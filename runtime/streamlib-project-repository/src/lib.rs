@@ -173,7 +173,7 @@ pub use stream_graph_studio_contract::{
 /// staged imports and the project's store.
 pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";
 pub use tatolab_view_manifest::{
-    TatolabViewAcceptedFiles, TatolabViewCapability, TatolabViewDeclaredPort, TatolabViewManifest,
-    TatolabViewPlacement, VIEW_CONTRACT_READ_MAJOR, VIEW_CONTRACT_READ_MINOR,
-    read_tatolab_view_manifest,
+    FAMILIES_A_PANEL_WRITES, TatolabViewAcceptedFiles, TatolabViewCapability,
+    TatolabViewDeclaredPort, TatolabViewManifest, TatolabViewPlacement, VIEW_CONTRACT_READ_MAJOR,
+    VIEW_CONTRACT_READ_MINOR, a_panel_writes, read_tatolab_view_manifest,
 };

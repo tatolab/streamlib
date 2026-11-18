@@ -201,14 +201,14 @@ fn an_output_named_after_one_of_its_inputs_is_refused_by_name() {
         .expect_err("an output and an input would be one name on one node");
 
     assert!(
-        refusal.starts_with("`outputs[1].name`: `waveform` names an input or a setting too"),
+        refusal.starts_with("`outputs[1].name`: `waveform` names an input too"),
         "{refusal}"
     );
     assert!(!refusal.contains("outputs[0]"), "{refusal}");
 }
 
 #[test]
-fn an_output_named_after_one_of_its_settings_is_refused_by_name() {
+fn an_output_a_panel_writes_named_after_one_of_its_settings_is_refused_by_name() {
     let mut manifest = a_node_view_manifest();
     manifest["settings"] = json!({
         "type": "object",
@@ -219,7 +219,53 @@ fn an_output_named_after_one_of_its_settings_is_refused_by_name() {
         .expect_err("an output and a setting would be one input name on one node");
 
     assert!(
-        refusal.starts_with("`outputs[0].name`: `fader` names an input or a setting too"),
+        refusal.starts_with("`outputs[0].name`: `fader` names a setting too"),
         "{refusal}"
     );
+}
+
+#[test]
+fn an_image_or_packets_output_named_after_one_of_its_inputs_is_refused_by_name() {
+    let mut manifest = a_node_view_manifest();
+    manifest["inputs"] = json!([
+        { "name": "preview", "family": "image" },
+        { "name": "midi", "family": "packets" }
+    ]);
+    manifest["outputs"] = json!([
+        { "name": "preview", "family": "image" },
+        { "name": "midi", "family": "packets" }
+    ]);
+
+    let refusal = read_tatolab_view_manifest(&manifest)
+        .expect_err("an output and an input would be one name on one node");
+
+    assert!(
+        refusal.contains("`outputs[0].name`: `preview` names an input too"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("`outputs[1].name`: `midi` names an input too"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn an_image_or_packets_output_may_share_its_name_with_a_setting() {
+    let mut manifest = a_node_view_manifest();
+    manifest["outputs"] = json!([
+        { "name": "preview", "family": "image" },
+        { "name": "midi", "family": "packets" }
+    ]);
+    manifest["settings"] = json!({
+        "type": "object",
+        "properties": {
+            "preview": { "type": "boolean", "default": true },
+            "midi": { "type": "number", "default": 1 }
+        }
+    });
+
+    let manifest = read_tatolab_view_manifest(&manifest)
+        .expect("no input of an Image or Packets output's name is made, so a setting takes it");
+
+    assert_eq!(manifest.outputs.len(), 2);
 }

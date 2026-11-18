@@ -335,6 +335,52 @@ fn the_same_channels_block_written_twice_is_two_blocks_one_after_the_other() {
     );
 }
 
+/// A batch naming a value one output does not carry publishes nothing on any output, and leaves
+/// each Channels output's next block where it was.
+///
+/// Mental-revert: a live set that hands each value to the node unchecked publishes `beat` and
+/// `cue`, which come before `fader`, and runs the next block of `beat` on past one never
+/// accepted.
+#[test]
+#[serial]
+fn a_batch_one_output_does_not_carry_publishes_nothing_and_runs_no_block_on() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let board_id = stream.add_a_node(BOARD_VIEW_TYPE, "board").unwrap();
+    let board_uuid = stream.run(&board_id);
+    let (_beat_viewer, mut beat_reader) = stream.a_reader_of(&board_uuid, "beat");
+    let (_cue_viewer, mut cue_reader) = stream.a_reader_of(&board_uuid, "cue");
+    let (_fader_viewer, mut fader_reader) = stream.a_reader_of(&board_uuid, "fader");
+    let silence = json!({ "samples": [[0.0, 0.0, 0.0]], "sample_rate": 48000 });
+    stream.write(&board_uuid, "beat", silence.clone()).unwrap();
+    assert_eq!(
+        the_start_sample_of(&the_next_message_read(&mut beat_reader)),
+        0
+    );
+
+    let refusal = stream
+        .write_each(
+            &board_uuid,
+            &[
+                ("beat", silence.clone()),
+                ("cue", json!({ "track": "drop" })),
+                ("fader", json!([[1], [2, 3]])),
+            ],
+        )
+        .expect_err("a ragged list is no Array value");
+
+    assert!(refusal.to_string().contains("`fader`"), "{refusal}");
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(beat_reader.read_the_latest_message().unwrap().is_none());
+    assert!(cue_reader.read_the_latest_message().unwrap().is_none());
+    assert!(fader_reader.read_the_latest_message().unwrap().is_none());
+    stream.write(&board_uuid, "beat", silence).unwrap();
+    assert_eq!(
+        the_start_sample_of(&the_next_message_read(&mut beat_reader)),
+        3,
+        "the refused batch ran no block on"
+    );
+}
+
 #[test]
 #[serial]
 fn a_write_onto_one_output_publishes_nothing_on_another() {

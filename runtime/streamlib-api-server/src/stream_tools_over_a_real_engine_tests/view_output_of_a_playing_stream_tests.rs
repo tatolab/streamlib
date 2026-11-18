@@ -320,3 +320,52 @@ async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_val
         .the_project_action_done("stop_playback", &project)
         .await;
 }
+
+/// A `live` transaction setting the deck's `cue` twice is refused at its second set before
+/// anything is applied, naming the node and the input: each value set live is its own message,
+/// and two sets of one input in one transaction would publish the last twice.
+///
+/// Mental-revert: holding both sets publishes the second record twice and the first never.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_is_applied() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_stream_holds_the_deck();
+    engine.playing(&project).await;
+    let stream_asset = project.stream_asset_of("main");
+    let set_cue = |record: Value| {
+        json!({ "operation": "set_node_input_value", "stream": stream_asset,
+                "node": DECK_NODE_UUID, "input": "cue", "value": record })
+    };
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "mode": "live", "author": an_agent_named("alice"),
+                    "operations": [set_cue(json!({ "track": "intro" })),
+                                   set_cue(json!({ "track": "drop" }))] }),
+        )
+        .await
+        .expect_err("one live transaction sets each input once");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::Refused,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
+    assert!(
+        refusal
+            .runtime_words
+            .contains("input `cue` of `deck` is set twice"),
+        "{refusal:?}"
+    );
+    let deck = the_node_named(
+        &engine.the_live_graph_of(&project.stream_id_of("main")),
+        "deck",
+    );
+    let cue_input = the_input_named(&deck, "cue");
+    assert_ne!(cue_input["value_comes_from"], "live", "{cue_input}");
+    engine
+        .the_project_action_done("stop_playback", &project)
+        .await;
+}

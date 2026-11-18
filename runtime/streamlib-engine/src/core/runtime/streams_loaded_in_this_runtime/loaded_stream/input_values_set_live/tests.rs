@@ -238,6 +238,46 @@ fn a_value_its_input_does_not_take_is_refused_by_its_index_before_any_is_set() {
     );
 }
 
+/// A set naming one input of one node twice is refused at the second value before any is set,
+/// naming the node and the input, since each value set live is published as its own write.
+///
+/// Mental-revert: holding both values sets `level` to the last, so the first is never published.
+#[test]
+fn a_set_naming_one_input_twice_is_refused_at_the_second_before_any_is_set() {
+    let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
+    let (level_meter, _delivery) = a_level_meter_past_its_setup(&mut graph);
+    let node = the_uuid_of(&graph, &level_meter);
+    let graph = RwLock::new(graph);
+    let refused = the_values_set_live(
+        &graph,
+        &[
+            a_set(node, "level", Some(json!(0.25))),
+            a_set(node, "gain", Some(json!(0.5))),
+            a_set(node, "level", Some(json!(0.75))),
+        ],
+    );
+    let Err(LiveInputValueSetRefusal::TheInputIsSetTwice {
+        set_index,
+        runtime_words,
+    }) = refused
+    else {
+        panic!("{:?}", refused.err());
+    };
+    assert_eq!(set_index, 2);
+    assert!(
+        runtime_words.starts_with("input `level` of `"),
+        "{runtime_words}"
+    );
+    assert_eq!(
+        graph.read().live_input_values().value_of(node, "level"),
+        None
+    );
+    assert_eq!(
+        graph.read().live_input_values().value_of(node, "gain"),
+        None
+    );
+}
+
 #[test]
 fn a_node_dropped_from_the_graph_forgets_its_live_values() {
     let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();

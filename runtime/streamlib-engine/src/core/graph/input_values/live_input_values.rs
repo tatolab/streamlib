@@ -422,6 +422,15 @@ pub enum LiveInputValueSetRefusal {
         /// Why, in the runtime's words, naming the node and the input.
         runtime_words: String,
     },
+    /// The value at `set_index` is on an input an earlier value of the same set is on, of the
+    /// same node: each value set live is published as its own write, so one set names each input
+    /// once.
+    TheInputIsSetTwice {
+        /// The index of the second value on the input among those asked.
+        set_index: usize,
+        /// Why, in the runtime's words, naming the node and the input.
+        runtime_words: String,
+    },
     /// A helper or island reading one of the values was not handed it.
     NotHandedOver(crate::core::Error),
 }
