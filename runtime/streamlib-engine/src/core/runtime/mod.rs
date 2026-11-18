@@ -109,7 +109,7 @@ pub use streams_loaded_in_this_runtime::status::RuntimeStatus;
 pub use streams_loaded_in_this_runtime::stream_actions_of_this_runtime::{
     CreateProjectRequest, LoadedStreamHolding, ProjectCreationQueued, ProjectOpenOrReloadRequest,
     ProjectPausedOrResumed, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, StreamListing,
-    StreamListingState, StreamReloadAtTheStart,
+    StreamListingState, StreamReloadAtTheStart, StreamsToReadOrEdit,
 };
 pub use streams_loaded_in_this_runtime::stream_environment::StreamEnvironment;
 pub use streams_loaded_in_this_runtime::stream_input_declared_by_a_graph_input::TopLevelGraphInputDeclaringAStreamInput;

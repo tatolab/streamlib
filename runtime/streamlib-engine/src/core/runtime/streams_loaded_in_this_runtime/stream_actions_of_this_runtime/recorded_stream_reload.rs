@@ -536,12 +536,16 @@ impl Runner {
         playback_after_the_load: ProjectPlaybackAfterItsLoad,
         is_interrupted: &dyn Fn() -> bool,
     ) -> Result<StreamStateAfterItsRun> {
-        let loaded = self.load_a_recorded_stream(
+        let loaded = self.load_a_recorded_stream_held_from_its_document_when_refused(
             OneStreamAStreamActionLoads::recorded_by(stream_record, display_name, graph)
                 .abandoned_once(is_interrupted),
         );
-        let stream = match loaded {
-            Ok(stream) => stream,
+        let (stream, load_refusal) = match loaded {
+            Ok(LoadedOrHeldFromItsDocument::Loaded(stream)) => (stream, None),
+            Ok(LoadedOrHeldFromItsDocument::HeldFromItsDocument {
+                stream,
+                load_refusal,
+            }) => (stream, Some(load_refusal)),
             Err(load_refusal) => {
                 return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
             }
@@ -553,6 +557,11 @@ impl Runner {
         {
             unload_a_stream_an_action_took_back(&stream, "its record was not written");
             return Err(not_written);
+        }
+        if let Some(load_refusal) = load_refusal {
+            stream.hold_stopped_without_a_start();
+            stream_record.mark_open_with_its_playback_stopped();
+            return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
         }
         if let Some(why_it_cannot_play) =
             stream.why_its_graph_as_held_keeps_this_stream_from_playing()
@@ -653,6 +662,46 @@ impl Runner {
         Some(start_refusal)
     }
 
+    /// Load `stream_to_load` without starting it; when its load is refused, hold it from its
+    /// document instead, reading none of its node code, so every node it names is held as a
+    /// placeholder and its graph is there to read and edit. A load abandoned for an interrupt,
+    /// one already reading no node code, and one the fallback refuses too answer the first
+    /// refusal.
+    pub(super) fn load_a_recorded_stream_held_from_its_document_when_refused(
+        &self,
+        stream_to_load: OneStreamAStreamActionLoads<'_>,
+    ) -> Result<LoadedOrHeldFromItsDocument> {
+        let held_from_its_document = stream_to_load.clone();
+        let load_refusal = match self.load_a_recorded_stream(stream_to_load) {
+            Ok(stream) => return Ok(LoadedOrHeldFromItsDocument::Loaded(stream)),
+            Err(load_refusal) => load_refusal,
+        };
+        if held_from_its_document
+            .why_none_of_its_node_code_is_read
+            .is_some()
+            || (held_from_its_document.is_interrupted)()
+            || is_the_machines_shutdown_requested()
+        {
+            return Err(load_refusal);
+        }
+        let why_none_of_it_is_read = load_refusal.to_string();
+        match self.load_a_recorded_stream(
+            held_from_its_document.reading_none_of_its_node_code(Some(why_none_of_it_is_read)),
+        ) {
+            Ok(stream) => Ok(LoadedOrHeldFromItsDocument::HeldFromItsDocument {
+                stream,
+                load_refusal,
+            }),
+            Err(refused_even_so) => {
+                tracing::warn!(
+                    "the stream whose load was refused was not held from its document either: \
+                     {refused_even_so}"
+                );
+                Err(load_refusal)
+            }
+        }
+    }
+
     /// Load `stream_to_load` without starting it.
     pub(super) fn load_a_recorded_stream(
         &self,
@@ -703,14 +752,34 @@ impl Runner {
     }
 }
 
+/// A stream a load took in: loaded as its document says, or held from its document reading
+/// none of its node code because its load was refused.
+pub(super) enum LoadedOrHeldFromItsDocument {
+    Loaded(Arc<LoadedStreamInThisRuntime>),
+    HeldFromItsDocument {
+        stream: Arc<LoadedStreamInThisRuntime>,
+        /// Why the load as its document says was refused.
+        load_refusal: Error,
+    },
+}
+
 /// The graph the document of `record`'s stream asset holds as it is on disk now, or why
 /// there is none: the project is gone from where it was recorded, or no document holds the
 /// stream asset, or the document holds no graph.
 pub(super) fn the_graph_the_recorded_stream_holds(
     record: &StreamRecord,
 ) -> std::result::Result<GraphSnapshot, String> {
-    let (project_file, stream_document) = the_graph_document_of_the_stream_at(&record.location)?;
-    let project_directory = &record.location.project_directory;
+    the_graph_the_document_of_the_stream_at_holds(&record.location)
+}
+
+/// The graph the document of the stream asset at `location` holds as it is on disk now, or
+/// why there is none: the project is gone from where it was, or no document holds the stream
+/// asset, or the document holds no graph.
+pub(super) fn the_graph_the_document_of_the_stream_at_holds(
+    location: &StreamLocation,
+) -> std::result::Result<GraphSnapshot, String> {
+    let (project_file, stream_document) = the_graph_document_of_the_stream_at(location)?;
+    let project_directory = &location.project_directory;
     let asset_uuids_the_project_holds =
         every_asset_uuid_the_project_holds(project_directory, project_file.project)
             .map_err(|refusal| format!("its project's assets do not read: {refusal}"))?;

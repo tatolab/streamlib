@@ -588,6 +588,7 @@ pub(crate) struct StreamActionsOfTheEngine {
 /// One stream a stream action loads, recorded by the runtime under its id: its display name
 /// and location, the graph its document holds, where its interpreters start, and whether its
 /// capture devices may ask the user.
+#[derive(Clone)]
 struct OneStreamAStreamActionLoads<'load> {
     stream_id: &'load str,
     display_name: &'load str,
@@ -798,6 +799,9 @@ mod project_venv_actions;
 mod recorded_stream_reload;
 mod stream_action_queue;
 mod stream_records;
+mod streams_to_read_or_edit;
+
+pub use streams_to_read_or_edit::StreamsToReadOrEdit;
 
 #[cfg(test)]
 mod tests;

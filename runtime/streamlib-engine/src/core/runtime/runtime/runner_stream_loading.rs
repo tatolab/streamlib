@@ -222,7 +222,7 @@ impl Runner {
             .collect()
     }
 
-    pub(super) fn build_the_stream_a_load_names(
+    pub(in crate::core::runtime) fn build_the_stream_a_load_names(
         &self,
         load_options: OptionsForLoadingOneStream,
         holding: LoadedStreamHolding,
@@ -275,7 +275,7 @@ impl Runner {
 
     /// Load `graph` into `stream`, which is not in the table; a refused load
     /// tears the stream down through its own stop.
-    pub(super) fn load_the_graph_into_the_stream(
+    pub(in crate::core::runtime) fn load_the_graph_into_the_stream(
         &self,
         stream: &Arc<LoadedStreamInThisRuntime>,
         graph: &GraphSnapshot,

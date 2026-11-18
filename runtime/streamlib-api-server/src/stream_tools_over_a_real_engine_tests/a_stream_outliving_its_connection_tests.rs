@@ -244,6 +244,15 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn the_streams_to_read_or_edit(
+        &self,
+        stream_ids: &[String],
+    ) -> Result<streamlib::sdk::runtime::StreamsToReadOrEdit<'_>> {
+        OperationsOnTheStreamsLoadedInThisRuntime::the_streams_to_read_or_edit(
+            self.engine.as_ref(),
+            stream_ids,
+        )
+    }
     fn list_streams(&self) -> Vec<StreamListing> {
         OperationsOnTheStreamsLoadedInThisRuntime::list_streams(self.engine.as_ref())
     }

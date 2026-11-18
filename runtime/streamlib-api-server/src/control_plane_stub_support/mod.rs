@@ -387,6 +387,26 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 )?;
                 Ok(::std::sync::Arc::new(self.clone()))
             }
+            fn the_streams_to_read_or_edit(
+                &self,
+                stream_ids: &[String],
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamsToReadOrEdit<'_>>
+            {
+                let mut runtime_operations_of_each_stream = ::std::collections::HashMap::new();
+                for stream_id in stream_ids {
+                    $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                        stream_id,
+                    )?;
+                    runtime_operations_of_each_stream.insert(
+                        stream_id.clone(),
+                        ::std::sync::Arc::new(self.clone())
+                            as ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
+                    );
+                }
+                Ok(::streamlib::sdk::runtime::StreamsToReadOrEdit::of_streams_each_loaded(
+                    runtime_operations_of_each_stream,
+                ))
+            }
             fn loaded_stream_identity_of_the_stream_a_call_names(
                 &self,
                 stream_id: &str,

@@ -341,7 +341,9 @@ impl Drop for TheMachineShutdownSignalsOwnedByOneEngine<'_> {
 
 /// Stop a stream a refused load built, which never entered the table, and
 /// close its JSONL log.
-fn tear_down_a_stream_that_never_entered_the_table(stream: &Arc<LoadedStreamInThisRuntime>) {
+pub(in crate::core::runtime) fn tear_down_a_stream_that_never_entered_the_table(
+    stream: &Arc<LoadedStreamInThisRuntime>,
+) {
     if let Err(teardown_failure) = stream.stop() {
         stream.log_route().run_entered(|| {
             tracing::error!(

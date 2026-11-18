@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
-use crate::core::descriptors::{NodeClassImportPath, PinType};
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
 };
@@ -20,8 +20,8 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{
     ALinkConnected, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
-    NodeRunId, PendingDeletionComponent, cast_exposed_name_to_url_safe,
-    the_pin_types_at_the_ends_of, the_pin_types_refuse_the_link,
+    NodeRunId, PendingDeletionComponent, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
+    cast_exposed_name_to_url_safe, the_ends_a_link_is_judged_by,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::pubsub::RuntimeEvent;
@@ -51,40 +51,40 @@ pub(in crate::core::runtime) struct LiveLinkAsGiven {
     pub(in crate::core::runtime) wired_as: Vec<LinkUniqueId>,
 }
 
-/// Which links a reconcile makes as a saved graph's, keeping one its pin types alone refuse when
-/// its ports' families take it, and which it judges as `connect` judges a link made now.
+/// Which links a reconcile makes as a saved graph's, keeping one its pin types or Image formats
+/// alone refuse when its ports' families take it, and which it judges as `connect` judges a link
+/// made now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::core::runtime) enum LinksAReconcileMakes {
     /// Each link, the document being a saved graph: read from disk, or as the stream drew it.
     EachAsASavedGraphsLink,
-    /// A link the live graph held when the reconcile began though its pin types refused it, a
-    /// saved graph's link the reconcile remakes, as a saved graph's while its two ends' pin types
-    /// are the ones it had then; any other as one an edit makes now.
-    ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+    /// A link the live graph held when the reconcile began though `connect` would refuse it made
+    /// now, a saved graph's link the reconcile remakes, as a saved graph's while its two ends are
+    /// judged by what they were then; any other as one an edit makes now.
+    ThoseTheLiveGraphKeptThoughConnectRefusesThem,
 }
 
 impl LinksAReconcileMakes {
-    /// How a reconcile making `link`, whose two ends' pin types are now `pin_types_now`, judges
-    /// it, `kept_though_their_pin_types_refused_them` holding the pin types of each link the live
-    /// graph held so when it began.
+    /// How a reconcile making `link`, whose two ends are now judged by `ends_now`, judges it,
+    /// `kept_though_connect_refuses_them` holding what the ends of each link the live graph held
+    /// so when it began were judged by.
     fn for_a_link(
         self,
         link: &RunningLinkBetweenTwoNodesByUuid,
-        pin_types_now: Option<&(PinType, PinType)>,
-        kept_though_their_pin_types_refused_them: &HashMap<
+        ends_now: Option<&TheEndsALinkIsJudgedBy>,
+        kept_though_connect_refuses_them: &HashMap<
             RunningLinkBetweenTwoNodesByUuid,
-            (PinType, PinType),
+            TheEndsALinkIsJudgedBy,
         >,
     ) -> ALinkConnected {
         match self {
             Self::EachAsASavedGraphsLink => ALinkConnected::OfASavedGraph,
-            Self::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem
-                if pin_types_now.is_some()
-                    && kept_though_their_pin_types_refused_them.get(link) == pin_types_now =>
+            Self::ThoseTheLiveGraphKeptThoughConnectRefusesThem
+                if ends_now.is_some() && kept_though_connect_refuses_them.get(link) == ends_now =>
             {
                 ALinkConnected::OfASavedGraph
             }
-            Self::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem => ALinkConnected::MadeNow,
+            Self::ThoseTheLiveGraphKeptThoughConnectRefusesThem => ALinkConnected::MadeNow,
         }
     }
 }
@@ -126,8 +126,8 @@ impl LoadedStreamInThisRuntime {
     /// and the links made to be the document's. The document is resolved and validated whole,
     /// as a load is, before the live graph is touched. A kept node not handed the values the
     /// document sets on it fails the reconcile once every node and link is made. Each link it
-    /// makes as a saved graph's, as `links_it_makes` says, is kept when its pin types alone
-    /// refuse it and its ports' families take it.
+    /// makes as a saved graph's, as `links_it_makes` says, is kept when its pin types or Image
+    /// formats alone refuse it and its ports' families take it.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         mut graph_document: Value,
@@ -181,10 +181,10 @@ impl LoadedStreamInThisRuntime {
             .collect();
         let document_link_set: HashSet<&RunningLinkBetweenTwoNodesByUuid> =
             document_links.iter().collect();
-        let kept_though_their_pin_types_refused_them = match links_it_makes {
+        let kept_though_connect_refuses_them = match links_it_makes {
             LinksAReconcileMakes::EachAsASavedGraphsLink => HashMap::new(),
-            LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem => {
-                self.the_live_links_their_pin_types_refuse()
+            LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem => {
+                self.the_live_links_connect_refuses()
             }
         };
 
@@ -356,13 +356,13 @@ impl LoadedStreamInThisRuntime {
                 node_of(&document_link.target_node)?,
                 &document_link.target_port,
             );
-            let pin_types_now = self
+            let ends_now = self
                 .compiler
-                .scope_reading(|graph| the_pin_types_at_the_ends_of(graph, &from, &to));
+                .scope_reading(|graph| the_ends_a_link_is_judged_by(graph, &from, &to));
             let a_link_connected = links_it_makes.for_a_link(
                 document_link,
-                pin_types_now.as_ref(),
-                &kept_though_their_pin_types_refused_them,
+                ends_now.as_ref(),
+                &kept_though_connect_refuses_them,
             );
             connect_impl(self.live_graph_change(), from, to, a_link_connected).await?;
         }
@@ -501,13 +501,12 @@ impl LoadedStreamInThisRuntime {
             .collect()
     }
 
-    /// Each link the live graph holds whose two ends' pin types the verdict refuses, among the
-    /// conversions this stream resolves, beside those pin types.
-    fn the_live_links_their_pin_types_refuse(
+    /// Each link the live graph holds that `connect` would refuse made now, by its pin types,
+    /// its Image formats or anything else, beside what its ends are judged by.
+    fn the_live_links_connect_refuses(
         &self,
-    ) -> HashMap<RunningLinkBetweenTwoNodesByUuid, (PinType, PinType)> {
+    ) -> HashMap<RunningLinkBetweenTwoNodesByUuid, TheEndsALinkIsJudgedBy> {
         let live_links = self.the_live_links_as_given();
-        let conversions = self.node_types_this_stream_resolves().pin_conversions();
         self.compiler.scope_reading(|graph| {
             let node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> = graph
                 .traversal()
@@ -530,11 +529,11 @@ impl LoadedStreamInThisRuntime {
                             .clone(),
                         &link.target_port,
                     );
-                    if !the_pin_types_refuse_the_link(graph, &from, &to, &conversions) {
+                    if !a_link_made_now_would_be_refused(graph, &from, &to) {
                         return None;
                     }
-                    let pin_types = the_pin_types_at_the_ends_of(graph, &from, &to)?;
-                    Some((link, pin_types))
+                    let ends = the_ends_a_link_is_judged_by(graph, &from, &to)?;
+                    Some((link, ends))
                 })
                 .collect()
         })
