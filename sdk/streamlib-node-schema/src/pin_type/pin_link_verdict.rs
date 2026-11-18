@@ -487,7 +487,6 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
             },
         ) => {
             let not_listed: Vec<String> = the_ones_not_held(output_options, input_options)
-                .into_iter()
                 .cloned()
                 .collect();
             if not_listed.is_empty() {
@@ -638,7 +637,7 @@ fn the_same_but_for_member_meanings(one: &PinType, other: &PinType) -> bool {
 
 /// Whether every one `output` states is one `input` takes, or `input` takes any by stating none.
 fn every_one_is_taken<T: PartialEq>(output: &[T], input: &[T]) -> bool {
-    the_ones_not_taken(output, input).is_empty()
+    the_ones_not_taken(output, input).next().is_none()
 }
 
 /// A direct link when the input takes any, or the output states some and each is one it takes.

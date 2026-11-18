@@ -16,7 +16,10 @@ use crate::core::descriptors::{
     OutputPortDeclaredNames, PinDeclaration, PinLinkRefusal, PinType, PortDescriptor, PortFamily,
     PortFamilyDeclaration, SettingReadTime, TexturePixelFormat,
 };
-use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
+use crate::core::graph::{
+    InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+    refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
+};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::{Error, Result};
@@ -41,6 +44,7 @@ const RGBA_OR_NV12_TEXTURE_SOURCE: &str = "VerdictCheckRgbaOrNv12TextureSource";
 const TEXTURE_PASSTHROUGH: &str = "VerdictCheckTexturePassthrough";
 const RGBA_TEXTURE_SINK: &str = "VerdictCheckRgbaTextureSink";
 const ANY_TEXTURE_SINK: &str = "VerdictCheckAnyTextureSink";
+const UNTYPED_RGBA_PICTURE_SINK: &str = "VerdictCheckUntypedRgbaPictureSink";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -267,6 +271,20 @@ fn register_the_verdict_fixture_node_types() {
         register(a_node_type(
             class_path(RGBA_TEXTURE_SINK),
             vec![a_texture_port("video", &[Rgba8Unorm])],
+            Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(UNTYPED_RGBA_PICTURE_SINK),
+            vec![PortDescriptor::new(
+                "video",
+                "video",
+                true,
+                PortFamilyDeclaration {
+                    formats: vec![Rgba8Unorm.wire_name().to_owned()],
+                    also_takes_families: vec![PortFamily::Records],
+                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                },
+            )],
             Vec::new(),
         ));
         register(a_node_type(
@@ -692,8 +710,8 @@ fn an_output_following_an_input_is_judged_by_the_formats_it_hands_on() {
 }
 
 /// A saved graph's Texture link whose output states a format the input does not take, besides
-/// one it does, is kept, as it loaded before the formats were judged by every one the output
-/// states; the same link made now is refused.
+/// one it does, is kept, so that a saved document always opens; the same link made now is
+/// refused.
 ///
 /// Mental-revert: judging a saved link's formats as a new link's refuses it, and the saved graph
 /// holding it no longer loads.
@@ -721,6 +739,116 @@ fn a_saved_graphs_texture_link_its_formats_alone_refuse_is_kept_and_a_new_one_re
     )
     .expect_err("a link made now is judged by every format the output states");
     assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A saved graph's link into an untyped Image input, judged by the family check alone, is kept
+/// when the input does not read every format the output states; made now it is refused.
+///
+/// Mental-revert: judging a saved link's formats on the family check as a new link's refuses it.
+#[test]
+fn a_saved_graphs_link_into_an_untyped_image_input_its_formats_alone_refuse_is_kept() {
+    register_the_verdict_fixture_node_types();
+    for (a_link_the_pin_types_refuse, kept) in [
+        (ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt, true),
+        (ALinkThePinTypesRefuse::IsRefused, false),
+    ] {
+        let compiler = Arc::new(Compiler::new());
+        let source = a_node_of(&compiler, class_path(RGBA_OR_NV12_TEXTURE_SOURCE));
+        let sink = a_node_of(&compiler, class_path(UNTYPED_RGBA_PICTURE_SINK));
+        let connected = connect_on_this_thread_as(
+            &compiler,
+            OutputLinkPortRef::new(source, "video"),
+            InputLinkPortRef::new(sink, "video"),
+            a_link_the_pin_types_refuse,
+        );
+        match (connected, kept) {
+            (Ok(_), true) => {}
+            (Err(Error::InvalidLink(words)), false) => {
+                assert!(words.contains("may write [\"nv12\"], which"), "{words}");
+            }
+            (outcome, _) => panic!("{a_link_the_pin_types_refuse:?}: {outcome:?}"),
+        }
+    }
+}
+
+/// A saved graph keeps a link whose Image formats alone are refused, and nothing else: a family
+/// mismatch from an output stating formats, a missing required name and a codec outside the
+/// required set are each refused as they are when the link is made now.
+///
+/// Mental-revert: keeping every link of a saved graph its families refuse keeps each of these.
+#[test]
+fn a_saved_graph_keeps_no_link_its_families_names_or_codec_refuse() {
+    register_the_verdict_fixture_node_types();
+    let keep = ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt;
+    let compiler = Arc::new(Compiler::new());
+
+    let pictures = a_node_of(&compiler, class_path(RGBA_OR_NV12_TEXTURE_SOURCE));
+    let numbers = a_node_of(&compiler, class_path(NUMBER_SINK));
+    connect_on_this_thread_as(
+        &compiler,
+        OutputLinkPortRef::new(pictures, "video"),
+        InputLinkPortRef::new(numbers, "count"),
+        keep,
+    )
+    .expect_err("a picture stating formats never feeds an Integer, saved or not");
+
+    let records = a_node_of(&compiler, class_path(NAMED_RECORDS_SOURCE));
+    let needing_z = a_node_of(&compiler, class_path(RECORDS_NEEDING_Z));
+    match connect_on_this_thread_as(
+        &compiler,
+        OutputLinkPortRef::new(records, "records"),
+        InputLinkPortRef::new(needing_z, "records"),
+        keep,
+    ) {
+        Err(Error::InvalidLink(words)) => assert!(words.contains("\"z\""), "{words}"),
+        outcome => panic!("a missing required name refuses a saved link: {outcome:?}"),
+    }
+
+    let encoder = a_node_configured(
+        &compiler,
+        class_path(ENCODER_CODEC_FROM_CONFIG),
+        serde_json::json!({ "codec": "h265" }),
+    );
+    let h264 = a_node_of(&compiler, class_path(H264_SINK));
+    match connect_on_this_thread_as(
+        &compiler,
+        OutputLinkPortRef::new(encoder, "packets"),
+        InputLinkPortRef::new(h264, "packets"),
+        keep,
+    ) {
+        Err(Error::InvalidLink(words)) => assert!(words.contains("requires a codec in"), "{words}"),
+        outcome => panic!("a codec outside the required set refuses a saved link: {outcome:?}"),
+    }
+    assert_eq!(the_links_in(&compiler), 0);
+}
+
+/// A config update on the source of a saved link kept despite its Image formats is taken: no
+/// config sets the formats, so the wired link is not judged by them again.
+///
+/// Mental-revert: judging the wired links' formats at a config update refuses every update of
+/// the source.
+#[test]
+fn a_config_update_on_the_source_of_a_link_kept_despite_its_formats_is_taken() {
+    register_the_verdict_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(RGBA_OR_NV12_TEXTURE_SOURCE));
+    let sink = a_node_of(&compiler, class_path(RGBA_TEXTURE_SINK));
+    connect_on_this_thread_as(
+        &compiler,
+        OutputLinkPortRef::new(source.clone(), "video"),
+        InputLinkPortRef::new(sink, "video"),
+        ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+    )
+    .expect("a saved link whose formats alone refuse it is kept");
+
+    compiler.scope(|graph, _tx| {
+        refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
+            graph,
+            &source,
+            &serde_json::json!({ "label": "camera" }),
+        )
+        .expect("a config update sets no format");
+    });
 }
 
 /// A saved graph's link handed on past an output that follows its input is kept when the input

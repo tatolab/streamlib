@@ -573,7 +573,7 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
-    /// alone refuse it is kept when its ports' families take it.
+    /// or Image formats alone refuse it is kept when its ports' families take it.
     pub(crate) fn connect_a_link_of_a_saved_graph(
         &self,
         from: OutputLinkPortRef,

@@ -614,6 +614,23 @@ fn conversion_between_families(from: PortFamily, to: PortFamily) -> String {
     })
 }
 
+/// Why [`refusal_of_a_link_between_port_families`] refuses a link, its words naming both ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortFamilyLinkRefusal {
+    /// The output may write an Image format the input does not read.
+    ImageFormatsNotRead(String),
+    /// Anything else: the families, the names or the codec.
+    Other(String),
+}
+
+impl fmt::Display for PortFamilyLinkRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ImageFormatsNotRead(words) | Self::Other(words) => formatter.write_str(words),
+        }
+    }
+}
+
 /// Why `connect` refuses a link from `output` to `input`, or `None` when it
 /// takes it.
 ///
@@ -626,63 +643,69 @@ pub fn refusal_of_a_link_between_port_families(
     output: PortFamilyLinkEndpoint<'_>,
     output_node_config: Option<&serde_json::Value>,
     input: PortFamilyLinkEndpoint<'_>,
-) -> Option<String> {
-    refusal_of_a_link_between_port_families_but_for_image_formats(output, output_node_config, input)
-        .or_else(|| refusal_of_the_image_formats_a_link_carries(output, output_node_config, input))
-}
-
-/// Why [`refusal_of_a_link_between_port_families`] refuses a link from `output`
-/// to `input` by all but its Image formats, or `None` when nothing else does.
-pub fn refusal_of_a_link_between_port_families_but_for_image_formats(
-    output: PortFamilyLinkEndpoint<'_>,
-    output_node_config: Option<&serde_json::Value>,
-    input: PortFamilyLinkEndpoint<'_>,
-) -> Option<String> {
-    let output_declaration = output.declaration;
-    let input_declaration = input.declaration;
+) -> Option<PortFamilyLinkRefusal> {
     let output_family =
-        match output_port_family_resolved_against_config(output_declaration, output_node_config) {
+        match output_port_family_resolved_against_config(output.declaration, output_node_config) {
             Ok(family) => family,
             Err(unresolved) => {
-                return Some(format!(
+                return Some(PortFamilyLinkRefusal::Other(format!(
                     "cannot link {output} to {input}: {output}'s family cannot be resolved: \
                      {unresolved}"
-                ));
+                )));
             }
         };
-    let input_families = input_declaration.families_an_input_takes();
-    if !input_families.contains(&output_family) {
-        let input_family = input_declaration.family;
-        let input_families_named = input_families
-            .iter()
-            .map(|family| family.declaration_name())
-            .collect::<Vec<_>>()
-            .join(" or ");
-        return Some(format!(
-            "cannot link {output} ({output_family}) to {input} ({input_families_named}): a link \
-             joins two ports of one family; {}",
-            conversion_between_families(output_family, input_family)
-        ));
-    }
-    refusal_of_the_names_and_codec_a_link_carries(output, output_family, output_node_config, input)
+    refusal_of_the_family_a_link_carries(output, output_family, input)
+        .or_else(|| {
+            refusal_of_the_names_and_codec_a_link_carries(
+                output,
+                output_family,
+                output_node_config,
+                input,
+            )
+        })
+        .map(PortFamilyLinkRefusal::Other)
+        .or_else(|| {
+            refusal_of_the_image_formats_a_link_carries(output, output_family, input)
+                .map(PortFamilyLinkRefusal::ImageFormatsNotRead)
+        })
 }
 
-/// Why an Image output cannot feed `input` by the formats it writes, or `None`
-/// when it can: the output's `formats=` against the input's, which, when it
-/// states any, must read every format the output states. An output its node's
-/// config resolves to no Image is not judged here.
-pub fn refusal_of_the_image_formats_a_link_carries(
+/// Why an output resolved to `output_family` cannot feed `input`, which takes no link of it.
+fn refusal_of_the_family_a_link_carries(
     output: PortFamilyLinkEndpoint<'_>,
-    output_node_config: Option<&serde_json::Value>,
+    output_family: PortFamily,
     input: PortFamilyLinkEndpoint<'_>,
 ) -> Option<String> {
-    let output_family =
-        output_port_family_resolved_against_config(output.declaration, output_node_config).ok()?;
+    let input_declaration = input.declaration;
+    let input_families = input_declaration.families_an_input_takes();
+    if input_families.contains(&output_family) {
+        return None;
+    }
+    let input_families_named = input_families
+        .iter()
+        .map(|family| family.declaration_name())
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Some(format!(
+        "cannot link {output} ({output_family}) to {input} ({input_families_named}): a link \
+         joins two ports of one family; {}",
+        conversion_between_families(output_family, input_declaration.family)
+    ))
+}
+
+/// Why an output resolved to `output_family` cannot feed `input` by the Image formats it
+/// writes: when the input states any, it must read every format the output states.
+fn refusal_of_the_image_formats_a_link_carries(
+    output: PortFamilyLinkEndpoint<'_>,
+    output_family: PortFamily,
+    input: PortFamilyLinkEndpoint<'_>,
+) -> Option<String> {
     if output_family != PortFamily::Image {
         return None;
     }
     let input_formats = &input.declaration.formats;
-    let not_read = the_ones_not_taken(&output.declaration.formats, input_formats);
+    let not_read: Vec<&String> =
+        the_ones_not_taken(&output.declaration.formats, input_formats).collect();
     if not_read.is_empty() {
         return None;
     }
@@ -767,7 +790,7 @@ pub fn refusal_of_required_names(
     input: PortFamilyLinkEndpoint<'_>,
     required_names: &[String],
 ) -> Option<String> {
-    let missing_names = the_ones_not_held(required_names, output_names);
+    let missing_names: Vec<&String> = the_ones_not_held(required_names, output_names).collect();
     if missing_names.is_empty() {
         return None;
     }

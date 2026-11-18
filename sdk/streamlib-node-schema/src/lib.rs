@@ -64,11 +64,10 @@ pub use port_family::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     IMAGE_TEXTURE_FORMAT_WIRE_NAMES, ImageOutputPortFrameRate, OutputPortDeclaredNames, PortFamily,
     PortFamilyDeclaration, PortFamilyDeclarationDirection, PortFamilyLinkEndpoint,
-    output_port_codec_resolved_against_config, output_port_family_resolved_against_config,
-    output_port_frame_rate_resolved_against_config, output_port_names_resolved_against_config,
-    refusal_of_a_link_between_port_families,
-    refusal_of_a_link_between_port_families_but_for_image_formats, refusal_of_required_names,
-    refusal_of_the_image_formats_a_link_carries, refusal_of_the_names_and_codec_a_link_carries,
+    PortFamilyLinkRefusal, output_port_codec_resolved_against_config,
+    output_port_family_resolved_against_config, output_port_frame_rate_resolved_against_config,
+    output_port_names_resolved_against_config, refusal_of_a_link_between_port_families,
+    refusal_of_required_names, refusal_of_the_names_and_codec_a_link_carries,
 };
 pub use port_stream_facts::{
     ImageStreamContentLightLevel, ImageStreamFacts, ImageStreamFrameRate,

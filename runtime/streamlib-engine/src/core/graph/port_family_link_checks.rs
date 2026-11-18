@@ -5,14 +5,14 @@
 //! families: at connect, and again when a live config update changes what an
 //! output resolves from its node's config.
 
+use super::pin_type_link_checks::ALinkThePinTypesRefuse;
 use super::{
     Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef,
     PendingDeletionComponent,
 };
 use crate::core::descriptors::{
-    PortFamilyDeclaration, PortFamilyLinkEndpoint, refusal_of_a_link_between_port_families,
-    refusal_of_a_link_between_port_families_but_for_image_formats,
-    refusal_of_the_image_formats_a_link_carries,
+    PortFamilyDeclaration, PortFamilyLinkEndpoint, PortFamilyLinkRefusal,
+    refusal_of_a_link_between_port_families,
 };
 use std::collections::HashSet;
 
@@ -159,102 +159,108 @@ pub(crate) fn the_inputs_an_input_is_carried_on_to<'graph>(
     inputs_carried_on_to
 }
 
-/// What becomes of a link whose Image output may write a format its input does not read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ImageFormatsTheInputDoesNotRead {
-    /// The link is refused naming them: a link made now.
-    RefuseTheLink,
-    /// The link is kept and they are logged as a warning: a link a saved graph already holds.
-    AreWarnedOf,
-}
-
 /// The refusal of a link from `output` to the input `to_port_name` of
-/// `to_node`, by their families, or `None` when they match; an Image format the
-/// input does not read refuses it as `image_formats` says.
+/// `to_node`, by their families, or `None` when they match.
 fn refusal_of_a_link_from_an_output(
     (from_node, from_port_name, output_declaration): (&GraphNode, &str, &PortFamilyDeclaration),
     to_node: &GraphNode,
     to_port_name: &str,
     input_declaration: &PortFamilyDeclaration,
-    image_formats: ImageFormatsTheInputDoesNotRead,
-) -> Option<String> {
-    let output = PortFamilyLinkEndpoint {
-        node_name: &from_node.display_name,
-        port_name: from_port_name,
-        declaration: output_declaration,
-    };
-    let input = PortFamilyLinkEndpoint {
-        node_name: &to_node.display_name,
-        port_name: to_port_name,
-        declaration: input_declaration,
-    };
-    let output_node_config = from_node.config.as_ref();
-    if let Some(refusal) = refusal_of_a_link_between_port_families_but_for_image_formats(
-        output,
-        output_node_config,
-        input,
-    ) {
-        return Some(refusal);
-    }
-    let refusal = refusal_of_the_image_formats_a_link_carries(output, output_node_config, input)?;
-    match image_formats {
-        ImageFormatsTheInputDoesNotRead::RefuseTheLink => Some(refusal),
-        ImageFormatsTheInputDoesNotRead::AreWarnedOf => {
-            tracing::warn!(
-                "a saved link is kept, though its output may write a format its input does not \
-                 read: {refusal}"
-            );
-            None
+) -> Option<PortFamilyLinkRefusal> {
+    refusal_of_a_link_between_port_families(
+        PortFamilyLinkEndpoint {
+            node_name: &from_node.display_name,
+            port_name: from_port_name,
+            declaration: output_declaration,
+        },
+        from_node.config.as_ref(),
+        PortFamilyLinkEndpoint {
+            node_name: &to_node.display_name,
+            port_name: to_port_name,
+            declaration: input_declaration,
+        },
+    )
+}
+
+/// How the family checks take a link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FamiliesTakeTheLink {
+    /// Nothing in them refuses it.
+    Wholly,
+    /// A saved graph's link is kept though its output may write an Image format an input it
+    /// reaches does not read, in these words.
+    ButForImageFormatsNotRead(String),
+}
+
+impl FamiliesTakeTheLink {
+    /// Take `refusal` of a link connected as `link`: a saved graph's link is kept when its Image
+    /// formats alone refuse it, the first such refusal kept in its words as `in_words` puts
+    /// them; any other refusal is the link's.
+    fn take(
+        &mut self,
+        refusal: PortFamilyLinkRefusal,
+        link: ALinkThePinTypesRefuse,
+        in_words: impl FnOnce(String) -> String,
+    ) -> Result<()> {
+        match (refusal, link) {
+            (
+                PortFamilyLinkRefusal::ImageFormatsNotRead(words),
+                ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+            ) => {
+                if *self == Self::Wholly {
+                    *self = Self::ButForImageFormatsNotRead(in_words(words));
+                }
+                Ok(())
+            }
+            (refusal, _) => Err(Error::InvalidLink(in_words(refusal.to_string()))),
         }
     }
 }
 
-/// Refuse a link whose two ports' families, names, codec or formats do not
-/// match, naming both endpoints.
+/// Refuse a link connected as `link` whose two ports' families, names, codec
+/// or formats do not match, naming both endpoints; a saved graph's link whose
+/// Image formats alone do not match is taken, as the answer says.
 ///
 /// An output whose family follows an input of its node is checked as each
 /// output linked into that input, once one is; and a link into such an input
 /// is checked, as that output, against every input the following output
-/// already feeds. An Image format an input does not read refuses the link as
-/// `image_formats` says.
+/// already feeds.
 pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-    image_formats: ImageFormatsTheInputDoesNotRead,
-) -> Result<()> {
+    link: ALinkThePinTypesRefuse,
+) -> Result<FamiliesTakeTheLink> {
+    let mut taken = FamiliesTakeTheLink::Wholly;
     let (Some(from_node), Some(to_node)) = (
         graph.traversal().v(from.node_run_id()).first(),
         graph.traversal().v(to.node_run_id()).first(),
     ) else {
-        return Ok(());
+        return Ok(taken);
     };
     let Some(input_declaration) = input_port_family(to_node, to.port_name()) else {
-        return Ok(());
+        return Ok(taken);
     };
     if output_port_family(from_node, from.port_name()).is_none() {
-        return Ok(());
+        return Ok(taken);
     }
     let inputs_carried_on_to = the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name());
     for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
-        if let Some(refusal) = refusal_of_a_link_from_an_output(
-            carried_on,
-            to_node,
-            to.port_name(),
-            input_declaration,
-            image_formats,
-        ) {
-            return Err(Error::InvalidLink(refusal));
+        if let Some(refusal) =
+            refusal_of_a_link_from_an_output(carried_on, to_node, to.port_name(), input_declaration)
+        {
+            taken.take(refusal, link, |words| words)?;
         }
         refuse_what_a_link_carries_on_past_its_input(
             carried_on,
             &inputs_carried_on_to,
             from,
             to,
-            image_formats,
+            link,
+            &mut taken,
         )?;
     }
-    Ok(())
+    Ok(taken)
 }
 
 /// Each input what arrives at an input is carried on to, with the following output it leaves
@@ -266,15 +272,16 @@ pub(crate) type InputsCarriedOnTo<'graph> = [(
     &'graph str,
 )];
 
-/// Refuse a link from `from` into `to` when an output that follows `to`'s input carries what
-/// `carried_on` sends on into one of `inputs_carried_on_to` whose family refuses it, an Image
-/// format it does not read refusing it as `image_formats` says.
+/// Refuse a link from `from` into `to`, connected as `link`, when an output that follows `to`'s
+/// input carries what `carried_on` sends on into one of `inputs_carried_on_to` whose family
+/// refuses it; a saved graph's link whose Image formats alone are refused is noted in `taken`.
 pub(crate) fn refuse_what_a_link_carries_on_past_its_input(
     carried_on: (&GraphNode, &str, &PortFamilyDeclaration),
     inputs_carried_on_to: &InputsCarriedOnTo<'_>,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-    image_formats: ImageFormatsTheInputDoesNotRead,
+    link: ALinkThePinTypesRefuse,
+    taken: &mut FamiliesTakeTheLink,
 ) -> Result<()> {
     for &(following_node, following_output_name, downstream_node, downstream_input_port) in
         inputs_carried_on_to
@@ -289,21 +296,26 @@ pub(crate) fn refuse_what_a_link_carries_on_past_its_input(
             downstream_node,
             downstream_input_port,
             downstream_input_declaration,
-            image_formats,
         ) {
-            return Err(Error::InvalidLink(format!(
-                "cannot link {from} to {to}: {}.{} carries on what {to} takes, and it \
-                 feeds {}.{}: {refusal}",
-                following_node.display_name,
-                following_output_name,
-                downstream_node.display_name,
-                downstream_input_port
-            )));
+            taken.take(refusal, link, |words| {
+                format!(
+                    "cannot link {from} to {to}: {}.{} carries on what {to} takes, and it \
+                     feeds {}.{}: {words}",
+                    following_node.display_name,
+                    following_output_name,
+                    downstream_node.display_name,
+                    downstream_input_port
+                )
+            })?;
         }
     }
     Ok(())
 }
 
+/// Refuse a config update `config_to_apply` on node `node_run_id` under which a link out of
+/// it, or what a passer carries on from one, would be refused by its families, names or codec.
+/// Its Image formats are not judged again: no config sets them, and a wired link has passed
+/// them or, a saved graph's, been kept despite them.
 pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
     graph: &Graph,
     node_run_id: &NodeRunId,
@@ -362,7 +374,7 @@ pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_ref
                     declaration: reached_input_declaration,
                 },
             );
-            if let Some(refusal) = refusal {
+            if let Some(PortFamilyLinkRefusal::Other(refusal)) = refusal {
                 return Err(Error::Config(format!(
                     "config update for {} refused: under it the wired link {} → {}, which \
                      reaches {}.{reached_input_port}, is refused: {refusal}",
