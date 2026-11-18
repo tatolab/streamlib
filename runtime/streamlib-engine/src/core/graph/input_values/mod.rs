@@ -118,7 +118,7 @@ pub fn refuse_an_input_value_its_input_does_not_take(
         )?;
         return match (port.range, value.as_f64()) {
             (Some(range), Some(number)) => {
-                refuse_a_number_outside_the_range(node.name, &port.name, number, range)
+                refuse_a_number_outside_the_range(node.name, &port.name, number, range.0)
             }
             _ => Ok(()),
         };

@@ -461,7 +461,7 @@ fn a_stream_input_is_found_by_the_port_its_graph_input_declares() {
             ..
         } => {
             assert_eq!(input, "fader");
-            assert_eq!(inputs_the_stream_has, "`Cue`");
+            assert_eq!(inputs_the_stream_has, ["Cue"]);
         }
         other => panic!("the refusal names the stream's inputs: {other}"),
     }
@@ -878,10 +878,10 @@ fn a_link_into_the_value_of_a_graph_input_is_refused() {
 }
 
 /// A stream document holding a link into the `value` of a top-level `GraphInput` is refused as
-/// it loads, naming the setting.
+/// it is validated, naming the setting, before the load adds any node.
 ///
-/// Mental-revert: without the rule refusing a link into a setting, the document loads with the
-/// link.
+/// Mental-revert: without the setting rule in the document's validation, the link is refused at
+/// its connect, after the load added the graph's nodes.
 #[test]
 #[serial]
 fn a_document_linking_into_the_value_of_a_graph_input_is_refused_at_load() {
@@ -912,4 +912,5 @@ fn a_document_linking_into_the_value_of_a_graph_input_is_refused_at_load() {
         refusal.contains("input `value` of `echo`, a setting, which takes no wire"),
         "{refusal}"
     );
+    assert_eq!(stream.node_count(), 0, "the refused load added no node");
 }

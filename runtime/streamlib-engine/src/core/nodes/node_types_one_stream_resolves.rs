@@ -18,10 +18,10 @@ use crate::core::graph::{
     GraphNodeWithComponents, PortInfo,
 };
 use crate::core::nodes::node_instance_factory::the_node_type_as_registered;
-use crate::core::nodes::project_view_node::{
-    ValueSourceNode, the_node_type_of_a_project_view, the_node_type_of_a_top_level_graph_input,
+use crate::core::nodes::project_view_node::{ValueSourceNode, the_node_type_of_a_project_view};
+use crate::core::nodes::{
+    DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, the_node_type_of_a_top_level_graph_input,
 };
-use crate::core::nodes::{DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance};
 use crate::core::{NodeDescriptor, PortDirection};
 
 struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
@@ -553,9 +553,7 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &NodeClassImportPath,
     ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
-        if node_type.as_str()
-            == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
-        {
+        if crate::core::graph::graph_interface_resolution::is_the_graph_input_type(node_type) {
             return Some(Arc::clone(&THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS));
         }
         self.view_types_this_streams_project_brings

@@ -27,6 +27,7 @@ use streamlib::sdk::json_schema::{
 };
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use streamlib_control_contract::CALL_OPERATION_TOOL_NAME;
+use streamlib_project_repository::GraphEditStream;
 use uuid::Uuid;
 
 use crate::mcp::LocalApiMcpServerHandler;
@@ -189,11 +190,13 @@ impl LocalApiMcpServerHandler {
             .stream
             .clone()
             .unwrap_or_else(|| stream_id.to_string());
-        let stream_asset =
-            crate::control_operations_on_project_views::the_stream_asset_a_loaded_stream_runs(
-                operations_on_the_loaded_streams.as_ref(),
-                &stream_id_as_the_graph_reports_it,
-            )
+        let listings = operations_on_the_loaded_streams.list_streams();
+        let stream_asset = crate::stream_graph_transaction_executor::StreamsTheRuntimeHolds::listed_in(&listings)
+            .the_stream_named(&GraphEditStream::StreamId(
+                stream_id_as_the_graph_reports_it.clone(),
+            ))
+            .map(|(stream_asset, _)| stream_asset)
+            .ok()
             .ok_or_else(|| {
                 McpError::invalid_params(
                     format!(

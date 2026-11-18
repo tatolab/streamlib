@@ -9,7 +9,7 @@ use streamlib_control_contract::{
     SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
     TransactRequest, UnlockSubgraphRequest,
 };
-use streamlib_project_repository::StreamGraphAction;
+use streamlib_project_repository::{GRAPH_INTERFACE_VALUE_PORT_NAME, StreamGraphAction};
 
 use super::{
     ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
@@ -286,10 +286,11 @@ impl ControlOperationDispatcher {
         let level = level.unwrap_or_default();
         let (node, input) = match node {
             Some(node) => (node, input),
-            None => {
-                self.the_input_a_set_naming_no_node_sets(ACTION_NAME, stream, &level, &input)
-                    .await?
-            }
+            None => (
+                self.the_node_a_set_naming_no_node_sets(ACTION_NAME, &stream, &level, &input)
+                    .await?,
+                GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
+            ),
         };
         self.apply_a_graph_transaction(
             ACTION_NAME,

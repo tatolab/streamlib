@@ -5692,8 +5692,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -5773,8 +5772,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -5806,8 +5804,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -5844,8 +5841,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -5882,8 +5878,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -5921,8 +5916,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -5962,8 +5956,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6000,8 +5993,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6039,8 +6031,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "generator": {
                 "type": "string",
@@ -6086,8 +6077,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6127,8 +6117,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6182,8 +6171,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6236,8 +6224,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "project": {
                 "type": "string",
@@ -6280,8 +6267,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6328,8 +6314,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6361,8 +6346,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "text": {
                 "type": "string",
@@ -6408,8 +6392,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "note": {
                 "type": "string",
@@ -6466,8 +6449,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "note": {
                 "type": "string",
@@ -6491,8 +6473,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6524,8 +6505,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6872,8 +6852,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -6973,8 +6952,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7038,8 +7016,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "generator": {
             "type": "string",
@@ -7102,8 +7079,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7162,8 +7138,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7228,8 +7203,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7296,8 +7270,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7366,8 +7339,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7431,8 +7403,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7497,8 +7468,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7565,8 +7535,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7647,8 +7616,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7728,8 +7696,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7796,8 +7763,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -7856,8 +7822,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "text": {
             "type": "string",
@@ -7927,8 +7892,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "note": {
             "type": "string",
@@ -8009,8 +7973,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "note": {
             "type": "string",
@@ -8058,8 +8021,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -10332,8 +10294,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "project": {
             "type": "string",

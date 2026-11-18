@@ -99,20 +99,15 @@ fn the_graph_input_declaring_the_input<'graph>(
     }) {
         return Ok(node);
     }
-    let mut declared: Vec<String> = graph_inputs
+    let mut inputs_the_stream_has: Vec<String> = graph_inputs
         .iter()
         .filter_map(|node| declared_port_of(node))
-        .map(|port| format!("`{port}`"))
         .collect();
-    declared.sort();
+    inputs_the_stream_has.sort();
     Err(Error::StreamHasNoInputNamed {
         stream: stream_id.to_string(),
         input: input_name.to_string(),
-        inputs_the_stream_has: if declared.is_empty() {
-            "none".to_string()
-        } else {
-            declared.join(", ")
-        },
+        inputs_the_stream_has,
     })
 }
 

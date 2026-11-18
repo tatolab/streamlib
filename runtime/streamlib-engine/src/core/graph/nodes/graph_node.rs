@@ -42,6 +42,11 @@ pub struct GraphNode {
     #[serde(default)]
     pub config_checksum: u64,
     pub ports: GraphNodePorts,
+    /// The ports as the node's type declares them, before its config resolves them, which each
+    /// config resolves again; `None` on a node read back from its rendering, whose ports are
+    /// taken as declared.
+    #[serde(skip)]
+    declared_ports: Option<GraphNodePorts>,
     /// How the node's type runs, read off its registered descriptor; `None`
     /// on a node whose type nothing registers.
     #[serde(skip)]
@@ -108,7 +113,9 @@ impl GraphNode {
             &outputs,
             config.as_ref(),
         ));
-        let ports = GraphNodePorts { inputs, outputs }
+        let declared_ports = GraphNodePorts { inputs, outputs };
+        let ports = declared_ports
+            .clone()
             .resolved_against_the_config(&node_type, config.as_ref());
         Self {
             id: NodeRunId::new(),
@@ -121,6 +128,7 @@ impl GraphNode {
             config,
             config_checksum,
             ports,
+            declared_ports: Some(declared_ports),
             node_kind,
             components: ComponentMap::new(),
             component_serializers: Vec::new(),
@@ -152,7 +160,10 @@ impl GraphNode {
     /// Update config and recompute checksum.
     pub fn set_config(&mut self, config: serde_json::Value) {
         self.config_checksum = compute_json_checksum(&config);
-        self.ports = std::mem::take(&mut self.ports)
+        self.ports = self
+            .declared_ports
+            .clone()
+            .unwrap_or_else(|| self.ports.clone())
             .resolved_against_the_config(&self.node_type, Some(&config));
         self.config = Some(config);
     }
@@ -171,8 +182,7 @@ impl GraphNode {
     /// Whether this node is a `GraphInput`; one in a graph that runs is at its stream's top
     /// level, since a fragment's own are flattened away.
     pub fn is_a_graph_input(&self) -> bool {
-        self.node_type.as_str()
-            == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
+        crate::core::graph::graph_interface_resolution::is_the_graph_input_type(&self.node_type)
     }
 
     pub fn node_type(&self) -> &NodeClassImportPath {
@@ -193,10 +203,27 @@ impl GraphNode {
     ) {
         let exposed_before =
             std::mem::replace(&mut self.exposed_config_fields, exposed_config_fields);
-        self.ports
-            .inputs
-            .retain(|port| !exposed_before.contains(&port.name));
-        self.ports.inputs.extend(exposed_config_field_input_ports);
+        for ports in self.the_ports_resolved_and_declared() {
+            ports
+                .inputs
+                .retain(|port| !exposed_before.contains(&port.name));
+            ports
+                .inputs
+                .extend(exposed_config_field_input_ports.iter().cloned());
+        }
+    }
+
+    /// Give this node the input `input` and the output `output`, beyond those its type declares.
+    pub(crate) fn add_an_input_and_an_output(&mut self, input: PortInfo, output: PortInfo) {
+        for ports in self.the_ports_resolved_and_declared() {
+            ports.inputs.push(input.clone());
+            ports.outputs.push(output.clone());
+        }
+    }
+
+    /// This node's ports as its config resolves them, and as they are declared, to change alike.
+    fn the_ports_resolved_and_declared(&mut self) -> impl Iterator<Item = &mut GraphNodePorts> {
+        std::iter::once(&mut self.ports).chain(self.declared_ports.as_mut())
     }
 
     /// Whether input `name` is a config field this node exposes as an input.

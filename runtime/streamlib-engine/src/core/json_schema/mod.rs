@@ -593,7 +593,7 @@ pub struct PortDescriptorOutput {
 impl PortDescriptorOutput {
     /// Whether a link may end at this input: every input but a setting.
     pub fn takes_a_wire(&self) -> bool {
-        !matches!(self.input_mode, Some(NodeInputMode::SettingOnly { .. }))
+        self.input_mode.is_none_or(NodeInputMode::takes_a_wire)
     }
 
     /// The input a config field of a node type not yet typed is: one that takes

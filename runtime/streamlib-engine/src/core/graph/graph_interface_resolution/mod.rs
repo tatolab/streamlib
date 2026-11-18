@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 
 use crate::core::descriptors::{
-    NodeValueLifetime, PinNumberRange, PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
-    refusal_of_a_link_between_port_families,
+    NodeClassImportPath, NodeValueLifetime, PinNumberRange, PortFamily, PortFamilyDeclaration,
+    PortFamilyLinkEndpoint, refusal_of_a_link_between_port_families,
 };
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, refuse_a_port_the_node_does_not_have,
@@ -25,7 +25,8 @@ use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
 use crate::core::graph::{
-    GraphNodePorts, cast_exposed_name_to_url_safe, the_words_of_a_link_into_a_setting,
+    GraphNodePorts, InputNumberRange, cast_exposed_name_to_url_safe,
+    the_words_of_a_link_into_a_setting,
 };
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
@@ -44,6 +45,7 @@ use interface_node_config::{
 pub use streamlib_project_repository::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, is_a_graph_interface_node_type,
+    is_the_graph_input_type,
 };
 
 /// The component key an interface node, and a drawn link with an end on one,
@@ -175,7 +177,7 @@ impl GraphInterfaceNodeAsDrawn {
             declared.as_component(),
         );
         let config = the_config_a_graph_interface_node_renders(
-            self.node.node_type.as_str(),
+            &self.node.node_type,
             config_of_a_node_holding_no_pin_value(&self.node.input_values),
         );
         GraphNodeOutput {
@@ -204,10 +206,10 @@ impl GraphInterfaceNodeAsDrawn {
 /// The config an interface node of `node_type` holding `config` renders: a `GraphInput`'s saved
 /// `value` under `default`, as [`render_the_saved_value_of_a_graph_input_as_its_default`] puts it.
 pub(crate) fn the_config_a_graph_interface_node_renders(
-    node_type: &str,
+    node_type: &NodeClassImportPath,
     mut config: serde_json::Value,
 ) -> serde_json::Value {
-    if node_type != GRAPH_INPUT_NODE_TYPE {
+    if !is_the_graph_input_type(node_type) {
         return config;
     }
     if let Some(config) = config.as_object_mut() {
@@ -281,7 +283,7 @@ pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
     if let Some(family) = the_family_a_graph_input_config_names(config) {
         value.family.family = family;
     }
-    value.range = the_range_a_graph_input_config_declares(config);
+    value.range = the_range_a_graph_input_config_declares(config).map(InputNumberRange);
     value.lifetime = the_value_lifetime_a_graph_input_config_declares(config).unwrap_or_default();
 }
 

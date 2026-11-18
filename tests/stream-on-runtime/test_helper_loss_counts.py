@@ -373,9 +373,7 @@ def test_a_killed_helper_is_restarted_and_its_counts_keep_counting_from_where_it
     loss_counting_stream.local_api.call_tool(
         "remove_node",
         {
-            "stream": loss_counting_stream.local_api.stream_asset_of(
-                loss_counting_stream.stream_id
-            ),
+            "stream": loss_counting_stream.stream_id,
             "node": slow_sink_uuid,
             "mode": "live",
         },

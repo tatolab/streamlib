@@ -185,7 +185,18 @@ pub(crate) struct ValueSourceNode {
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
-    publishes_each_input_on_its_output: bool,
+    kind: ValueSourceKind,
+}
+
+/// Which node a [`ValueSourceNode`] is, which decides where the values a client sets go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueSourceKind {
+    /// A stream's top-level `GraphInput`: each input value is published on its same-named
+    /// output, which keeps its last message for a reader that connects later.
+    TopLevelGraphInput,
+    /// A view node: a panel writes onto its outputs, and each reader that connects later is
+    /// handed the value each output carries.
+    ViewNode,
 }
 
 impl ValueSourceNode {
@@ -202,7 +213,7 @@ impl ValueSourceNode {
             port.family = PortFamilyDeclaration::of_family(family);
         }
         Ok(Self {
-            publishes_each_input_on_its_output: true,
+            kind: ValueSourceKind::TopLevelGraphInput,
             ..Self::for_the_node(node, descriptor)
         })
     }
@@ -228,7 +239,7 @@ impl ValueSourceNode {
             next_start_sample_of_each_channels_output: HashMap::new(),
             output_writer: None,
             input_mailboxes: None,
-            publishes_each_input_on_its_output: false,
+            kind: ValueSourceKind::ViewNode,
         }
     }
 
@@ -559,10 +570,12 @@ impl DynGeneratedNode for ValueSourceNode {
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         self.take_every_waiting_input_message()?;
-        if self.publishes_each_input_on_its_output {
-            return Ok(());
+        match self.kind {
+            ValueSourceKind::TopLevelGraphInput => Ok(()),
+            ValueSourceKind::ViewNode => {
+                self.hand_each_current_value_to_a_reader_it_has_not_reached()
+            }
         }
-        self.hand_each_current_value_to_a_reader_it_has_not_reached()
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -634,13 +647,12 @@ impl DynGeneratedNode for ValueSourceNode {
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
     ) -> Result<()> {
-        if !self.publishes_each_input_on_its_output {
-            return land_the_unlinked_input_values_in_the_input_mailboxes(
-                self.iceoryx2_input_mailboxes_inner(),
-                input_values,
-            );
-        }
-        let read_by_an_input_alone = self.publish_each_input_value_on_its_output(input_values)?;
+        let read_by_an_input_alone = match self.kind {
+            ValueSourceKind::TopLevelGraphInput => {
+                std::borrow::Cow::Owned(self.publish_each_input_value_on_its_output(input_values)?)
+            }
+            ValueSourceKind::ViewNode => std::borrow::Cow::Borrowed(input_values),
+        };
         land_the_unlinked_input_values_in_the_input_mailboxes(
             self.iceoryx2_input_mailboxes_inner(),
             &read_by_an_input_alone,

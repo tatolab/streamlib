@@ -12,7 +12,7 @@ use streamlib_project_repository::{
     EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION, GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION,
     GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
     GROUP_ARGUMENT_DESCRIPTION, GROUP_COLOUR_ARGUMENT_DESCRIPTION,
-    GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION,
+    GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION, GraphEditStream,
     IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
@@ -38,7 +38,7 @@ pub struct TransactRequest {
     #[schemars(
         description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_input_value`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
-    pub operations: Vec<StreamGraphAction>,
+    pub operations: Vec<StreamGraphAction<GraphEditStream>>,
     /// Whether the edit is kept.
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     pub mode: Option<GraphEditMode>,
@@ -54,9 +54,9 @@ pub struct TransactRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddNodeRequest {
-    /// The stream asset the node is added to.
+    /// The stream the node is added to.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -101,9 +101,9 @@ pub struct AddNodeRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OneLinkGraphEditRequest {
-    /// The stream asset the link is in.
+    /// The stream the link is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -133,9 +133,9 @@ pub struct OneLinkGraphEditRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OneNodeGraphEditRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -158,9 +158,9 @@ pub struct OneNodeGraphEditRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetNodeConfigRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -188,9 +188,9 @@ pub struct SetNodeConfigRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetPinValueRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -223,9 +223,9 @@ pub struct SetPinValueRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetNodeInputValueRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -257,9 +257,9 @@ const SET_NODE_INPUT_VALUE_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the defa
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RenameNodeRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -287,9 +287,9 @@ pub struct RenameNodeRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetStudioFieldsRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -315,9 +315,9 @@ pub struct SetStudioFieldsRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddGroupRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -351,9 +351,9 @@ pub struct AddGroupRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetGroupFieldsRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -385,9 +385,9 @@ pub struct SetGroupFieldsRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddNoteRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The note's text.
     #[schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION)]
     pub text: String,
@@ -412,9 +412,9 @@ pub struct AddNoteRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetNoteFieldsRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The note, by its UUID.
     #[schemars(description = NOTE_ARGUMENT_DESCRIPTION)]
     pub note: String,
@@ -448,9 +448,9 @@ pub struct SetNoteFieldsRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RemoveNoteRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The note, by its UUID.
     #[schemars(description = NOTE_ARGUMENT_DESCRIPTION)]
     pub note: String,
@@ -469,9 +469,9 @@ pub struct RemoveNoteRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RemoveGroupRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -494,9 +494,9 @@ pub struct RemoveGroupRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CollapseSelectionIntoSubgraphRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -526,9 +526,9 @@ pub struct CollapseSelectionIntoSubgraphRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UnlockSubgraphRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
@@ -553,9 +553,9 @@ pub struct UnlockSubgraphRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImportGraphGeneratorRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The graph generator, by its import path.
     #[schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION)]
     pub generator: String,
@@ -580,9 +580,9 @@ pub struct ImportGraphGeneratorRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetExposedConfigFieldsRequest {
-    /// The stream asset the edit is in.
+    /// The stream the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]

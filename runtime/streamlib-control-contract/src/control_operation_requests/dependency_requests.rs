@@ -10,8 +10,8 @@ use serde::Deserialize;
 use streamlib_project_repository::{
     DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,
     DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
+    GraphEditStream,
 };
-use uuid::Uuid;
 
 use super::{
     AUTHOR_ARGUMENT_DESCRIPTION, GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION, GraphEditMode,
@@ -115,9 +115,9 @@ pub struct RemoveDependencyRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UseDependencyStreamRequest {
-    /// The stream the edit is to, by its stream asset's UUID.
+    /// The stream the edit is to, by its stream id or its stream asset's UUID.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: Uuid,
+    pub stream: GraphEditStream,
     /// The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists
     /// under `dependencies`.
     #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]

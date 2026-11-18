@@ -121,11 +121,6 @@ impl PortDescriptor {
         self
     }
 
-    /// Whether a link may end at this input: every input but a setting.
-    pub fn takes_a_wire(&self) -> bool {
-        !matches!(self.input_mode, Some(NodeInputMode::SettingOnly { .. }))
-    }
-
     /// Builder-style override for the pin type and flow the port's author states.
     pub fn with_pin_declaration(mut self, pin_declaration: PinDeclaration) -> Self {
         self.pin_declaration = Some(pin_declaration);

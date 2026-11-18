@@ -185,17 +185,18 @@ pub enum Error {
 
     /// A stream has no input of the name given: none of its top-level `GraphInput`s declares it.
     #[error(
-        "the stream `{stream}` has no input `{input}`; its inputs are {inputs_the_stream_has}, \
-         each the port a top-level `GraphInput` of family array, channels or records declares. \
-         To fix: name one of them. To set an input of a node, name the node"
+        "the stream `{stream}` has no input `{input}`; its inputs are {}, each the port a \
+         top-level `GraphInput` of family array, channels or records declares. To fix: name one \
+         of them. To set an input of a node, name the node",
+        names_in_backticks_or_none(.inputs_the_stream_has)
     )]
     StreamHasNoInputNamed {
         /// The stream.
         stream: String,
         /// The input's name as it was given.
         input: String,
-        /// The stream's inputs, each in backticks and comma-joined, or `none`.
-        inputs_the_stream_has: String,
+        /// The stream's inputs, sorted.
+        inputs_the_stream_has: Vec<String>,
     },
 
     #[error("Node '{node_run_id}' has no {direction} port named '{port_name}'")]
@@ -412,3 +413,15 @@ pub enum Error {
 
 /// StreamLib result alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// `names`, each in backticks and comma-joined, or `none` when there are none.
+fn names_in_backticks_or_none(names: &[String]) -> String {
+    if names.is_empty() {
+        return "none".to_owned();
+    }
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}

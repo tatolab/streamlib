@@ -84,7 +84,8 @@ pub use edges::{
 };
 pub(crate) use nodes::the_words_of_a_link_into_a_setting;
 pub use nodes::{
-    GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PortInfo,
+    GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, InputNumberRange, NodeRunId,
+    PortInfo,
 };
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{

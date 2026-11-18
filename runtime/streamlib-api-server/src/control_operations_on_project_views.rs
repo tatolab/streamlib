@@ -6,11 +6,9 @@
 
 use std::path::Path;
 
-use streamlib::sdk::runtime::{
-    OperationsOnTheStreamsLoadedInThisRuntime, TopLevelGraphInputDeclaringAStreamInput,
-};
+use streamlib::sdk::runtime::TopLevelGraphInputDeclaringAStreamInput;
 use streamlib_project_repository::{
-    GRAPH_INTERFACE_VALUE_PORT_NAME, ProjectViewFolderRead, StreamGraphAction,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GraphEditStream, ProjectViewFolderRead, StreamGraphAction,
     TatolabViewDeclaredPort, every_view_a_project_and_its_imports_bring,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -26,6 +24,7 @@ use crate::control_operation_dispatcher::{
     ControlOperationDispatcher, ControlOperationRefusal, ControlRequestOrigin,
 };
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
+use crate::stream_graph_transaction_executor::StreamsTheRuntimeHolds;
 
 fn the_declared_port_on_the_wire(port: &TatolabViewDeclaredPort) -> ProjectViewDeclaredPort {
     ProjectViewDeclaredPort {
@@ -152,20 +151,10 @@ impl ControlOperationDispatcher {
         if let Some(refusal) = graph_input.refusal_while_its_node_does_not_run {
             return Err(the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal));
         }
-        let stream_asset = the_stream_asset_a_loaded_stream_runs(
-            self.operations_on_the_loaded_streams.as_ref(),
-            &stream,
-        )
-        .ok_or_else(|| {
-            ControlOperationRefusal::failed(format!(
-                "{ACTION_NAME} failed: the stream `{stream}` runs no stream asset of a project, \
-                 so it has no graph to set the input `{input}` on"
-            ))
-        })?;
         self.apply_a_graph_transaction(
             ACTION_NAME,
             vec![StreamGraphAction::SetNodeInputValue {
-                stream: stream_asset,
+                stream: GraphEditStream::StreamId(stream.clone()),
                 level: Vec::new(),
                 node: graph_input.node.to_string(),
                 input: GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
@@ -184,17 +173,18 @@ impl ControlOperationDispatcher {
         })
     }
 
-    /// The node and input a `set_node_input_value` naming no node sets, on the stream asset
-    /// `stream_asset` at `level`: the `value` input of the top-level `GraphInput` declaring the
-    /// stream input `input`. Refused below the top level, where no stream input is declared,
-    /// and for an input no top-level `GraphInput` declares, naming the stream's inputs.
-    pub(crate) async fn the_input_a_set_naming_no_node_sets(
+    /// The node a `set_node_input_value` naming no node sets the `value` input of, in the stream
+    /// `stream` names at `level`: the top-level `GraphInput` declaring the stream input `input`.
+    /// Refused below the top level, where no stream input is declared, for a stream the runtime
+    /// does not hold, and for an input no top-level `GraphInput` declares, naming the stream's
+    /// inputs.
+    pub(crate) async fn the_node_a_set_naming_no_node_sets(
         &self,
         action_name: &str,
-        stream_asset: Uuid,
+        stream: &GraphEditStream,
         level: &[Uuid],
         input: &str,
-    ) -> Result<(String, String), ControlOperationRefusal> {
+    ) -> Result<String, ControlOperationRefusal> {
         if !level.is_empty() {
             return Err(ControlOperationRefusal::RefusedAction(Box::new(
                 ProjectActionRefusalOnTheWire {
@@ -207,26 +197,19 @@ impl ControlOperationDispatcher {
                 },
             )));
         }
-        let stream_id = the_loaded_stream_running_the_stream_asset(
-            self.operations_on_the_loaded_streams.as_ref(),
-            stream_asset,
-        )
-        .ok_or_else(|| {
-            ControlOperationRefusal::coded(
-                RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
-                format!(
-                    "{action_name} failed: no stream the runtime holds runs the stream asset \
-                     {stream_asset}, so it has no input `{input}` to set"
-                ),
-            )
-        })?;
+        let listings = self.operations_on_the_loaded_streams.list_streams();
+        let (_, stream_id) = StreamsTheRuntimeHolds::listed_in(&listings)
+            .the_stream_named(stream)
+            .map_err(|runtime_words| {
+                ControlOperationRefusal::coded(
+                    RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
+                    format!("{action_name} failed: {runtime_words}"),
+                )
+            })?;
         let graph_input = self
             .the_graph_input_declaring_the_stream_input(action_name, &stream_id, input)
             .await?;
-        Ok((
-            graph_input.node.to_string(),
-            GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
-        ))
+        Ok(graph_input.node.to_string())
     }
 
     /// The top-level `GraphInput` of the loaded stream `stream_id` declaring the stream input
@@ -252,36 +235,4 @@ pub(crate) fn the_words_of_a_stream_input_named_below_the_top_level(input: &str)
          `GraphInput` declares, so its `level` is the top level; the input `{input}` was named \
          at a level below it. To fix: leave `level` out, or name the node whose input it is"
     )
-}
-
-/// The stream asset the loaded stream `stream_id` runs; `None` when it runs none.
-pub(crate) fn the_stream_asset_a_loaded_stream_runs(
-    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
-    stream_id: &str,
-) -> Option<Uuid> {
-    operations_on_the_loaded_streams
-        .list_streams()
-        .into_iter()
-        .find(|listing| listing.stream_id == stream_id)
-        .and_then(|listing| listing.stream_location)
-        .map(|stream_location| stream_location.stream_asset)
-}
-
-/// The loaded stream running the stream asset `stream_asset`, one whose graph is loaded first;
-/// `None` when none runs it.
-fn the_loaded_stream_running_the_stream_asset(
-    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
-    stream_asset: Uuid,
-) -> Option<String> {
-    let mut listings = operations_on_the_loaded_streams.list_streams();
-    listings.sort_by_key(|listing| listing.node_count.is_none());
-    listings
-        .into_iter()
-        .find(|listing| {
-            listing
-                .stream_location
-                .as_ref()
-                .is_some_and(|stream_location| stream_location.stream_asset == stream_asset)
-        })
-        .map(|listing| listing.stream_id)
 }

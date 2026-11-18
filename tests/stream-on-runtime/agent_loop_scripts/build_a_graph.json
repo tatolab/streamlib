@@ -29,20 +29,20 @@
         "operations": [
           {
             "operation": "add_node",
-            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/location/stream_asset" } },
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
             "type": { "$given": "source_node_type" },
             "as": { "$given": "source_label" },
             "config": { "$given": "source_config" }
           },
           {
             "operation": "add_node",
-            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/location/stream_asset" } },
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
             "type": { "$given": "sink_node_type" },
             "as": { "$given": "sink_label" }
           },
           {
             "operation": "connect",
-            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/location/stream_asset" } },
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
             "source": { "node": { "$given": "source_label" }, "port": { "$given": "source_output" } },
             "target": { "node": { "$given": "sink_label" }, "port": { "$given": "sink_input" } }
           }

@@ -264,8 +264,10 @@ fn carry_one_link_through_the_pool(
     .with_delivery_profile("newest");
     let output_descriptor =
         PortDescriptor::new(&pool_output_port, &description, false, family.clone());
-    pool.ports.inputs.push(PortInfo::from(&input_descriptor));
-    pool.ports.outputs.push(PortInfo::from(&output_descriptor));
+    pool.add_an_input_and_an_output(
+        PortInfo::from(&input_descriptor),
+        PortInfo::from(&output_descriptor),
+    );
     let mut config = pool
         .config
         .clone()

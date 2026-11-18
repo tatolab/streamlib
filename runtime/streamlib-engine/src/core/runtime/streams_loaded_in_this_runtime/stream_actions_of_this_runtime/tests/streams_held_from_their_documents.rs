@@ -445,3 +445,56 @@ fn a_reload_once_its_document_names_only_described_types_loads_the_failed_stream
     assert!(loaded_again.is_held_stopped());
     assert!(!the_record_of(state_directory.path(), &camera).is_failed());
 }
+
+/// A recorded stream whose document links a node into the `value` of its top-level `GraphInput`,
+/// a setting, is held with that link set aside, naming the setting, and the rest of its graph
+/// loaded.
+///
+/// Mental-revert: without the setting rule in the document's validation, the link is first
+/// refused at its connect, after the load added the graph's nodes, and the stream is not held.
+#[test]
+#[serial]
+fn a_recorded_stream_linking_into_a_graph_inputs_value_is_held_with_that_link_set_aside() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let mut graph = the_graph_of_a_source_linked_into_a_sink("camera", false);
+    graph["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "5e8c2b7a-1d4f-4c6e-9a3b-8f2d6c1e7a54",
+            "name": "echo",
+            "type": crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+            "config": {"port": "echo", "family": "records"},
+        }));
+    graph["links"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "source": {"node": "source", "port": "out1"},
+            "target": {"node": "echo", "port": "value"},
+        }));
+    let project = ProjectWithGraphDocuments::holding(graph);
+    let camera = project.stream_id_of("camera");
+    a_project_opened_on(&runner, &project);
+
+    let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+    assert!(held.is_held_stopped());
+    assert_eq!(held.node_count(), 3);
+    let why_it_cannot_play = held
+        .why_its_graph_as_held_keeps_this_stream_from_playing()
+        .expect("a link set aside keeps it from playing");
+    assert!(
+        why_it_cannot_play.contains("input `value` of `echo`, a setting, which takes no wire"),
+        "{why_it_cannot_play}"
+    );
+    let rendered = held.to_json().unwrap();
+    let links_loaded: Vec<&serde_json::Value> = rendered["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|link| link["state"] != "error")
+        .collect();
+    assert_eq!(links_loaded.len(), 1, "{rendered}");
+    assert_eq!(links_loaded[0]["target"]["node"], "sink", "{rendered}");
+}
