@@ -872,8 +872,7 @@ export interface GraphNodeComponentsOnTheWire {
 }
 
 /**
- * A node's state as `graph` renders it. The set grows: a state a client does not know is one it
- * shows as written.
+ * A node's state as `graph` renders it.
  */
 export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
 
@@ -1128,7 +1127,7 @@ export interface GraphLinkOnTheWire {
   /**
    * The link's state now.
    */
-  state: GraphLinkStateOnTheWire;
+  state?: GraphLinkStateOnTheWire;
   /**
    * Why the link is in the `error` state, in the words of the helper process that could not
    * open its port, or of the graph's validation that refused it as its stream loaded. Absent
@@ -1168,8 +1167,7 @@ export interface GraphLinkPortRefOnTheWire {
 }
 
 /**
- * The state of a link of a stream's graph. The set grows: a state a client does not know is
- * one it shows as written.
+ * The state of a link of a stream's graph.
  */
 export type GraphLinkStateOnTheWire = "pending" | "wired" | "disconnecting" | "disconnected" | "error";
 

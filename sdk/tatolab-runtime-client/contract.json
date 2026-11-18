@@ -7625,8 +7625,7 @@
             "description": "Its helper process died on its own and a new one starts after a backoff."
           }
         ],
-        "description": "A node's state as `graph` renders it. The set grows: a state a client does not know is one it\nshows as written.",
-        "x-may-grow": true
+        "description": "A node's state as `graph` renders it."
       },
       "HelperProcessRestartsOnTheWire": {
         "type": "object",
@@ -8108,8 +8107,7 @@
             "description": "Wiring failed; `error_reason` says why."
           }
         ],
-        "description": "The state of a link of a stream's graph. The set grows: a state a client does not know is\none it shows as written.",
-        "x-may-grow": true
+        "description": "The state of a link of a stream's graph."
       },
       "PinLinkWarningOnTheWire": {
         "oneOf": [
@@ -8309,8 +8307,7 @@
             "description": "Wiring failed."
           }
         ],
-        "description": "A link's state as wiring stamped it on the link, spelled with a capital.",
-        "x-may-grow": true
+        "description": "A link's state as wiring stamped it on the link, spelled with a capital."
       },
       "LinkCarriedThroughTheFunctionNodePoolOnTheWire": {
         "type": "object",
