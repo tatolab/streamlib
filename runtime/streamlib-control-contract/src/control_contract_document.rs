@@ -14,11 +14,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRef
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
 use crate::control_notification::{CONTROL_NOTIFICATIONS, ControlNotificationDeclaration};
-use crate::control_operation::{
-    ControlOperation, ControlOperationDeclaration, ControlOperationStability,
-};
+use crate::control_operation::{ControlOperationDeclaration, ControlOperationStability};
 use crate::control_operation_results::ControlContractVersionMismatch;
-use crate::control_operations::{CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, Discover};
+use crate::control_operations::{
+    CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS,
+};
 
 /// The OpenRPC version the contract file is written in.
 pub const OPENRPC_DOCUMENT_VERSION: &str = "1.3.2";
@@ -40,8 +40,9 @@ pub const JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE: i64 = -32601;
 /// JSON-RPC's error code of params that do not match the operation's, its `data` the refusal.
 pub const JSON_RPC_INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
-/// The JSON-RPC error code of a `discover` from a client built against another contract version,
-/// its `data` both versions.
+/// The JSON-RPC error code of a call from a client built against a contract the runtime does not
+/// serve, in `discover`'s params or in the request's headers, its `data` the mismatch naming the
+/// older side.
 pub const CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE: i64 = 3;
 
 const COMPONENT_SCHEMAS_DEFINITIONS_PATH: &str = "/components/schemas/";
@@ -95,8 +96,9 @@ pub fn control_contract_document() -> Value {
         "info": {
             "title": "StreamLib runtime control API",
             "version": CONTROL_CONTRACT_VERSION.to_string(),
-            "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change; an addition is marked by its method's `x-since`.",
+            "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
             "x-contract-version": CONTROL_CONTRACT_VERSION,
+            "x-contract-revision": CONTROL_CONTRACT_REVISION,
         },
         "methods": methods,
         "x-notifications": notifications,
@@ -128,7 +130,7 @@ fn the_method_entry_of(
             "name": format!("{}_result", declaration.method_name),
             "schema": result_schema,
         },
-        "errors": the_errors_of(declaration, refusal_schema, contract_version_mismatch_schema),
+        "errors": the_errors_of(refusal_schema, contract_version_mismatch_schema),
         "x-since": declaration.since_contract_version,
         "x-stability": declaration.stability,
         "x-group": declaration.group,
@@ -197,11 +199,10 @@ fn the_node_ui_manifest_component_added_to(schema_generator: &mut schemars::Sche
 }
 
 fn the_errors_of(
-    declaration: &ControlOperationDeclaration,
     refusal_schema: &schemars::Schema,
     contract_version_mismatch_schema: &schemars::Schema,
 ) -> Vec<Value> {
-    let mut errors = vec![
+    vec![
         json!({
             "code": CONTROL_OPERATION_REFUSED_ERROR_CODE,
             "message": "refused",
@@ -217,15 +218,12 @@ fn the_errors_of(
             "message": "params do not match",
             "data": refusal_schema,
         }),
-    ];
-    if declaration.method_name == Discover::METHOD_NAME {
-        errors.push(json!({
+        json!({
             "code": CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
-            "message": "contract version mismatch",
+            "message": "contract mismatch",
             "data": contract_version_mismatch_schema,
-        }));
-    }
-    errors
+        }),
+    ]
 }
 
 fn the_notification_entry_of(
@@ -271,6 +269,10 @@ mod tests {
         assert_eq!(
             document["info"]["x-contract-version"],
             CONTROL_CONTRACT_VERSION
+        );
+        assert_eq!(
+            document["info"]["x-contract-revision"],
+            CONTROL_CONTRACT_REVISION
         );
     }
 

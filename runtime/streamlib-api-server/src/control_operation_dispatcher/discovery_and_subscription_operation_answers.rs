@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use streamlib_control_contract::{
-    CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, DiscoverResult, SubscribeInputValueChangesResult,
-    SubscribeProjectChangesResult, SubscribeProjectLogRecordsResult,
-    SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesResult,
+    CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, DiscoverResult,
+    SubscribeInputValueChangesResult, SubscribeProjectChangesResult,
+    SubscribeProjectLogRecordsResult, SubscribeStreamActionChangesResult,
+    SubscribeStreamGraphChangesResult,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET, ListStreamsToolResult, ListStreamsToolResultStream,
@@ -21,24 +22,25 @@ use crate::control_subscriptions_of_one_connection::{
 };
 
 use super::{
-    ControlOperationDispatcher, ControlOperationRefusal, ControlRequestOrigin,
-    capture_device_on_the_wire, listed_stream_state_on_the_wire,
-    refuse_a_relative_project_directory, refuse_another_contract_version,
-    stream_action_step_on_the_wire, stream_location_on_the_wire,
+    ContractAClientNames, ControlOperationDispatcher, ControlOperationRefusal,
+    ControlRequestOrigin, capture_device_on_the_wire, listed_stream_state_on_the_wire,
+    refuse_a_relative_project_directory, stream_action_step_on_the_wire,
+    stream_location_on_the_wire,
 };
 
 impl ControlOperationDispatcher {
     pub(super) fn discover(
         &self,
-        client_contract_version: Option<u32>,
+        client: ContractAClientNames,
     ) -> Result<DiscoverResult, ControlOperationRefusal> {
-        refuse_another_contract_version(client_contract_version)
+        self.refuse_a_client_of_another_contract(client)
             .map_err(ControlOperationRefusal::ContractVersionMismatch)?;
         let this_runtime = self
             .operations_on_the_loaded_streams
             .describe_this_runtime();
         Ok(DiscoverResult {
             contract_version: CONTROL_CONTRACT_VERSION,
+            contract_revision: CONTROL_CONTRACT_REVISION,
             runtime_version: this_runtime.version,
             build_id: this_runtime.build_id,
             operations: CONTROL_OPERATIONS

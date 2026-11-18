@@ -76,6 +76,9 @@ pub use project_lifecycle::{
 /// The contract's version: bumped only by a breaking change to an operation already in it.
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
+/// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
+pub const CONTROL_CONTRACT_REVISION: u32 = 1;
+
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
     ControlOperationExposure::Agent,

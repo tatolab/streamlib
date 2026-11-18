@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use streamlib_control_contract::{GraphEditMode, RefreshFragmentsRequest, UndoOrRedoRequest};
 use streamlib_project_repository::{
-    ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
+    GraphEditStream, ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
     ProjectTransactionReversal,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -79,7 +79,10 @@ impl ControlOperationDispatcher {
         }
         self.apply_a_graph_transaction(
             "refresh_fragments",
-            refreshes,
+            refreshes
+                .into_iter()
+                .map(|refresh| refresh.map_stream(GraphEditStream::StreamAsset))
+                .collect(),
             mode,
             author,
             idempotency_key,

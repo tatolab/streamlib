@@ -201,7 +201,8 @@ export interface SuggestedOperationCall {
 }
 
 /**
- * The `data` of a `discover` refused for a client built against another contract version.
+ * The `data` of a call, or the body of a WebSocket upgrade, refused for a client built against
+ * another contract than the runtime serves: another version, or a higher revision.
  */
 export interface ControlContractVersionMismatch {
   /**
@@ -212,7 +213,29 @@ export interface ControlContractVersionMismatch {
    * The version this runtime serves.
    */
   runtime_contract_version: number;
+  /**
+   * The revision the client sent, 0 when it sent none.
+   */
+  client_contract_revision: number;
+  /**
+   * The revision this runtime serves.
+   */
+  runtime_contract_revision: number;
+  /**
+   * The side built against the older contract, the one to update.
+   */
+  older_side: OlderSide;
+  /**
+   * The runtime's release, for the words a person reads.
+   */
+  runtime_version: string;
 }
+
+/**
+ * Which side of a refused connection was built against the older contract, and so is the one
+ * to update.
+ */
+export type OlderSide = "runtime" | "client";
 
 /**
  * `discover`'s params.
@@ -220,9 +243,14 @@ export interface ControlContractVersionMismatch {
 export interface DiscoverRequest {
   /**
    * The contract version the client was built against; another version than the runtime's is
-   * refused naming both.
+   * refused naming the older side.
    */
   contract_version?: number | null;
+  /**
+   * The contract revision the client was built against, 0 when absent; a higher revision than
+   * the runtime's is refused naming the runtime as the older side.
+   */
+  contract_revision?: number | null;
 }
 
 /**
@@ -233,6 +261,10 @@ export interface DiscoverResult {
    * The contract version this runtime serves.
    */
   contract_version: number;
+  /**
+   * The contract revision this runtime serves: the additions made within its version.
+   */
+  contract_revision: number;
   /**
    * The runtime's crate version.
    */
@@ -827,7 +859,7 @@ export interface TransactRequest {
  */
 export type StreamGraphAction = ({
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -865,7 +897,7 @@ export type StreamGraphAction = ({
   operation: "add_node";
 }) | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -879,7 +911,7 @@ export type StreamGraphAction = ({
   operation: "remove_node";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -897,7 +929,7 @@ export type StreamGraphAction = ({
   operation: "connect";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -915,7 +947,7 @@ export type StreamGraphAction = ({
   operation: "disconnect";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -933,7 +965,7 @@ export type StreamGraphAction = ({
   operation: "set_node_config";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -955,7 +987,7 @@ export type StreamGraphAction = ({
   operation: "set_pin_value";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -973,7 +1005,7 @@ export type StreamGraphAction = ({
   operation: "rename_node";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -991,7 +1023,7 @@ export type StreamGraphAction = ({
   operation: "set_studio_fields";
 } | ({
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1013,7 +1045,7 @@ export type StreamGraphAction = ({
   operation: "import_graph_generator";
 }) | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1031,7 +1063,7 @@ export type StreamGraphAction = ({
   operation: "set_exposed_config_fields";
 } | ({
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1057,7 +1089,7 @@ export type StreamGraphAction = ({
   operation: "add_group";
 }) | ({
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1083,7 +1115,7 @@ export type StreamGraphAction = ({
   operation: "set_group_fields";
 }) | ({
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1105,7 +1137,7 @@ export type StreamGraphAction = ({
   operation: "use_dependency_stream";
 }) | ({
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1127,7 +1159,7 @@ export type StreamGraphAction = ({
   operation: "collapse_selection_into_subgraph";
 }) | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1141,7 +1173,7 @@ export type StreamGraphAction = ({
   operation: "unlock_subgraph";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1159,7 +1191,7 @@ export type StreamGraphAction = ({
   operation: "add_note";
 } | ({
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1181,7 +1213,7 @@ export type StreamGraphAction = ({
   operation: "set_note_fields";
 }) | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1191,7 +1223,7 @@ export type StreamGraphAction = ({
   operation: "remove_note";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1205,7 +1237,7 @@ export type StreamGraphAction = ({
   operation: "remove_group";
 } | {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1440,7 +1472,7 @@ export interface GraphTransactionInputOverriddenByALink {
  */
 export interface AddNodeRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1490,7 +1522,7 @@ export interface AddNodeRequest {
  */
 export interface OneLinkGraphEditRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1524,7 +1556,7 @@ export interface OneLinkGraphEditRequest {
  */
 export interface ImportGraphGeneratorRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1558,7 +1590,7 @@ export interface ImportGraphGeneratorRequest {
  */
 export interface OneNodeGraphEditRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1588,7 +1620,7 @@ export interface OneNodeGraphEditRequest {
  */
 export interface SetNodeConfigRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1622,7 +1654,7 @@ export interface SetNodeConfigRequest {
  */
 export interface SetPinValueRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1660,7 +1692,7 @@ export interface SetPinValueRequest {
  */
 export interface SetNodeInputValueRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1698,7 +1730,7 @@ export interface SetNodeInputValueRequest {
  */
 export interface RenameNodeRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1732,7 +1764,7 @@ export interface RenameNodeRequest {
  */
 export interface SetStudioFieldsRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1766,7 +1798,7 @@ export interface SetStudioFieldsRequest {
  */
 export interface SetExposedConfigFieldsRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1800,7 +1832,7 @@ export interface SetExposedConfigFieldsRequest {
  */
 export interface AddGroupRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1842,7 +1874,7 @@ export interface AddGroupRequest {
  */
 export interface SetGroupFieldsRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1884,7 +1916,7 @@ export interface SetGroupFieldsRequest {
  */
 export interface CollapseSelectionIntoSubgraphRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1918,7 +1950,7 @@ export interface CollapseSelectionIntoSubgraphRequest {
  */
 export interface UnlockSubgraphRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1948,7 +1980,7 @@ export interface UnlockSubgraphRequest {
  */
 export interface AddNoteRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -1982,7 +2014,7 @@ export interface AddNoteRequest {
  */
 export interface SetNoteFieldsRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -2020,7 +2052,7 @@ export interface SetNoteFieldsRequest {
  */
 export interface RemoveNoteRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -2046,7 +2078,7 @@ export interface RemoveNoteRequest {
  */
 export interface RemoveGroupRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -3386,7 +3418,7 @@ export interface RemoveDependencyRequest {
  */
 export interface UseDependencyStreamRequest {
   /**
-   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
   stream: string;
   /**
@@ -4779,6 +4811,7 @@ export interface ControlContractComponents {
   NodeNotRunningBecauseOnTheWire: NodeNotRunningBecauseOnTheWire;
   SuggestedOperationCall: SuggestedOperationCall;
   ControlContractVersionMismatch: ControlContractVersionMismatch;
+  OlderSide: OlderSide;
   DiscoverRequest: DiscoverRequest;
   DiscoverResult: DiscoverResult;
   SubscribeProjectChangesRequest: SubscribeProjectChangesRequest;
@@ -5018,9 +5051,9 @@ export type ControlContractComponentName = keyof ControlContractComponents;
 /** Every operation the runtime serves, by method name: the params it takes and the result it answers. */
 export interface ControlOperations {
   /**
-   * Answer the contract version this runtime serves, its version and build id, and every method it serves.
+   * Answer the contract version and revision this runtime serves, its version and build id, and every method it serves.
    *
-   * Answer `contract_version`, the version of the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` it was built against; another version is refused naming both, and the client is not served.
+   * Answer `contract_version` and `contract_revision`, the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` and `contract_revision` it was built against; another version, or a higher revision, is refused with error 3, whose data names the `older_side` to update, and the client is not served.
    *
    * Since contract version 1, stable.
    */
@@ -5929,8 +5962,14 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 /** The contract version this package was generated from. */
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
+/** The contract revision this package was generated from: the additions made within its version. */
+export declare const CONTROL_CONTRACT_REVISION: 1;
+
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];
+
+/** Every method the contract marks `experimental`, whose shape may change within a version. */
+export declare const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];
 
 /** The route one JSON-RPC request is POSTed to. */
 export declare const CONTROL_JSON_RPC_ROUTE_PATH: "/control";
@@ -5940,6 +5979,9 @@ export declare const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET: "/control/ws";
 
 /** The header naming the contract version a client was built against. */
 export declare const CONTROL_CONTRACT_VERSION_HEADER_NAME: "tatolab-control-contract-version";
+
+/** The header naming the contract revision a client was built against. */
+export declare const CONTROL_CONTRACT_REVISION_HEADER_NAME: "tatolab-control-contract-revision";
 
 /** The header naming the client, the author of a change it sends with no author. */
 export declare const CONTROL_CLIENT_NAME_HEADER_NAME: "tatolab-control-client-name";

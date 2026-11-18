@@ -3,14 +3,15 @@
   "info": {
     "title": "StreamLib runtime control API",
     "version": "3",
-    "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change; an addition is marked by its method's `x-since`.",
-    "x-contract-version": 3
+    "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
+    "x-contract-version": 3,
+    "x-contract-revision": 1
   },
   "methods": [
     {
       "name": "discover",
-      "summary": "Answer the contract version this runtime serves, its version and build id, and every method it serves.",
-      "description": "Answer `contract_version`, the version of the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` it was built against; another version is refused naming both, and the client is not served.",
+      "summary": "Answer the contract version and revision this runtime serves, its version and build id, and every method it serves.",
+      "description": "Answer `contract_version` and `contract_revision`, the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` and `contract_revision` it was built against; another version, or a higher revision, is refused with error 3, whose data names the `older_side` to update, and the client is not served.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -51,7 +52,7 @@
         },
         {
           "code": 3,
-          "message": "contract version mismatch",
+          "message": "contract mismatch",
           "data": {
             "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
@@ -108,6 +109,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -160,6 +168,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -214,6 +229,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 3,
@@ -266,6 +288,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -320,6 +349,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 2,
@@ -372,6 +408,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -427,6 +470,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -480,6 +530,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -535,6 +592,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -588,6 +652,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -643,6 +714,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -696,6 +774,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -751,6 +836,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -805,6 +897,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -858,6 +957,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -914,6 +1020,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -969,6 +1082,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 3,
@@ -1022,6 +1142,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1077,6 +1204,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1130,6 +1264,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1185,6 +1326,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1238,6 +1386,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1293,6 +1448,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1346,6 +1508,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1401,6 +1570,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1454,6 +1630,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1509,6 +1692,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1562,6 +1752,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1617,6 +1814,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1670,6 +1874,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1725,6 +1936,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1778,6 +1996,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1833,6 +2058,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1886,6 +2118,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -1941,6 +2180,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -1994,6 +2240,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2049,6 +2302,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2102,6 +2362,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2157,6 +2424,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2210,6 +2484,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2265,6 +2546,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2318,6 +2606,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2373,6 +2668,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2426,6 +2728,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2481,6 +2790,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 2,
@@ -2533,6 +2849,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2588,6 +2911,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2641,6 +2971,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2696,6 +3033,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2749,6 +3093,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2804,6 +3155,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2857,6 +3215,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -2912,6 +3277,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -2965,6 +3337,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3020,6 +3399,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3073,6 +3459,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3128,6 +3521,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3181,6 +3581,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3236,6 +3643,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3289,6 +3703,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3344,6 +3765,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3397,6 +3825,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3452,6 +3887,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3505,6 +3947,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3560,6 +4009,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3613,6 +4069,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3668,6 +4131,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3721,6 +4191,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3776,6 +4253,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3829,6 +4313,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3884,6 +4375,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -3937,6 +4435,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -3992,6 +4497,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -4045,6 +4557,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -4100,6 +4619,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -4153,6 +4679,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -4208,6 +4741,13 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
         }
       ],
       "x-since": 1,
@@ -4261,6 +4801,13 @@
           "message": "params do not match",
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
           }
         }
       ],
@@ -5174,13 +5721,52 @@
             "format": "uint32",
             "minimum": 0,
             "description": "The version this runtime serves."
+          },
+          "client_contract_revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The revision the client sent, 0 when it sent none."
+          },
+          "runtime_contract_revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The revision this runtime serves."
+          },
+          "older_side": {
+            "$ref": "#/components/schemas/OlderSide",
+            "description": "The side built against the older contract, the one to update."
+          },
+          "runtime_version": {
+            "type": "string",
+            "description": "The runtime's release, for the words a person reads."
           }
         },
         "required": [
           "client_contract_version",
-          "runtime_contract_version"
+          "runtime_contract_version",
+          "client_contract_revision",
+          "runtime_contract_revision",
+          "older_side",
+          "runtime_version"
         ],
-        "description": "The `data` of a `discover` refused for a client built against another contract version."
+        "description": "The `data` of a call, or the body of a WebSocket upgrade, refused for a client built against\nanother contract than the runtime serves: another version, or a higher revision."
+      },
+      "OlderSide": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "runtime",
+            "description": "The runtime serves an older contract than the client was built against."
+          },
+          {
+            "type": "string",
+            "const": "client",
+            "description": "The client was built against an older contract than the runtime serves."
+          }
+        ],
+        "description": "Which side of a refused connection was built against the older contract, and so is the one\nto update."
       },
       "DiscoverRequest": {
         "type": "object",
@@ -5193,7 +5779,16 @@
             ],
             "format": "uint32",
             "minimum": 0,
-            "description": "The contract version the client was built against; another version than the runtime's is\nrefused naming both."
+            "description": "The contract version the client was built against; another version than the runtime's is\nrefused naming the older side."
+          },
+          "contract_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The contract revision the client was built against, 0 when absent; a higher revision than\nthe runtime's is refused naming the runtime as the older side."
           }
         },
         "description": "`discover`'s params."
@@ -5206,6 +5801,12 @@
             "format": "uint32",
             "minimum": 0,
             "description": "The contract version this runtime serves."
+          },
+          "contract_revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The contract revision this runtime serves: the additions made within its version."
           },
           "runtime_version": {
             "type": "string",
@@ -5225,6 +5826,7 @@
         },
         "required": [
           "contract_version",
+          "contract_revision",
           "runtime_version",
           "build_id",
           "operations"
@@ -6789,8 +7391,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6870,8 +7471,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6903,8 +7503,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6941,8 +7540,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -6979,8 +7577,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7018,8 +7615,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7059,8 +7655,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7097,8 +7692,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7136,8 +7730,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "generator": {
                 "type": "string",
@@ -7183,8 +7776,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7224,8 +7816,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7279,8 +7870,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7333,8 +7923,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "project": {
                 "type": "string",
@@ -7377,8 +7966,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7425,8 +8013,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7458,8 +8045,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "text": {
                 "type": "string",
@@ -7505,8 +8091,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "note": {
                 "type": "string",
@@ -7563,8 +8148,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "note": {
                 "type": "string",
@@ -7588,8 +8172,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7621,8 +8204,7 @@
             "properties": {
               "stream": {
                 "type": "string",
-                "format": "uuid",
-                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
               },
               "level": {
                 "type": "array",
@@ -7969,8 +8551,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8070,8 +8651,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8135,8 +8715,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "generator": {
             "type": "string",
@@ -8199,8 +8778,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8259,8 +8837,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8325,8 +8902,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8393,8 +8969,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8461,8 +9036,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8526,8 +9100,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8592,8 +9165,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8660,8 +9232,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8742,8 +9313,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8823,8 +9393,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8891,8 +9460,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -8951,8 +9519,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "text": {
             "type": "string",
@@ -9022,8 +9589,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "note": {
             "type": "string",
@@ -9104,8 +9670,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "note": {
             "type": "string",
@@ -9153,8 +9718,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "level": {
             "type": [
@@ -11427,8 +11991,7 @@
         "properties": {
           "stream": {
             "type": "string",
-            "format": "uuid",
-            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
           },
           "project": {
             "type": "string",

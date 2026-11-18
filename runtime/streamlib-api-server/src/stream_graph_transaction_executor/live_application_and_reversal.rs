@@ -238,7 +238,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 &input_values_after_the_set,
                 input,
                 to.as_ref(),
-                "/value",
+                None,
             )?;
             set_on.input_values = input_values_after_the_set;
             node_as_the_operations_leave_it.insert((*stream, *node), set_on);

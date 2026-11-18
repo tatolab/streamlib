@@ -38,8 +38,11 @@ pub struct GraphRequest {
 #[serde(deny_unknown_fields)]
 pub struct DiscoverRequest {
     /// The contract version the client was built against; another version than the runtime's is
-    /// refused naming both.
+    /// refused naming the older side.
     pub contract_version: Option<u32>,
+    /// The contract revision the client was built against, 0 when absent; a higher revision than
+    /// the runtime's is refused naming the runtime as the older side.
+    pub contract_revision: Option<u32>,
 }
 
 /// `subscribe_project_changes`' params.

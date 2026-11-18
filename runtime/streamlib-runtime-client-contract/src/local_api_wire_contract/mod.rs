@@ -83,6 +83,10 @@ pub const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET: &str = "/control/ws";
 /// version than the runtime's is refused before any call is served.
 pub const CONTROL_CONTRACT_VERSION_HEADER_NAME: &str = "tatolab-control-contract-version";
 
+/// The header a control client names the contract revision it was built against in, read as 0
+/// when absent; a higher revision than the runtime's is refused before any call is served.
+pub const CONTROL_CONTRACT_REVISION_HEADER_NAME: &str = "tatolab-control-contract-revision";
+
 /// The header a control client names itself in, which a change it makes with no author is
 /// recorded under.
 pub const CONTROL_CLIENT_NAME_HEADER_NAME: &str = "tatolab-control-client-name";

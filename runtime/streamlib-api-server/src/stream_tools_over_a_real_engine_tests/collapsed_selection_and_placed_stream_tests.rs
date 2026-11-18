@@ -670,3 +670,35 @@ async fn an_unlocked_placement_of_an_imports_stream_keeps_each_stream_it_places_
         ["source"]
     );
 }
+
+/// A collapse naming a node the stream does not hold is refused naming that node, the node the
+/// refusal names, and not the subgraph the collapse would make.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_collapse_naming_a_node_the_stream_does_not_hold_is_refused_naming_that_node() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let saved_before = project.the_graph_document_of("main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "collapse_selection_into_subgraph",
+            json!({ "stream": project.stream_asset_of("main"),
+                    "nodes": [SOURCE_NODE_UUID, "absent"], "name": "sub",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("a collapse naming a node the stream does not hold is refused");
+
+    assert_eq!(
+        refusal.refusal_code,
+        streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode::NodeNotFound,
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.refused_node.as_deref(),
+        Some("absent"),
+        "{refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+}

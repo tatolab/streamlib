@@ -30,8 +30,8 @@ impl ControlOperation for Discover {
     type Request = DiscoverRequest;
     type Result = DiscoverResult;
     const METHOD_NAME: &'static str = "discover";
-    const ONE_LINE_DOC: &'static str = "Answer the contract version this runtime serves, its version and build id, and every method it serves.";
-    const AGENT_USAGE_NOTE: &'static str = "Answer `contract_version`, the version of the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` it was built against; another version is refused naming both, and the client is not served.";
+    const ONE_LINE_DOC: &'static str = "Answer the contract version and revision this runtime serves, its version and build id, and every method it serves.";
+    const AGENT_USAGE_NOTE: &'static str = "Answer `contract_version` and `contract_revision`, the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` and `contract_revision` it was built against; another version, or a higher revision, is refused with error 3, whose data names the `older_side` to update, and the client is not served.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;

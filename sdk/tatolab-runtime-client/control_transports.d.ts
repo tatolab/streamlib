@@ -46,7 +46,7 @@ export declare class ControlPostTransport implements ControlTransport {
 
 /** One WebSocket opened at `/control/ws` on the runtime's local API socket, one JSON-RPC message per text frame, carrying requests, answers and notifications. */
 export declare class ControlWebSocketTransport implements ControlTransport {
-  /** Open the WebSocket; aborting `signal` before it is open closes it and rejects with the signal's reason. */
+  /** Open the WebSocket; rejects with `ControlContractMismatch` when the runtime refuses a client of another contract, and, when `signal` is aborted before it is open, closes it and rejects with the signal's reason. */
   static open(address: ControlLocalApiSocketAddress & { signal?: ControlOperationAbortSignal }): Promise<ControlWebSocketTransport>;
   sendRequest(requestMessage: ControlRequestMessage, sendOptions?: ControlTransportSendOptions): Promise<unknown>;
   onNotificationMessage(listener: (notificationMessage: unknown) => void): () => void;
