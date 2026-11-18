@@ -71,7 +71,15 @@ impl Default for TensorToTextureConfig {
     output(
         "image",
         description = "One Image frame per Array frame",
-        pin_type = Texture
+        pin_type = Texture,
+        formats = [
+            "rgba8_unorm",
+            "rgba8_unorm_srgb",
+            "bgra8_unorm",
+            "bgra8_unorm_srgb",
+            "rgba16_float",
+            "rgba32_float"
+        ]
     ),
 )]
 #[meta(
@@ -84,8 +92,8 @@ impl Default for TensorToTextureConfig {
                    order: `uint8` for the 8-bit formats, `float16` for `rgba16_float` and \
                    `float32` for `rgba32_float`. A GPU attribute's pool slot becomes the Image \
                    frame's slot and nothing is copied, so the slot holds what `format` states, \
-                   as an attribute `TextureToTensor` wrote does. A CPU attribute is copied once into \
-                   a pixel buffer from this node's own output pool. A frame without the \
+                   as an attribute `TextureToTensor` wrote does. A CPU attribute is copied once \
+                   into a pixel buffer from this node's own output pool. A frame without the \
                    attribute, or whose attribute is of another dtype or another shape, is \
                    refused and writes nothing. Each Image frame states no colour."
 )]
@@ -190,8 +198,8 @@ pub fn image_frame_of_the_array_frame(
         .find(|row| row.name == attribute_name)
         .ok_or_else(|| {
             Error::PortError(format!(
-                "TensorToTexture: an Array frame on `array` has no attribute {attribute_name:?}; it \
-                 has {:?}",
+                "TensorToTexture: an Array frame on `array` has no attribute \
+                 {attribute_name:?}; it has {:?}",
                 attribute_table
                     .iter()
                     .map(|row| row.name.as_str())

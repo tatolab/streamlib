@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The built-in nodes a person or an agent places between two ports whose types differ, so
-//! every conversion, and what it costs, is a node in the graph. Each one named for the pin
-//! types it converts between states `conversion`, so the link verdict finds it.
+//! every conversion, and what it costs, is a node in the graph. The four named for the pin types
+//! they convert between state `conversion`, so the link verdict finds them.
 
 pub mod audio_to_tensor;
 #[cfg(test)]

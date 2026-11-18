@@ -20,9 +20,12 @@ fn records_payload_of(entries: Vec<(rmpv::Value, rmpv::Value)>) -> Vec<u8> {
 }
 
 fn samples_of(payload: &[u8]) -> Vec<f64> {
-    payload
-        .as_chunks::<8>()
-        .0
+    let (samples, remainder) = payload.as_chunks::<8>();
+    assert!(
+        remainder.is_empty(),
+        "a block of f64 samples holds no trailing bytes: {remainder:?}"
+    );
+    samples
         .iter()
         .map(|sample| f64::from_le_bytes(*sample))
         .collect()

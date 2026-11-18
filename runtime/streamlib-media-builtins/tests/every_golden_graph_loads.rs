@@ -53,8 +53,10 @@ fn golden_graph_document(path: &Path) -> serde_json::Value {
 
 /// The type of each node in `graph_document`, as the runtime reads it: a type renamed since the
 /// golden was recorded is read as its new type.
-fn node_types_in(graph_document: &serde_json::Value) -> Vec<NodeClassImportPath> {
-    streamlib_project_repository::stream_document_in_the_current_shape(graph_document.clone())["nodes"]
+fn node_types_in(graph_document: serde_json::Value) -> Vec<NodeClassImportPath> {
+    let graph_document =
+        streamlib_project_repository::stream_document_in_the_current_shape(graph_document);
+    graph_document["nodes"]
         .as_array()
         .expect("a graph holds nodes")
         .iter()
@@ -155,7 +157,7 @@ fn every_golden_graph_loads_on_this_floor() {
 fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
     register_media_builtin_node_types();
     for path in golden_graph_paths() {
-        let node_types = node_types_in(&golden_graph_document(&path));
+        let node_types = node_types_in(golden_graph_document(&path));
         for module_node_type in [
             "tatolab.camera:CameraSource",
             "tatolab.microphone:MicrophoneSource",
@@ -196,7 +198,7 @@ fn the_golden_graphs_name_every_built_in_this_floor_registers() {
     register_media_builtin_node_types();
     let named_by_a_golden: BTreeSet<NodeClassImportPath> = golden_graph_paths()
         .iter()
-        .flat_map(|path| node_types_in(&golden_graph_document(path)))
+        .flat_map(|path| node_types_in(golden_graph_document(path)))
         .collect();
 
     let named_by_no_golden: Vec<NodeClassImportPath> = NODE_REGISTRY

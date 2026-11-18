@@ -452,6 +452,43 @@ fn a_link_one_built_in_conversion_bridges_goes_through_its_node() {
     );
 }
 
+/// A conversion whose input states the formats it takes bridges only a Texture of those; an
+/// `nv12` Texture into a Tensor is refused naming no node, the family table's included.
+#[test]
+fn a_texture_of_a_format_no_conversion_takes_is_refused_naming_no_node() {
+    use TexturePixelFormat::{Nv12, Rgba8Unorm};
+    let texture_to_tensor = a_conversion(
+        NodeClassImportPath::of_built_in_node("TextureToTensor"),
+        texture(&[Rgba8Unorm]),
+        PinType::Tensor {},
+    );
+    let verdict_from = |output_format| {
+        pin_link_verdict(
+            an_output(&texture(&[output_format])),
+            an_input(&PinType::Tensor {}),
+            std::slice::from_ref(&texture_to_tensor),
+        )
+    };
+
+    assert!(
+        matches!(
+            verdict_from(Rgba8Unorm).outcome,
+            PinLinkOutcome::ConnectsThroughConvertNode(_)
+        ),
+        "an rgba8_unorm Texture goes through the conversion"
+    );
+    let PinLinkOutcome::Refused(refusal) = verdict_from(Nv12).outcome else {
+        panic!("no conversion takes an nv12 Texture");
+    };
+    assert!(the_conversions_named_by(&refusal).is_empty(), "{refusal}");
+    let words = refusal.to_string();
+    assert!(!words.contains("TextureToTensor"), "{words}");
+    assert!(
+        words.contains("no node type converts between them"),
+        "{words}"
+    );
+}
+
 /// A conversion's sides are each judged by the direct rules, free conversions included: a
 /// Boolean reaches a conversion that takes a Float.
 #[test]

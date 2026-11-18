@@ -195,13 +195,23 @@ impl fmt::Display for PinLinkRefusal {
     }
 }
 
-/// The node the family table names between the families of these ends' types.
+/// The node the family table names between the families of these ends' types. Between Image
+/// or Channels and Array the table's node states the pin types it converts, so it is named only
+/// as a conversion that bridges, never by its family: an `nv12` Texture is not sent to a
+/// `TextureToTensor` that does not take it.
 fn node_placed_between_the_families_of(
     output: &PinLinkEndNamed,
     input: &PinLinkEndNamed,
 ) -> Option<&'static str> {
+    use PortFamily::{Array, Channels, Image};
     let output_family = PortFamily::carrying(&output.pin_type)?;
     let input_family = PortFamily::carrying(&input.pin_type)?;
+    if matches!(
+        (output_family, input_family),
+        (Image | Channels, Array) | (Array, Image | Channels)
+    ) {
+        return None;
+    }
     node_placed_between_families(output_family, input_family)
 }
 

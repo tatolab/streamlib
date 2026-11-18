@@ -219,10 +219,10 @@ class TextureToTensor(BuiltInNode[TextureToTensorConfig]):
     place, at the slot's own address; one that cannot reads it through one GPU copy into
     a linear staging buffer, as a read of the Image frame itself does. The tensor's rows
     are the slot's rows, so a padded row pitch is a stride, never a copy. An `nv12`
-    frame has two planes and no one-tensor layout, and is refused and writes nothing. A
-    reader claims the slot when it reads the Array frame, so a producer that has
-    recycled the slot by then makes the read a counted loss, never another frame's
-    pixels.
+    frame has two planes and no one-tensor layout, so `image` does not take one, and one
+    that arrives is refused and writes nothing. A reader claims the slot when it reads
+    the Array frame, so a producer that has recycled the slot by then makes the read a
+    counted loss, never another frame's pixels.
 
     Inputs:
         `image` (newest): The Image frames to borrow as tensors.

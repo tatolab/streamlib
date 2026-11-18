@@ -28,7 +28,15 @@ pub const TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME: &str = "image";
         "image",
         description = "The Image frames to borrow as tensors",
         delivery_profile = "newest",
-        pin_type = Texture
+        pin_type = Texture,
+        formats = [
+            "rgba8_unorm",
+            "rgba8_unorm_srgb",
+            "bgra8_unorm",
+            "bgra8_unorm_srgb",
+            "rgba16_float",
+            "rgba32_float"
+        ]
     ),
     output(
         "array",
@@ -43,16 +51,16 @@ pub const TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME: &str = "image";
     description = "Converts each Image frame on `image` into one Array frame on `array`, whose \
                    one GPU attribute `image` is the frame's own pool slot borrowed as an `[h, w, \
                    4]` tensor: `uint8` for an `rgba8` or `bgra8` frame, `float16` for \
-                   `rgba16_float` and `float32` for `rgba32_float`, its channels in the frame's own \
-                   order. This node copies nothing. A \
-                   reader whose device maps the slot linearly reads the tensor in place, at the \
-                   slot's own address; one that cannot reads it through one GPU copy into a \
-                   linear staging buffer, as a read of the Image frame itself does. The tensor's \
-                   rows are the slot's rows, so a padded row pitch is a stride, never a copy. An \
-                   `nv12` frame has two planes and no one-tensor layout, and is refused and writes \
-                   nothing. A reader claims the slot when it reads the Array frame, so a \
-                   producer that has recycled the slot by then makes the read a counted loss, \
-                   never another frame's pixels."
+                   `rgba16_float` and `float32` for `rgba32_float`, its channels in the frame's \
+                   own order. This node copies nothing. A reader whose device maps the slot \
+                   linearly reads the tensor in place, at the slot's own address; one that cannot \
+                   reads it through one GPU copy into a linear staging buffer, as a read of the \
+                   Image frame itself does. The tensor's rows are the slot's rows, so a padded \
+                   row pitch is a stride, never a copy. An `nv12` frame has two planes and no \
+                   one-tensor layout, so `image` does not take one, and one that arrives is \
+                   refused and writes nothing. A reader claims the slot when it reads the Array \
+                   frame, so a producer that has recycled the slot by then makes the read a \
+                   counted loss, never another frame's pixels."
 )]
 pub struct TextureToTensor;
 

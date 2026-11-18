@@ -111,9 +111,9 @@ impl ReactiveNode for TensorToAudio::Node {
                     continue;
                 }
             };
-            let block_body =
-                ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
-            self.next_start_sample += u64::from(block_body.samples_per_channel);
+            let samples_per_channel =
+                ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body)
+                    .samples_per_channel;
             self.outputs.write_bytes_described_by(
                 CHANNELS_OUTPUT_PORT,
                 &payload,
@@ -121,6 +121,7 @@ impl ReactiveNode for TensorToAudio::Node {
                 message.group_boundary,
                 payload_descriptor,
             )?;
+            self.next_start_sample += u64::from(samples_per_channel);
         }
         Ok(())
     }
