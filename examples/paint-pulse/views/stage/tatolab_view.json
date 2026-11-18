@@ -9,6 +9,11 @@
       "name": "video",
       "family": "image",
       "description": "The finished picture to show and steer."
+    },
+    {
+      "name": "audio",
+      "family": "channels",
+      "description": "The music, played on the default output device."
     }
   ],
   "outputs": [

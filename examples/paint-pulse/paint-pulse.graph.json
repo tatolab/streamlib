@@ -289,6 +289,16 @@
         "node": "c39fea05-57b1-5144-87db-7c614307bfbf",
         "port": "video"
       }
+    },
+    {
+      "source": {
+        "node": "3424c41f-0439-5006-b36a-45fd896dcbd8",
+        "port": "audio"
+      },
+      "target": {
+        "node": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
+        "port": "audio"
+      }
     }
   ],
   "nodes": [

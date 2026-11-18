@@ -10,7 +10,12 @@ const VIDEO_WATCH_ID = 1;
 const OPEN_PROJECT_WATCH_ID = 2;
 const LISTED_STREAMS_WATCH_ID = 3;
 const STREAM_GRAPH_WATCH_ID = 4;
+const AUDIO_WATCH_ID = 5;
 const CONTROL_SEND_EVERY_MS = 60;
+// Blocks are scheduled this far ahead of the sound card's clock, and the queue restarts from
+// there when it falls behind or drifts too far ahead.
+const AUDIO_LEAD_SECONDS = 0.08;
+const AUDIO_MOST_LEAD_SECONDS = 0.4;
 
 // Each control sets one or more node inputs live, by the node's name in the graph. Today these
 // are node settings set through a live graph transaction; once typed pins land they are pins.
@@ -119,6 +124,51 @@ window.addEventListener("keydown", (event) => {
 buildThePanel();
 document.querySelector(".stage-burst").addEventListener("click", burst);
 document.querySelector(".stage-reset").addEventListener("click", resetTheView);
+
+const sound = { context: null, gain: null, playsAt: 0, muted: false };
+
+function playTheBlock(reading) {
+  const channels = reading.channel_samples;
+  if (sound.muted || channels === undefined || channels.length === 0 || reading.samples_per_channel === 0) return;
+  if (sound.context === null) {
+    sound.context = new AudioContext({ latencyHint: "interactive" });
+    sound.gain = sound.context.createGain();
+    sound.gain.connect(sound.context.destination);
+    sound.playsAt = 0;
+  }
+  if (sound.context.state === "suspended") void sound.context.resume();
+  const buffer = sound.context.createBuffer(channels.length, reading.samples_per_channel, reading.sample_rate);
+  channels.forEach((samples, channel) => buffer.copyToChannel(samples, channel));
+  const now = sound.context.currentTime;
+  if (sound.playsAt < now || sound.playsAt > now + AUDIO_MOST_LEAD_SECONDS) sound.playsAt = now + AUDIO_LEAD_SECONDS;
+  const source = sound.context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(sound.gain);
+  source.start(sound.playsAt);
+  sound.playsAt += buffer.duration;
+}
+
+function stopTheSound() {
+  if (sound.context === null) return;
+  void sound.context.close();
+  sound.context = null;
+  sound.gain = null;
+}
+
+function onAudioReading(reading) {
+  if (reading.kind === "message" && reading.reading.family === "channels") playTheBlock(reading.reading);
+  else if (reading.kind === "unwired" || reading.kind === "reopening" || reading.kind === "ended") stopTheSound();
+}
+
+const muteButton = document.querySelector(".stage-mute");
+muteButton.addEventListener("click", () => {
+  sound.muted = !sound.muted;
+  muteButton.textContent = sound.muted ? "Unmute" : "Mute";
+  muteButton.setAttribute("aria-pressed", String(sound.muted));
+  if (sound.muted) stopTheSound();
+});
+// Chromium keeps sound suspended until the page has seen a gesture; any press here resumes it.
+window.addEventListener("pointerdown", () => { if (sound.context?.state === "suspended") void sound.context.resume(); });
 
 function sendTheControl(control, value) {
   if (port === null || target.projectFolder === null || target.streamAsset === null) return;
@@ -292,6 +342,7 @@ function talkOver(handedPort) {
   port.addEventListener("message", ({ data: message }) => {
     if (message?.kind === "hello") {
       port.postMessage({ kind: "watch", watch_id: VIDEO_WATCH_ID, subject: { kind: "input", input: "video" } });
+      port.postMessage({ kind: "watch", watch_id: AUDIO_WATCH_ID, subject: { kind: "input", input: "audio" } });
       port.postMessage({ kind: "watch", watch_id: OPEN_PROJECT_WATCH_ID, subject: { kind: "open_project" } });
       port.postMessage({ kind: "watch", watch_id: LISTED_STREAMS_WATCH_ID, subject: { kind: "listed_streams" } });
       sendTheCamera();
@@ -299,13 +350,15 @@ function talkOver(handedPort) {
     }
     if (message?.kind === "watched" && message.watch_id === VIDEO_WATCH_ID && message.watched.subject === "input") {
       onVideoReading(message.watched.reading);
+    } else if (message?.kind === "watched" && message.watch_id === AUDIO_WATCH_ID && message.watched.subject === "input") {
+      onAudioReading(message.watched.reading);
     } else if (message?.kind === "watched" && message.watched.subject === "open_project") {
       onOpenProject(message.watched.reading);
     } else if (message?.kind === "watched" && message.watched.subject === "listed_streams") {
       onListedStreams(message.watched.reading);
     } else if (message?.kind === "watched" && message.watched.subject === "stream_graph") {
       onStreamGraph(message.watched.reading);
-    } else if (message?.kind === "watch_refused") {
+    } else if (message?.kind === "watch_refused" && message.watch_id !== AUDIO_WATCH_ID) {
       notice.textContent = message.because;
     } else if (message?.kind === "answered" && message.answer?.kind === "refused") {
       notice.textContent = message.answer.because;
