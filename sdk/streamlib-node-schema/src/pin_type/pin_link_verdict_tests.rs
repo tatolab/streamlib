@@ -251,6 +251,49 @@ fn a_texture_connects_when_the_input_takes_every_format_the_output_states() {
     );
 }
 
+/// A Texture output stating a format the input does not take goes through a conversion of
+/// Textures that bridges the two, and without one is refused in words naming each side's formats.
+#[test]
+fn a_texture_of_a_format_the_input_does_not_take_converts_or_is_refused_naming_the_formats() {
+    use TexturePixelFormat::{Bgra8Unorm, Nv12, Rgba8Unorm};
+    let output = texture(&[Bgra8Unorm, Rgba8Unorm]);
+    let input = texture(&[Rgba8Unorm]);
+    let format_convert = a_conversion(
+        NodeClassImportPath::of_built_in_node("TextureFormatConvert"),
+        texture(&[Rgba8Unorm, Bgra8Unorm]),
+        texture(&[Rgba8Unorm]),
+    );
+
+    let verdict = pin_link_verdict(
+        an_output(&output),
+        an_input(&input),
+        std::slice::from_ref(&format_convert),
+    );
+    let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome else {
+        panic!("a conversion of Textures bridges them: {verdict:?}");
+    };
+    assert_eq!(convert_node.conversion, format_convert);
+    assert!(verdict.warnings.is_empty(), "{verdict:?}");
+
+    let nv12 = texture(&[Nv12]);
+    let PinLinkOutcome::Refused(refusal) = pin_link_verdict(
+        an_output(&nv12),
+        an_input(&input),
+        std::slice::from_ref(&format_convert),
+    )
+    .outcome
+    else {
+        panic!("the conversion takes no nv12 Texture");
+    };
+    assert!(the_conversions_named_by(&refusal).is_empty(), "{refusal}");
+    assert_eq!(
+        refusal.to_string(),
+        "cannot link `source.out` (Texture (nv12)) to `sink.in` (Texture (rgba8_unorm)): a \
+         Texture (nv12) output does not connect to a Texture (rgba8_unorm) input; no node type \
+         converts between them"
+    );
+}
+
 #[test]
 fn an_encoded_stream_connects_when_the_input_takes_every_codec_the_output_states() {
     assert_eq!(

@@ -278,7 +278,7 @@ impl LoadedStreamInThisRuntime {
         if let Err(refusal) = self
             .reconcile_the_live_graph_to_the_graph_document(
                 graph_document.to_value(),
-                LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+                LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
             )
             .await
         {
