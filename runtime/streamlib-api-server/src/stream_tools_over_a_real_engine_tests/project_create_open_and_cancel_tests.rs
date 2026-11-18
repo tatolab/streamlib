@@ -390,6 +390,130 @@ exit 1
     );
 }
 
+/// While its project's open makes the venv, a stream is not loaded, yet `graph` answers it from
+/// its graph document and `transact` edits that document; the load that follows takes the
+/// edit in.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_whose_project_is_preparing_is_read_and_edited_from_its_graph_document() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    register_the_stream_tools_test_sink_once();
+    let project = ProjectWithGraphDocuments::with_no_venv();
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"][0]["id"] = json!(SOURCE_NODE_UUID);
+    project.write_the_graph_document(graph);
+    let main = project.stream_id_of("main");
+    let uv_directory = tempfile::tempdir().expect("a directory for the runtime unit's uv");
+    let uv_released = uv_directory.path().join("released");
+    let uv_held_until_released = uv_directory.path().join("uv");
+    write_an_executable_script_from_a_child_process(
+        &uv_held_until_released,
+        &format!(
+            "#!/bin/sh
+while [ ! -e '{}' ]; do sleep 0.05; done
+exit 1
+",
+            uv_released.display()
+        ),
+    );
+    engine
+        .engine
+        .set_runtime_unit_uv_executable(uv_held_until_released)
+        .expect("the runtime is handed its uv");
+    let queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "open_project",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("an open of the project is queued");
+    let action = queued["action"]
+        .as_str()
+        .expect("the action's id")
+        .to_string();
+    the_stream_action_once(operations_on_the_loaded_streams, &action, |described| {
+        described["step"] == "making_the_venv"
+    })
+    .await;
+
+    let read_while_preparing = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "graph",
+            json!({ "stream": main }),
+        )
+        .await,
+    )
+    .expect("a stream preparing answers its graph from its document");
+    assert_eq!(
+        sorted_node_names_in(&read_while_preparing),
+        ["source"],
+        "{read_while_preparing}"
+    );
+    let applied = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "transact",
+            json!({
+                "author": an_agent_named("alice"),
+                "operations": [
+                    { "operation": "add_node", "stream": project.stream_asset_of("main"),
+                      "type": StreamToolsTestSink::node_class_import_path().as_str(),
+                      "name": "monitor" },
+                ],
+            }),
+        )
+        .await,
+    )
+    .expect("an edit of a stream preparing applies to its document");
+    assert!(applied["commit"].is_string(), "{applied}");
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["monitor", "source"]
+    );
+
+    std::fs::write(&uv_released, "").expect("uv is released");
+    let finished = the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+    assert_eq!(finished["state"], "done", "{finished}");
+    let listed = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "list_streams",
+            json!({}),
+        )
+        .await,
+    )
+    .expect("list_streams answers");
+    let listed_main = listed["streams"]
+        .as_array()
+        .expect("the streams listed")
+        .iter()
+        .find(|listed_stream| listed_stream["stream"] == main.as_str())
+        .unwrap_or_else(|| panic!("the stream is listed: {listed}"));
+    // The held uv exits failing, so the stream is loaded failed for its venv, its graph in the
+    // stream table.
+    assert_eq!(
+        listed_main["node_count"], 2,
+        "the stream loaded with the edit rather than being held from its document: {listed_main}"
+    );
+    let read_once_loaded = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "graph",
+            json!({ "stream": main }),
+        )
+        .await,
+    )
+    .expect("the loaded stream answers its graph");
+    assert_eq!(
+        sorted_node_names_in(&read_once_loaded),
+        ["monitor", "source"],
+        "the load took in the edit made while the project prepared: {read_once_loaded}"
+    );
+}
+
 /// An action the runtime never queued, and a relative project directory, are refused
 /// saying so.
 #[tokio::test(flavor = "multi_thread")]

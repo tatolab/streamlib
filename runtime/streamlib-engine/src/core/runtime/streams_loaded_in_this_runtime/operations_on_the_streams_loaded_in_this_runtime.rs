@@ -19,6 +19,7 @@ use crate::core::runtime::operations::RuntimeOperations;
 use crate::core::runtime::{
     CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectOpenOrReloadRequest,
     ProjectPausedOrResumed, Runner, StreamAction, StreamActionQueued, StreamListing,
+    StreamsToReadOrEdit,
 };
 
 /// What the local API reaches a runtime through: the runtime's description, the
@@ -175,6 +176,10 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::list_streams`].
     fn list_streams(&self) -> Vec<StreamListing>;
+
+    /// [`Runner::the_streams_to_read_or_edit`].
+    fn the_streams_to_read_or_edit(&self, stream_ids: &[String])
+    -> Result<StreamsToReadOrEdit<'_>>;
 
     /// [`Runner::set_stream_clock_scale`].
     fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading>;
@@ -376,6 +381,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
         Runner::delete_project(self, project_directory)
+    }
+
+    fn the_streams_to_read_or_edit(
+        &self,
+        stream_ids: &[String],
+    ) -> Result<StreamsToReadOrEdit<'_>> {
+        Runner::the_streams_to_read_or_edit(self, stream_ids)
     }
 
     fn list_streams(&self) -> Vec<StreamListing> {

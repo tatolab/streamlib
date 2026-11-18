@@ -9,6 +9,7 @@ use crate::port_family::{
     CodecDirection, EncodedMedia, PortFamily, codec_nodes_placed_between,
     node_placed_between_families,
 };
+use crate::stated_lists::{the_ones_not_held, the_ones_not_taken};
 
 /// One end of a link: the port, or one member of a bundle port, with its resolved type.
 #[derive(Debug, Clone, Copy)]
@@ -485,9 +486,7 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
                 option_names: input_options,
             },
         ) => {
-            let not_listed: Vec<String> = output_options
-                .iter()
-                .filter(|option_name| !input_options.contains(option_name))
+            let not_listed: Vec<String> = the_ones_not_held(output_options, input_options)
                 .cloned()
                 .collect();
             if not_listed.is_empty() {
@@ -638,7 +637,7 @@ fn the_same_but_for_member_meanings(one: &PinType, other: &PinType) -> bool {
 
 /// Whether every one `output` states is one `input` takes, or `input` takes any by stating none.
 fn every_one_is_taken<T: PartialEq>(output: &[T], input: &[T]) -> bool {
-    input.is_empty() || output.iter().all(|stated| input.contains(stated))
+    the_ones_not_taken(output, input).next().is_none()
 }
 
 /// A direct link when the input takes any, or the output states some and each is one it takes.
