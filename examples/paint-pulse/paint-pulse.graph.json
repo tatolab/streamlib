@@ -1,0 +1,727 @@
+{
+  "links": [
+    {
+      "source": {
+        "node": "5d4f613f-7e88-50f4-995b-33b1f1351797",
+        "port": "motion"
+      },
+      "target": {
+        "node": "0b3a812f-d39f-5075-b170-8dc2ac6f5d32",
+        "port": "motion"
+      }
+    },
+    {
+      "source": {
+        "node": "5d4f613f-7e88-50f4-995b-33b1f1351797",
+        "port": "motion"
+      },
+      "target": {
+        "node": "e2daa4d4-6b17-59c6-8eac-be515359341f",
+        "port": "motion"
+      }
+    },
+    {
+      "source": {
+        "node": "2544046a-114a-57c2-90b0-6d29931c105e",
+        "port": "result"
+      },
+      "target": {
+        "node": "b3d811c0-ce23-549c-a1a5-04f5906540d4",
+        "port": "spin"
+      }
+    },
+    {
+      "source": {
+        "node": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
+        "port": "camera"
+      },
+      "target": {
+        "node": "b3d811c0-ce23-549c-a1a5-04f5906540d4",
+        "port": "view"
+      }
+    },
+    {
+      "source": {
+        "node": "b3d811c0-ce23-549c-a1a5-04f5906540d4",
+        "port": "result"
+      },
+      "target": {
+        "node": "0b3a812f-d39f-5075-b170-8dc2ac6f5d32",
+        "port": "camera"
+      }
+    },
+    {
+      "source": {
+        "node": "0b3a812f-d39f-5075-b170-8dc2ac6f5d32",
+        "port": "ball"
+      },
+      "target": {
+        "node": "31d11287-2618-52a0-b0e0-0aa46a8eef60",
+        "port": "size_from"
+      }
+    },
+    {
+      "source": {
+        "node": "0b3a812f-d39f-5075-b170-8dc2ac6f5d32",
+        "port": "ball"
+      },
+      "target": {
+        "node": "5cf24689-51da-544e-b2ce-2adaa7dfd0f8",
+        "port": "size_from"
+      }
+    },
+    {
+      "source": {
+        "node": "ce35f7a9-1132-5104-b715-977e81fef375",
+        "port": "result"
+      },
+      "target": {
+        "node": "5cf24689-51da-544e-b2ce-2adaa7dfd0f8",
+        "port": "time"
+      }
+    },
+    {
+      "source": {
+        "node": "31d11287-2618-52a0-b0e0-0aa46a8eef60",
+        "port": "result"
+      },
+      "target": {
+        "node": "c54e1988-7771-5889-889b-b71eb36566b5",
+        "port": "a"
+      }
+    },
+    {
+      "source": {
+        "node": "5cf24689-51da-544e-b2ce-2adaa7dfd0f8",
+        "port": "result"
+      },
+      "target": {
+        "node": "c54e1988-7771-5889-889b-b71eb36566b5",
+        "port": "b"
+      }
+    },
+    {
+      "source": {
+        "node": "c54e1988-7771-5889-889b-b71eb36566b5",
+        "port": "result"
+      },
+      "target": {
+        "node": "5a7f0184-7851-5225-9dee-fc097eb5c546",
+        "port": "background"
+      }
+    },
+    {
+      "source": {
+        "node": "0b3a812f-d39f-5075-b170-8dc2ac6f5d32",
+        "port": "ball"
+      },
+      "target": {
+        "node": "5a7f0184-7851-5225-9dee-fc097eb5c546",
+        "port": "foreground"
+      }
+    },
+    {
+      "source": {
+        "node": "e2daa4d4-6b17-59c6-8eac-be515359341f",
+        "port": "bass"
+      },
+      "target": {
+        "node": "b633b5f3-a3be-5a4a-91a5-2cf488d6fd6c",
+        "port": "x"
+      }
+    },
+    {
+      "source": {
+        "node": "b633b5f3-a3be-5a4a-91a5-2cf488d6fd6c",
+        "port": "result"
+      },
+      "target": {
+        "node": "9869725a-fecd-5fc7-95c3-78183e3780dd",
+        "port": "x"
+      }
+    },
+    {
+      "source": {
+        "node": "9869725a-fecd-5fc7-95c3-78183e3780dd",
+        "port": "result"
+      },
+      "target": {
+        "node": "f889bd58-de19-5147-a892-29cca9e707af",
+        "port": "stroke"
+      }
+    },
+    {
+      "source": {
+        "node": "ce35f7a9-1132-5104-b715-977e81fef375",
+        "port": "result"
+      },
+      "target": {
+        "node": "f889bd58-de19-5147-a892-29cca9e707af",
+        "port": "time"
+      }
+    },
+    {
+      "source": {
+        "node": "5a7f0184-7851-5225-9dee-fc097eb5c546",
+        "port": "result"
+      },
+      "target": {
+        "node": "f889bd58-de19-5147-a892-29cca9e707af",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "e2daa4d4-6b17-59c6-8eac-be515359341f",
+        "port": "beat"
+      },
+      "target": {
+        "node": "972ea8d2-e682-591a-82de-b068181be6b1",
+        "port": "x"
+      }
+    },
+    {
+      "source": {
+        "node": "972ea8d2-e682-591a-82de-b068181be6b1",
+        "port": "result"
+      },
+      "target": {
+        "node": "488ad2b5-8dd2-5813-b03b-d656787d8678",
+        "port": "amount"
+      }
+    },
+    {
+      "source": {
+        "node": "f889bd58-de19-5147-a892-29cca9e707af",
+        "port": "result"
+      },
+      "target": {
+        "node": "488ad2b5-8dd2-5813-b03b-d656787d8678",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "e2daa4d4-6b17-59c6-8eac-be515359341f",
+        "port": "energy"
+      },
+      "target": {
+        "node": "5b5be77a-75d5-5003-bb13-7d0a21039df2",
+        "port": "x"
+      }
+    },
+    {
+      "source": {
+        "node": "5b5be77a-75d5-5003-bb13-7d0a21039df2",
+        "port": "result"
+      },
+      "target": {
+        "node": "0440ef9f-0bc0-55bd-b38d-67d71ef5a46e",
+        "port": "x"
+      }
+    },
+    {
+      "source": {
+        "node": "0440ef9f-0bc0-55bd-b38d-67d71ef5a46e",
+        "port": "result"
+      },
+      "target": {
+        "node": "d9ca7a7f-f68f-50a4-b4af-1769e9fecb09",
+        "port": "saturation"
+      }
+    },
+    {
+      "source": {
+        "node": "488ad2b5-8dd2-5813-b03b-d656787d8678",
+        "port": "result"
+      },
+      "target": {
+        "node": "d9ca7a7f-f68f-50a4-b4af-1769e9fecb09",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "d9ca7a7f-f68f-50a4-b4af-1769e9fecb09",
+        "port": "result"
+      },
+      "target": {
+        "node": "3e35c490-fa67-571b-bf15-3b0a7928c173",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "3e35c490-fa67-571b-bf15-3b0a7928c173",
+        "port": "result"
+      },
+      "target": {
+        "node": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "3e35c490-fa67-571b-bf15-3b0a7928c173",
+        "port": "result"
+      },
+      "target": {
+        "node": "c39fea05-57b1-5144-87db-7c614307bfbf",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "3424c41f-0439-5006-b36a-45fd896dcbd8",
+        "port": "audio"
+      },
+      "target": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "song"
+      }
+    },
+    {
+      "source": {
+        "node": "3a00bb94-a2d3-5771-8b18-987537156d3a",
+        "port": "audio"
+      },
+      "target": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "computer"
+      }
+    },
+    {
+      "source": {
+        "node": "885a7beb-6b16-5fc0-811b-1ab5dd758d72",
+        "port": "audio"
+      },
+      "target": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "mic"
+      }
+    },
+    {
+      "source": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "audio"
+      },
+      "target": {
+        "node": "5d4f613f-7e88-50f4-995b-33b1f1351797",
+        "port": "music"
+      }
+    },
+    {
+      "source": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "monitor"
+      },
+      "target": {
+        "node": "c39fea05-57b1-5144-87db-7c614307bfbf",
+        "port": "audio"
+      }
+    },
+    {
+      "source": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "monitor"
+      },
+      "target": {
+        "node": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
+        "port": "audio"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "3424c41f-0439-5006-b36a-45fd896dcbd8",
+      "name": "synth_song",
+      "type": "nodes.synth_song:SynthSong",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          0
+        ]
+      },
+      "input_values": {
+        "volume": 0.13
+      }
+    },
+    {
+      "id": "5d4f613f-7e88-50f4-995b-33b1f1351797",
+      "name": "spectrum_listener",
+      "type": "nodes.spectrum_listener:SpectrumListener",
+      "studio": {
+        "contract": 1,
+        "position": [
+          300,
+          0
+        ]
+      },
+      "input_values": {
+        "sensitivity": 0.5,
+        "spread": 0.65
+      }
+    },
+    {
+      "id": "e2daa4d4-6b17-59c6-8eac-be515359341f",
+      "name": "motion_readout",
+      "type": "nodes.motion:MotionReadout",
+      "studio": {
+        "contract": 1,
+        "position": [
+          600,
+          250
+        ]
+      }
+    },
+    {
+      "id": "2544046a-114a-57c2-90b0-6d29931c105e",
+      "name": "spin",
+      "type": "imports/core-nodes/core_nodes.animation:Speed",
+      "studio": {
+        "contract": 1,
+        "position": [
+          300,
+          -250
+        ]
+      },
+      "input_values": {
+        "rate": 0.12
+      }
+    },
+    {
+      "id": "b3d811c0-ce23-549c-a1a5-04f5906540d4",
+      "name": "orbit_camera",
+      "type": "nodes.motion:OrbitCamera",
+      "studio": {
+        "contract": 1,
+        "position": [
+          600,
+          -250
+        ]
+      },
+      "input_values": {
+        "tilt": 0.14,
+        "distance": 11.5
+      }
+    },
+    {
+      "id": "0b3a812f-d39f-5075-b170-8dc2ac6f5d32",
+      "name": "paint_ball",
+      "type": "nodes.paint_ball:PaintBall",
+      "studio": {
+        "contract": 1,
+        "position": [
+          900,
+          0
+        ]
+      },
+      "input_values": {
+        "width": 1280,
+        "height": 720,
+        "flow": true
+      }
+    },
+    {
+      "id": "ce35f7a9-1132-5104-b715-977e81fef375",
+      "name": "clock",
+      "type": "imports/core-nodes/core_nodes.animation:Timer",
+      "studio": {
+        "contract": 1,
+        "position": [
+          900,
+          -450
+        ]
+      }
+    },
+    {
+      "id": "31d11287-2618-52a0-b0e0-0aa46a8eef60",
+      "name": "sky",
+      "type": "imports/core-nodes/core_nodes.generators:Gradient",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1200,
+          -300
+        ]
+      },
+      "input_values": {
+        "angle": 0.25,
+        "start_red": 0.12,
+        "start_green": 0.15,
+        "start_blue": 0.27,
+        "end_red": 0.05,
+        "end_green": 0.05,
+        "end_blue": 0.08
+      }
+    },
+    {
+      "id": "5cf24689-51da-544e-b2ce-2adaa7dfd0f8",
+      "name": "haze",
+      "type": "imports/core-nodes/core_nodes.generators:Noise",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1200,
+          -150
+        ]
+      },
+      "input_values": {
+        "scale": 3.0,
+        "detail": 0.6,
+        "contrast": 1.2
+      }
+    },
+    {
+      "id": "c54e1988-7771-5889-889b-b71eb36566b5",
+      "name": "backdrop",
+      "type": "imports/core-nodes/core_nodes.composite:Mix",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1500,
+          -200
+        ]
+      },
+      "input_values": {
+        "amount": 0.12
+      }
+    },
+    {
+      "id": "5a7f0184-7851-5225-9dee-fc097eb5c546",
+      "name": "ball_over_backdrop",
+      "type": "imports/core-nodes/core_nodes.composite:Over",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1800,
+          0
+        ]
+      },
+      "input_values": {
+        "opacity": 1.0
+      }
+    },
+    {
+      "id": "b633b5f3-a3be-5a4a-91a5-2cf488d6fd6c",
+      "name": "bass_lag",
+      "type": "imports/core-nodes/core_nodes.animation:Lag",
+      "studio": {
+        "contract": 1,
+        "position": [
+          900,
+          300
+        ]
+      },
+      "input_values": {
+        "seconds": 0.15
+      }
+    },
+    {
+      "id": "9869725a-fecd-5fc7-95c3-78183e3780dd",
+      "name": "stroke_from_bass",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1200,
+          300
+        ]
+      },
+      "input_values": {
+        "from_low": 0.0,
+        "from_high": 1.0,
+        "to_low": 11.0,
+        "to_high": 22.0
+      }
+    },
+    {
+      "id": "f889bd58-de19-5147-a892-29cca9e707af",
+      "name": "painterly",
+      "type": "nodes.painterly:Painterly",
+      "studio": {
+        "contract": 1,
+        "position": [
+          2100,
+          0
+        ]
+      },
+      "input_values": {
+        "stroke": 14.0,
+        "width": 1280.0,
+        "height": 720.0,
+        "canvas": 0.03,
+        "amount": 1.0
+      }
+    },
+    {
+      "id": "972ea8d2-e682-591a-82de-b068181be6b1",
+      "name": "split_from_beat",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1200,
+          450
+        ]
+      },
+      "input_values": {
+        "from_low": 0.0,
+        "from_high": 1.0,
+        "to_low": 0.0,
+        "to_high": 0.008
+      }
+    },
+    {
+      "id": "488ad2b5-8dd2-5813-b03b-d656787d8678",
+      "name": "beat_split",
+      "type": "imports/core-nodes/core_nodes.filters:RgbSplit",
+      "studio": {
+        "contract": 1,
+        "position": [
+          2400,
+          0
+        ]
+      },
+      "input_values": {
+        "angle": 0.1
+      }
+    },
+    {
+      "id": "5b5be77a-75d5-5003-bb13-7d0a21039df2",
+      "name": "energy_lag",
+      "type": "imports/core-nodes/core_nodes.animation:Lag",
+      "studio": {
+        "contract": 1,
+        "position": [
+          900,
+          600
+        ]
+      },
+      "input_values": {
+        "seconds": 0.4
+      }
+    },
+    {
+      "id": "0440ef9f-0bc0-55bd-b38d-67d71ef5a46e",
+      "name": "saturation_from_energy",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1200,
+          600
+        ]
+      },
+      "input_values": {
+        "from_low": 0.0,
+        "from_high": 1.0,
+        "to_low": 1.05,
+        "to_high": 1.5
+      }
+    },
+    {
+      "id": "d9ca7a7f-f68f-50a4-b4af-1769e9fecb09",
+      "name": "colour",
+      "type": "imports/core-nodes/core_nodes.color:HsvAdjust",
+      "studio": {
+        "contract": 1,
+        "position": [
+          2700,
+          0
+        ]
+      },
+      "input_values": {
+        "hue_shift": 0.0,
+        "value": 1.0
+      }
+    },
+    {
+      "id": "3e35c490-fa67-571b-bf15-3b0a7928c173",
+      "name": "vignette",
+      "type": "imports/core-nodes/core_nodes.filters:Vignette",
+      "studio": {
+        "contract": 1,
+        "position": [
+          3000,
+          0
+        ]
+      },
+      "input_values": {
+        "amount": 0.55,
+        "size": 0.55,
+        "softness": 0.5
+      }
+    },
+    {
+      "id": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
+      "name": "stage",
+      "type": "__PROJECT__:stage",
+      "studio": {
+        "contract": 1,
+        "position": [
+          3300,
+          -200
+        ]
+      }
+    },
+    {
+      "id": "c39fea05-57b1-5144-87db-7c614307bfbf",
+      "name": "program",
+      "type": "Core Nodes:program",
+      "studio": {
+        "contract": 1,
+        "position": [
+          3300,
+          200
+        ]
+      }
+    },
+    {
+      "id": "3a00bb94-a2d3-5771-8b18-987537156d3a",
+      "name": "computer_audio",
+      "type": "__MICROPHONE__",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          250
+        ]
+      },
+      "input_values": {
+        "device_id": "E829E599-5A90-4208-B177-ED1AC8BD23A5"
+      }
+    },
+    {
+      "id": "885a7beb-6b16-5fc0-811b-1ab5dd758d72",
+      "name": "room_mic",
+      "type": "__MICROPHONE__",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          500
+        ]
+      },
+      "input_values": {
+        "device_id": "BuiltInMicrophoneDevice"
+      }
+    },
+    {
+      "id": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+      "name": "source_switch",
+      "type": "nodes.source_switch:SourceSwitch",
+      "studio": {
+        "contract": 1,
+        "position": [
+          150,
+          250
+        ]
+      },
+      "input_values": {
+        "source": 0
+      }
+    }
+  ]
+}
