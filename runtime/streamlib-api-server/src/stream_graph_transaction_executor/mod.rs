@@ -534,6 +534,12 @@ impl StreamGraphTransactionExecutor<'_> {
                 stream_ids_in_order.push(stream_id.clone());
             }
         }
+        if mode == GraphEditMode::Live {
+            self.refuse_an_input_set_twice_in_a_live_transaction(
+                &requests,
+                &stream_id_of_each_request,
+            )?;
+        }
         if mode == GraphEditMode::Live
             && let Some(applied) = self.apply_input_values_set_live_apart_from_the_graph(
                 &requests,

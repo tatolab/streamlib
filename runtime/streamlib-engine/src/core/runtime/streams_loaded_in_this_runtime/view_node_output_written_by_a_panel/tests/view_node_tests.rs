@@ -335,15 +335,17 @@ fn the_same_channels_block_written_twice_is_two_blocks_one_after_the_other() {
     );
 }
 
-/// A batch naming a value one output does not carry publishes nothing on any output, and leaves
-/// each Channels output's next block where it was.
+/// A regression lock on the live set's own check of each value: a batch naming a value one
+/// output does not carry is refused before the node is handed any, so nothing is published on
+/// any output and each Channels output's next block stays where it was. The node's own making
+/// of every message before it writes any is locked in `project_view_node`'s tests.
 ///
 /// Mental-revert: a live set that hands each value to the node unchecked publishes `beat` and
 /// `cue`, which come before `fader`, and runs the next block of `beat` on past one never
 /// accepted.
 #[test]
 #[serial]
-fn a_batch_one_output_does_not_carry_publishes_nothing_and_runs_no_block_on() {
+fn a_batch_one_output_does_not_carry_is_refused_before_the_node_publishes_any() {
     let stream = AStreamOfAProjectBringingViews::load();
     let board_id = stream.add_a_node(BOARD_VIEW_TYPE, "board").unwrap();
     let board_uuid = stream.run(&board_id);

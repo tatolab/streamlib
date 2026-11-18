@@ -253,21 +253,18 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         .collect();
     for (index, output) in manifest.outputs.iter().enumerate() {
         let name = output.name.as_str();
-        if input_names.contains(name) {
-            issue(
-                format!("outputs[{index}].name"),
-                &format!("`{name}` names an input too, and a port is named once"),
-            );
+        let why = if input_names.contains(name) {
+            format!("`{name}` names an input too, and a port is named once")
         } else if a_panel_writes(output.family) && setting_names.contains(name) {
-            issue(
-                format!("outputs[{index}].name"),
-                &format!(
-                    "`{name}` names a setting too, and the value of an output a panel writes is \
-                     set on the view node's input of the output's name, so such an output is \
-                     named after no setting"
-                ),
-            );
-        }
+            format!(
+                "`{name}` names a setting too, and the value of an output a panel writes is set \
+                 on the view node's input of the output's name, so such an output is named \
+                 after no setting"
+            )
+        } else {
+            continue;
+        };
+        issue(format!("outputs[{index}].name"), &why);
     }
     for (index, extension) in manifest.accepts.files.iter().enumerate() {
         if !is_a_file_extension(extension) {

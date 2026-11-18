@@ -322,49 +322,96 @@ async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_val
 }
 
 /// A `live` transaction setting the deck's `cue` twice is refused at its second set before
-/// anything is applied, naming the node and the input: each value set live is its own message,
-/// and two sets of one input in one transaction would publish the last twice.
+/// anything is applied, naming the node and the input, whatever else it holds: two sets alone,
+/// which the stream sets apart from the graph, a config set before them, which takes the
+/// staged path, and two sets of a deck an `add_node` names by its `as`. Without the refusal the
+/// second value would replace the first before the node is handed either, so the first would
+/// never be published.
 ///
-/// Mental-revert: holding both sets publishes the second record twice and the first never.
+/// Mental-revert: checking the sets on the path that sets values apart from the graph alone lets
+/// the second and third transactions through, the deck handed the second record alone.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_is_applied() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_stream_holds_the_deck();
     engine.playing(&project).await;
     let stream_asset = project.stream_asset_of("main");
-    let set_cue = |record: Value| {
+    let set_cue_on = |node: &str, record: Value| {
         json!({ "operation": "set_node_input_value", "stream": stream_asset,
-                "node": DECK_NODE_UUID, "input": "cue", "value": record })
+                "node": node, "input": "cue", "value": record })
     };
+    let intro = json!({ "track": "intro" });
+    let drop = json!({ "track": "drop" });
+    let configuring_the_deck = json!({ "operation": "set_node_config", "stream": stream_asset,
+                                       "node": DECK_NODE_UUID, "config": {} });
+    let adding_a_second_deck = json!({ "operation": "add_node", "stream": stream_asset,
+                                       "type": format!("{TEST_PROJECT_NAME}:deck"),
+                                       "name": "second", "as": "second" });
 
-    let refusal = engine
-        .the_answer_or_the_refusal_of(
-            "transact",
-            json!({ "mode": "live", "author": an_agent_named("alice"),
-                    "operations": [set_cue(json!({ "track": "intro" })),
-                                   set_cue(json!({ "track": "drop" }))] }),
-        )
-        .await
-        .expect_err("one live transaction sets each input once");
+    for (operations, second_index, node_named) in [
+        (
+            json!([
+                set_cue_on(DECK_NODE_UUID, intro.clone()),
+                set_cue_on(DECK_NODE_UUID, drop.clone())
+            ]),
+            1,
+            "deck",
+        ),
+        (
+            json!([
+                configuring_the_deck,
+                set_cue_on(DECK_NODE_UUID, intro.clone()),
+                set_cue_on(DECK_NODE_UUID, drop.clone())
+            ]),
+            2,
+            "deck",
+        ),
+        (
+            json!([
+                adding_a_second_deck,
+                set_cue_on("second", intro.clone()),
+                set_cue_on("second", drop.clone())
+            ]),
+            2,
+            "second",
+        ),
+    ] {
+        let refusal = engine
+            .the_answer_or_the_refusal_of(
+                "transact",
+                json!({ "mode": "live", "author": an_agent_named("alice"),
+                        "operations": operations }),
+            )
+            .await
+            .expect_err("one live transaction sets each input once");
 
-    assert_eq!(
-        refusal.refusal_code,
-        ControlOperationRefusalCode::Refused,
-        "{refusal:?}"
-    );
-    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
-    assert!(
-        refusal
-            .runtime_words
-            .contains("input `cue` of `deck` is set twice"),
-        "{refusal:?}"
-    );
-    let deck = the_node_named(
-        &engine.the_live_graph_of(&project.stream_id_of("main")),
-        "deck",
-    );
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::Refused,
+            "{operations}: {refusal:?}"
+        );
+        assert_eq!(
+            refusal.refused_operation_index,
+            Some(second_index),
+            "{operations}: {refusal:?}"
+        );
+        assert!(
+            refusal
+                .runtime_words
+                .contains(&format!("input `cue` of `{node_named}` is set twice")),
+            "{operations}: {refusal:?}"
+        );
+    }
+    let live_graph = engine.the_live_graph_of(&project.stream_id_of("main"));
+    let deck = the_node_named(&live_graph, "deck");
     let cue_input = the_input_named(&deck, "cue");
     assert_ne!(cue_input["value_comes_from"], "live", "{cue_input}");
+    assert!(
+        live_graph["nodes"]
+            .as_array()
+            .is_some_and(|nodes| nodes.iter().all(|node| node["name"] != "second")),
+        "{live_graph}"
+    );
     engine
         .the_project_action_done("stop_playback", &project)
         .await;

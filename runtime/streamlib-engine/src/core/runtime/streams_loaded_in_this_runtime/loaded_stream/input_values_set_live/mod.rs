@@ -24,7 +24,7 @@ use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
     refuse_an_input_value_its_input_does_not_take, the_control_value_of_a_pin,
-    the_input_value_change, the_lifetime_of_the_input,
+    the_input_value_change, the_lifetime_of_the_input, the_words_of_an_input_set_twice_live,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     LegacyConfigOfANodeType, input_values_of_a_config_and_pin_values,
@@ -156,6 +156,27 @@ pub(crate) fn set_the_input_values_live_and_hand_each_node_its_own(
     Ok(Some(held_live))
 }
 
+/// Refuse `sets` when two of them name one input of one node, at the second, whatever else
+/// they set: the second value would replace the first before the node is handed either.
+fn refuse_an_input_set_twice(
+    graph: &Graph,
+    sets: &[InputValueToSetLive],
+) -> std::result::Result<(), LiveInputValueSetRefusal> {
+    let mut inputs_set = HashSet::with_capacity(sets.len());
+    for (set_index, set) in sets.iter().enumerate() {
+        if !inputs_set.insert((set.node, set.input.as_str())) {
+            let node_name = graph
+                .node_by_uuid(set.node)
+                .map_or_else(|| set.node.to_string(), |node| node.display_name.clone());
+            return Err(LiveInputValueSetRefusal::TheInputIsSetTwice {
+                set_index,
+                runtime_words: the_words_of_an_input_set_twice_live(&set.input, &node_name),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Set each of `sets` live in `graph`'s live values and answer how each node set on takes its
 /// values; `None`, with nothing set, when one is held on the graph. A value its input does not
 /// take, a second value on one input of one node, and a value on a `reset` input while
@@ -165,25 +186,14 @@ fn set_the_input_values_live(
     sets: &[InputValueToSetLive],
     playback: PlaybackOfTheStreamSetOn,
 ) -> std::result::Result<Option<InputValuesHeldLive>, LiveInputValueSetRefusal> {
+    refuse_an_input_set_twice(graph, sets)?;
     let mut set_on_each: Vec<&GraphNode> = Vec::with_capacity(sets.len());
-    let mut inputs_set = HashSet::with_capacity(sets.len());
     for (set_index, set) in sets.iter().enumerate() {
         let Some(set_on) = graph.node_by_uuid(set.node) else {
             return Ok(None);
         };
         if is_held_on_the_graph(graph, set_on, &set.input) {
             return Ok(None);
-        }
-        if !inputs_set.insert((set.node, set.input.as_str())) {
-            return Err(LiveInputValueSetRefusal::TheInputIsSetTwice {
-                set_index,
-                runtime_words: format!(
-                    "input `{}` of `{}` is set twice in one live set, and each value set live \
-                     is published as its own write. To fix: set each input once, or make each \
-                     write a transaction of its own",
-                    set.input, set_on.display_name
-                ),
-            });
         }
         refuse_an_input_value_its_input_does_not_take(
             graph.node_types_this_stream_resolves(),
