@@ -15,13 +15,17 @@ use crate::core::descriptors::{
 };
 use crate::core::{Error, Result};
 
-/// The end of a link at `port` of `node`, when typed and its config resolves no family or codec.
+/// The end of a link at `port` of `node`, when typed and neither config nor an input sets it.
 fn the_typed_link_end<'graph>(
     node: &'graph GraphNode,
     port: &'graph PortInfo,
 ) -> Option<PinLinkEnd<'graph>> {
     let pin = port.pin.as_ref()?;
-    if port.family.family_from_config_key.is_some() || port.family.codec_from_config_key.is_some() {
+    let family = &port.family;
+    if family.family_from_config_key.is_some()
+        || family.codec_from_config_key.is_some()
+        || family.family_follows_input_port.is_some()
+    {
         return None;
     }
     Some(PinLinkEnd {

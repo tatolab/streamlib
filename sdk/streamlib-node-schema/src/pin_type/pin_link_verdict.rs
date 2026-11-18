@@ -195,7 +195,7 @@ impl fmt::Display for PinLinkRefusal {
     }
 }
 
-/// The node the family check names between these ends' types, until TAT-371 marks the built-ins.
+/// The node the family table names between the families of these ends' types.
 fn node_placed_between_the_families_of(
     output: &PinLinkEndNamed,
     input: &PinLinkEndNamed,
@@ -303,15 +303,13 @@ pub fn pin_link_verdict(
         };
     }
     let input = input.end;
-    let meanings_differ = match (output.meaning, input.meaning) {
-        (Some(output_meaning), Some(input_meaning)) if output_meaning != input_meaning => {
-            Some(PinLinkWarning::MeaningsDiffer {
-                output_meaning: output_meaning.to_owned(),
-                input_meaning: input_meaning.to_owned(),
-            })
-        }
-        _ => None,
-    };
+    let meanings_differ =
+        differing_meanings(output.meaning, input.meaning).map(|(output_meaning, input_meaning)| {
+            PinLinkWarning::MeaningsDiffer {
+                output_meaning,
+                input_meaning,
+            }
+        });
     if let Some(direct) = direct_link_between(output.pin_type, input.pin_type) {
         let mut warnings = direct.warnings;
         warnings.extend(meanings_differ);
@@ -475,35 +473,14 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
                 ))
             }
         }
-        (
-            PinType::Bundle {
-                members: output_members,
-            },
-            PinType::Bundle {
-                members: input_members,
-            },
-        ) if the_same_but_for_member_meanings(output, input) => Some(DirectPinLink {
-            free_conversion: None,
-            warnings: output_members
-                .iter()
-                .zip(input_members)
-                .filter_map(|(output_member, input_member)| {
-                    match (&output_member.meaning, &input_member.meaning) {
-                        (Some(output_meaning), Some(input_meaning))
-                            if output_meaning != input_meaning =>
-                        {
-                            Some(PinLinkWarning::MemberMeaningsDiffer {
-                                member_name: output_member.name.clone(),
-                                output_meaning: output_meaning.clone(),
-                                input_meaning: input_meaning.clone(),
-                            })
-                        }
-                        _ => None,
-                    }
-                })
-                .collect(),
-        }),
-        _ if the_same_but_for_member_meanings(output, input) => Some(DirectPinLink::as_it_is()),
+        _ if the_same_but_for_member_meanings(output, input) => {
+            let mut warnings = Vec::new();
+            warn_of_member_meanings_that_differ(output, input, "", &mut warnings);
+            Some(DirectPinLink {
+                free_conversion: None,
+                warnings,
+            })
+        }
         (output_number, input_number)
             if output_number.is_a_number() && input_number.is_a_number() =>
         {
@@ -526,6 +503,59 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
             Some(DirectPinLink::converting(MenuOptionNameAsString))
         }
         _ => None,
+    }
+}
+
+/// The two meanings, when both ends state one and they differ.
+fn differing_meanings(output: Option<&str>, input: Option<&str>) -> Option<(String, String)> {
+    match (output, input) {
+        (Some(output), Some(input)) if output != input => {
+            Some((output.to_owned(), input.to_owned()))
+        }
+        _ => None,
+    }
+}
+
+/// Push a warning for each bundle member, at any depth, whose two meanings differ.
+fn warn_of_member_meanings_that_differ(
+    output: &PinType,
+    input: &PinType,
+    path: &str,
+    warnings: &mut Vec<PinLinkWarning>,
+) {
+    match (output, input) {
+        (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => {
+            for (output_member, input_member) in output.iter().zip(input) {
+                let member_name = format!("{path}{}", output_member.name);
+                if let Some((output_meaning, input_meaning)) = differing_meanings(
+                    output_member.meaning.as_deref(),
+                    input_member.meaning.as_deref(),
+                ) {
+                    warnings.push(PinLinkWarning::MemberMeaningsDiffer {
+                        member_name: member_name.clone(),
+                        output_meaning,
+                        input_meaning,
+                    });
+                }
+                warn_of_member_meanings_that_differ(
+                    &output_member.member_type,
+                    &input_member.member_type,
+                    &format!("{member_name}."),
+                    warnings,
+                );
+            }
+        }
+        (
+            PinType::ListOf {
+                element_type: output,
+            },
+            PinType::ListOf {
+                element_type: input,
+            },
+        ) => {
+            warn_of_member_meanings_that_differ(output, input, path, warnings);
+        }
+        _ => {}
     }
 }
 

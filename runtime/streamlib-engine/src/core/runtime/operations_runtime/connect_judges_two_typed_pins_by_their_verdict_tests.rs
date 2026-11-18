@@ -13,8 +13,8 @@ use super::{LiveGraphChangeOnOneStream, connect_impl};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    PinDeclaration, PinLinkRefusal, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    SettingReadTime,
+    OutputPortDeclaredNames, PinDeclaration, PinLinkRefusal, PinType, PortDescriptor, PortFamily,
+    PortFamilyDeclaration, SettingReadTime,
 };
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
@@ -32,6 +32,10 @@ const KELVIN_TO_RANKINE: &str = "VerdictCheckKelvinToRankine";
 const DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS: &str = "VerdictCheckDescribedOnlyFahrenheitToCelsius";
 const ENCODER_CODEC_FROM_CONFIG: &str = "VerdictCheckEncoderCodecFromConfig";
 const H264_SINK: &str = "VerdictCheckH264Sink";
+const NAMED_RECORDS_SOURCE: &str = "VerdictCheckNamedRecordsSource";
+const RECORDS_PASSTHROUGH: &str = "VerdictCheckRecordsPassthrough";
+const RECORDS_NEEDING_X: &str = "VerdictCheckRecordsNeedingX";
+const RECORDS_NEEDING_Z: &str = "VerdictCheckRecordsNeedingZ";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -170,6 +174,49 @@ fn register_the_verdict_fixture_node_types() {
             }],
             Vec::new(),
         ));
+        let records = |name: &str, family: PortFamilyDeclaration| PortDescriptor {
+            family,
+            ..a_typed_port(name, PinType::String {})
+        };
+        let of_records = || PortFamilyDeclaration::of_family(PortFamily::Records);
+        register(a_node_type(
+            class_path(NAMED_RECORDS_SOURCE),
+            Vec::new(),
+            vec![records(
+                "records",
+                PortFamilyDeclaration {
+                    names: Some(OutputPortDeclaredNames::Stated(vec![
+                        "x".to_owned(),
+                        "y".to_owned(),
+                    ])),
+                    ..of_records()
+                },
+            )],
+        ));
+        register(a_node_type(
+            class_path(RECORDS_PASSTHROUGH),
+            vec![records("in", of_records())],
+            vec![records(
+                "out",
+                PortFamilyDeclaration {
+                    family_follows_input_port: Some("in".to_owned()),
+                    ..of_records()
+                },
+            )],
+        ));
+        for (sink, required) in [(RECORDS_NEEDING_X, "x"), (RECORDS_NEEDING_Z, "z")] {
+            register(a_node_type(
+                class_path(sink),
+                vec![records(
+                    "records",
+                    PortFamilyDeclaration {
+                        requires: vec![required.to_owned()],
+                        ..of_records()
+                    },
+                )],
+                Vec::new(),
+            ));
+        }
         register(
             a_node_type(
                 NodeClassImportPath::of_built_in_node(DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS),
@@ -456,6 +503,41 @@ fn a_typed_output_whose_config_names_its_codec_is_judged_by_that_codec() {
                 assert!(words.contains("requires a codec in"), "{words}");
             }
             (outcome, _) => panic!("an {codec} encoder into an h264 input: {outcome:?}"),
+        }
+    }
+}
+
+/// A typed output whose family follows an input carries the names of what arrives there, so it
+/// is judged on the family check: the upstream names `x` and `y` reach an input requiring `x`,
+/// and not one requiring `z`.
+///
+/// Mental-revert: reading the following output's own declaration refuses both, as stating no
+/// names.
+#[test]
+fn a_typed_output_whose_family_follows_an_input_is_judged_by_what_it_carries_on() {
+    register_the_verdict_fixture_node_types();
+    for (sink_type, connects) in [(RECORDS_NEEDING_X, true), (RECORDS_NEEDING_Z, false)] {
+        let compiler = Arc::new(Compiler::new());
+        let source = a_node_of(&compiler, class_path(NAMED_RECORDS_SOURCE));
+        let passthrough = a_node_of(&compiler, class_path(RECORDS_PASSTHROUGH));
+        let sink = a_node_of(&compiler, class_path(sink_type));
+        connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(source, "records"),
+            InputLinkPortRef::new(passthrough.clone(), "in"),
+        )
+        .expect("the source feeds the passthrough");
+        let connected = connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(passthrough, "out"),
+            InputLinkPortRef::new(sink, "records"),
+        );
+        match (connected, connects) {
+            (Ok(_), true) => {}
+            (Err(Error::InvalidLink(words)), false) => {
+                assert!(words.contains("\"z\""), "{words}");
+            }
+            (outcome, _) => panic!("the passthrough into {sink_type}: {outcome:?}"),
         }
     }
 }

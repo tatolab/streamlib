@@ -361,8 +361,8 @@ fn a_refusal_names_both_ends_and_both_types() {
     );
 }
 
-/// Until the built-ins state their conversions, a refusal between two families one node
-/// converts between names the node the family check names.
+/// A refusal no stated conversion bridges names the node the family table places between
+/// the two ends' families.
 #[test]
 fn a_refusal_no_stated_conversion_bridges_names_the_node_between_the_families() {
     let PinLinkOutcome::Refused(refusal) =
@@ -597,9 +597,32 @@ fn bundles_connect_by_member_names_and_types_and_warn_of_member_meanings() {
     let list_of = |element_type| PinType::ListOf {
         element_type: Box::new(element_type),
     };
+    let pitch_warning = |member_name: &str| PinLinkWarning::MemberMeaningsDiffer {
+        member_name: member_name.to_owned(),
+        output_meaning: "frequency".to_owned(),
+        input_meaning: "note".to_owned(),
+    };
     assert_eq!(
-        the_outcome_between(&list_of(bundle("frequency")), &list_of(bundle("note"))),
-        PinLinkOutcome::Connects
+        the_verdict_between(&list_of(bundle("frequency")), &list_of(bundle("note"))),
+        PinLinkVerdict {
+            outcome: PinLinkOutcome::Connects,
+            warnings: vec![pitch_warning("pitch")],
+        }
+    );
+    let nested = |meaning: &str| PinType::Bundle {
+        members: vec![BundleMember {
+            name: "voice".to_owned(),
+            member_type: bundle(meaning),
+            meaning: None,
+            default_value: None,
+        }],
+    };
+    assert_eq!(
+        the_verdict_between(&nested("frequency"), &nested("note")),
+        PinLinkVerdict {
+            outcome: PinLinkOutcome::Connects,
+            warnings: vec![pitch_warning("voice.pitch")],
+        }
     );
     let renamed = PinType::Bundle {
         members: vec![BundleMember {
