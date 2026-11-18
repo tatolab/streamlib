@@ -6,6 +6,7 @@ mod compute;
 mod device_idle;
 mod export_staging;
 pub(crate) mod failure_the_node_reported_of_itself;
+mod function_node_raising_reports;
 mod graphics;
 pub(super) mod handle_lifecycle;
 mod helper_log_record;
@@ -83,6 +84,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::ReadNodeStoreKey(p) => Some(&p.request_id),
         EscalateRequest::WriteNodeStoreKey(p) => Some(&p.request_id),
         EscalateRequest::RemoveNodeStoreKey(p) => Some(&p.request_id),
+        EscalateRequest::SetFunctionNodeRaisingBecause(p) => Some(&p.request_id),
         EscalateRequest::SetProcessRaisingBecause(p) => Some(&p.request_id),
         EscalateRequest::SetNotReadyBecause(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
@@ -168,6 +170,13 @@ pub(crate) fn handle_escalate_op(
                 req,
             ))
         }
+        EscalateRequest::SetFunctionNodeRaisingBecause(req) => Some(
+            function_node_raising_reports::handle_set_function_node_raising_because(
+                what_the_node_reaches,
+                rid,
+                req,
+            ),
+        ),
         EscalateRequest::SetProcessRaisingBecause(req) => Some(
             process_raising_the_node_reports::handle_set_process_raising_because(
                 what_the_node_reaches,

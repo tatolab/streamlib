@@ -116,6 +116,8 @@ fn escalate_request_vectors_round_trip() {
         CopyDeviceExportStagingBackToSurface => r#"{"op":"copy_device_export_staging_back_to_surface","request_id":"copy_device_export_staging_back_to_surface.request_id-15","surface_id":"copy_device_export_staging_back_to_surface.surface_id-16"}"#,
         CopySurfaceToSurface => r#"{"op":"copy_surface_to_surface","destination_surface_id":"copy_surface_to_surface.destination_surface_id-262","request_id":"copy_surface_to_surface.request_id-263","source_surface_id":"copy_surface_to_surface.source_surface_id-264"}"#,
         FailTheNode => r#"{"op":"fail_the_node","reason":"the page's renderer ended 6 times in 60s","request_id":"fail_the_node.request_id-282"}"#,
+        SetFunctionNodeRaisingBecause => r#"{"op":"set_function_node_raising_because","function_node":"Pbeat","raising_because":"raised RuntimeError: broke on purpose (nodes/beat.py, line 3)","request_id":"set_function_node_raising_because.request_id-293"}"#,
+        SetFunctionNodeRaisingBecause => r#"{"op":"set_function_node_raising_because","function_node":"Pbeat","raising_because":null,"request_id":"set_function_node_raising_because.request_id-294"}"#,
         SetProcessRaisingBecause => r#"{"op":"set_process_raising_because","raising_because":"process() raised RuntimeError: broke on purpose","request_id":"set_process_raising_because.request_id-283"}"#,
         SetProcessRaisingBecause => r#"{"op":"set_process_raising_because","raising_because":null,"request_id":"set_process_raising_because.request_id-284"}"#,
         SetNotReadyBecause => r#"{"op":"set_not_ready_because","not_ready_because":"`riv_path` is not set","request_id":"set_not_ready_because.request_id-291"}"#,

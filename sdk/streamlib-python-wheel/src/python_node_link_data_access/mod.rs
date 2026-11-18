@@ -84,6 +84,8 @@ pub(crate) struct PythonNodeLinkDataAccess {
     runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool,
     values_last_read_off_links_into_its_function_node_islands:
         crate::python_function_node_island::ValuesLastReadOffLinksFromOutsideIslands,
+    function_node_raises_in_this_helper:
+        Arc<crate::python_function_node_island::FunctionNodeRaisesInThisHelper>,
     /// The client this helper claims pooled GPU frames through, once its
     /// runtime context opened one; the islands it feeds claim through it the
     /// frames the messages they hold name.

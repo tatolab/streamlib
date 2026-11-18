@@ -27,6 +27,8 @@ from tatolab.runtime._engine import (
     note_stop_request_from_parent_on_runtime_context,
     read_each_unlinked_input_port_as_its_pin_value,
     run_the_scheduling_loop_of_this_helper,
+    take_each_function_node_raise_newly_noted,
+    why_each_function_node_its_islands_call_is_raising,
 )
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeIslandsFedToTheirPorts,
@@ -103,6 +105,7 @@ class HelperProcessLifecycle:
         self._config_its_node_was_last_handed: "dict[str, Any]" = {}
         self._exposed_config_values_last_refused: "dict[str, Any]" = {}
         self._whether_the_parent_last_took_process_as_raising: "Optional[bool]" = False
+        self._raises_the_parent_holds_by_function_node: "dict[str, str]" = {}
         self._not_ready_reason_the_parent_last_took: "Optional[str]" = None
         self._the_parent_holds_the_last_not_ready_report = True
         self._transparent_frames_while_not_ready: "Optional[TransparentFramesOnTheImageOutputsOfANodeNotReady]" = None
@@ -472,6 +475,7 @@ class HelperProcessLifecycle:
         raised = self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
         if hook_name == "process":
             self._tell_the_parent_when_process_starts_or_stops_raising(raised)
+            self._tell_the_parent_when_a_function_node_starts_or_stops_raising()
             self._tell_the_parent_whether_the_node_is_ready()
 
     def _tell_the_parent_when_process_starts_or_stops_raising(
@@ -503,6 +507,61 @@ class HelperProcessLifecycle:
             self._whether_the_parent_last_took_process_as_raising = None
             return
         self._whether_the_parent_last_took_process_as_raising = process_is_raising
+
+    def _tell_the_parent_when_a_function_node_starts_or_stops_raising(self) -> None:
+        """Send the parent what each function node this helper's islands call
+        raised when a run of its raises begins, and `None` when a clean call
+        ends one, so the graph shows the function node raising while this node
+        keeps running. A report the parent refused or did not answer is sent
+        again after the next call. The first raise of each run is logged once,
+        with its traceback."""
+        for function_node, raising_because, raised_traceback in (
+            take_each_function_node_raise_newly_noted(link_data_access=self._link_data_access)
+        ):
+            log.error(
+                "a function node this node's islands call raised; it hands out nothing until "
+                "it runs cleanly",
+                function_node=function_node,
+                error=raising_because,
+                traceback=raised_traceback,
+            )
+        raising_because_by_function_node = why_each_function_node_its_islands_call_is_raising(
+            link_data_access=self._link_data_access
+        )
+        raises_the_parent_holds = self._raises_the_parent_holds_by_function_node
+        if raising_because_by_function_node == raises_the_parent_holds:
+            return
+        reports: "list[tuple[str, Optional[str]]]" = [
+            (function_node, raising_because)
+            for function_node, raising_because in raising_because_by_function_node.items()
+            if function_node not in raises_the_parent_holds
+        ]
+        reports.extend(
+            (function_node, None)
+            for function_node in raises_the_parent_holds
+            if function_node not in raising_because_by_function_node
+        )
+        for function_node, raising_because in reports:
+            try:
+                self._bridge.request_from_parent(
+                    {
+                        "op": "set_function_node_raising_because",
+                        "function_node": function_node,
+                        "raising_because": raising_because,
+                    }
+                )
+            except EscalateRequestError as refusal:
+                log.error(
+                    "the parent did not take whether a function node raises; the next call "
+                    "tells it again",
+                    function_node=function_node,
+                    error=str(refusal),
+                )
+                continue
+            if raising_because is None:
+                del raises_the_parent_holds[function_node]
+            else:
+                raises_the_parent_holds[function_node] = raising_because
 
     def _take_the_config_fields_its_node_exposes_as_inputs(self, exposed_config_fields: "list[str]") -> None:
         """Read each of `exposed_config_fields` from the input port of its name, in place of those read before."""

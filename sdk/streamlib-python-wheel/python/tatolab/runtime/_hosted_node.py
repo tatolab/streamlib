@@ -201,10 +201,16 @@ def construct_hosted_node(
 def the_words_a_process_raise_is_shown_in(raised: BaseException) -> str:
     """`process() raised <type>: <message>`, then where in the node's own code it
     was raised, as the graph shows a node whose `process()` keeps raising."""
+    return f"process() {the_words_a_raise_is_shown_in(raised)}"
+
+
+def the_words_a_raise_is_shown_in(raised: BaseException) -> str:
+    """`raised <type>: <message>`, then where in the code it was raised, as the
+    graph shows a node whose code keeps raising."""
     words = "".join(traceback.format_exception_only(type(raised), raised)).strip()
     raised_at = traceback.extract_tb(raised.__traceback__)[-1:] if raised.__traceback__ else []
     if not raised_at:
-        return f"process() raised {words}"
+        return f"raised {words}"
     frame = raised_at[0]
     filename = frame.filename
     try:
@@ -213,4 +219,4 @@ def the_words_a_process_raise_is_shown_in(raised: BaseException) -> str:
             filename = relative_filename
     except ValueError:
         pass
-    return f"process() raised {words} ({filename}, line {frame.lineno})"
+    return f"raised {words} ({filename}, line {frame.lineno})"
