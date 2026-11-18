@@ -10,6 +10,7 @@ use super::link_ends_this_graph_cannot_take::{
     refuse_a_destination_this_graph_cannot_take, refuse_a_source_this_graph_cannot_take,
 };
 use super::{LiveGraphChangeOnOneStream, commit_live_graph_change};
+use crate::core::compiler::compiler_ops::function_node_island::refuse_a_link_feeding_an_island_into_the_app_process;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     ALinkThePinTypesRefuse, LinkUniqueId, refuse_a_link_its_pin_types_or_families_refuse,
@@ -22,8 +23,9 @@ use crate::iceoryx2::ChannelName;
 ///
 /// Connect judges two typed ports by their pin link verdict, and any other two
 /// by their families, names, codec and formats, and refuses a link that does
-/// not connect as it is by name before any channel exists; one the verdict
-/// alone refuses is kept as `a_link_the_pin_types_refuse` says.
+/// not connect as it is, or that feeds a function node island into a node in
+/// the app process, by name before any channel exists; one the verdict alone
+/// refuses is kept as `a_link_the_pin_types_refuse` says.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -87,6 +89,7 @@ fn apply_a_link(
                 &to,
                 a_link_the_pin_types_refuse,
             )?;
+            refuse_a_link_feeding_an_island_into_the_app_process(graph, &from, &to)?;
 
             let channel =
                 crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())

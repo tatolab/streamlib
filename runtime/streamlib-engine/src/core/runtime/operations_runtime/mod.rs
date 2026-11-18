@@ -925,3 +925,6 @@ mod connect_refuses_ports_whose_families_do_not_match_tests;
 
 #[cfg(test)]
 mod connect_judges_two_typed_pins_by_their_verdict_tests;
+
+#[cfg(test)]
+mod connect_refuses_an_island_into_the_app_process_tests;
