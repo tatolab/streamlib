@@ -11,8 +11,8 @@ use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, GraphWeight, Link, LinkUniqueId,
-    OutOfProcessLinkWiringComponent,
+    Graph, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link, LinkUniqueId,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef,
 };
 
 use super::{
@@ -78,6 +78,49 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
         }
     }
     Ok(())
+}
+
+/// Refuse a link from `from` into `to`, before it is made, when it would feed a function node
+/// island into a node of a type that runs in the app process, in the words the wiring of such a
+/// link refuses it in; a stopped stream wires nothing, so this is what keeps the link out of
+/// the graph it saves.
+pub(crate) fn refuse_a_link_feeding_an_island_into_the_app_process(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Result<()> {
+    let reader_id = to.node_run_id();
+    if !runs_inside_the_read_of_each_node_it_feeds(graph, from.node_run_id())
+        || runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
+    {
+        return Ok(());
+    }
+    let Some(reader) = graph.traversal().v(reader_id).first() else {
+        return Ok(());
+    };
+    if !graph
+        .node_types_this_stream_resolves()
+        .runs_each_of_its_nodes_in_the_app_process(reader.node_type())
+    {
+        return Ok(());
+    }
+    Err(the_refusal_of_an_island_fed_into_the_app_process(
+        &format!("the link from `{from}` to `{to}`"),
+        reader_id,
+    ))
+}
+
+/// The refusal of `link_named`, a link feeding a function node island into `reader_id`, which
+/// runs in the app process.
+pub(super) fn the_refusal_of_an_island_fed_into_the_app_process(
+    link_named: &str,
+    reader_id: &NodeRunId,
+) -> Error {
+    Error::InvalidLink(format!(
+        "{link_named} feeds a function node island into `{reader_id}`, which runs in the app \
+         process; a function node runs inside the read of a node in a helper process, and the \
+         app process runs no node code"
+    ))
 }
 
 /// Refuse `link`, between two function nodes, when what it feeds already

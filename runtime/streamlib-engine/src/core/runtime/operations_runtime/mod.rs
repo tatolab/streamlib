@@ -13,6 +13,7 @@ use super::node_interpreters::node_interpreter_launch_record::NodeInterpreterLau
 use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
+use crate::core::compiler::compiler_ops::function_node_island::refuse_a_link_feeding_an_island_into_the_app_process;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
@@ -397,7 +398,8 @@ pub(super) async fn remove_node_impl(
 ///
 /// Connect judges two typed ports by their pin link verdict, and any other two
 /// by their families, names, codec and formats, and refuses a link that does
-/// not connect as it is by name before any channel exists.
+/// not connect as it is, or that feeds a function node island into a node in
+/// the app process, by name before any channel exists.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -472,6 +474,7 @@ fn apply_a_link(
                 &to,
                 &NODE_REGISTRY.pin_conversions(),
             )?;
+            refuse_a_link_feeding_an_island_into_the_app_process(graph, &from, &to)?;
 
             let channel =
                 crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
@@ -987,3 +990,6 @@ mod connect_refuses_ports_whose_families_do_not_match_tests;
 
 #[cfg(test)]
 mod connect_judges_two_typed_pins_by_their_verdict_tests;
+
+#[cfg(test)]
+mod connect_refuses_an_island_into_the_app_process_tests;
