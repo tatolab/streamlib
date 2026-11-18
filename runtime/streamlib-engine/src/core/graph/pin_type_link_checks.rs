@@ -4,7 +4,7 @@
 //! The judgement of a link by its two ends' pin types, or by their families when one is untyped.
 
 use super::port_family_link_checks::{
-    refuse_a_link_between_ports_whose_families_do_not_match,
+    ImageFormatsTheInputDoesNotRead, refuse_a_link_between_ports_whose_families_do_not_match,
     refuse_what_a_link_carries_on_past_its_input, the_inputs_an_input_is_carried_on_to,
     the_outputs_a_link_carries_on,
 };
@@ -42,9 +42,22 @@ fn the_typed_link_end<'graph>(
 pub(crate) enum ALinkThePinTypesRefuse {
     /// It is refused in the verdict's words: a link made now.
     IsRefused,
-    /// It is kept when its ports' families, names, codec and formats take it, and the verdict's
-    /// refusal is logged as a warning: a link a saved graph already holds.
+    /// It is kept when its ports' families, names and codec take it, and the verdict's refusal,
+    /// and any Image format its input does not read, is logged as a warning: a link a saved
+    /// graph already holds.
     IsKeptWhenItsFamiliesTakeIt,
+}
+
+impl ALinkThePinTypesRefuse {
+    /// What becomes of the link when its Image output may write a format its input does not
+    /// read: a saved graph's link is kept with a warning, as it loaded before formats were
+    /// judged by every one the output states.
+    fn image_formats_the_input_does_not_read(self) -> ImageFormatsTheInputDoesNotRead {
+        match self {
+            Self::IsRefused => ImageFormatsTheInputDoesNotRead::RefuseTheLink,
+            Self::IsKeptWhenItsFamiliesTakeIt => ImageFormatsTheInputDoesNotRead::AreWarnedOf,
+        }
+    }
 }
 
 /// The two ports of a link from `from` to `to` and their ends, when both are typed.
@@ -122,6 +135,7 @@ pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
     to: &InputLinkPortRef,
     a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
 ) -> Result<()> {
+    let image_formats = a_link_the_pin_types_refuse.image_formats_the_input_does_not_read();
     let Some(TypedLinkEnds {
         from_node,
         output_port,
@@ -131,7 +145,12 @@ pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
         input,
     }) = the_typed_ends_of(graph, from, to)
     else {
-        return refuse_a_link_between_ports_whose_families_do_not_match(graph, from, to);
+        return refuse_a_link_between_ports_whose_families_do_not_match(
+            graph,
+            from,
+            to,
+            image_formats,
+        );
     };
     let conversions = graph.node_types_this_stream_resolves().pin_conversions();
     if let Some(refusal) =
@@ -139,7 +158,13 @@ pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
     {
         if a_link_the_pin_types_refuse == ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
             && matches!(refusal, PinLinkRefusal::PinTypesDoNotConnect { .. })
-            && refuse_a_link_between_ports_whose_families_do_not_match(graph, from, to).is_ok()
+            && refuse_a_link_between_ports_whose_families_do_not_match(
+                graph,
+                from,
+                to,
+                image_formats,
+            )
+            .is_ok()
         {
             tracing::warn!(
                 from = %from,
@@ -169,7 +194,13 @@ pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
     }
     let inputs_carried_on_to = the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name());
     for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
-        refuse_what_a_link_carries_on_past_its_input(carried_on, &inputs_carried_on_to, from, to)?;
+        refuse_what_a_link_carries_on_past_its_input(
+            carried_on,
+            &inputs_carried_on_to,
+            from,
+            to,
+            image_formats,
+        )?;
     }
     Ok(())
 }

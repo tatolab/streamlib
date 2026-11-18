@@ -9,6 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::pin_type::TexturePixelFormat;
+use crate::stated_lists::{the_ones_not_held, the_ones_not_taken};
 
 /// The memory layout a port carries; a link joins two ports of one family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
@@ -618,10 +619,21 @@ fn conversion_between_families(from: PortFamily, to: PortFamily) -> String {
 ///
 /// The output's family, resolved against its node's config, must be one the
 /// input takes; then the input's `requires=` is checked against the output's
-/// resolved names, `requires_codec=` against its resolved codec, and each
-/// format the output's `formats=` states against the input's, which must read it
-/// when it states any.
+/// resolved names, `requires_codec=` against its resolved codec, and the
+/// output's `formats=` against the input's: when the input states any, it must
+/// read every format the output states.
 pub fn refusal_of_a_link_between_port_families(
+    output: PortFamilyLinkEndpoint<'_>,
+    output_node_config: Option<&serde_json::Value>,
+    input: PortFamilyLinkEndpoint<'_>,
+) -> Option<String> {
+    refusal_of_a_link_between_port_families_but_for_image_formats(output, output_node_config, input)
+        .or_else(|| refusal_of_the_image_formats_a_link_carries(output, output_node_config, input))
+}
+
+/// Why [`refusal_of_a_link_between_port_families`] refuses a link from `output`
+/// to `input` by all but its Image formats, or `None` when nothing else does.
+pub fn refusal_of_a_link_between_port_families_but_for_image_formats(
     output: PortFamilyLinkEndpoint<'_>,
     output_node_config: Option<&serde_json::Value>,
     input: PortFamilyLinkEndpoint<'_>,
@@ -652,35 +664,32 @@ pub fn refusal_of_a_link_between_port_families(
             conversion_between_families(output_family, input_family)
         ));
     }
-    if let Some(refusal) = refusal_of_the_names_and_codec_a_link_carries(
-        output,
-        output_family,
-        output_node_config,
-        input,
-    ) {
-        return Some(refusal);
+    refusal_of_the_names_and_codec_a_link_carries(output, output_family, output_node_config, input)
+}
+
+/// Why an Image output cannot feed `input` by the formats it writes, or `None`
+/// when it can: the output's `formats=` against the input's, which, when it
+/// states any, must read every format the output states. An output its node's
+/// config resolves to no Image is not judged here.
+pub fn refusal_of_the_image_formats_a_link_carries(
+    output: PortFamilyLinkEndpoint<'_>,
+    output_node_config: Option<&serde_json::Value>,
+    input: PortFamilyLinkEndpoint<'_>,
+) -> Option<String> {
+    let output_family =
+        output_port_family_resolved_against_config(output.declaration, output_node_config).ok()?;
+    if output_family != PortFamily::Image {
+        return None;
     }
-    if output_family == PortFamily::Image && !input_declaration.formats.is_empty() {
-        let formats_the_input_does_not_read: Vec<&String> = output_declaration
-            .formats
-            .iter()
-            .filter(|format| !input_declaration.formats.contains(format))
-            .collect();
-        if !formats_the_input_does_not_read.is_empty() {
-            return Some(format!(
-                "cannot link {output} to {input}: {output} writes formats {:?}, and {input} \
-                 reads only {:?}; {output} may write {}, which {input} does not read",
-                output_declaration.formats,
-                input_declaration.formats,
-                formats_the_input_does_not_read
-                    .iter()
-                    .map(|format| format!("{format:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
+    let input_formats = &input.declaration.formats;
+    let not_read = the_ones_not_taken(&output.declaration.formats, input_formats);
+    if not_read.is_empty() {
+        return None;
     }
-    None
+    Some(format!(
+        "cannot link {output} to {input}: {output} may write {not_read:?}, which {input} does \
+         not read (it reads only {input_formats:?})"
+    ))
 }
 
 /// Why an output of `output_family` cannot feed `input` by the names and the codec it resolves
@@ -758,10 +767,7 @@ pub fn refusal_of_required_names(
     input: PortFamilyLinkEndpoint<'_>,
     required_names: &[String],
 ) -> Option<String> {
-    let missing_names: Vec<&String> = required_names
-        .iter()
-        .filter(|required| !output_names.contains(required))
-        .collect();
+    let missing_names = the_ones_not_held(required_names, output_names);
     if missing_names.is_empty() {
         return None;
     }

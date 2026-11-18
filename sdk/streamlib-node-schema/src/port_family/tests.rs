@@ -216,7 +216,10 @@ fn an_image_output_writing_a_format_the_input_does_not_read_is_refused_though_ot
     )
     .expect("the camera may write nv12, which the compositor does not read");
     assert!(
-        refusal.contains("may write \"nv12\", which compositor.video does not read"),
+        refusal.ends_with(
+            "camera.video may write [\"nv12\"], which compositor.video does not read (it reads \
+             only [\"rgba8_unorm\"])"
+        ),
         "{refusal}"
     );
     let input_reading_any = PortFamilyDeclaration::of_family(PortFamily::Image);

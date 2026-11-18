@@ -680,7 +680,7 @@ fn an_output_following_an_input_is_judged_by_the_formats_it_hands_on() {
             ) {
                 (Ok(_), true) => {}
                 (Err(Error::InvalidLink(words)), false) => {
-                    assert!(words.contains("may write \"nv12\", which"), "{words}");
+                    assert!(words.contains("may write [\"nv12\"], which"), "{words}");
                 }
                 (outcome, _) => panic!(
                     "the handed-on picture into {sink_type}, passthrough feeding first: \
@@ -688,6 +688,74 @@ fn an_output_following_an_input_is_judged_by_the_formats_it_hands_on() {
                 ),
             }
         }
+    }
+}
+
+/// A saved graph's Texture link whose output states a format the input does not take, besides
+/// one it does, is kept, as it loaded before the formats were judged by every one the output
+/// states; the same link made now is refused.
+///
+/// Mental-revert: judging a saved link's formats as a new link's refuses it, and the saved graph
+/// holding it no longer loads.
+#[test]
+fn a_saved_graphs_texture_link_its_formats_alone_refuse_is_kept_and_a_new_one_refused() {
+    register_the_verdict_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(RGBA_OR_NV12_TEXTURE_SOURCE));
+    let saved_sink = a_node_of(&compiler, class_path(RGBA_TEXTURE_SINK));
+    let new_sink = a_node_of(&compiler, class_path(RGBA_TEXTURE_SINK));
+
+    connect_on_this_thread_as(
+        &compiler,
+        OutputLinkPortRef::new(source.clone(), "video"),
+        InputLinkPortRef::new(saved_sink, "video"),
+        ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+    )
+    .expect("a saved link whose formats alone refuse it is kept");
+    assert_eq!(the_links_in(&compiler), 1);
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(source, "video"),
+        InputLinkPortRef::new(new_sink, "video"),
+    )
+    .expect_err("a link made now is judged by every format the output states");
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A saved graph's link handed on past an output that follows its input is kept when the input
+/// it reaches does not read every format, and refused when made now.
+///
+/// Mental-revert: judging what a saved link carries on as a new link's refuses it.
+#[test]
+fn a_saved_graphs_link_handed_on_to_an_input_not_reading_every_format_is_kept() {
+    register_the_verdict_fixture_node_types();
+    for (a_link_the_pin_types_refuse, kept) in [
+        (ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt, true),
+        (ALinkThePinTypesRefuse::IsRefused, false),
+    ] {
+        let compiler = Arc::new(Compiler::new());
+        let source = a_node_of(&compiler, class_path(RGBA_OR_NV12_TEXTURE_SOURCE));
+        let passthrough = a_node_of(&compiler, class_path(TEXTURE_PASSTHROUGH));
+        let sink = a_node_of(&compiler, class_path(RGBA_TEXTURE_SINK));
+        connect_on_this_thread_as(
+            &compiler,
+            OutputLinkPortRef::new(passthrough.clone(), "out"),
+            InputLinkPortRef::new(sink, "video"),
+            a_link_the_pin_types_refuse,
+        )
+        .expect("nothing arrives at the passthrough yet");
+        let connected = connect_on_this_thread_as(
+            &compiler,
+            OutputLinkPortRef::new(source, "video"),
+            InputLinkPortRef::new(passthrough, "in"),
+            a_link_the_pin_types_refuse,
+        );
+        assert_eq!(
+            connected.is_ok(),
+            kept,
+            "{a_link_the_pin_types_refuse:?}: {connected:?}"
+        );
     }
 }
 
