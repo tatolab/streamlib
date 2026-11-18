@@ -33,6 +33,7 @@ impl PythonNodeLinkDataAccess {
             output_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
             runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool::new(false),
             values_last_read_off_links_into_its_function_node_islands: Arc::default(),
+            function_node_raises_in_this_helper: Arc::default(),
             gpu_exchange_client_of_this_helper: Arc::new(OnceLock::new()),
         }
     }
@@ -43,6 +44,14 @@ impl PythonNodeLinkDataAccess {
         &self,
     ) -> crate::python_function_node_island::ValuesLastReadOffLinksFromOutsideIslands {
         Arc::clone(&self.values_last_read_off_links_into_its_function_node_islands)
+    }
+
+    /// What each function node this helper's islands call raised at its last
+    /// call, which the parent shows on the function node.
+    pub(crate) fn function_node_raises_in_this_helper(
+        &self,
+    ) -> Arc<crate::python_function_node_island::FunctionNodeRaisesInThisHelper> {
+        Arc::clone(&self.function_node_raises_in_this_helper)
     }
 
     /// Hand the islands this helper feeds the client its runtime context

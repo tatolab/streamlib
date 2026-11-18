@@ -132,6 +132,31 @@ impl LiveInputValuesOfAStream {
             .map(|live| live.value.clone())
     }
 
+    /// Hold each value set live on an input of `node` under the lifetime `lifetime_of` answers
+    /// for its input where that differs from the one it is held under: a value now `kept` is
+    /// mirrored into the project's store, and one now `reset` forgotten there. A value whose
+    /// lifetime is unchanged is left as it is held.
+    pub(crate) fn hold_each_value_of_the_node_whose_lifetime_changed(
+        &self,
+        node: Uuid,
+        lifetime_of: impl Fn(&str) -> NodeValueLifetime,
+    ) {
+        let changed: Vec<(String, Value, NodeValueLifetime)> = self
+            .values
+            .read()
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .filter_map(|(input, live)| {
+                let lifetime = lifetime_of(input);
+                (lifetime != live.lifetime).then(|| (input.clone(), live.value.clone(), lifetime))
+            })
+            .collect();
+        for (input, value, lifetime) in changed {
+            self.set(node, &input, Some(value), lifetime);
+        }
+    }
+
     /// Each value set live on an input of `node`, by input.
     pub fn values_of_the_node(&self, node: Uuid) -> Map<String, Value> {
         self.values
@@ -196,14 +221,16 @@ impl LiveInputValuesOfAStream {
 /// The lifetime input `input` of `node` declares; kept for an input it does not have.
 pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeValueLifetime {
     node.input_port(input)
-        .map(|port| port.lifetime)
-        .unwrap_or_default()
+        .map_or_else(NodeValueLifetime::default, |port| port.lifetime)
 }
 
-/// Whether input `port` of a node running as `node_kind` takes a stored value: what its pin type
-/// holds and, on a node that is no function or shader node, only a Channels input; on a port
-/// that names no pin type, any input of a function node.
+/// Whether input `port` of a node running as `node_kind` takes a stored value: a setting does;
+/// else what its pin type holds and, on a node that is no function or shader node, only a
+/// Channels input; on a port that names no pin type, any input of a function node.
 pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &PortInfo) -> bool {
+    if !port.takes_a_wire() {
+        return true;
+    }
     let read_whole_by_its_node = matches!(
         node_kind,
         Some(NodeKind::Function { .. } | NodeKind::Shader)

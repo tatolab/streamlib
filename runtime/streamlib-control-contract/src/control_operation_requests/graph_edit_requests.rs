@@ -22,6 +22,9 @@ use streamlib_project_repository::{
 };
 use uuid::Uuid;
 
+/// How `set_node_input_value`'s `node` is described to its caller.
+const SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, at the stream's top level, and the set is made on that node's `value`; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A `transact` operation names its node.";
+
 use super::{
     AUTHOR_ARGUMENT_DESCRIPTION, GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION, GraphEditMode,
     IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, ProjectTransactionAuthorArgument,
@@ -227,9 +230,9 @@ pub struct SetNodeInputValueRequest {
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
     pub level: Option<Vec<Uuid>>,
-    /// The node, by its UUID.
-    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-    pub node: String,
+    /// The node, by its UUID; omitted, `input` names one of the stream's own inputs.
+    #[schemars(description = SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION)]
+    pub node: Option<String>,
     /// The input, by name.
     #[schemars(description = NODE_INPUT_ARGUMENT_DESCRIPTION)]
     pub input: String,

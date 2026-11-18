@@ -288,7 +288,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   write_studio_view_output(params: ControlOperations["write_studio_view_output"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_studio_view_output"]["result"]>;
   /**
-   * Write a value onto one of a loaded stream's graph inputs.
+   * Write a value onto one of a loaded stream's graph inputs. Replaced by `set_node_input_value`.
    */
   write_graph_input(params: ControlOperations["write_graph_input"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_graph_input"]["result"]>;
   /**

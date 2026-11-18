@@ -41,5 +41,6 @@ pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWir
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 pub(crate) use project_view_node::{
-    NodeWhoseOutputsAClientWrites, the_message_a_value_written_onto_an_output_is,
+    THE_FAMILY_A_GRAPH_INPUT_DECLARES, ValueSourceNode,
+    the_message_a_value_written_onto_an_output_is, the_node_type_of_a_top_level_graph_input,
 };

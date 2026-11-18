@@ -28,12 +28,15 @@ use crate::python_node_link_data_access::PythonNodeLinkDataAccess;
 
 mod function_node_call_shapes;
 mod function_node_island_evaluators;
+mod function_node_raises_in_this_helper;
 
-use function_node_call_shapes::HowAFunctionNodeIsCalled;
+use function_node_call_shapes::{FunctionNodeCallFailure, HowAFunctionNodeIsCalled};
 use function_node_island_evaluators::FunctionNodeHandedOverByTheBootstrap;
 pub(crate) use function_node_island_evaluators::{
     FunctionNodeEvaluatedAsAStandaloneNode, FunctionNodeIslandEvaluatedInThisHelper,
 };
+pub(crate) use function_node_raises_in_this_helper::FunctionNodeRaisesInThisHelper;
+use function_node_raises_in_this_helper::WhereAnIslandNotesTheRaisesOfItsFunctionNodes;
 
 /// One value a function node takes or gives.
 #[derive(Debug)]
@@ -441,6 +444,7 @@ struct FunctionNodeIslandEvaluation {
     /// The board each call's breadcrumb is noted on, so the parent can name
     /// the node a call died or stalled in.
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
+    where_it_notes_the_raises_of_its_function_nodes: WhereAnIslandNotesTheRaisesOfItsFunctionNodes,
 }
 
 impl FunctionNodeIslandEvaluation {
@@ -507,6 +511,8 @@ impl FunctionNodeIslandEvaluation {
         Ok(())
     }
 
+    /// Call each node in turn at `now_ns`. A node whose call fails hands out
+    /// nothing, its raise noted, so each node reading it takes nothing.
     fn evaluate_every_node_at(&mut self, now_ns: i64) -> Result<()> {
         self.read_each_link_from_outside_the_island()?;
         self.message_handed_on_since_the_last_evaluation = false;
@@ -550,12 +556,10 @@ impl FunctionNodeIslandEvaluation {
                             && !function_node.inputs_that_take_none.contains(&input_index)
                     });
             if an_input_that_needs_a_value_has_none {
-                for output_value in &mut function_node.output_values {
-                    *output_value = FunctionNodeValue::Nothing;
-                }
+                hand_out_nothing_on_every_output(&mut function_node.output_values);
                 continue;
             }
-            call_noting_its_breadcrumb_on(
+            let called = call_noting_its_breadcrumb_on(
                 self.call_breadcrumb_board_writer.as_deref(),
                 &function_node.node_id,
                 function_node.breadcrumb_number,
@@ -563,7 +567,15 @@ impl FunctionNodeIslandEvaluation {
                 &mut function_node.output_values,
                 &input_values,
                 now_ns,
-            )?;
+            );
+            if let Err(call_failure) = called {
+                self.where_it_notes_the_raises_of_its_function_nodes
+                    .note_that_it_raised(&function_node.node_id, || call_failure.described());
+                hand_out_nothing_on_every_output(&mut function_node.output_values);
+                continue;
+            }
+            self.where_it_notes_the_raises_of_its_function_nodes
+                .note_that_it_ran_cleanly(&function_node.node_id);
             if let Some(board_writer) = self.call_breadcrumb_board_writer.as_deref()
                 && function_node.writes_its_state_on_the_board
             {
@@ -578,6 +590,13 @@ impl FunctionNodeIslandEvaluation {
     }
 }
 
+/// Set every output of a node that answered nothing this evaluation to nothing.
+fn hand_out_nothing_on_every_output(output_values: &mut [FunctionNodeValue]) {
+    for output_value in output_values {
+        *output_value = FunctionNodeValue::Nothing;
+    }
+}
+
 /// Call a function node at `now_ns` with `input_values`, its breadcrumb noted
 /// on `call_breadcrumb_board_writer` for the length of the call.
 fn call_noting_its_breadcrumb_on(
@@ -588,7 +607,7 @@ fn call_noting_its_breadcrumb_on(
     output_values: &mut [FunctionNodeValue],
     input_values: &[&FunctionNodeValue],
     now_ns: i64,
-) -> Result<()> {
+) -> std::result::Result<(), FunctionNodeCallFailure> {
     let call_under_way = call_breadcrumb_board_writer.map(|board_writer| {
         board_writer.note_a_function_node_call_started(breadcrumb_number, monotonic_clock_now_ns())
     });
@@ -678,6 +697,11 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
                 claim_the_pooled_gpu_frame_a_message_names: link_data_access
                     .claim_of_the_pooled_gpu_frames_its_islands_hold(),
             },
+            WhereAnIslandNotesTheRaisesOfItsFunctionNodes {
+                function_node_raises_in_this_helper: link_data_access
+                    .function_node_raises_in_this_helper(),
+                island_input_port: input_port.to_string(),
+            },
         )
         .map_err(PyValueError::new_err)?;
     if let Some(function_node_id) = island.the_first_function_node_it_runs_as_python()
@@ -690,6 +714,9 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
              `{function_node_id}` compile, or read the port from Python"
         )));
     }
+    link_data_access
+        .function_node_raises_in_this_helper()
+        .forget_the_island_feeding(input_port);
     input_mailboxes.feed_an_input_port_from_a_function_node_island(input_port, Arc::new(island));
     Ok(())
 }
@@ -708,7 +735,44 @@ pub(crate) fn stop_feeding_an_input_port_from_a_function_node_island(
                 "a function node island feeds only a helper process's own data plane",
             )
         })?;
+    link_data_access
+        .function_node_raises_in_this_helper()
+        .forget_the_island_feeding(input_port);
     Ok(input_mailboxes.stop_feeding_an_input_port_from_a_function_node_island(input_port))
+}
+
+/// What each function node this helper's islands call raised at its last call,
+/// by the node's id; a node that ran cleanly is left out.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access))]
+pub(crate) fn why_each_function_node_its_islands_call_is_raising(
+    link_data_access: &PythonNodeLinkDataAccess,
+) -> std::collections::BTreeMap<String, String> {
+    link_data_access
+        .function_node_raises_in_this_helper()
+        .why_each_function_node_is_raising()
+}
+
+/// Each first raise of a run of a function node's raises noted since the last
+/// call, in the order noted: the node's id, what it raised as the graph shows
+/// it, and its Python traceback, `None` for a call refused outside Python.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access))]
+pub(crate) fn take_each_function_node_raise_newly_noted(
+    link_data_access: &PythonNodeLinkDataAccess,
+) -> Vec<(String, String, Option<String>)> {
+    link_data_access
+        .function_node_raises_in_this_helper()
+        .take_each_raise_newly_noted()
+        .into_iter()
+        .map(|newly_noted| {
+            (
+                newly_noted.function_node_id,
+                newly_noted.raise.raising_because,
+                newly_noted.raise.traceback,
+            )
+        })
+        .collect()
 }
 
 /// The message `input_port` holds for this read, handed back unread: an

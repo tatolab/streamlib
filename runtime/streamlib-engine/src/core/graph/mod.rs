@@ -55,6 +55,7 @@ pub use streamlib_node_schema::{
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
 
+pub(crate) use components::HowOneReadersHelperRanEachFunctionNode;
 pub use components::{
     Component, ComponentMap, ComponentSerializer, DeviceMatchedAudioWindowContractsComponent,
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
@@ -82,8 +83,10 @@ pub use edges::{
     InputLinkPortRef, InputPortMarker, Link, LinkCapacity, LinkDirection, LinkState, LinkUniqueId,
     OutputLinkPortRef, OutputPortMarker, PortMarker, input, output,
 };
+pub(crate) use nodes::the_words_of_a_link_into_a_setting;
 pub use nodes::{
-    GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PortInfo,
+    GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, InputNumberRange, NodeRunId,
+    PortInfo,
 };
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{

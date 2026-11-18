@@ -3,12 +3,13 @@
 
 use streamlib_control_contract::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CollapseSelectionIntoSubgraphRequest,
-    ImportGraphGeneratorRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
-    RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest,
-    SetGroupFieldsRequest, SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest,
-    SetPinValueRequest, SetStudioFieldsRequest, TransactRequest, UnlockSubgraphRequest,
+    ControlOperation, ImportGraphGeneratorRequest, OneLinkGraphEditRequest,
+    OneNodeGraphEditRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
+    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest, SetNodeInputValue,
+    SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
+    TransactRequest, UnlockSubgraphRequest,
 };
-use streamlib_project_repository::StreamGraphAction;
+use streamlib_project_repository::{GRAPH_INTERFACE_VALUE_PORT_NAME, StreamGraphAction};
 
 use super::{
     ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
@@ -281,11 +282,21 @@ impl ControlOperationDispatcher {
             author,
             idempotency_key,
         } = set_node_input_value_request;
+        const ACTION_NAME: &str = <SetNodeInputValue as ControlOperation>::METHOD_NAME;
+        let level = level.unwrap_or_default();
+        let (node, input) = match node {
+            Some(node) => (node, input),
+            None => (
+                self.the_node_a_set_naming_no_node_sets(ACTION_NAME, &stream, &level, &input)
+                    .await?,
+                GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
+            ),
+        };
         self.apply_a_graph_transaction(
-            "set_node_input_value",
+            ACTION_NAME,
             vec![StreamGraphAction::SetNodeInputValue {
                 stream,
-                level: level.unwrap_or_default(),
+                level,
                 node,
                 input,
                 value,

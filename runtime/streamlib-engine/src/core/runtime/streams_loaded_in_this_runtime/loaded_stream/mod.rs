@@ -393,12 +393,6 @@ impl LoadedStreamInThisRuntime {
         function_node_states
     }
 
-    pub(crate) fn the_handles_a_runtime_context_of_this_stream_belongs_to(
-        &self,
-    ) -> Arc<LoadedStreamARuntimeContextBelongsTo> {
-        Arc::clone(&self.this_streams_identity_and_handles)
-    }
-
     pub fn project_directory(&self) -> &Path {
         &self.this_streams_identity_and_handles.project_directory
     }
@@ -499,7 +493,7 @@ impl LoadedStreamInThisRuntime {
             .machine_name
             .name()
             .to_string();
-        let (mut graph_response, stateful_function_nodes_by_node_uuid, current_value_of_each_graph_input) =
+        let (mut graph_response, stateful_function_nodes_by_node_uuid, value_of_each_graph_input) =
             self.compiler.scope(|graph, _tx| {
                 let stateful_function_nodes_by_node_uuid: HashMap<uuid::Uuid, Vec<String>> =
                     graph
@@ -526,10 +520,7 @@ impl LoadedStreamInThisRuntime {
                 (
                     graph.to_graph_response(machine_name),
                     stateful_function_nodes_by_node_uuid,
-                    the_current_value_of_each_graph_input(graph, &|node_uuid| {
-                        self.this_streams_identity_and_handles
-                            .the_store_of_the_node(node_uuid)
-                    }),
+                    the_value_of_each_graph_input(graph),
                 )
             });
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
@@ -540,9 +531,9 @@ impl LoadedStreamInThisRuntime {
         self.graph_only_nodes_as_drawn
             .lock()
             .render_into(&mut graph_response, &self.node_types_this_stream_resolves);
-        render_the_current_value_of_each_graph_input_into(
+        render_the_value_of_each_graph_input_into(
             &mut graph_response.nodes,
-            current_value_of_each_graph_input,
+            value_of_each_graph_input,
         );
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
@@ -626,79 +617,71 @@ pub(crate) fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &
         .unwrap_or("a panic that carried no message")
 }
 
-/// The value each running top-level `GraphInput` carries now, by its node's UUID.
-/// The value each top-level `GraphInput` of `graph` carries, by node UUID: a running one's
-/// current value, and a stopped one's value at its next Play.
-pub(in crate::core::runtime) fn the_current_value_of_each_graph_input(
+/// What `graph` renders of one top-level `GraphInput`'s `value` input: the value it reads now,
+/// set live, saved or nothing, and its saved value.
+struct ValueOfAGraphInputRendered {
+    current_value: Option<serde_json::Value>,
+    saved_value: Option<serde_json::Value>,
+}
+
+/// What `graph` renders of the `value` input of each top-level `GraphInput` of `graph`, by node
+/// UUID, running or not: the value it reads, a value set live over its saved one.
+fn the_value_of_each_graph_input(
     graph: &crate::core::graph::Graph,
-    the_store_of_the_node: &dyn Fn(
-        uuid::Uuid,
-    ) -> Result<crate::core::context::StoreScopedToThisNode>,
-) -> HashMap<String, serde_json::Value> {
-    use crate::core::graph::GraphNodeWithComponents;
-    use crate::core::nodes::NodeWhoseOutputsAClientWrites;
+) -> HashMap<String, ValueOfAGraphInputRendered> {
+    use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME;
     graph
-        .traversal()
-        .v(())
-        .iter()
-        .filter(|node| {
-            node.node_type.as_str()
-                == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
-        })
+        .every_graph_input()
         .filter_map(|node| {
-            let current_value = match node.get::<crate::core::graph::NodeInstanceComponent>() {
-                Some(node_instance) => node_instance
-                    .0
-                    .lock()
-                    .as_any_mut()
-                    .downcast_mut::<NodeWhoseOutputsAClientWrites>()?
-                    .current_value_of_the_output(
-                        crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME,
-                    )?
-                    .clone(),
-                None => {
-                    let store = the_store_of_the_node(node.node_uuid)
-                        .inspect_err(|not_opened| {
-                            tracing::warn!(
-                                "`GraphInput` node `{}` does not run and its project's store \
-                                 did not open, so `graph` shows its default: {not_opened}",
-                                node.display_name
-                            )
-                        })
-                        .ok();
-                    NodeWhoseOutputsAClientWrites::the_value_a_stopped_top_level_graph_input_carries(
-                        node, store,
-                    )
-                    .ok()??
-                }
-            };
-            Some((node.node_uuid.to_string(), current_value))
+            let port = node.input_port(GRAPH_INTERFACE_VALUE_PORT_NAME)?;
+            let current_value = crate::core::graph::input_values::the_value_an_input_reads(
+                graph, node, port, false,
+            )
+            .and_then(|read| read.value)
+            .filter(|value| !value.is_null());
+            Some((
+                node.node_uuid.to_string(),
+                ValueOfAGraphInputRendered {
+                    current_value,
+                    saved_value: node.pins.get(&port.name).cloned(),
+                },
+            ))
         })
         .collect()
 }
 
-/// Render each `GraphInput`'s current value under its `graph_interface` component, as
-/// `current_value`.
-fn render_the_current_value_of_each_graph_input_into(
+/// Render the value of each `GraphInput`'s `value` input: the one it reads under its
+/// `graph_interface` component, as `current_value`, and its saved one in its config under
+/// `default`, the key a published Tato Studio reads.
+fn render_the_value_of_each_graph_input_into(
     nodes: &mut [crate::core::json_schema::GraphNodeOutput],
-    mut current_value_of_each_graph_input: HashMap<String, serde_json::Value>,
+    mut value_of_each_graph_input: HashMap<String, ValueOfAGraphInputRendered>,
 ) {
+    use crate::core::graph::graph_interface_resolution::{
+        GRAPH_INTERFACE_COMPONENT_KEY, render_the_saved_value_of_a_graph_input_as_its_default,
+    };
     for node in nodes {
-        let Some(current_value) = current_value_of_each_graph_input.remove(&node.id) else {
+        let Some(rendered) = value_of_each_graph_input.remove(&node.id) else {
             continue;
         };
-        if let Some(serde_json::Value::Object(graph_interface)) = node
-            .components
-            .get_mut(crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_COMPONENT_KEY)
+        if let Some(serde_json::Value::Object(graph_interface)) =
+            node.components.get_mut(GRAPH_INTERFACE_COMPONENT_KEY)
+            && let Some(current_value) = rendered.current_value
         {
             graph_interface.insert(
                 GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD.to_string(),
                 current_value,
             );
         }
+        if let Some(serde_json::Value::Object(config)) = &mut node.config {
+            render_the_saved_value_of_a_graph_input_as_its_default(config, rendered.saved_value);
+            node.config_checksum = crate::core::utils::compute_json_checksum(
+                node.config.as_ref().unwrap_or(&serde_json::Value::Null),
+            );
+        }
     }
 }
 
-/// The field of a `GraphInput`'s `graph_interface` component holding the value it carries now:
-/// the last a client wrote, else its `default`.
+/// The field of a `GraphInput`'s `graph_interface` component holding the value its `value` input
+/// reads now: the one set live, else its saved one.
 pub(crate) const GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD: &str = "current_value";

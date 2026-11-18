@@ -5482,6 +5482,7 @@ dependencies = [
  "image",
  "parking_lot",
  "rmcp",
+ "rmp-serde",
  "serde",
  "serde_json",
  "serial_test",

@@ -108,6 +108,8 @@ impl GraphNode {
             &outputs,
             config.as_ref(),
         ));
+        let ports = GraphNodePorts { inputs, outputs }
+            .resolved_against_the_config(&node_type, config.as_ref());
         Self {
             id: NodeRunId::new(),
             node_uuid: uuid::Uuid::new_v4(),
@@ -118,7 +120,7 @@ impl GraphNode {
             display_name: display_name.into(),
             config,
             config_checksum,
-            ports: GraphNodePorts { inputs, outputs },
+            ports,
             node_kind,
             components: ComponentMap::new(),
             component_serializers: Vec::new(),
@@ -150,7 +152,28 @@ impl GraphNode {
     /// Update config and recompute checksum.
     pub fn set_config(&mut self, config: serde_json::Value) {
         self.config_checksum = compute_json_checksum(&config);
+        if self.is_a_graph_input() {
+            self.ports = std::mem::take(&mut self.ports)
+                .resolved_against_the_config(&self.node_type, Some(&config));
+        }
         self.config = Some(config);
+    }
+
+    /// Refuse a link into input `input` when it is a setting, which takes a stored value and
+    /// never a wire.
+    pub(crate) fn refuse_a_link_into_a_setting(&self, input: &str) -> crate::core::Result<()> {
+        match self.input_port(input) {
+            Some(port) if !port.takes_a_wire() => Err(crate::core::Error::InvalidLink(
+                the_words_of_a_link_into_a_setting(&port.name, &self.display_name),
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Whether this node is a `GraphInput`; one in a graph that runs is at its stream's top
+    /// level, since a fragment's own are flattened away.
+    pub fn is_a_graph_input(&self) -> bool {
+        crate::core::graph::graph_interface_resolution::is_the_graph_input_type(&self.node_type)
     }
 
     pub fn node_type(&self) -> &NodeClassImportPath {
@@ -269,4 +292,12 @@ impl GraphNodeWithComponents for GraphNode {
     fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer> {
         &mut self.component_serializers
     }
+}
+
+/// The words refusing a link into input `input` of the node `node`, a setting.
+pub(crate) fn the_words_of_a_link_into_a_setting(input: &str, node: &str) -> String {
+    format!(
+        "a link enters input `{input}` of `{node}`, a setting, which takes no wire. To fix: set \
+         its value with `set_node_input_value`"
+    )
 }

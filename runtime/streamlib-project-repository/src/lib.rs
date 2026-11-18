@@ -157,7 +157,7 @@ pub use stream_graph_document::{
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, asset_references_made_references_into_the_import,
     assets_a_nodes_input_values_reference, fragment_with_each_node_uuid_kept_by_its_name,
-    is_a_graph_interface_node_type,
+    is_a_graph_interface_node_type, is_the_graph_input_type,
 };
 pub use stream_graph_fragment_fold::{
     StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,

@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::core::graph::{
     GraphNodePorts, PortInfo, cast_exposed_name_to_url_safe, port_names_listed_for_a_refusal,
-    the_input_ports_of_the_exposed_config_fields,
+    the_input_ports_of_the_exposed_config_fields, the_words_of_a_link_into_a_setting,
 };
 use crate::core::json_schema::LabelledNodeGroup;
 use crate::core::nodes::NodeTypesOneStreamResolves;
@@ -337,7 +337,8 @@ pub(crate) fn the_ports_of_a_graph_document_node(
 }
 
 /// Refuse `port` unless `node` has it in `direction`, whether its type declares it or it is
-/// a config field the node exposes, listing the ports it does have there.
+/// a config field the node exposes, listing the ports it does have there; and refuse an input
+/// that is a setting, which takes no wire, as the end of a link.
 pub(crate) fn refuse_a_port_the_node_does_not_have(
     node_types: &NodeTypesOneStreamResolves,
     node_name: &str,
@@ -346,22 +347,25 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
     direction: PortDirection,
 ) -> Result<()> {
     let port_cast = cast_exposed_name_to_url_safe(port)?;
-    let port_names: Vec<String> = the_ports_of_a_graph_document_node(node_types, node_name, node)?
+    let ports: Vec<PortInfo> = the_ports_of_a_graph_document_node(node_types, node_name, node)?
         .map(|(inputs, outputs)| match direction {
             PortDirection::Input => inputs,
             PortDirection::Output => outputs,
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|declared| declared.name)
-        .collect();
-    if port_names.iter().any(|name| *name == port_cast) {
-        return Ok(());
+        .unwrap_or_default();
+    match ports.iter().find(|declared| declared.name == port_cast) {
+        Some(declared) if direction == PortDirection::Input && !declared.takes_a_wire() => {
+            Err(Error::InvalidLink(the_words_of_a_link_into_a_setting(
+                &declared.name,
+                node_name,
+            )))
+        }
+        Some(_) => Ok(()),
+        None => Err(Error::GraphError(format!(
+            "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",
+            port_names_listed_for_a_refusal(ports.iter().map(|declared| declared.name.as_str()))
+        ))),
     }
-    Err(Error::GraphError(format!(
-        "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",
-        port_names_listed_for_a_refusal(port_names.iter().map(String::as_str))
-    )))
 }
 
 /// Refuse an integer literal outside `i64::MIN..=u64::MAX`, which `serde_json`

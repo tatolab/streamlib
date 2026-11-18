@@ -18,11 +18,10 @@ use crate::core::graph::{
     GraphNodeWithComponents, PortInfo,
 };
 use crate::core::nodes::node_instance_factory::the_node_type_as_registered;
-use crate::core::nodes::project_view_node::{
-    NodeWhoseOutputsAClientWrites, the_node_type_of_a_project_view,
-    the_node_type_of_a_top_level_graph_input,
+use crate::core::nodes::project_view_node::{ValueSourceNode, the_node_type_of_a_project_view};
+use crate::core::nodes::{
+    DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, the_node_type_of_a_top_level_graph_input,
 };
-use crate::core::nodes::{DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance};
 use crate::core::{NodeDescriptor, PortDirection};
 
 struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
@@ -39,16 +38,15 @@ static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
         .expect("the GraphInput node type's names are valid");
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
         input_and_output_port_info: GraphNodePorts {
-            inputs: Vec::new(),
+            inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
             outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
         },
         descriptor,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
             |node| {
                 Ok(
-                    Box::new(NodeWhoseOutputsAClientWrites::for_a_top_level_graph_input(
-                        node,
-                    )?) as Box<dyn crate::core::nodes::DynGeneratedNode + Send>,
+                    Box::new(ValueSourceNode::for_a_top_level_graph_input(node)?)
+                        as Box<dyn crate::core::nodes::DynGeneratedNode + Send>,
                 )
             },
         )),
@@ -213,7 +211,7 @@ impl NodeTypesOneStreamResolves {
                     input_and_output_port_info,
                     how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
                         Box::new(move |node| {
-                            Ok(Box::new(NodeWhoseOutputsAClientWrites::for_the_node(
+                            Ok(Box::new(ValueSourceNode::for_the_node(
                                 node,
                                 descriptor_for_constructor.clone(),
                             ))
@@ -555,9 +553,7 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &NodeClassImportPath,
     ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
-        if node_type.as_str()
-            == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
-        {
+        if crate::core::graph::graph_interface_resolution::is_the_graph_input_type(node_type) {
             return Some(Arc::clone(&THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS));
         }
         self.view_types_this_streams_project_brings
@@ -807,6 +803,7 @@ mod tests {
             pin_default: None,
             pin_declaration: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+            input_mode: None,
         }
     }
 

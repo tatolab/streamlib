@@ -107,6 +107,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
         state_resumed_from: &dyn Fn(u32) -> Option<Vec<f64>>,
         how_it_carries_values_beyond_numbers: HowAFunctionNodeIslandCarriesValuesBeyondNumbers,
+        where_it_notes_the_raises_of_its_function_nodes: WhereAnIslandNotesTheRaisesOfItsFunctionNodes,
     ) -> std::result::Result<Self, String> {
         let HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
             mut how_each_node_carries_its_values,
@@ -296,6 +297,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 values_last_read_off_links_from_outside_islands,
                 claim_the_pooled_gpu_frame_a_message_names,
                 call_breadcrumb_board_writer,
+                where_it_notes_the_raises_of_its_function_nodes,
             }),
             stream_clock_now_ns,
         })
@@ -427,7 +429,7 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
                 &input_value_references,
                 now_ns,
             )
-            .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+            .map_err(FunctionNodeCallFailure::into_py_err)?;
             if let Some(board_writer) = call_breadcrumb_board_writer
                 && function_node.writes_its_state_on_the_board
             {

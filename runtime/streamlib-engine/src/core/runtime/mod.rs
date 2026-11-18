@@ -112,4 +112,5 @@ pub use streams_loaded_in_this_runtime::stream_actions_of_this_runtime::{
     StreamListingState, StreamReloadAtTheStart,
 };
 pub use streams_loaded_in_this_runtime::stream_environment::StreamEnvironment;
+pub use streams_loaded_in_this_runtime::stream_input_declared_by_a_graph_input::TopLevelGraphInputDeclaringAStreamInput;
 pub use streams_loaded_in_this_runtime::stream_location_and_id::StreamLocation;

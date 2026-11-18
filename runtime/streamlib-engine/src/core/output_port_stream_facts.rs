@@ -237,6 +237,8 @@ mod tests {
             former_names: Vec::new(),
             may_be_unset: false,
             family,
+            input_mode: None,
+            range: None,
         }
     }
 

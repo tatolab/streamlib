@@ -19,6 +19,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
     EscalateResponseErr, EscalateResponseOk,
 };
 use crate::core::context::texture_pools_and_rings::node_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneNode;
+use crate::core::graph::HowOneReadersHelperRanEachFunctionNode;
 use crate::core::output_port_stream_facts::{
     StreamFactsOfOutputPorts, UpstreamStreamFactsByInboundLink,
 };
@@ -30,6 +31,7 @@ pub(crate) struct WhatAHelperPlacedNodeReaches {
     pub(crate) shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
     pub(crate) failure_the_node_reported_of_itself: Arc<FailureTheNodeReportedOfItself>,
     pub(crate) process_raising_the_node_reports: Arc<ProcessRaisingTheNodeReports>,
+    pub(crate) how_its_islands_ran_each_function_node: Arc<HowOneReadersHelperRanEachFunctionNode>,
     pub(crate) node_not_ready_reports: Arc<NodeNotReadyReports>,
     pub(crate) output_frames_kept_by_its_output_links:
         Arc<OutputFramesKeptByTheOutputLinksOfOneNode>,
@@ -114,6 +116,8 @@ mod tests {
             former_names: Vec::new(),
             may_be_unset: false,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Packets),
+            input_mode: None,
+            range: None,
         }
     }
 

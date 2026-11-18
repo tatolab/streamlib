@@ -31,7 +31,7 @@ use crate::core::graph::{
     HowItsHelpersRanAFunctionNode, InputLinkPortRef, Link,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
     LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
-    the_outputs_a_link_carries_on,
+    StateComponent, the_outputs_a_link_carries_on,
 };
 use crate::core::nodes::OutOfProcessLinkWireReply;
 use crate::iceoryx2::{Iceoryx2Node, InboundLinkName};
@@ -644,8 +644,9 @@ fn mark_an_island_link_by_whether_its_reader_owes_an_answer(
 }
 
 /// Where the helpers evaluating `function_node_id` note how they ran it, which
-/// `graph` renders on the node as `ran_compiled`; attached on its first reader
-/// or its promotion, whichever comes first.
+/// `graph` renders on the node as `ran_compiled`, and what its calls raised,
+/// which it renders as the node's `process_raising_because`; attached on its
+/// first reader or its promotion, whichever comes first.
 pub(crate) fn the_report_of_how_its_helpers_ran_a_function_node(
     graph: &mut Graph,
     function_node_id: &NodeRunId,
@@ -654,7 +655,10 @@ pub(crate) fn the_report_of_how_its_helpers_ran_a_function_node(
     if let Some(component) = node.get::<FunctionNodeRanCompiledComponent>() {
         return Some(std::sync::Arc::clone(&component.0));
     }
-    let how_it_ran = std::sync::Arc::new(HowItsHelpersRanAFunctionNode::default());
+    let function_node_state = node.get::<StateComponent>()?.clone_inner();
+    let how_it_ran = std::sync::Arc::new(HowItsHelpersRanAFunctionNode::showing_its_raises_on(
+        function_node_state,
+    ));
     node.insert(FunctionNodeRanCompiledComponent(std::sync::Arc::clone(
         &how_it_ran,
     )));

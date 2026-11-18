@@ -6,16 +6,25 @@
 
 use std::path::Path;
 
+use streamlib::sdk::runtime::TopLevelGraphInputDeclaringAStreamInput;
 use streamlib_project_repository::{
-    ProjectViewFolderRead, TatolabViewDeclaredPort, every_view_a_project_and_its_imports_bring,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GraphEditStream, ProjectViewFolderRead, StreamGraphAction,
+    TatolabViewDeclaredPort, every_view_a_project_and_its_imports_bring,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListProjectViewsToolResult, ProjectViewDeclaredPort, ProjectViewListed,
-    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    ControlOperationRefusalCode, ListProjectViewsToolResult, ProjectActionRefusalOnTheWire,
+    ProjectViewDeclaredPort, ProjectViewListed, WriteGraphInputToolResult,
+    WriteStudioViewOutputToolResult,
 };
 
+use uuid::Uuid;
+
 use crate::control_operation_dispatcher::the_refusal_of_a_reach_for_a_node;
-use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
+use crate::control_operation_dispatcher::{
+    ControlOperationDispatcher, ControlOperationRefusal, ControlRequestOrigin,
+};
+use crate::refusal_code_and_place::RefusalCodeAndPlace;
+use crate::stream_graph_transaction_executor::StreamsTheRuntimeHolds;
 
 fn the_declared_port_on_the_wire(port: &TatolabViewDeclaredPort) -> ProjectViewDeclaredPort {
     ProjectViewDeclaredPort {
@@ -72,7 +81,8 @@ fn the_view_on_the_wire(
 }
 
 use streamlib_control_contract::{
-    ListProjectViewsRequest, WriteGraphInputRequest, WriteStudioViewOutputRequest,
+    ControlOperation, GraphEditMode, ListProjectViewsRequest, WriteGraphInput,
+    WriteGraphInputRequest, WriteStudioViewOutputRequest,
 };
 impl ControlOperationDispatcher {
     pub(crate) async fn list_project_views(
@@ -123,6 +133,8 @@ impl ControlOperationDispatcher {
         Ok(WriteStudioViewOutputToolResult { stream, node, port })
     }
 
+    /// `write_graph_input`, replaced by `set_node_input_value` naming no node: the one live set
+    /// of the `value` input of the top-level `GraphInput` declaring the stream input `input`.
     pub(crate) async fn write_graph_input(
         &self,
         WriteGraphInputRequest {
@@ -130,24 +142,97 @@ impl ControlOperationDispatcher {
             input,
             value,
         }: WriteGraphInputRequest,
+        request_origin: &ControlRequestOrigin,
     ) -> Result<WriteGraphInputToolResult, ControlOperationRefusal> {
-        let stream_operations = self.the_stream_a_call_names("write_graph_input", &stream)?;
-        let family = stream_operations
-            .write_a_value_to_a_top_level_graph_input(input.clone(), value)
-            .await;
-        let family = match family {
-            Ok(family) => family,
-            Err(refusal) => {
-                return Err(the_refusal_of_a_reach_for_a_node(
-                    "write_graph_input",
-                    refusal,
-                ));
-            }
-        };
+        const ACTION_NAME: &str = <WriteGraphInput as ControlOperation>::METHOD_NAME;
+        let graph_input = self
+            .the_graph_input_declaring_the_stream_input(ACTION_NAME, &stream, &input)
+            .await?;
+        if let Some(refusal) = graph_input.refusal_while_its_node_does_not_run {
+            return Err(the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal));
+        }
+        self.apply_a_graph_transaction(
+            ACTION_NAME,
+            vec![StreamGraphAction::SetNodeInputValue {
+                stream: GraphEditStream::StreamId(stream.clone()),
+                level: Vec::new(),
+                node: graph_input.node.to_string(),
+                input: GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
+                value: Some(value),
+            }],
+            Some(GraphEditMode::Live),
+            None,
+            None,
+            request_origin,
+        )
+        .await?;
         Ok(WriteGraphInputToolResult {
             stream,
             input,
-            family: family.wire_name().to_owned(),
+            family: graph_input.family.wire_name().to_owned(),
         })
     }
+
+    /// The node a `set_node_input_value` naming no node sets the `value` input of, in the stream
+    /// `stream` names at `level`: the top-level `GraphInput` declaring the stream input `input`.
+    /// Refused below the top level, where no stream input is declared, for a stream the runtime
+    /// does not hold, and for an input no top-level `GraphInput` declares, naming the stream's
+    /// inputs.
+    pub(crate) async fn the_node_a_set_naming_no_node_sets(
+        &self,
+        action_name: &str,
+        stream: &GraphEditStream,
+        level: &[Uuid],
+        input: &str,
+    ) -> Result<String, ControlOperationRefusal> {
+        if !level.is_empty() {
+            return Err(ControlOperationRefusal::RefusedAction(Box::new(
+                ProjectActionRefusalOnTheWire {
+                    refused_params_pointer: Some("/level".to_owned()),
+                    ..RefusalCodeAndPlace::coded(ControlOperationRefusalCode::Refused)
+                        .on_the_refusal_of(
+                            action_name,
+                            the_words_of_a_stream_input_named_below_the_top_level(input),
+                        )
+                },
+            )));
+        }
+        let listings = self.operations_on_the_loaded_streams.list_streams();
+        let (_, stream_id) = StreamsTheRuntimeHolds::listed_in(&listings)
+            .the_stream_named(stream)
+            .map_err(|runtime_words| {
+                ControlOperationRefusal::coded(
+                    RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
+                    format!("{action_name} failed: {runtime_words}"),
+                )
+            })?;
+        let graph_input = self
+            .the_graph_input_declaring_the_stream_input(action_name, &stream_id, input)
+            .await?;
+        Ok(graph_input.node.to_string())
+    }
+
+    /// The top-level `GraphInput` of the loaded stream `stream_id` declaring the stream input
+    /// `input`, refused as the engine codes it.
+    async fn the_graph_input_declaring_the_stream_input(
+        &self,
+        action_name: &str,
+        stream_id: &str,
+        input: &str,
+    ) -> Result<TopLevelGraphInputDeclaringAStreamInput, ControlOperationRefusal> {
+        self.the_stream_a_call_names(action_name, stream_id)?
+            .the_top_level_graph_input_declaring(input.to_owned())
+            .await
+            .map_err(|refusal| the_refusal_of_a_reach_for_a_node(action_name, refusal))
+    }
+}
+
+/// The words of a `set_node_input_value` naming no node and naming the stream input `input` at
+/// a level below the top level.
+pub(crate) fn the_words_of_a_stream_input_named_below_the_top_level(input: &str) -> String {
+    format!(
+        "a `set_node_input_value` naming no node sets an input of the stream, which a top-level \
+         `GraphInput` declares, so its `level` is the top level; the input `{input}` was named \
+         at a level below it. To fix: leave `level` out, or name the node whose input it is"
+    )
 }

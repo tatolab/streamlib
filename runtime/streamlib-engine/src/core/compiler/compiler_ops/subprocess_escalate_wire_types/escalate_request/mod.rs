@@ -15,6 +15,7 @@ mod compute;
 mod device_idle;
 mod export_staging;
 mod failure_the_node_reported_of_itself;
+mod function_node_raising_reports;
 mod graphics;
 mod handle_lifecycle;
 mod helper_log_record;
@@ -32,6 +33,7 @@ pub(crate) use compute::*;
 pub(crate) use device_idle::*;
 pub(crate) use export_staging::*;
 pub(crate) use failure_the_node_reported_of_itself::*;
+pub(crate) use function_node_raising_reports::*;
 pub(crate) use graphics::*;
 pub(crate) use handle_lifecycle::*;
 pub(crate) use helper_log_record::*;
@@ -134,6 +136,9 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "run_ray_tracing_kernel")]
     RunRayTracingKernel(EscalateRequestRunRayTracingKernel),
+
+    #[serde(rename = "set_function_node_raising_because")]
+    SetFunctionNodeRaisingBecause(EscalateRequestSetFunctionNodeRaisingBecause),
 
     #[serde(rename = "set_process_raising_because")]
     SetProcessRaisingBecause(EscalateRequestSetProcessRaisingBecause),

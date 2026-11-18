@@ -227,6 +227,23 @@ pub enum NodeInputMode {
     },
 }
 
+impl NodeInputMode {
+    /// Whether a link may end at an input of this mode: every mode but a setting.
+    pub fn takes_a_wire(self) -> bool {
+        !matches!(self, Self::SettingOnly { .. })
+    }
+
+    /// Whether an input of this mode is a setting its node reads each run.
+    pub fn is_a_setting_read_each_run(self) -> bool {
+        matches!(
+            self,
+            Self::SettingOnly {
+                read: SettingReadTime::EachRun
+            }
+        )
+    }
+}
+
 /// When a node reads a setting-only input.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(

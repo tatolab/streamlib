@@ -63,6 +63,10 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
 #: The nodes whose `process()`, or evaluation, must never raise while the stream plays.
 NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally")
 
+#: The function nodes, which run inside the read of the stream's function node pool, since
+#: `glow` is a shader node and `beat` runs as Python.
+FUNCTION_NODES = ("beat", "warmth")
+
 #: The inputs of `glow` the function nodes drive, which read from their links, not a default.
 GLOW_INPUTS_FED_BY_A_LINK = ("glow", "warmth")
 
@@ -130,20 +134,44 @@ def pictures_glow_wrote(graph: dict[str, Any]) -> int:
     return int(written.get("result", 0))
 
 
+def every_island_glow_reads_answered_or_a_function_node_raised(graph: dict[str, Any]) -> bool:
+    """Whether the function node pool has handed `glow` a value from every island it carries,
+    or a function node shows a raise: until one of them, an island may not have been called."""
+    if any(
+        node_named(graph, node_name).get("components", {}).get("process_raising_because")
+        for node_name in FUNCTION_NODES
+    ):
+        return True
+    written_by_island_output = (
+        graph.get("function_node_pool", {})
+        .get("components", {})
+        .get("metrics", {})
+        .get("written_bags_by_output_port", {})
+    )
+    return bool(written_by_island_output) and all(
+        int(written) > 0 for written in written_by_island_output.values()
+    )
+
+
 def await_pictures_through_glow(
     tatolabd: TatolabdUnderTest, local_api: LocalApiClient, stream_id: str
 ) -> dict[str, Any]:
     """Poll the live graph until the shader node has written pictures into the node not yet
-    typed; answer that graph. Glow writes on its defaults too, so whether the function nodes
-    drive it is asserted from the graph this answers."""
+    typed and every island it reads has answered, or a function node raised; answer that
+    graph. Glow writes on its defaults too, so whether the function nodes drive it is asserted
+    from the graph this answers."""
     deadline = time.monotonic() + PICTURES_WRITTEN_TIMEOUT_SECONDS
     while True:
         graph = local_api.graph(stream=stream_id)
-        if pictures_glow_wrote(graph) >= PICTURES_SHOWING_THE_STREAM_PLAYS:
+        if (
+            pictures_glow_wrote(graph) >= PICTURES_SHOWING_THE_STREAM_PLAYS
+            and every_island_glow_reads_answered_or_a_function_node_raised(graph)
+        ):
             return graph
         if time.monotonic() >= deadline:
             raise AssertionError(
-                f"glow wrote fewer than {PICTURES_SHOWING_THE_STREAM_PLAYS} pictures within "
+                f"glow wrote fewer than {PICTURES_SHOWING_THE_STREAM_PLAYS} pictures, or an "
+                f"island it reads neither answered nor raised, within "
                 f"{PICTURES_WRITTEN_TIMEOUT_SECONDS}s: {json.dumps(graph)[:4000]}\n"
                 f"{tatolabd.recent_stderr()}"
             )

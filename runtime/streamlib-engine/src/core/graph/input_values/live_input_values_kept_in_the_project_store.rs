@@ -14,9 +14,15 @@ use streamlib_project_repository::ProjectStore;
 use uuid::Uuid;
 
 use crate::core::context::{
-    LIVE_INPUT_VALUES_TABLE, ProjectStoresOpenInThisRuntime, key_of_the_node,
-    the_node_a_key_leads_with,
+    LIVE_INPUT_VALUES_TABLE, ProjectStoresOpenInThisRuntime, forget_the_value_the_node_keeps_under,
+    key_of_the_node, the_node_a_key_leads_with, the_value_the_node_keeps_under,
 };
+use crate::core::descriptors::NodeValueLifetime;
+
+/// The key of its own store a top-level `GraphInput` kept its last value under before its value
+/// was an input, which [`LiveInputValuesKeptInTheProjectStore::carry_the_value_a_graph_input_kept_under_its_old_key`]
+/// carries into this table once.
+const GRAPH_INPUT_KEPT_VALUE_STORE_KEY: &str = "value";
 
 /// One stream's project's store, where the live values of its `kept` inputs are mirrored. A
 /// store that does not open, read or take a write is logged and leaves the live value as set:
@@ -67,6 +73,59 @@ impl LiveInputValuesKeptInTheProjectStore {
     pub(crate) fn forget(&self, node: Uuid, input: &str) {
         if let Some(project_store) = self.the_project_store_when_the_project_has_one() {
             project_store.remove(LIVE_INPUT_VALUES_TABLE, &key_of_the_node(node, input));
+        }
+    }
+
+    /// Carry the value the top-level `GraphInput` `node` kept in its own store before its value
+    /// was an input: read from the `node_store` table and, when `lifetime` keeps it and the store
+    /// holds no live value of its input `input` yet, kept here as that live value. A live value
+    /// already held wins, and the old key is forgotten. The old key is forgotten only once the
+    /// value is kept here, a live value is held, or `lifetime` keeps nothing, so a carry whose
+    /// read or write fails runs again at the next load, and one that succeeds runs once and needs
+    /// no marker.
+    pub(crate) fn carry_the_value_a_graph_input_kept_under_its_old_key(
+        &self,
+        node: Uuid,
+        input: &str,
+        lifetime: NodeValueLifetime,
+    ) {
+        let Some(project_store) = self.the_project_store_when_the_project_has_one() else {
+            return;
+        };
+        let kept = match the_value_the_node_keeps_under(
+            &project_store,
+            node,
+            GRAPH_INPUT_KEPT_VALUE_STORE_KEY,
+        ) {
+            Ok(Some(kept)) => kept,
+            Ok(None) => return,
+            Err(not_read) => {
+                tracing::error!(
+                    %node,
+                    "the value a `GraphInput` kept before its value was an input was not read, \
+                     so it reads its saved value: {not_read}"
+                );
+                return;
+            }
+        };
+        let live_value_held_already =
+            match project_store.read(LIVE_INPUT_VALUES_TABLE, &key_of_the_node(node, input)) {
+                Ok(live) => live.is_some(),
+                Err(not_read) => {
+                    tracing::error!(
+                        %node,
+                        "the live value of a `GraphInput` was not read, so the value it kept \
+                         before its value was an input stays for the next load: {not_read}"
+                    );
+                    return;
+                }
+            };
+        if live_value_held_already || !lifetime.is_kept() || self.keep(node, input, &kept) {
+            forget_the_value_the_node_keeps_under(
+                &project_store,
+                node,
+                GRAPH_INPUT_KEPT_VALUE_STORE_KEY,
+            );
         }
     }
 

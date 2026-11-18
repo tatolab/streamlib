@@ -522,7 +522,7 @@ fn refuse_a_destination_this_graph_cannot_take(
             direction: PortDirection::Input,
         });
     }
-    Ok(())
+    to_node.refuse_a_link_into_a_setting(to.port_name())
 }
 
 /// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
@@ -598,6 +598,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<()> {
         self.log_a_node_config_update_for_the_next_commit(node_run_id, config)?;
         commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+        self.hold_each_live_value_whose_lifetime_the_config_changed(node_run_id);
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
     }
@@ -611,6 +612,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<()> {
         self.log_a_node_config_update_for_the_next_commit_built_from(node_run_id, build)?;
         commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+        self.hold_each_live_value_whose_lifetime_the_config_changed(node_run_id);
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
     }
@@ -915,14 +917,11 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
-    fn write_a_value_to_a_top_level_graph_input(
+    fn the_top_level_graph_input_declaring(
         &self,
         input_name: String,
-        value: serde_json::Value,
-    ) -> BoxFuture<'_, Result<crate::core::descriptors::PortFamily>> {
-        self.in_this_streams_log_route(
-            self.hand_a_value_written_to_a_top_level_graph_input(input_name, value),
-        )
+    ) -> BoxFuture<'_, Result<crate::core::runtime::TopLevelGraphInputDeclaringAStreamInput>> {
+        self.in_this_streams_log_route(self.read_the_top_level_graph_input_declaring(input_name))
     }
 
     fn add_node(&self, spec: NodeSpec) -> Result<NodeRunId> {

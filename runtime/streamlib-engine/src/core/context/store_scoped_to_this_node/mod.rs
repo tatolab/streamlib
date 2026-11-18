@@ -37,6 +37,25 @@ pub(crate) fn the_node_a_key_leads_with(key: &str) -> Option<(Uuid, &str)> {
     Some((node.parse().ok()?, rest))
 }
 
+/// The value `node` keeps under its own `key` in the `node_store` table of `project_store`.
+pub(crate) fn the_value_the_node_keeps_under(
+    project_store: &ProjectStore,
+    node: Uuid,
+    key: &str,
+) -> std::result::Result<Option<JsonValue>, ProjectStoreRefusal> {
+    project_store.read(NODE_STORE_TABLE, &key_of_the_node(node, key))
+}
+
+/// Forget the value `node` keeps under its own `key` in the `node_store` table of
+/// `project_store`.
+pub(crate) fn forget_the_value_the_node_keeps_under(
+    project_store: &ProjectStore,
+    node: Uuid,
+    key: &str,
+) {
+    project_store.remove(NODE_STORE_TABLE, &key_of_the_node(node, key));
+}
+
 /// Remove every key of `table`, each of which [`key_of_the_node`] names, whose node
 /// `is_the_node_to_forget` picks.
 fn remove_every_key_whose_node(
@@ -88,13 +107,6 @@ impl StoreScopedToThisNode {
         self.the_project_store()?
             .remove(NODE_STORE_TABLE, &self.the_key_in_the_table(key));
         Ok(())
-    }
-
-    /// Commit every write the project's store holds waiting, without waiting for its window.
-    pub(crate) fn commit_every_waiting_write_now(&self) -> Result<()> {
-        self.the_project_store()?
-            .commit_every_waiting_write_now()
-            .map_err(|refusal| Error::Runtime(refusal.to_string()))
     }
 
     fn the_project_store(&self) -> Result<Arc<ProjectStore>> {
