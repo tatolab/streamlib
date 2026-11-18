@@ -60,8 +60,9 @@ fn the_one_link_of(stream: &LoadedStreamInThisRuntime) -> LinkUniqueId {
 /// A node linked to a `GraphInput` again, after the link it read through was released, reads the
 /// value the Input carries though it never changed.
 ///
-/// Mental-revert: a `GraphInput` that hands its value to no reader its last send missed leaves
-/// the node linked again reading nothing until the value changes.
+/// Mental-revert: this locks keep-last on the `GraphInput` `value` output; an output that keeps
+/// no last message for a reader linked later leaves the node linked again reading nothing until
+/// the value changes.
 #[test]
 #[serial]
 fn a_reader_linked_again_reads_the_value_a_graph_input_carries() {

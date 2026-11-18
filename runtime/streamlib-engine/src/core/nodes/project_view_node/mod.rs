@@ -192,14 +192,14 @@ pub(crate) struct ValueSourceNode {
     kind: ValueSourceKind,
 }
 
-/// Which node a [`ValueSourceNode`] is, which decides where the values a client sets go. Either
-/// kind hands a reader that connects after an output's last send the value that output carries.
+/// Which node a [`ValueSourceNode`] is, which decides where the values a client sets go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ValueSourceKind {
     /// A stream's top-level `GraphInput`: each input value is published on its same-named
-    /// output.
+    /// output, which keeps its last message for a reader that connects later.
     TopLevelGraphInput,
-    /// A view node: a panel writes onto its outputs.
+    /// A view node: a panel writes onto its outputs, and each reader that connects later is
+    /// handed the value each output carries.
     ViewNode,
 }
 
@@ -574,7 +574,12 @@ impl DynGeneratedNode for ValueSourceNode {
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         self.take_every_waiting_input_message()?;
-        self.hand_each_current_value_to_a_reader_it_has_not_reached()
+        match self.kind {
+            ValueSourceKind::TopLevelGraphInput => Ok(()),
+            ValueSourceKind::ViewNode => {
+                self.hand_each_current_value_to_a_reader_it_has_not_reached()
+            }
+        }
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

@@ -296,10 +296,9 @@ pub fn an_exposure_of_config_fields_is_recorded_on(
     Ok(false)
 }
 
-/// Refuse `number`, set on the input `input` of the node named `node_name`, when it lies outside
-/// `range`; it is never clamped.
-/// Refuse `value` set on input `input` of `node_name` when a number it holds, itself or each
-/// number of an Array value, lies outside `range`, naming the first that does.
+/// Refuse `value` set on input `input` of `node_name` when a number it holds lies outside
+/// `range`, naming the first that does; it is never clamped. A range bounds a number, or every
+/// number of an array, nested arrays included.
 fn refuse_a_value_holding_a_number_outside_the_range(
     node_name: &str,
     input: &str,
@@ -334,7 +333,7 @@ fn refuse_a_value_holding_a_number_outside_the_range(
 }
 
 /// Push each number `value` holds onto `numbers`, in order: itself when it is one, and each
-/// number inside an array or an object.
+/// number of an array, nested arrays included. An object's members are not ranged.
 fn every_number_a_value_holds(value: &Value, numbers: &mut Vec<f64>) {
     match value {
         Value::Number(number) => numbers.extend(number.as_f64()),
@@ -343,12 +342,7 @@ fn every_number_a_value_holds(value: &Value, numbers: &mut Vec<f64>) {
                 every_number_a_value_holds(element, numbers);
             }
         }
-        Value::Object(members) => {
-            for member in members.values() {
-                every_number_a_value_holds(member, numbers);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::String(_) => {}
+        Value::Null | Value::Bool(_) | Value::String(_) | Value::Object(_) => {}
     }
 }
 
