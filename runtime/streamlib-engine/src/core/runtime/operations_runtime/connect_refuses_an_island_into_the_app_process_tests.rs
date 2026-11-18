@@ -4,17 +4,22 @@
 //! `connect` refuses a link from a function node into a node that runs in the app process, on a
 //! stream no commit builds, in the words its wiring would refuse it in at play, so the link is
 //! never in the graph a stopped stream saves; and refuses, by the same judgement a link check
-//! makes, a link an island cannot take.
+//! makes, a link an island cannot take. A saved graph holding such a link sets it aside, made
+//! nowhere, so the graph opens and plays without it.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link};
+use super::{
+    ALinkOfASavedGraphMade, LiveGraphChangeOnOneStream,
+    connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it, connect_impl,
+    the_verdict_connect_takes_on_a_link,
+};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
-    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
+    AudioWindowContract, FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName,
+    NodeDescriptor, NodeKind, PortDescriptor, PortFamily, PortFamilyDeclaration,
 };
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
 use crate::core::graph::{
@@ -27,6 +32,7 @@ use crate::core::{Error, Result};
 
 const FUNCTION_NODE: &str = "app_process_check:switch";
 const HELPER_PROCESS_READER: &str = "app_process_check:meter";
+const HELPER_PROCESS_WINDOWED_READER: &str = "app_process_check:windowed_meter";
 
 fn a_records_port(name: &str) -> PortDescriptor {
     PortDescriptor::new(
@@ -87,6 +93,21 @@ fn a_stopped_stream_resolving_a_function_node_type() -> Arc<Compiler> {
             })),
         )
         .unwrap();
+    let mut windowed_reader = a_described_node_type(
+        HELPER_PROCESS_WINDOWED_READER,
+        NodeKind::Process,
+        &["audio"],
+        &[],
+    );
+    windowed_reader.inputs[0].audio_window = Some(AudioWindowContract::MatchDevice {});
+    node_types
+        .register_a_type_described_in_this_streams_node_interpreter(
+            windowed_reader,
+            HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(|_node| {
+                Err(Error::NotSupported("a fixture runs no node".to_owned()))
+            })),
+        )
+        .unwrap();
     Arc::new(Compiler::new_of_a_stream(
         Arc::new(node_types),
         LiveInputValuesOfAStream::default(),
@@ -109,6 +130,18 @@ fn a_node_of(compiler: &Compiler, node_type: &str) -> NodeRunId {
     })
 }
 
+fn a_change_on_a_stopped_stream(compiler: &Arc<Compiler>) -> LiveGraphChangeOnOneStream {
+    LiveGraphChangeOnOneStream {
+        compiler: Arc::clone(compiler),
+        live: None,
+        stream: LoadedStreamIdentity {
+            runtime_id: "Rappprocesscheck".to_string(),
+            stream_id: "main".to_string(),
+            stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
+        },
+    }
+}
+
 fn connect_on_this_thread(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
@@ -118,19 +151,30 @@ fn connect_on_this_thread(
         .build()
         .expect("current-thread runtime")
         .block_on(connect_impl(
-            LiveGraphChangeOnOneStream {
-                compiler: Arc::clone(compiler),
-                live: None,
-                stream: LoadedStreamIdentity {
-                    runtime_id: "Rappprocesscheck".to_string(),
-                    stream_id: "main".to_string(),
-                    stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
-                },
-            },
+            a_change_on_a_stopped_stream(compiler),
             from,
             to,
             ALinkConnected::MadeNow,
         ))
+}
+
+/// Connect a link of a saved graph as a load or a reconcile makes it.
+fn connect_a_link_of_a_saved_graph_on_this_thread(
+    compiler: &Arc<Compiler>,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+) -> Result<ALinkOfASavedGraphMade> {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("current-thread runtime")
+        .block_on(
+            connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it(
+                a_change_on_a_stopped_stream(compiler),
+                from,
+                to,
+                ALinkConnected::OfASavedGraph,
+            ),
+        )
 }
 
 fn the_links_in(compiler: &Compiler) -> usize {
@@ -235,5 +279,127 @@ fn a_link_an_island_cannot_take_is_refused_by_connect_and_its_check_alike() {
         assert_eq!(checked.to_string(), refused.to_string());
         assert!(refused.to_string().contains(words), "{refused}");
     }
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// Every link a stream's start once refused is judged on the edit: a link made now is refused
+/// before it is made, and a saved graph's is set aside, made nowhere, in the same words, so the
+/// graph opens and its stream plays without it. Each other refusal that once failed a start no
+/// longer comes out of one: a function node input no value reaches is shown on its node, which
+/// holds until it has one; a link the graph's validation sets aside is shown on the link; and
+/// shader nodes reading their own Image in a cycle are failed on their nodes. A start is still
+/// refused for a node held as a placeholder of a type its node code did not describe, which no
+/// edit makes, and for a clock this runtime does not run, which a load refuses first.
+///
+/// Mental-revert: leaving a saved graph's link an island cannot take to the commit that builds
+/// the stream connects it here and fails the stream at its start.
+#[test]
+fn every_link_a_start_once_refused_is_refused_made_now_and_set_aside_from_a_saved_graph() {
+    type ALinkJudged = (OutputLinkPortRef, InputLinkPortRef);
+    let cases: [(&str, fn(&Arc<Compiler>) -> ALinkJudged, &str); 4] = [
+        (
+            "a second link into a port an island feeds",
+            |compiler| {
+                let first = a_node_of(compiler, FUNCTION_NODE);
+                let second = a_node_of(compiler, FUNCTION_NODE);
+                let meter = a_node_of(compiler, HELPER_PROCESS_READER);
+                connect_on_this_thread(
+                    compiler,
+                    OutputLinkPortRef::new(first, "result"),
+                    InputLinkPortRef::new(meter.clone(), "in1"),
+                )
+                .expect("one island feeds the port");
+                (
+                    OutputLinkPortRef::new(second, "result"),
+                    InputLinkPortRef::new(meter, "in1"),
+                )
+            },
+            "shares the port with no other link",
+        ),
+        (
+            "an island into a port declaring an audio window",
+            |compiler| {
+                let switch = a_node_of(compiler, FUNCTION_NODE);
+                let windowed = a_node_of(compiler, HELPER_PROCESS_WINDOWED_READER);
+                (
+                    OutputLinkPortRef::new(switch, "result"),
+                    InputLinkPortRef::new(windowed, "audio"),
+                )
+            },
+            "declares an `audio_window`",
+        ),
+        (
+            "a cycle of function nodes",
+            |compiler| {
+                let first = a_node_of(compiler, FUNCTION_NODE);
+                let second = a_node_of(compiler, FUNCTION_NODE);
+                connect_on_this_thread(
+                    compiler,
+                    OutputLinkPortRef::new(first.clone(), "result"),
+                    InputLinkPortRef::new(second.clone(), "x"),
+                )
+                .expect("the two run in one island");
+                (
+                    OutputLinkPortRef::new(second, "result"),
+                    InputLinkPortRef::new(first, "x"),
+                )
+            },
+            "closes a cycle of function nodes",
+        ),
+        (
+            "an island into a node in the app process",
+            |compiler| {
+                let switch = a_node_of(compiler, FUNCTION_NODE);
+                let program = a_node_of(
+                    compiler,
+                    MockInputOnlyNode::node_class_import_path().as_str(),
+                );
+                (
+                    OutputLinkPortRef::new(switch, "result"),
+                    InputLinkPortRef::new(program, "in1"),
+                )
+            },
+            "runs in the app process",
+        ),
+    ];
+    for (case, the_graph_and_its_link, words) in cases {
+        let compiler = a_stopped_stream_resolving_a_function_node_type();
+        let (from, to) = the_graph_and_its_link(&compiler);
+        let links_before = the_links_in(&compiler);
+
+        let refused = connect_on_this_thread(&compiler, from.clone(), to.clone())
+            .expect_err(case)
+            .to_string();
+        assert!(refused.contains(words), "{case}: {refused}");
+        assert_eq!(the_links_in(&compiler), links_before, "{case}");
+
+        match connect_a_link_of_a_saved_graph_on_this_thread(&compiler, from, to) {
+            Ok(ALinkOfASavedGraphMade::SetAside(why)) => {
+                assert_eq!(why.to_string(), refused, "{case}");
+            }
+            made => panic!("{case}: a saved graph's link is set aside, got {made:?}"),
+        }
+        assert_eq!(the_links_in(&compiler), links_before, "{case}");
+    }
+}
+
+/// A saved graph's link the engine can wire is connected as any other.
+#[test]
+fn a_saved_graphs_link_the_engine_can_wire_is_connected() {
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let switch = a_node_of(&compiler, FUNCTION_NODE);
+    let meter = a_node_of(&compiler, HELPER_PROCESS_READER);
+
+    let made = connect_a_link_of_a_saved_graph_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(switch, "result"),
+        InputLinkPortRef::new(meter, "in1"),
+    )
+    .expect("a helper process evaluates the island at each read");
+
+    assert!(
+        matches!(made, ALinkOfASavedGraphMade::Connected),
+        "{made:?}"
+    );
     assert_eq!(the_links_in(&compiler), 1);
 }

@@ -142,7 +142,7 @@ pub struct LinkOutput {
     pub state: LinkStateOutput,
     /// Why the link is in the `error` state, in the words of the helper
     /// process that could not open its port, or of the graph's validation that
-    /// refused it as its stream loaded.
+    /// refused it, or the engine that cannot wire it, as its stream loaded.
     ///
     /// Absent in every other state, so a reader that finds it knows the link
     /// carries nothing and will not start to: disconnect it and wire again.

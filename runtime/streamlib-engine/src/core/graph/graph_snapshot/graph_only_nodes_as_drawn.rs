@@ -31,13 +31,14 @@ pub struct GraphOnlyNodesAsDrawn {
     pub links_its_validation_set_aside: Vec<LinkSetAsideByTheGraphsValidation>,
 }
 
-/// A link of a graph document its validation refused, held as drawn and never wired, so the
-/// stream's graph still reads and edits; the stream does not play while it holds one.
+/// A link of a graph document its validation refused, or the engine cannot wire, held as drawn
+/// and never wired, so the stream's graph still reads and edits and the stream plays without it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkSetAsideByTheGraphsValidation {
     /// The link as the document draws it.
     pub link: GraphSnapshotLink,
-    /// Why the graph's validation refused it, in the runtime's words.
+    /// Why the graph's validation refused it, or the engine cannot wire it, in the runtime's
+    /// words.
     pub why_its_validation_refused_it: String,
 }
 

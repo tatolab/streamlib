@@ -371,8 +371,13 @@ impl Compiler {
         let mut barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)> = vec![];
         let function_nodes_run_inside_their_readers =
             the_function_nodes_among(&graph_arc.read(), &plan.nodes_to_add);
-        let shader_nodes_fused_into_another =
+        let shader_nodes_placed =
             place_each_shader_node_island_on_its_host(&mut graph_arc.write(), &plan.nodes_to_add)?;
+        plan.leave_unbuilt_each_node_and_unwired_each_of_its_links(
+            &graph_arc.read(),
+            &shader_nodes_placed.in_a_cycle_no_node_evaluates,
+        );
+        let shader_nodes_fused_into_another = &shader_nodes_placed.fused_into_another;
         let nodes_to_build: Vec<NodeRunId> = plan
             .nodes_to_add
             .iter()
@@ -468,7 +473,7 @@ impl Compiler {
             let graph = graph_arc.read();
             for function_node_id in function_nodes_run_inside_their_readers
                 .iter()
-                .chain(&shader_nodes_fused_into_another)
+                .chain(shader_nodes_fused_into_another)
             {
                 if let Some(state) = graph
                     .traversal()
@@ -568,7 +573,7 @@ fn stop_each_shader_node_restarted(
         .map(|node| node.node_run_id.clone())
         .collect();
     let mut graph = graph_arc.write();
-    plan.leave_unbuilt_each_node_whose_thread_was_abandoned(&graph, &abandoned_node_ids);
+    plan.leave_unbuilt_each_node_and_unwired_each_of_its_links(&graph, &abandoned_node_ids);
     let rebuilt_node_ids: Vec<NodeRunId> = shader_nodes_restarted
         .nodes
         .iter()

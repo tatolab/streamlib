@@ -259,11 +259,24 @@ pub(crate) fn pin_value_of_a_shader_node_input(node: &GraphNode, port: &str) -> 
         .unwrap_or(0.0) as f32
 }
 
+/// The shader nodes of a compile placed on the islands that evaluate them.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ShaderNodesPlacedOnTheirIslands {
+    /// Each shader node another node evaluates in its island, which runs once that node does.
+    pub(crate) fused_into_another: HashSet<NodeRunId>,
+    /// Each shader node that reads its own Image through the shader nodes it feeds, failed with
+    /// why, so no node evaluates it and it runs nothing.
+    pub(crate) in_a_cycle_no_node_evaluates: Vec<NodeRunId>,
+}
+
+/// Place the island of each shader node of `nodes_to_add` on the node that evaluates it. A
+/// shader node reading its own Image through the shader nodes it feeds is failed with why on
+/// its node, rather than the compile refused, so the rest of the stream plays.
 pub(crate) fn place_each_shader_node_island_on_its_host(
     graph: &mut Graph,
     nodes_to_add: &[NodeRunId],
-) -> Result<HashSet<NodeRunId>> {
-    let mut fused_into_another: HashSet<NodeRunId> = HashSet::new();
+) -> Result<ShaderNodesPlacedOnTheirIslands> {
+    let mut placed = ShaderNodesPlacedOnTheirIslands::default();
     let mut islands_read = Vec::new();
     for node_id in nodes_to_add {
         if !is_a_shader_node(graph, node_id) {
@@ -274,12 +287,21 @@ pub(crate) fn place_each_shader_node_island_on_its_host(
                 graph,
                 &the_host_of_the_shader_node_island_of(graph, node_id),
             ) {
-                return Err(Error::Configuration(format!(
-                    "shader node `{node_id}` reads its own Image through the shader nodes it \
-                     feeds, so no node evaluates their island. To fix: break the cycle"
-                )));
+                if let Some(state) = graph
+                    .traversal()
+                    .v(node_id)
+                    .first()
+                    .and_then(|node| node.get::<StateComponent>())
+                {
+                    state.fail_with(format!(
+                        "shader node `{node_id}` reads its own Image through the shader nodes \
+                         it feeds, so no node evaluates their island. To fix: break the cycle"
+                    ));
+                }
+                placed.in_a_cycle_no_node_evaluates.push(node_id.clone());
+                continue;
             }
-            fused_into_another.insert(node_id.clone());
+            placed.fused_into_another.insert(node_id.clone());
             continue;
         }
         islands_read.push((
@@ -316,7 +338,7 @@ pub(crate) fn place_each_shader_node_island_on_its_host(
             });
         }
     }
-    Ok(fused_into_another)
+    Ok(placed)
 }
 
 /// The running shader nodes a live edit restarts so their islands are placed

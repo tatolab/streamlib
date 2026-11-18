@@ -269,11 +269,12 @@ fn placing_the_islands_hands_the_island_to_its_host_and_its_group_to_every_membe
         stream.tint_again.clone(),
         stream.sink.clone(),
     ];
-    let fused = place_each_shader_node_island_on_its_host(&mut stream.graph, &every_node).unwrap();
+    let placed = place_each_shader_node_island_on_its_host(&mut stream.graph, &every_node).unwrap();
     assert_eq!(
-        fused,
+        placed.fused_into_another,
         HashSet::from([stream.tint.clone(), stream.blur.clone()])
     );
+    assert!(placed.in_a_cycle_no_node_evaluates.is_empty());
     let host = stream
         .graph
         .traversal()
@@ -532,17 +533,50 @@ fn the_host_input_port_of_a_fused_input_is_already_in_cast_form() {
     );
 }
 
+/// Shader nodes reading their own Image in a cycle are each failed with why on its node and
+/// placed on no island, so the compile goes on and the rest of the stream plays; a shader node
+/// outside the cycle is placed as ever.
+///
+/// Mental-revert: refusing the placement, as it once did, fails the whole stream at its start.
 #[test]
-fn shader_nodes_reading_their_own_image_in_a_cycle_are_refused() {
+fn shader_nodes_reading_their_own_image_in_a_cycle_are_failed_on_their_nodes() {
     let mut graph = a_graph_resolving_shader_and_process_types();
     let first = add(&mut graph, "test_shaders:blend");
     let second = add(&mut graph, "test_shaders:tint");
+    let lone = add(&mut graph, "test_shaders:tint");
     link(&mut graph, (&first, "result"), (&second, "image"));
     link(&mut graph, (&second, "result"), (&first, "a"));
-    let refusal = place_each_shader_node_island_on_its_host(&mut graph, &[first, second])
-        .unwrap_err()
-        .to_string();
-    assert!(refusal.contains("break the cycle"), "{refusal}");
+    let placed = place_each_shader_node_island_on_its_host(
+        &mut graph,
+        &[first.clone(), second.clone(), lone.clone()],
+    )
+    .expect("a cycle fails its nodes, not the compile");
+    assert_eq!(
+        placed.in_a_cycle_no_node_evaluates,
+        vec![first.clone(), second.clone()]
+    );
+    assert!(placed.fused_into_another.is_empty());
+    for node_id in [&first, &second] {
+        let node = graph.traversal().v(node_id).first().unwrap();
+        let state = node.get::<StateComponent>().unwrap();
+        assert_eq!(state.current(), NodeState::Error);
+        let failed_because = node.serialize_components()["failed_because"].clone();
+        assert!(
+            failed_because
+                .as_str()
+                .is_some_and(|why| why.contains("break the cycle")),
+            "{failed_because}"
+        );
+        assert!(!node.has::<ShaderNodeIslandHostedHereComponent>());
+    }
+    assert!(
+        graph
+            .traversal()
+            .v(&lone)
+            .first()
+            .unwrap()
+            .has::<ShaderNodeIslandHostedHereComponent>()
+    );
 }
 
 /// The members of an island are each named once: a shader node linked into one member through

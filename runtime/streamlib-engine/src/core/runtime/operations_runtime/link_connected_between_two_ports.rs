@@ -26,9 +26,8 @@ use crate::iceoryx2::ChannelName;
 ///
 /// Connect judges two typed ports by their pin link verdict, and any other two by their
 /// families, names, codec and formats, and refuses, by name before any channel exists, a link
-/// that does not connect as it is, that feeds a function node island into a node in the app
-/// process, or that an island cannot take; `a_link_connected` says how leniently a link of a
-/// saved graph is judged.
+/// that does not connect as it is, or that the engine cannot wire; `a_link_connected` says how
+/// leniently a link of a saved graph is judged by its pin types.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -79,13 +78,11 @@ fn the_ends_connect_links(
 }
 
 /// Refuse a link from `from` to `to` that connect refuses, in `graph`, before anything is made:
-/// an end the graph cannot take, a link its pin types or families refuse, one feeding a
-/// function node island into the app process, one an island cannot take, or one whose channel
-/// cannot be named. A link of a saved graph, as `a_link_connected` says, keeps one the verdict
-/// refuses by its pin types alone when its families take it, and leaves one an island cannot
-/// take to the commit that builds the stream, so the graph opens. Answers the verdict of two
-/// typed ends that connect, `None` for ends their families judge, and the channel the link
-/// carries on.
+/// an end the graph cannot take, a link its pin types or families refuse, one the engine cannot
+/// wire, or one whose channel cannot be named. A link of a saved graph, as `a_link_connected`
+/// says, keeps one the verdict refuses by its pin types alone when its families take it.
+/// Answers the verdict of two typed ends that connect, `None` for ends their families judge,
+/// and the channel the link carries on.
 fn refuse_a_link_connect_refuses(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -96,10 +93,7 @@ fn refuse_a_link_connect_refuses(
     refuse_a_destination_this_graph_cannot_take(graph, to)?;
     let verdict =
         refuse_a_link_its_pin_types_or_families_refuse(graph, from, to, a_link_connected)?;
-    refuse_a_link_feeding_an_island_into_the_app_process(graph, from, to)?;
-    if a_link_connected == ALinkConnected::MadeNow {
-        refuse_a_link_an_island_cannot_take(graph, from, to, None)?;
-    }
+    refuse_a_link_the_engine_cannot_wire(graph, from, to)?;
     let channel =
         crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
             .map_err(|source| Error::InvalidLink(source.to_string()))?;
@@ -120,6 +114,50 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
         refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)
             .map(|(verdict, _)| verdict)
     })
+}
+
+/// Refuse a link from `from` to `to`, not yet made in `graph`, that the engine could not wire
+/// as the stream plays: one feeding a function node island into a node in the app process, or
+/// one an island cannot take.
+fn refuse_a_link_the_engine_cannot_wire(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Result<()> {
+    refuse_a_link_feeding_an_island_into_the_app_process(graph, from, to)?;
+    refuse_a_link_an_island_cannot_take(graph, from, to, None)
+}
+
+/// What a load or a reconcile made of one link of a saved graph.
+#[derive(Debug)]
+pub(in crate::core::runtime) enum ALinkOfASavedGraphMade {
+    /// The link, connected as a link of the graph.
+    Connected,
+    /// Nothing: the engine cannot wire the link, for this refusal, so the graph holds it as
+    /// drawn, set aside, and the stream plays without it.
+    SetAside(Error),
+}
+
+/// Connect a link of a saved graph from `from` to `to`, judged as `a_link_connected` says,
+/// unless the engine cannot wire it, which makes nothing and answers why, so the saved graph
+/// opens and plays without it; refused as connect refuses any other link.
+pub(in crate::core::runtime) async fn connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it(
+    live_graph_change: LiveGraphChangeOnOneStream,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+    a_link_connected: ALinkConnected,
+) -> Result<ALinkOfASavedGraphMade> {
+    let (from, to) = the_ends_connect_links(&live_graph_change.compiler, from, to)?;
+    if let Err(why_the_engine_cannot_wire_it) = live_graph_change
+        .compiler
+        .scope_reading(|graph| refuse_a_link_the_engine_cannot_wire(graph, &from, &to))
+    {
+        return Ok(ALinkOfASavedGraphMade::SetAside(
+            why_the_engine_cannot_wire_it,
+        ));
+    }
+    connect_impl(live_graph_change, from, to, a_link_connected).await?;
+    Ok(ALinkOfASavedGraphMade::Connected)
 }
 
 /// Add the link from `from` to `to` to the graph and queue it for wiring.

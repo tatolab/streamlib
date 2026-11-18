@@ -14,6 +14,7 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
 use crate::core::descriptors::{NodeClassImportPath, PinType};
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
+    LinkSetAsideByTheGraphsValidation,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
@@ -27,7 +28,8 @@ use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
-    ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl,
+    ALinkOfASavedGraphMade, ConfigReferencesOfTheAddedNode, add_node_impl,
+    connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it, connect_impl,
     describe_the_type_an_add_names_when_it_must, disconnect_impl, remove_node_impl,
 };
 use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::{
@@ -127,7 +129,8 @@ impl LoadedStreamInThisRuntime {
     /// as a load is, before the live graph is touched. A kept node not handed the values the
     /// document sets on it fails the reconcile once every node and link is made. Each link it
     /// makes as a saved graph's, as `links_it_makes` says, is kept when its pin types alone
-    /// refuse it and its ports' families take it.
+    /// refuse it and its ports' families take it, and is set aside, not made, when the engine
+    /// cannot wire it; so is a link the stream held set aside before, which no edit refuses.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         mut graph_document: Value,
@@ -174,6 +177,7 @@ impl LoadedStreamInThisRuntime {
             document_node_index_by_uuid,
             document_links,
         } = accepted;
+        let links_set_aside_before_the_document = self.the_links_set_aside_by_node_uuid();
         let graph = &resolution.graph_the_runtime_runs;
         let document_node_by_uuid: HashMap<Uuid, &GraphSnapshotNode> = document_node_index_by_uuid
             .into_iter()
@@ -344,7 +348,7 @@ impl LoadedStreamInThisRuntime {
                     Error::GraphError(format!("the live graph holds no node {node_uuid}"))
                 })
         };
-        for document_link in &document_links {
+        for (document_link, link_as_drawn) in document_links.iter().zip(&graph.links) {
             if live_links.contains(document_link) {
                 continue;
             }
@@ -364,7 +368,29 @@ impl LoadedStreamInThisRuntime {
                 pin_types_now.as_ref(),
                 &kept_though_their_pin_types_refused_them,
             );
-            connect_impl(self.live_graph_change(), from, to, a_link_connected).await?;
+            let a_saved_graphs_link = a_link_connected == ALinkConnected::OfASavedGraph
+                || links_set_aside_before_the_document.contains(document_link);
+            if !a_saved_graphs_link {
+                connect_impl(self.live_graph_change(), from, to, a_link_connected).await?;
+                continue;
+            }
+            if let ALinkOfASavedGraphMade::SetAside(why_the_engine_cannot_wire_it) =
+                connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it(
+                    self.live_graph_change(),
+                    from,
+                    to,
+                    a_link_connected,
+                )
+                .await?
+            {
+                self.graph_only_nodes_as_drawn
+                    .lock()
+                    .links_its_validation_set_aside
+                    .push(LinkSetAsideByTheGraphsValidation {
+                        link: link_as_drawn.clone(),
+                        why_its_validation_refused_it: why_the_engine_cannot_wire_it.to_string(),
+                    });
+            }
         }
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         saved_values_handed_over
@@ -465,8 +491,9 @@ impl LoadedStreamInThisRuntime {
             .scope(|this_streams_graph, _tx| the_live_nodes_as_given_of(this_streams_graph))
     }
 
-    /// Each link this stream's graph holds set aside by its validation, each end its node's
-    /// UUID; one naming a node the graph no longer holds is left out.
+    /// Each link this stream's graph holds set aside, by its validation or as one the engine
+    /// cannot wire, each end its node's UUID; one naming a node the graph no longer holds is
+    /// left out.
     fn the_links_set_aside_by_node_uuid(&self) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
         let node_uuid_of_each_name: HashMap<String, Uuid> = self
             .the_live_nodes()

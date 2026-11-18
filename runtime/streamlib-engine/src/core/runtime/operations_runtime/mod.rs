@@ -37,6 +37,7 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
 pub(super) use link_connected_between_two_ports::{
+    ALinkOfASavedGraphMade, connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it,
     connect_impl, the_verdict_connect_takes_on_a_link,
 };
 
@@ -577,19 +578,21 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
-    /// alone refuse it is kept when its ports' families take it, and one an island cannot take
-    /// is left to the commit that builds the stream to refuse.
-    pub(crate) fn connect_a_link_of_a_saved_graph(
+    /// alone refuse it is kept when its ports' families take it, and one the engine cannot wire
+    /// is not made, answered with why.
+    pub(in crate::core::runtime) fn connect_a_link_of_a_saved_graph(
         &self,
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
-    ) -> Result<LinkUniqueId> {
-        self.block_on_the_engines_tokio_runtime(connect_impl(
-            self.live_graph_change(),
-            from,
-            to,
-            ALinkConnected::OfASavedGraph,
-        ))
+    ) -> Result<ALinkOfASavedGraphMade> {
+        self.block_on_the_engines_tokio_runtime(
+            connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it(
+                self.live_graph_change(),
+                from,
+                to,
+                ALinkConnected::OfASavedGraph,
+            ),
+        )
     }
 
     /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
