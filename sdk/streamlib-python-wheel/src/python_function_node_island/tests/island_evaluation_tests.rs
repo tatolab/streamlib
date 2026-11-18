@@ -60,6 +60,7 @@ fn an_island_of_add_one_then_scale(
         None,
         &|_| None,
         HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+        raises_noted_in_a_record_of_its_own(),
     )
     .unwrap()
 }
@@ -110,6 +111,7 @@ fn an_input_past_a_nodes_own_sets_the_config_value_it_names_at_each_evaluation()
             None,
             &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
         )
         .unwrap();
     assert_eq!(
@@ -141,6 +143,7 @@ fn a_config_value_an_input_sets_that_the_node_does_not_take_is_refused_naming_it
             None,
             &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
         )
         .err()
         .unwrap();
@@ -178,7 +181,7 @@ fn an_island_is_evaluated_once_per_stream_time() {
 }
 
 #[test]
-fn a_refused_evaluation_keeps_the_state_it_was_called_with_and_names_the_node() {
+fn a_refused_evaluation_hands_out_nothing_keeps_its_state_and_is_noted_as_the_nodes_raise() {
     let island =
         FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
             vec![(
@@ -196,12 +199,21 @@ fn a_refused_evaluation_keeps_the_state_it_was_called_with_and_names_the_node() 
             None,
             &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
         )
         .unwrap();
-    let refusal = island
-        .evaluate_the_island_output_for_this_read()
-        .unwrap_err();
-    assert!(refusal.to_string().contains("`refuses`"), "{refusal}");
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::Nothing
+    );
+    let raises = the_raises_noted_by(&island);
+    assert!(
+        raises["refuses"].contains("refused its evaluation with status"),
+        "{raises:?}"
+    );
     assert_eq!(
         island
             .evaluation
@@ -255,6 +267,7 @@ fn a_stateful_node_resumes_from_the_state_its_stream_carries_and_writes_each_new
             Some(board_writer),
             &|breadcrumb_number| (breadcrumb_number == 4).then(|| vec![41.0]),
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
         )
         .unwrap();
     assert_eq!(
@@ -312,6 +325,7 @@ fn a_node_reading_one_not_evaluated_before_it_is_refused() {
             None,
             &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
         )
         .err()
         .unwrap();
@@ -385,6 +399,7 @@ fn an_island_of_add_one_then_a_node_run_as_python(
         None,
         state_resumed_from,
         HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+        raises_noted_in_a_record_of_its_own(),
     )
     .unwrap()
 }
@@ -451,7 +466,7 @@ fn an_island_of_compiled_nodes_runs_no_node_as_python() {
 }
 
 #[test]
-fn a_node_run_as_python_that_raises_is_refused_naming_it_and_what_it_raised() {
+fn a_node_run_as_python_that_raises_hands_out_nothing_and_is_noted_with_what_it_raised() {
     let island =
         FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
             vec![(
@@ -469,21 +484,98 @@ fn a_node_run_as_python_that_raises_is_refused_naming_it_and_what_it_raised() {
             None,
             &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
         )
         .unwrap();
-    let refusal = island
-        .evaluate_the_island_output_for_this_read()
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refusal.contains("`tally`, run as Python, raised"),
-        "{refusal}"
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::Nothing
     );
-    assert!(refusal.contains("a negative input"), "{refusal}");
+    let raises = the_raises_noted_by(&island);
+    assert!(
+        raises["tally"].starts_with("raised ValueError: a negative input"),
+        "{raises:?}"
+    );
+}
+
+/// A node run as Python that raises on its first call and answers its call
+/// count after.
+fn run_as_python_raising_on_its_first_call() -> Py<PyAny> {
+    Python::initialize();
+    Python::attach(|python| {
+        let namespace = PyDict::new(python);
+        crate::python_class_from_source_for_tests::class_from_source_in_namespace(
+            python,
+            "class RaisesOnItsFirstCall:\n\
+             \x20   def __init__(self):\n\
+             \x20       self.calls = 0\n\
+             \x20   def evaluate(self, input_values, now_ns):\n\
+             \x20       self.calls += 1\n\
+             \x20       if self.calls == 1:\n\
+             \x20           raise RuntimeError('broke on its first call')\n\
+             \x20       return [float(self.calls)]\n",
+            "RaisesOnItsFirstCall",
+            &namespace,
+        )
+        .call0()
+        .unwrap()
+        .unbind()
+    })
 }
 
 #[test]
-fn a_compiled_node_handed_a_dict_is_refused_naming_it() {
+fn a_raise_is_noted_until_the_node_runs_cleanly_and_the_island_answers_again() {
+    let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+    let island =
+        FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+            vec![(
+                "beat".to_string(),
+                0,
+                run_as_python_raising_on_its_first_call(),
+                vec![],
+                vec![],
+                vec![],
+                1,
+                vec![],
+            )],
+            (0, 0),
+            stream_clock_now_ns,
+            None,
+            &|_| None,
+            HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
+        )
+        .unwrap();
+    stream_time_ns.store(1, Ordering::SeqCst);
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::Nothing
+    );
+    assert!(
+        the_raises_noted_by(&island)["beat"]
+            .starts_with("raised RuntimeError: broke on its first call"),
+        "{:?}",
+        the_raises_noted_by(&island)
+    );
+    stream_time_ns.store(2, Ordering::SeqCst);
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::ControlValue(2.0)
+    );
+    assert!(the_raises_noted_by(&island).is_empty());
+}
+
+#[test]
+fn a_compiled_node_handed_a_dict_hands_out_nothing_and_is_noted_with_why() {
     let island =
         FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
             vec![
@@ -513,14 +605,20 @@ fn a_compiled_node_handed_a_dict_is_refused_naming_it() {
             None,
             &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
+            raises_noted_in_a_record_of_its_own(),
         )
         .unwrap();
-    let refusal = island
-        .evaluate_the_island_output_for_this_read()
-        .unwrap_err()
-        .to_string();
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::Nothing
+    );
+    let raises = the_raises_noted_by(&island);
+    assert_eq!(raises.keys().collect::<Vec<_>>(), ["add_one"], "{raises:?}");
     assert!(
-        refusal.contains("`add_one` runs compiled and takes a number on input 0"),
-        "{refusal}"
+        raises["add_one"].contains("`add_one` runs compiled and takes a number on input 0"),
+        "{raises:?}"
     );
 }
