@@ -421,6 +421,56 @@ def test_a_port_an_island_stops_feeding_reads_nothing_and_names_no_node():
     assert fed.stop_feeding_an_input_port("count") is False
 
 
+@node.function
+def build_an_object_then_answer_the_level_raising_on_a_negative_one(level: float = 0.5) -> float:
+    repr(object())
+    if level < 0.0:
+        raise RuntimeError("broke on purpose")
+    return level
+
+
+def an_island_feeding_the_level_its_pin_sets(level: float) -> "dict[str, Any]":
+    island = an_island_of_one_node(
+        "level",
+        f"{__name__}:build_an_object_then_answer_the_level_raising_on_a_negative_one",
+        None,
+        "beat-1",
+    )
+    island["nodes"][0]["pins"] = {"level": level}
+    return island
+
+
+def test_a_function_node_that_raises_leaves_its_port_reading_nothing_and_is_named_until_it_runs_cleanly():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["level"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_feeding_the_level_its_pin_sets(-1.0)],
+        {
+            f"{__name__}:build_an_object_then_answer_the_level_raising_on_a_negative_one": (
+                build_an_object_then_answer_the_level_raising_on_a_negative_one
+            )
+        }.__getitem__,
+    )
+
+    assert data_plane.read_from_input_port("level") is None
+    raising_because = _engine.why_each_function_node_its_islands_call_is_raising(
+        link_data_access=data_plane
+    )
+    assert list(raising_because) == ["beat-1"]
+    assert raising_because["beat-1"].startswith("raised RuntimeError: broke on purpose (")
+    assert "test_function_node_islands_fed_to_their_ports.py, line " in raising_because["beat-1"]
+
+    fed.feed_an_input_port_from_its_island(an_island_feeding_the_level_its_pin_sets(0.5))
+    assert the_value_read_from(data_plane, "level") == 0.5
+    assert _engine.why_each_function_node_its_islands_call_is_raising(link_data_access=data_plane) == {}
+
+    fed.feed_an_input_port_from_its_island(an_island_feeding_the_level_its_pin_sets(-1.0))
+    assert data_plane.read_from_input_port("level") is None
+    fed.stop_feeding_an_input_port("level")
+    assert _engine.why_each_function_node_its_islands_call_is_raising(link_data_access=data_plane) == {}
+
+
 def test_a_live_feed_of_a_stateful_node_another_port_reads_is_refused_and_leaves_both_ports_as_they_were():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["count", "also_count"], [])

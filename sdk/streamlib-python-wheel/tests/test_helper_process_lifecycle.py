@@ -422,6 +422,93 @@ def test_a_process_that_keeps_raising_is_reported_once_and_cleared_once_it_runs_
     assert not lifecycle_thread.is_alive()
 
 
+def test_a_function_node_raising_in_the_read_of_a_node_is_reported_on_the_function_node(
+    stand_in_parent,
+):
+    """A function node whose call raises inside its reader's read is reported
+    on the function node, once per run of raises, while the reader runs
+    cleanly; a clean call clears it.
+
+    Fail-without-fix: the raise reaches the reader's `process()`, which sends
+    `set_process_raising_because` naming the reader, and nothing names the
+    function node.
+    """
+    from function_node_test_nodes import an_island_of_one_node
+
+    def an_island_feeding_the_level_its_pin_sets(level: float) -> dict:
+        island = an_island_of_one_node(
+            "level",
+            f"{PROBE_MODULE}:builds_an_object_then_answers_its_level_raising_on_a_negative_one",
+            None,
+            "beat-1",
+        )
+        island["nodes"][0]["pins"] = {"level": level}
+        return island
+
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:ReadsTheIslandFeedingItsLevelProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {},
+            "ports": {"islands": [an_island_feeding_the_level_its_pin_sets(-1.0)]},
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready", "function_nodes_ran_compiled": {"beat-1": False}}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
+
+    def the_next_escalate_request_other_than_a_log() -> dict:
+        while True:
+            frame = stand_in_parent.receive()
+            assert frame is not None, "the helper sent the parent nothing"
+            if frame.get("op") != "log":
+                return frame
+
+    raising = the_next_escalate_request_other_than_a_log()
+    assert raising["op"] == "set_function_node_raising_because", raising
+    assert raising["function_node"] == "beat-1"
+    assert raising["raising_because"].startswith(
+        "raised RuntimeError: the function node broke on purpose ("
+    )
+    assert "helper_process_probes.py, line " in raising["raising_because"]
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": raising["request_id"], "result": "ok"}
+    )
+
+    deadline = time.monotonic() + 0.3
+    while time.monotonic() < deadline:
+        frame = stand_in_parent.receive(timeout_seconds=max(0.0, deadline - time.monotonic()))
+        assert frame is None or frame.get("op") == "log", (
+            f"a raise after the first of the run, or the reader's process(), sent {frame}"
+        )
+
+    stand_in_parent.send(
+        {"cmd": "feed_island", "island": an_island_feeding_the_level_its_pin_sets(0.5)}
+    )
+    assert the_next_escalate_request_other_than_a_log() == {
+        "rpc": "link_wired",
+        "link_id": "L-level",
+    }
+    ran_cleanly = the_next_escalate_request_other_than_a_log()
+    assert ran_cleanly["op"] == "set_function_node_raising_because"
+    assert ran_cleanly["function_node"] == "beat-1"
+    assert ran_cleanly["raising_because"] is None
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": ran_cleanly["request_id"], "result": "ok"}
+    )
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    answers = [the_next_escalate_request_other_than_a_log()["rpc"] for _ in range(2)]
+    assert answers == ["stopped", "done"]
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_raise_report_the_parent_refused_is_sent_again_on_the_next_call(stand_in_parent):
     """A refused `set_process_raising_because` leaves the parent's record
     unknown, so the next raise sends it again rather than nothing.

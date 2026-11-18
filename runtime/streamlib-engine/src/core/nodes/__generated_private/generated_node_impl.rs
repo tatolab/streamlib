@@ -11,7 +11,7 @@ use crate::core::Result;
 use crate::core::context::texture_pools_and_rings::node_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneNode;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::HowItsHelpersRanAFunctionNode;
+use crate::core::graph::{HowItsHelpersRanAFunctionNode, HowOneReadersHelperRanEachFunctionNode};
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::FunctionNodeStatesCarriedForOneStream;
@@ -115,10 +115,6 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// carries.
     stateful_function_nodes_its_far_side_calls: Vec<StatefulFunctionNodeItsFarSideCalls>,
     runs_a_function_node_as_a_standalone_node: bool,
-    /// Where each function node its islands call is told how its far side ran
-    /// it, by the node's id.
-    how_its_far_side_ran_each_function_node:
-        std::collections::HashMap<String, Arc<HowItsHelpersRanAFunctionNode>>,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -382,6 +378,9 @@ pub struct OutOfProcessLinkWiringEnvelope {
         Mutex<RecordedLinksAndHowTheNextReachesTheFarSide>,
     loss_counts: Arc<HelperPlacedNodeLossCounts>,
     output_frames_kept_by_its_output_links: Arc<OutputFramesKeptByTheOutputLinksOfOneNode>,
+    /// Where each function node its islands call is told how its far side ran
+    /// it, by the node's id.
+    how_its_far_side_ran_each_function_node: Arc<HowOneReadersHelperRanEachFunctionNode>,
     far_side_process_execution: ProcessExecution,
     function_node_promotion_out_of_its_islands: FunctionNodePromotionOutOfTheIslandsOfOneFarSide,
     /// The stream's function-node states, which the current spawn's board
@@ -422,7 +421,6 @@ impl OutOfProcessLinkWiringEnvelope {
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
                     runs_a_function_node_as_a_standalone_node: false,
-                    how_its_far_side_ran_each_function_node: std::collections::HashMap::new(),
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
@@ -430,6 +428,7 @@ impl OutOfProcessLinkWiringEnvelope {
             ),
             loss_counts: Arc::default(),
             output_frames_kept_by_its_output_links: Arc::default(),
+            how_its_far_side_ran_each_function_node: Arc::default(),
             far_side_process_execution,
             function_node_promotion_out_of_its_islands: Default::default(),
             function_node_states_its_far_side_writes: Mutex::new(None),
@@ -440,6 +439,14 @@ impl OutOfProcessLinkWiringEnvelope {
         &self,
     ) -> Arc<OutputFramesKeptByTheOutputLinksOfOneNode> {
         Arc::clone(&self.output_frames_kept_by_its_output_links)
+    }
+
+    /// Where each function node its islands call is told how its far side ran
+    /// it: whether compiled, and what its calls raised.
+    pub(crate) fn how_its_far_side_ran_each_function_node(
+        &self,
+    ) -> Arc<HowOneReadersHelperRanEachFunctionNode> {
+        Arc::clone(&self.how_its_far_side_ran_each_function_node)
     }
 
     pub fn far_side_process_execution(&self) -> ProcessExecution {
@@ -734,10 +741,8 @@ impl OutOfProcessLinkWiringEnvelope {
         &self,
         function_nodes: impl IntoIterator<Item = (String, Arc<HowItsHelpersRanAFunctionNode>)>,
     ) {
-        self.recorded_links_and_how_the_next_reaches_the_far_side
-            .lock()
-            .how_its_far_side_ran_each_function_node
-            .extend(function_nodes);
+        self.how_its_far_side_ran_each_function_node
+            .report_each_function_node_to(function_nodes);
     }
 
     /// Note how the far side ran each function node its islands call, from the
@@ -751,17 +756,10 @@ impl OutOfProcessLinkWiringEnvelope {
         else {
             return;
         };
-        let recorded = self
-            .recorded_links_and_how_the_next_reaches_the_far_side
-            .lock();
         for (function_node_id, ran_compiled) in ran_compiled_by_function_node_id {
-            if let (Some(how_it_ran), Some(ran_compiled)) = (
-                recorded
-                    .how_its_far_side_ran_each_function_node
-                    .get(function_node_id),
-                ran_compiled.as_bool(),
-            ) {
-                how_it_ran.note_it_ran_compiled(ran_compiled);
+            if let Some(ran_compiled) = ran_compiled.as_bool() {
+                self.how_its_far_side_ran_each_function_node
+                    .note_it_ran_compiled(function_node_id, ran_compiled);
             }
         }
     }

@@ -710,6 +710,8 @@ pub(crate) fn spawn_host_for_graph_node(
             shared_native_service_leases: Default::default(),
             failure_the_node_reported_of_itself: Default::default(),
             process_raising_the_node_reports: Default::default(),
+            how_its_islands_ran_each_function_node: link_wiring
+                .how_its_far_side_ran_each_function_node(),
             node_not_ready_reports: Default::default(),
             output_frames_kept_by_its_output_links: link_wiring
                 .output_frames_kept_by_its_output_links(),

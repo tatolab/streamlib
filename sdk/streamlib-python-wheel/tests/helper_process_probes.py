@@ -192,6 +192,27 @@ class RaisesUntilToldNotToProbe:
             raise RuntimeError("broke on purpose")
 
 
+@node.function
+def builds_an_object_then_answers_its_level_raising_on_a_negative_one(level: float = 0.5) -> float:
+    """Answers `level`, raising on a negative one; building an object keeps its
+    body from compiling, so it runs as Python."""
+    repr(object())
+    if level < 0.0:
+        raise RuntimeError("the function node broke on purpose")
+    return level
+
+
+@node.process(execution="continuous", interval_ms=20)
+class ReadsTheIslandFeedingItsLevelProbe:
+    """Reads its `level` input, which a function node island feeds, on every
+    `process()`."""
+
+    level = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        ctx.inputs.read(self.level)
+
+
 class ReconfigurableProbeConfig(TypedDict, total=False):
     gain: int
 

@@ -111,6 +111,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        python_function_node_island::why_each_function_node_its_islands_call_is_raising,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_function_node_island::read_the_message_at_an_input_port_unread,
         module
     )?)?;

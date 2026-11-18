@@ -43,5 +43,14 @@ unsafe extern "C" fn add_one_and_count_calls(
     MODULE_HOST_TABLE_STATUS_OK
 }
 
+/// Where an island under test notes the raises of its function nodes: a record
+/// of its own, under the input port `island`.
+fn raises_noted_in_a_record_of_its_own() -> WhereAnIslandNotesTheRaisesOfItsFunctionNodes {
+    WhereAnIslandNotesTheRaisesOfItsFunctionNodes {
+        function_node_raises_in_this_helper: Arc::default(),
+        island_input_port: "island".to_string(),
+    }
+}
+
 mod island_evaluation_tests;
 mod links_from_outside_the_island_tests;

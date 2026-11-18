@@ -162,6 +162,7 @@ fn a_gate_reading_a_link_from_outside_its_island(
             values_last_read_off_links_from_outside_islands: Arc::default(),
             claim_the_pooled_gpu_frame_a_message_names,
         },
+        raises_noted_in_a_record_of_its_own(),
     )
     .unwrap()
 }
@@ -350,6 +351,7 @@ fn a_number_read_off_a_link_from_outside_the_island_keeps_the_newest_control_val
                 values_last_read_off_links_from_outside_islands: Arc::default(),
                 claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
             },
+            raises_noted_in_a_record_of_its_own(),
         )
         .unwrap();
     stream_time_ns.store(100, Ordering::SeqCst);
@@ -419,6 +421,7 @@ fn an_add_one_island_reading_a_link_from_outside_its_island(
             values_last_read_off_links_from_outside_islands,
             claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
         },
+        raises_noted_in_a_record_of_its_own(),
     )
     .unwrap()
 }
@@ -511,13 +514,29 @@ fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started
                 values_last_read_off_links_from_outside_islands: Arc::default(),
                 claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
             },
+            raises_noted_in_a_record_of_its_own(),
         )
         .unwrap();
     stream_time_ns.store(100, Ordering::SeqCst);
 
-    island
-        .evaluate_the_island_output_for_this_read()
-        .expect_err("a token naming no message input is refused");
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::Nothing,
+        "a call handing out a token naming no message input hands out nothing"
+    );
+    let raises = island
+        .evaluation
+        .lock()
+        .where_it_notes_the_raises_of_its_function_nodes
+        .function_node_raises_in_this_helper
+        .why_each_function_node_is_raising();
+    assert!(
+        raises["hand_on"].contains("names none of its message inputs"),
+        "{raises:?}"
+    );
 
     assert_eq!(
         island.the_state_each_stateful_function_node_last_returned(),

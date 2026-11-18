@@ -37,6 +37,7 @@ pub use function_node_promoted_to_its_own_process_component::{
 };
 pub use function_node_ran_compiled_component::{
     FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode,
+    HowOneReadersHelperRanEachFunctionNode,
 };
 pub use iceoryx2_services_held_open_for_link_component::Iceoryx2ServicesHeldOpenForLinkComponent;
 pub use json_component_trait::JsonSerializableComponent;

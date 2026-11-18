@@ -243,7 +243,7 @@ impl HowAFunctionNodeIsCalled {
                 Ok(())
             }
             Self::AsPython(run_as_python) => {
-                run_as_python.call_at(node_id, input_values, output_values, now_ns)
+                run_as_python.call_at(input_values, output_values, now_ns)
             }
         }
     }
@@ -384,17 +384,13 @@ impl FunctionNodeCalledAsPython {
     /// length of the call.
     fn call_at(
         &mut self,
-        node_id: &str,
         input_values: &[&FunctionNodeValue],
         output_values: &mut [FunctionNodeValue],
         now_ns: i64,
     ) -> Result<()> {
         Python::attach(|python| {
-            let raised = |refusal: PyErr| {
-                Error::Runtime(format!(
-                    "function node `{node_id}`, run as Python, raised: {refusal}"
-                ))
-            };
+            let raised =
+                |raise: PyErr| Error::Runtime(the_words_a_raise_is_shown_in(python, &raise));
             let input_objects = input_values
                 .iter()
                 .map(|input_value| input_value.to_python(python))
@@ -409,7 +405,7 @@ impl FunctionNodeCalledAsPython {
             let returned: Vec<Bound<'_, PyAny>> = returned.extract().map_err(raised)?;
             if returned.len() != output_values.len() {
                 return Err(Error::Runtime(format!(
-                    "function node `{node_id}`, run as Python, answered {} outputs, and it has {}",
+                    "answered {} outputs, and it has {}",
                     returned.len(),
                     output_values.len()
                 )));
@@ -432,4 +428,20 @@ impl FunctionNodeCalledAsPython {
             Ok(())
         })
     }
+}
+
+/// The module whose wording of a raise the graph shows on every node whose code
+/// keeps raising.
+const MODULE_WORDING_A_RAISE: &str = "tatolab.runtime._hosted_node";
+
+/// `raised <type>: <message>`, then where in the code it was raised, in the
+/// words the graph shows a raising node's own code in; without the location
+/// when the interpreter cannot import the module that words it.
+fn the_words_a_raise_is_shown_in(python: Python<'_>, raise: &PyErr) -> String {
+    python
+        .import(MODULE_WORDING_A_RAISE)
+        .and_then(|module| module.getattr("the_words_a_raise_is_shown_in"))
+        .and_then(|word_a_raise| word_a_raise.call1((raise.value(python),)))
+        .and_then(|words| words.extract::<String>())
+        .unwrap_or_else(|_| format!("raised {raise}"))
 }

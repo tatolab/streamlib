@@ -47,6 +47,7 @@ __all__ = [
     "read_the_message_at_an_input_port_unread",
     "run_the_scheduling_loop_of_this_helper",
     "stop_feeding_an_input_port_from_a_function_node_island",
+    "why_each_function_node_its_islands_call_is_raising",
 ]
 
 MODULE_HOST_TABLE_ABI_MAJOR: int
@@ -124,6 +125,12 @@ def stop_feeding_an_input_port_from_a_function_node_island(
     input_port: str,
 ) -> bool:
     """Stop feeding `input_port` from the island feeding it; whether one did."""
+
+def why_each_function_node_its_islands_call_is_raising(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+) -> dict[str, str]:
+    """What each function node this helper's islands call raised at its last call, by the node's id; a node that ran cleanly is left out."""
 
 def read_the_message_at_an_input_port_unread(
     *,

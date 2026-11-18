@@ -173,6 +173,9 @@ impl NodeInterpreterSpawnHost {
         self.bridge.take();
         self.link_wiring
             .keep_every_function_node_state_its_far_side_wrote();
+        self.link_wiring
+            .how_its_far_side_ran_each_function_node()
+            .forget_every_raise_the_helper_reported();
         if let Some(HelperProcessShutdownOutcome::Reaped(exit_status)) = outcome {
             tracing::debug!(
                 "[{}] helper process exited: {exit_status}",
