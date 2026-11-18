@@ -93,15 +93,30 @@ impl ControlOperationDispatcher {
         stream: Option<String>,
     ) -> Result<Value, ControlOperationRefusal> {
         match stream {
-            Some(stream) => self
-                .operations_on_the_loaded_streams
-                .runtime_operations_of_the_stream_a_call_names(&stream)
-                .map_err(|refusal| ControlOperationRefusal::of_an_engine_error("graph", &refusal))?
-                .to_json_async()
+            Some(stream) => {
+                let operations_on_the_loaded_streams =
+                    Arc::clone(&self.operations_on_the_loaded_streams);
+                let async_runtime = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    let streams = operations_on_the_loaded_streams
+                        .the_streams_to_read_or_edit(std::slice::from_ref(&stream))
+                        .map_err(|refusal| {
+                            ControlOperationRefusal::of_an_engine_error("graph", &refusal)
+                        })?;
+                    streams
+                        .runtime_operations_of(&stream)
+                        .and_then(|stream_operations| {
+                            async_runtime.block_on(stream_operations.to_json_async())
+                        })
+                        .map_err(|refusal| {
+                            ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
+                        })
+                })
                 .await
-                .map_err(|refusal| {
-                    ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
-                }),
+                .map_err(ControlOperationRefusal::the_task_did_not_finish(
+                    "the graph read",
+                ))?
+            }
             None => {
                 crate::handlers::machine_wide_graph_json(&self.operations_on_the_loaded_streams)
                     .await
