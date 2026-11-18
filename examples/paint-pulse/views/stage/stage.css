@@ -19,3 +19,4 @@ html, body { margin: 0; height: 100%; background: #0b0c12; color: #d8d8e0; font:
 .stage-controls button { background: #262836; color: inherit; border: 1px solid #3a3d52; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 .stage-controls button:hover { background: #31344a; }
 .stage-hint { opacity: 0.6; margin-left: auto; }
+.stage-control.is-select select { grid-column: 1 / -1; width: 100%; background: #262836; color: inherit; border: 1px solid #3a3d52; border-radius: 6px; padding: 4px 6px; }

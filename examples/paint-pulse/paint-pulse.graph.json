@@ -2,26 +2,6 @@
   "links": [
     {
       "source": {
-        "node": "3424c41f-0439-5006-b36a-45fd896dcbd8",
-        "port": "audio"
-      },
-      "target": {
-        "node": "5d4f613f-7e88-50f4-995b-33b1f1351797",
-        "port": "music"
-      }
-    },
-    {
-      "source": {
-        "node": "3424c41f-0439-5006-b36a-45fd896dcbd8",
-        "port": "audio"
-      },
-      "target": {
-        "node": "c39fea05-57b1-5144-87db-7c614307bfbf",
-        "port": "audio"
-      }
-    },
-    {
-      "source": {
         "node": "5d4f613f-7e88-50f4-995b-33b1f1351797",
         "port": "motion"
       },
@@ -293,6 +273,56 @@
     {
       "source": {
         "node": "3424c41f-0439-5006-b36a-45fd896dcbd8",
+        "port": "audio"
+      },
+      "target": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "song"
+      }
+    },
+    {
+      "source": {
+        "node": "3a00bb94-a2d3-5771-8b18-987537156d3a",
+        "port": "audio"
+      },
+      "target": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "computer"
+      }
+    },
+    {
+      "source": {
+        "node": "885a7beb-6b16-5fc0-811b-1ab5dd758d72",
+        "port": "audio"
+      },
+      "target": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "mic"
+      }
+    },
+    {
+      "source": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "audio"
+      },
+      "target": {
+        "node": "5d4f613f-7e88-50f4-995b-33b1f1351797",
+        "port": "music"
+      }
+    },
+    {
+      "source": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+        "port": "audio"
+      },
+      "target": {
+        "node": "c39fea05-57b1-5144-87db-7c614307bfbf",
+        "port": "audio"
+      }
+    },
+    {
+      "source": {
+        "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
         "port": "audio"
       },
       "target": {
@@ -646,6 +676,51 @@
           3300,
           200
         ]
+      }
+    },
+    {
+      "id": "3a00bb94-a2d3-5771-8b18-987537156d3a",
+      "name": "computer_audio",
+      "type": "__MICROPHONE__",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          250
+        ]
+      },
+      "input_values": {
+        "device_id": "E829E599-5A90-4208-B177-ED1AC8BD23A5"
+      }
+    },
+    {
+      "id": "885a7beb-6b16-5fc0-811b-1ab5dd758d72",
+      "name": "room_mic",
+      "type": "__MICROPHONE__",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          500
+        ]
+      },
+      "input_values": {
+        "device_id": "BuiltInMicrophoneDevice"
+      }
+    },
+    {
+      "id": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
+      "name": "source_switch",
+      "type": "nodes.source_switch:SourceSwitch",
+      "studio": {
+        "contract": 1,
+        "position": [
+          150,
+          250
+        ]
+      },
+      "input_values": {
+        "source": 0
       }
     }
   ]

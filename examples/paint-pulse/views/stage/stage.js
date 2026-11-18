@@ -21,6 +21,7 @@ const AUDIO_MOST_LEAD_SECONDS = 0.4;
 // are node settings set through a live graph transaction; once typed pins land they are pins.
 const CONTROLS = [
   { group: "Music" },
+  { label: "Source", options: ["Song", "My computer (Wave Link)", "Mic"], value: 0, sets: [["source_switch", "source"]] },
   { label: "Volume", min: 0, max: 1, step: 0.01, value: 0.8, sets: [["synth_song", "volume"]] },
   { label: "Sensitivity", min: 0.3, max: 3, step: 0.05, value: 1.25, sets: [["spectrum_listener", "sensitivity"]] },
   { label: "Explosion", min: 0, max: 2, step: 0.05, value: 1.2, sets: [["spectrum_listener", "spread"]] },
@@ -119,7 +120,7 @@ canvas.addEventListener("wheel", (event) => {
   sendTheCamera();
 }, { passive: false });
 window.addEventListener("keydown", (event) => {
-  if (event.code === "Space" && !(event.target instanceof HTMLInputElement)) { event.preventDefault(); burst(); }
+  if (event.code === "Space" && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) { event.preventDefault(); burst(); }
 });
 buildThePanel();
 document.querySelector(".stage-burst").addEventListener("click", burst);
@@ -225,6 +226,16 @@ function buildThePanel() {
     const label = document.createElement("label");
     label.htmlFor = input.id;
     label.textContent = control.label;
+    if (control.options !== undefined) {
+      row.classList.add("is-select");
+      const picker = document.createElement("select");
+      picker.id = input.id;
+      control.options.forEach((name, optionIndex) => picker.append(new Option(name, String(optionIndex), optionIndex === control.value, optionIndex === control.value)));
+      picker.addEventListener("change", () => sendTheControl(control, Number(picker.value)));
+      row.append(label, picker);
+      panelControls.append(row);
+      return;
+    }
     if (control.toggle) {
       input.type = "checkbox";
       input.checked = control.value;
