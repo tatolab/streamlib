@@ -7,7 +7,7 @@
 use schemars::{JsonSchema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    NodeTypeOfOneProjectSource, ProjectTransactionOnTheWire,
+    InputValueComesFromOnTheWire, NodeTypeOfOneProjectSource, ProjectTransactionOnTheWire,
 };
 use uuid::Uuid;
 
@@ -208,20 +208,6 @@ impl ControlNotification for StreamGraphChanged {
         ControlOperationExposure::Studio,
         ControlOperationExposure::Public,
     ];
-}
-
-/// Where the value an input reads comes from, as `graph` renders it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum InputValueComesFromOnTheWire {
-    /// A value set live, which no document holds.
-    Live,
-    /// The value the stream's graph document holds.
-    Saved,
-    /// The default the input declares.
-    Default,
-    /// A link feeds the input; it holds no value.
-    Wire,
 }
 
 /// `input_value_changed`'s params.

@@ -409,3 +409,123 @@ fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
         refusal
     );
 }
+
+#[test]
+fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_read() {
+    let one_stream = serde_json::json!({
+        "stream": "rig-main-7bd4ff",
+        "nodes": [{
+            "id": "1c1c1c1c-1c1c-4c1c-8c1c-1c1c1c1c1c1c",
+            "type": "tatolab.stream:Mixer",
+            "kind": "process",
+            "name": "mixer",
+            "config": {"frame_width": 640},
+            "config_checksum": 13757715674185714284_u64,
+            "ports": {
+                "inputs": [
+                    {"name": "gain", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest", "pin_type": {"type": "float"},
+                     "flow": "value", "value": 0.25, "value_comes_from": "live"},
+                    {"name": "trim", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest", "value": 0.5, "value_comes_from": "saved"},
+                    {"name": "pan", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest", "pin_default": 0.0, "value": 0.0,
+                     "value_comes_from": "default"},
+                    {"name": "level", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest", "value_comes_from": "wire"},
+                    {"name": "bias", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest", "pin_default": null, "value": null},
+                    {"name": "video", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest"},
+                ],
+                "outputs": [
+                    {"name": "out", "description": "", "port_kind": "data",
+                     "delivery_profile": null, "family": {"family": "channels"}},
+                ],
+            },
+            "input_values": {"frame_width": 640, "trim": 0.5},
+            "pins": {"trim": 0.5},
+            "components": {"state": "Running"},
+        }],
+        "links": [{"id": "L1", "source": {"node": "a", "port": "out"},
+                   "target": {"node": "mixer", "port": "level"}}],
+        "machine": "rig",
+    });
+    let every_stream = serde_json::json!({ "machine": "rig", "streams": [one_stream.clone()] });
+
+    let read_one: GraphToolResult = serde_json::from_value(one_stream.clone()).unwrap();
+    let GraphToolResult::OneStream(graph) = &read_one else {
+        panic!("one stream's graph reads as one stream: {read_one:?}");
+    };
+    let inputs = &graph.nodes[0].ports.inputs;
+    let comes_from: Vec<Option<InputValueComesFromOnTheWire>> = inputs
+        .iter()
+        .map(|input| {
+            input
+                .value_read
+                .as_ref()
+                .and_then(|read| read.value_comes_from)
+        })
+        .collect();
+    assert_eq!(
+        comes_from,
+        [
+            Some(InputValueComesFromOnTheWire::Live),
+            Some(InputValueComesFromOnTheWire::Saved),
+            Some(InputValueComesFromOnTheWire::Default),
+            Some(InputValueComesFromOnTheWire::Wire),
+            None,
+            None,
+        ]
+    );
+    assert_eq!(
+        inputs[4].value_read,
+        Some(InputValueReadOnTheWire {
+            value: Some(serde_json::Value::Null),
+            value_comes_from: None,
+        }),
+        "an input reading nothing reads a null value"
+    );
+    assert_eq!(
+        (
+            &inputs[5].value_read,
+            &graph.nodes[0].ports.outputs[0].value_read
+        ),
+        (&None, &None),
+        "an input with neither key, and an output, read no value"
+    );
+    assert_eq!(
+        inputs
+            .iter()
+            .map(|input| input.pin_default.clone())
+            .collect::<Vec<_>>(),
+        [
+            None,
+            None,
+            Some(serde_json::json!(0.0)),
+            None,
+            Some(serde_json::Value::Null),
+            None
+        ],
+        "a declared null default reads apart from no default"
+    );
+    assert!(inputs[0].pin.is_some() && inputs[1].pin.is_none());
+    assert_eq!(serde_json::to_value(&read_one).unwrap(), one_stream);
+
+    let read_every: GraphToolResult = serde_json::from_value(every_stream.clone()).unwrap();
+    assert!(
+        matches!(read_every, GraphToolResult::EveryStream(_)),
+        "every stream's graph reads as every stream: {read_every:?}"
+    );
+    assert_eq!(serde_json::to_value(&read_every).unwrap(), every_stream);
+}
+
+#[test]
+fn each_node_kind_and_language_is_named_as_it_is_written() {
+    for kind in GraphNodeKindOnTheWire::EVERY_KIND {
+        assert_eq!(serde_json::to_value(kind).unwrap(), kind.name());
+    }
+    for language in FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE {
+        assert_eq!(serde_json::to_value(language).unwrap(), language.name());
+    }
+}

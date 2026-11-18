@@ -363,6 +363,11 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         "{rendered}"
     );
     assert_eq!(
+        rendered["input_values"][VALUE],
+        json!({ "level": 0.75 }),
+        "a saved edit renders on the `value` input the `default` its config renders: {rendered}"
+    );
+    assert_eq!(
         rendered["components"]["graph_interface"]["current_value"],
         json!({ "level": 0.75 }),
         "{rendered}"
@@ -692,7 +697,10 @@ fn a_graph_input_declaring_a_lifetime_that_is_neither_kept_nor_reset_is_refused(
 }
 
 /// A published Studio reads a node's values from the keys `graph` rendered before a node held
-/// one map of input values, so a stream saved in the one map still renders them.
+/// one map of input values, so a stream saved in the one map renders that map as
+/// `input_values` and still renders those keys, derived from it: a node's `config`, `pins` and
+/// `exposed_config_fields`, a port's `family` and `pin_default`, a `GraphInput`'s
+/// `graph_interface.current_value`, and a node type's `config_schema`.
 #[test]
 #[serial]
 fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_studio_reads() {
@@ -735,9 +743,21 @@ fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_stud
             .clone()
     };
     let front = node_named("front");
+    assert_eq!(front["input_values"], json!({"frame_width": 640}));
     assert_eq!(front["config"], json!({"frame_width": 640}));
-    assert_eq!(node_named("sink")["pins"], json!({"in1": {"level": 1}}));
+    let sink = node_named("sink");
+    assert_eq!(sink["input_values"], json!({"in1": {"level": 1}}));
+    assert_eq!(sink["pins"], json!({"in1": {"level": 1}}));
+    assert_eq!(
+        sink["ports"]["inputs"][0]["family"]["family"],
+        json!("records")
+    );
     let lights = node_named("lights");
+    assert_eq!(
+        lights["input_values"],
+        json!({"port": "lights", "family": "records", "value": {"level": 0.0}}),
+        "a `GraphInput` holds its saved value on its `value` input"
+    );
     assert_eq!(
         lights["config"],
         json!({"port": "lights", "family": "records", "default": {"level": 0.0}})
@@ -746,22 +766,19 @@ fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_stud
         lights["components"]["graph_interface"]["current_value"],
         json!({"level": 0.0})
     );
-    for node in rendered["nodes"].as_array().unwrap() {
-        assert!(node.get("input_values").is_none(), "{node}");
-    }
-    let render_schema = serde_json::to_value(schemars::schema_for!(
-        crate::core::json_schema::GraphResponse
-    ))
-    .unwrap();
-    let node_render_schema = render_schema
-        .get("definitions")
-        .or_else(|| render_schema.get("$defs"))
-        .map(|definitions| definitions["GraphNodeOutput"]["properties"].clone())
-        .unwrap();
+    let properties_of = |component: &str| {
+        crate::core::json_schema::the_control_contract_schema_named(component)["properties"].clone()
+    };
     for key in ["config", "pins", "exposed_config_fields", "components"] {
         assert!(
-            node_render_schema.get(key).is_some(),
+            properties_of("GraphNodeOnTheWire").get(key).is_some(),
             "`graph` renders `{key}` on a node"
+        );
+    }
+    for key in ["family", "pin_default"] {
+        assert!(
+            properties_of("GraphNodePortOnTheWire").get(key).is_some(),
+            "`graph` renders `{key}` on a port"
         );
     }
     let catalog = serde_json::to_value(schemars::schema_for!(

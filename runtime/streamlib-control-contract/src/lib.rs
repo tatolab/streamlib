@@ -32,12 +32,11 @@ pub use control_contract_document::{
 };
 pub use control_notification::{
     CONTROL_NOTIFICATIONS, ControlNotification, ControlNotificationDeclaration, InputValueChanged,
-    InputValueChangedNotificationParams, InputValueComesFromOnTheWire, NodeStateOnTheWire,
-    PROJECT_LOG_RECORDS_PER_NOTIFICATION, ProjectChangeKindOnTheWire, ProjectChanged,
-    ProjectChangedNotificationParams, ProjectLogRecordsWritten,
-    ProjectLogRecordsWrittenNotificationParams, StreamActionChangeKindOnTheWire,
-    StreamActionChanged, StreamActionChangedNotificationParams, StreamGraphChangeKindOnTheWire,
-    StreamGraphChanged, StreamGraphChangedNotificationParams,
+    InputValueChangedNotificationParams, NodeStateOnTheWire, PROJECT_LOG_RECORDS_PER_NOTIFICATION,
+    ProjectChangeKindOnTheWire, ProjectChanged, ProjectChangedNotificationParams,
+    ProjectLogRecordsWritten, ProjectLogRecordsWrittenNotificationParams,
+    StreamActionChangeKindOnTheWire, StreamActionChanged, StreamActionChangedNotificationParams,
+    StreamGraphChangeKindOnTheWire, StreamGraphChanged, StreamGraphChangedNotificationParams,
 };
 pub use control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationDeclaration,

@@ -242,3 +242,19 @@ fn a_built_ins_settings_are_typed_by_their_rust_format_and_a_definition_is_read_
         )
     );
 }
+
+/// The catalog's schema names every kind a node type runs as and every language a function node
+/// is written in, as a rendering writes them.
+#[test]
+fn the_catalog_schema_names_each_kind_and_language_a_node_type_renders() {
+    let schema = serde_json::to_value(schemars::schema_for!(NodeDescriptorOutput)).unwrap();
+    let properties = &schema["properties"];
+    assert_eq!(
+        (&properties["kind"]["enum"], &properties["language"]["enum"]),
+        (
+            &serde_json::json!(["shader", "function", "process", "fragment"]),
+            &serde_json::json!(["python", "rust"])
+        ),
+        "{properties}"
+    );
+}

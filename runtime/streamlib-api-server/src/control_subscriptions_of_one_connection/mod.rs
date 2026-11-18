@@ -11,15 +11,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use streamlib::sdk::error::Result as StreamlibResult;
-use streamlib::sdk::graph::input_values::InputValueComesFrom;
 use streamlib::sdk::nodes::NodeState;
 use streamlib::sdk::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, RuntimeEvent, topics,
 };
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
-    InputValueChangedNotificationParams, InputValueComesFromOnTheWire, NodeStateOnTheWire,
-    StreamGraphChangeKindOnTheWire, StreamGraphChangedNotificationParams,
+    InputValueChangedNotificationParams, NodeStateOnTheWire, StreamGraphChangeKindOnTheWire,
+    StreamGraphChangedNotificationParams,
 };
 use streamlib_project_repository::ProjectFilesWatchedWhileHeld;
 use tokio::sync::mpsc;
@@ -462,7 +461,7 @@ impl EventListener for StreamChangesForwardedToOneConnection {
                         node: node.to_string(),
                         input: input.clone(),
                         value: value.filter(|value| !value.is_null()).cloned(),
-                        value_comes_from: value_comes_from.map(input_value_comes_from_on_the_wire),
+                        value_comes_from,
                     },
                 ));
             }
@@ -492,17 +491,6 @@ impl EventListener for StreamChangesForwardedToOneConnection {
     fn on_events_lost(&mut self, _lost_event_count: u64) -> StreamlibResult<()> {
         self.forward(StreamGraphChangeKindOnTheWire::Missed, None);
         Ok(())
-    }
-}
-
-fn input_value_comes_from_on_the_wire(
-    value_comes_from: InputValueComesFrom,
-) -> InputValueComesFromOnTheWire {
-    match value_comes_from {
-        InputValueComesFrom::Live => InputValueComesFromOnTheWire::Live,
-        InputValueComesFrom::Saved => InputValueComesFromOnTheWire::Saved,
-        InputValueComesFrom::Default => InputValueComesFromOnTheWire::Default,
-        InputValueComesFrom::Wire => InputValueComesFromOnTheWire::Wire,
     }
 }
 

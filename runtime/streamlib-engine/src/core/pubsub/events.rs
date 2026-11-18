@@ -341,7 +341,9 @@ pub enum RuntimeEvent {
     InputValueDidChange {
         node: uuid::Uuid,
         input: String,
-        value_read: Option<crate::core::graph::input_values::InputValueRead>,
+        value_read: Option<
+            streamlib_runtime_client_contract::local_api_wire_contract::InputValueReadOnTheWire,
+        >,
     },
 
     RuntimeDidRegisterNodeType {
