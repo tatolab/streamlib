@@ -285,3 +285,38 @@ async fn a_document_saving_a_value_on_a_view_outputs_input_loads_with_the_value_
         .the_project_action_done("stop_playback", &project)
         .await;
 }
+
+/// A graph document saved with a value on the input of the deck's output, reloaded onto the
+/// playing stream that holds the deck, reconciles with the value dropped: the deck is kept, and
+/// its input renders no saved value.
+///
+/// Mental-revert: a reconcile that sets each pin the document holds on a kept node saves a value
+/// the input never holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_value_dropped() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_stream_holds_the_deck();
+    engine.playing(&project).await;
+    let deck_id_before = the_node_named(
+        &engine.the_live_graph_of(&project.stream_id_of("main")),
+        "deck",
+    )["id"]
+        .clone();
+
+    let mut document = project.the_graph_document_of("main");
+    document["nodes"][0]["pins"] = json!({ "cue": { "track": "intro" } });
+    project.write_the_graph_document(document);
+    engine
+        .the_project_action_done("reload_project", &project)
+        .await;
+
+    let live_graph = engine.the_live_graph_of(&project.stream_id_of("main"));
+    let deck = the_node_named(&live_graph, "deck");
+    assert_eq!(deck["id"], deck_id_before, "the reload reconciles: {deck}");
+    let cue_input = the_input_named(&deck, "cue");
+    assert_ne!(cue_input["value_comes_from"], "saved", "{cue_input}");
+    assert!(deck["pins"].get("cue").is_none(), "{deck}");
+    engine
+        .the_project_action_done("stop_playback", &project)
+        .await;
+}

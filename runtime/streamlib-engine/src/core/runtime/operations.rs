@@ -108,6 +108,17 @@ pub trait RuntimeOperations: Send + Sync {
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
 
+    /// Refuse `value`, saved on input `input` of the node named `node_name` of type `node_type`,
+    /// when that input is the input of an output a panel writes, which holds what a panel writes,
+    /// live, and no saved value; taking a value off is no refusal.
+    fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+        &self,
+        node_type: &NodeClassImportPath,
+        node_name: &str,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
+
     /// Whether a node of type `node_type` still takes a config, as this stream resolves the
     /// type: its config schema lists a field, or the stream does not describe it.
     fn node_type_takes_a_config(&self, node_type: &NodeClassImportPath) -> bool;

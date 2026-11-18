@@ -27,14 +27,12 @@ use crate::core::descriptors::{
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::GraphNode;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME,
 };
-use crate::core::graph::input_values::{
-    InputValueRefusal, InputValueRefusalCode, NodeAnInputValueIsSetOn,
-};
+use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode};
+use crate::core::graph::{GraphNode, GraphNodePorts};
 use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
 use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
 use crate::iceoryx2::{
@@ -149,12 +147,21 @@ pub(crate) fn is_the_input_of_an_output_a_panel_writes(
 ) -> bool {
     node_types.is_a_view_type_of_this_streams_project(node_type)
         && node_types.port_info(node_type).is_some_and(|ports| {
-            ports.outputs.iter().any(|output| output.name == input)
-                && ports
-                    .inputs
-                    .iter()
-                    .any(|port| port.name == input && !port.takes_a_wire())
+            is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(&ports, input)
         })
+}
+
+/// Whether input `input`, among `ports`, the ports of a view node, is the input of an output a
+/// panel writes: a setting of the name of one of the outputs.
+fn is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(
+    ports: &GraphNodePorts,
+    input: &str,
+) -> bool {
+    ports.outputs.iter().any(|output| output.name == input)
+        && ports
+            .inputs
+            .iter()
+            .any(|port| port.name == input && !port.takes_a_wire())
 }
 
 /// A port carried as a value of any type, its family alone deciding what it takes; an output so
@@ -169,50 +176,51 @@ fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
     }
 }
 
-/// Refuse `value`, saved on input `input` of `node`, when it is the input of an output a panel
-/// writes, which holds what a panel writes, live, and no saved value; taking a value off is no
-/// refusal.
+/// Refuse `value`, saved on input `input` of the node named `node_name` of `node_type`, when it is
+/// the input of an output a panel writes, which holds what a panel writes, live, and no saved
+/// value; taking a value off is no refusal.
 pub(crate) fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
     node_types: &NodeTypesOneStreamResolves,
-    node: &NodeAnInputValueIsSetOn<'_>,
+    node_type: &NodeClassImportPath,
+    node_name: &str,
     input: &str,
     value: Option<&JsonValue>,
 ) -> std::result::Result<(), InputValueRefusal> {
-    if value.is_none()
-        || !is_the_input_of_an_output_a_panel_writes(node_types, node.node_type, input)
-    {
+    if value.is_none() || !is_the_input_of_an_output_a_panel_writes(node_types, node_type, input) {
         return Ok(());
     }
     Err(InputValueRefusal {
         code: InputValueRefusalCode::InputTakesNoValue,
         words: format!(
-            "input `{input}` of `{}` holds what a panel writes onto its output `{input}`, live, \
-             and no saved value: it returns to no value at Stop. To fix: set it with `mode` \
-             `live`, in a transaction of value sets alone",
-            node.name
+            "input `{input}` of `{node_name}` holds what a panel writes onto its output \
+             `{input}`, live, and no saved value: it returns to no value at Stop. To fix: set it \
+             with `mode` `live`, in a transaction of value sets alone"
         ),
     })
 }
 
-/// `pins`, the saved values a graph document holds for the node named `node_name` of
-/// `node_type`, without any on the input of an output a panel writes, which holds no saved value;
-/// each dropped is logged, naming the node and the input.
+/// `pins`, the saved values given to the node named `node_name` of `node_type`, whose ports are
+/// `ports`, without any on the input of an output a panel writes, which holds no saved value;
+/// each dropped is logged, naming the node and the input. A node of a type that is no view of
+/// this stream's project keeps every one.
 pub(crate) fn the_saved_values_without_any_on_an_output_a_panel_writes(
     node_types: &NodeTypesOneStreamResolves,
     node_type: &NodeClassImportPath,
+    ports: &GraphNodePorts,
     node_name: &str,
     mut pins: serde_json::Map<String, JsonValue>,
 ) -> serde_json::Map<String, JsonValue> {
+    if !node_types.is_a_view_type_of_this_streams_project(node_type) {
+        return pins;
+    }
     pins.retain(|input, _| {
         let holds_no_saved_value =
-            is_the_input_of_an_output_a_panel_writes(node_types, node_type, input);
+            is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(ports, input);
         if holds_no_saved_value {
             tracing::warn!(
                 node = node_name,
                 input = input.as_str(),
-                "the graph document saves a value on input `{input}` of `{node_name}`, which \
-                 holds what a panel writes onto its output `{input}` and no saved value; the \
-                 value is dropped"
+                "a saved value on an input that holds only what a panel writes live is dropped"
             );
         }
         !holds_no_saved_value
