@@ -33,7 +33,6 @@ use streamlib_project_repository::{
     ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_VERSION_HEADER_NAME,
     NodeTypeOfOneProjectSource, ProjectActionRefusalOnTheWire, SuggestedOperationCall,
 };
 use streamlib_runtime_client_contract::project_log_records::{
@@ -46,7 +45,7 @@ use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{
     ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
-    ControlRequestOrigin, refuse_another_contract_version,
+    ControlRequestOrigin,
 };
 use crate::control_subscriptions_of_one_connection::{
     ControlSubscriptionsOfOneConnection, HeardOfAFollowedStream, ProjectLogNextPush,
@@ -62,6 +61,10 @@ use crate::stream_graph_drops_raises_and_link_states::{
     StreamGraphDropsRaisesAndLinkStatesLastSampled,
     the_drops_raises_and_link_states_of_a_stream_graph,
 };
+
+mod what_a_control_request_names;
+
+use what_a_control_request_names::{the_client_name_a_request_sent, the_contract_a_request_names};
 
 const JSON_RPC_VERSION: &str = "2.0";
 const JSON_RPC_PARSE_ERROR_CODE: i64 = -32700;
@@ -117,15 +120,15 @@ async fn answer_one_control_json_rpc_post(
         subscriptions: None,
         viewers_held_open: None,
     };
-    let answer = match the_contract_version_a_request_sent(&request_headers) {
+    let answer = match the_contract_a_request_names(&request_headers) {
         Err(why) => Some(a_json_rpc_error(
             Value::Null,
             JSON_RPC_INVALID_REQUEST_ERROR_CODE,
             why,
             None,
         )),
-        Ok(client_contract_version) => {
-            match refuse_another_contract_version(client_contract_version) {
+        Ok(client_contract) => {
+            match dispatcher.refuse_a_client_of_another_contract(client_contract) {
                 Err(mismatch) => Some(the_json_rpc_error_of_a_contract_version_mismatch(
                     Value::Null,
                     mismatch,
@@ -158,14 +161,12 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
     websocket_upgrade: WebSocketUpgrade,
     request_headers: HeaderMap,
 ) -> Response {
-    match the_contract_version_a_request_sent(&request_headers)
-        .map_err(|why| (StatusCode::BAD_REQUEST, why))
-        .and_then(|client_contract_version| {
-            refuse_another_contract_version(client_contract_version)
-                .map_err(|refusal| (StatusCode::CONFLICT, refusal.to_string()))
-        }) {
-        Ok(()) => {}
-        Err(refused) => return refused.into_response(),
+    let client_contract = match the_contract_a_request_names(&request_headers) {
+        Ok(client_contract) => client_contract,
+        Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
+    };
+    if let Err(mismatch) = dispatcher.refuse_a_client_of_another_contract(client_contract) {
+        return (StatusCode::CONFLICT, axum::Json(mismatch)).into_response();
     }
     let (stream_changes_to_the_connection, stream_changes_heard) =
         mpsc::channel(CONTROL_WEBSOCKET_STREAM_CHANGES_HEARD_CAPACITY);
@@ -186,27 +187,6 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
             local_api_stopping_token,
         )
     })
-}
-
-fn the_client_name_a_request_sent(request_headers: &HeaderMap) -> Option<String> {
-    request_headers
-        .get(CONTROL_CLIENT_NAME_HEADER_NAME)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-}
-
-fn the_contract_version_a_request_sent(request_headers: &HeaderMap) -> Result<Option<u32>, String> {
-    let Some(value) = request_headers.get(CONTROL_CONTRACT_VERSION_HEADER_NAME) else {
-        return Ok(None);
-    };
-    value
-        .to_str()
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .map(Some)
-        .ok_or_else(|| {
-            format!("`{CONTROL_CONTRACT_VERSION_HEADER_NAME}` must be a contract version, a whole number")
-        })
 }
 
 /// Serve one WebSocket: answer each request as it completes, send each change of a subscribed
@@ -920,8 +900,8 @@ fn the_result_of_an_answer(answered: ControlOperationAnswer) -> Value {
         .unwrap_or_else(|_| unreachable!("a result type always serializes to JSON"))
 }
 
-/// The JSON-RPC error of `refusal`: the runtime's words as its message, the contract version
-/// mismatch as code 3's `data`, and the refusal on the wire as every other code's.
+/// The JSON-RPC error of `refusal`: the runtime's words as its message, the contract mismatch as
+/// code 3's `data`, and the refusal on the wire as every other code's.
 fn the_json_rpc_error_of_a_refusal(
     request_id: Value,
     action: &str,
@@ -983,3 +963,6 @@ fn a_json_rpc_error(request_id: Value, code: i64, message: String, data: Option<
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod contract_mismatch_tests;

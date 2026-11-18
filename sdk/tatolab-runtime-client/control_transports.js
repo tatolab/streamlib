@@ -6,16 +6,19 @@ import { request as sendAnHttpRequest } from "node:http";
 
 import {
   CONTROL_CLIENT_NAME_HEADER_NAME,
+  CONTROL_CONTRACT_REVISION,
+  CONTROL_CONTRACT_REVISION_HEADER_NAME,
   CONTROL_CONTRACT_VERSION,
   CONTROL_CONTRACT_VERSION_HEADER_NAME,
   CONTROL_JSON_RPC_ROUTE_PATH,
   CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
 } from "./control_contract.js";
-import { controlMessageOfText, controlMessageText } from "./control_messages.js";
+import { controlContractMismatchOf, controlMessageOfText, controlMessageText } from "./control_messages.js";
 
 function controlClientHeaders(clientName) {
   return {
     [CONTROL_CONTRACT_VERSION_HEADER_NAME]: String(CONTROL_CONTRACT_VERSION),
+    [CONTROL_CONTRACT_REVISION_HEADER_NAME]: String(CONTROL_CONTRACT_REVISION),
     [CONTROL_CLIENT_NAME_HEADER_NAME]: clientName,
   };
 }
@@ -101,6 +104,7 @@ const WEBSOCKET_CLOSE_OPCODE = 0x8;
 const WEBSOCKET_PING_OPCODE = 0x9;
 const WEBSOCKET_PONG_OPCODE = 0xa;
 const WEBSOCKET_NORMAL_CLOSURE_CODE = 1000;
+const HTTP_CONFLICT_STATUS_CODE = 409;
 
 export class ControlWebSocketTransport {
   #socket;
@@ -327,6 +331,14 @@ function theFirstFrameOf(bytes) {
   return { isTheFinalFragment, opcode, isMasked, payload, byteLength };
 }
 
+function controlContractMismatchOfAnUpgradeRefusal(refusalText) {
+  try {
+    return controlContractMismatchOf(controlMessageOfText(refusalText));
+  } catch {
+    return undefined;
+  }
+}
+
 function openAControlWebSocket(socketPath, clientName, signal) {
   return new Promise((resolveOpenedSocket, rejectOpening) => {
     if (signal?.aborted) {
@@ -369,7 +381,10 @@ function openAControlWebSocket(socketPath, clientName, signal) {
       refusalResponse.once("end", () => {
         refusalReadToTheEnd = true;
         stopListeningForAnAbort();
-        rejectOpening(new Error(`the runtime refused the control WebSocket (HTTP ${refusalResponse.statusCode}): ${refusalWords}`));
+        rejectOpening(
+          (refusalResponse.statusCode === HTTP_CONFLICT_STATUS_CODE && controlContractMismatchOfAnUpgradeRefusal(refusalWords)) ||
+            new Error(`the runtime refused the control WebSocket (HTTP ${refusalResponse.statusCode}): ${refusalWords}`),
+        );
       });
       refusalResponse.once("error", (refusalError) => {
         stopListeningForAnAbort();

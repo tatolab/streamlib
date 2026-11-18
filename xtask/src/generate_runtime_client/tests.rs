@@ -109,7 +109,7 @@ fn the_client_has_one_method_per_operation_and_one_listener_per_notification() {
 #[test]
 fn a_property_defaulting_to_a_member_of_a_set_that_may_grow_reads_as_present() {
     let mut contract = json!({
-        "info": { "x-contract-version": 1 },
+        "info": { "x-contract-version": 1, "x-contract-revision": 0 },
         "components": { "schemas": {
             "Code": {
                 "oneOf": [{ "type": "string", "const": "known" }, { "type": "string", "const": "refused" }],
@@ -156,7 +156,7 @@ fn a_property_defaulting_to_a_member_of_a_set_that_may_grow_reads_as_present() {
 #[test]
 fn an_operation_named_like_a_member_of_the_client_is_refused() {
     let contract = json!({
-        "info": { "x-contract-version": 1 },
+        "info": { "x-contract-version": 1, "x-contract-revision": 0 },
         "components": { "schemas": {} },
         "methods": [{ "name": "close", "params": [{ "schema": {} }] }],
         "x-notifications": []
@@ -199,7 +199,7 @@ fn every_component_is_named_in_the_map_the_checker_reads_values_as() {
 #[test]
 fn a_contract_stating_a_keyword_the_checker_does_not_implement_generates_nothing() {
     let mut contract = json!({
-        "info": { "x-contract-version": 1 },
+        "info": { "x-contract-version": 1, "x-contract-revision": 0 },
         "components": { "schemas": {
             "NodeUiManifest": { "type": "object" },
             "Kind": { "enum": ["a", "b"] }

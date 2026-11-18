@@ -10,7 +10,7 @@ use rmcp::model::ProtocolVersion;
 use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService};
 use serde_json::{Value, json};
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
-use streamlib_control_contract::CONTROL_CONTRACT_VERSION;
+use streamlib_control_contract::{CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION};
 use streamlib_project_repository::{ProjectRepository, ProjectTransactionAuthor};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -45,7 +45,7 @@ impl ControlServedWithAnMcpClient {
         Self { served, mcp_client }
     }
 
-    async fn over_the_stub() -> Self {
+    pub(super) async fn over_the_stub() -> Self {
         Self::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await
     }
 
@@ -56,7 +56,11 @@ impl ControlServedWithAnMcpClient {
     }
 
     /// One `POST /control` with `extra_headers`: its status line and its body, `Null` when empty.
-    async fn control_post_with_headers(&self, extra_headers: &str, body: &str) -> (String, Value) {
+    pub(super) async fn control_post_with_headers(
+        &self,
+        extra_headers: &str,
+        body: &str,
+    ) -> (String, Value) {
         let mut connection = UnixStream::connect(&self.served.local_api_socket_path)
             .await
             .unwrap();
@@ -89,11 +93,11 @@ impl ControlServedWithAnMcpClient {
     }
 
     /// A WebSocket opened at `/control/ws` with `extra_headers`, or the status the
-    /// runtime refused it with.
+    /// runtime refused it with and the refusal's body, `Null` when it is not JSON.
     pub(crate) async fn control_websocket_with_headers(
         &self,
         extra_headers: &[(&str, String)],
-    ) -> Result<ControlWebSocketMessages, u16> {
+    ) -> Result<ControlWebSocketMessages, (u16, Value)> {
         let stream = UnixStream::connect(&self.served.local_api_socket_path)
             .await
             .unwrap();
@@ -106,9 +110,14 @@ impl ControlServedWithAnMcpClient {
         }
         match tokio_tungstenite::client_async(request, stream).await {
             Ok((websocket, _)) => Ok(ControlWebSocketMessages { websocket }),
-            Err(tokio_tungstenite::tungstenite::Error::Http(refusal)) => {
-                Err(refusal.status().as_u16())
-            }
+            Err(tokio_tungstenite::tungstenite::Error::Http(refusal)) => Err((
+                refusal.status().as_u16(),
+                refusal
+                    .body()
+                    .as_deref()
+                    .and_then(|body| serde_json::from_slice(body).ok())
+                    .unwrap_or(Value::Null),
+            )),
             Err(not_opened) => panic!("the control WebSocket did not open: {not_opened}"),
         }
     }
@@ -345,51 +354,12 @@ async fn discover_answers_the_contract_this_runtime_serves() {
         discovered["result"],
         json!({
             "contract_version": CONTROL_CONTRACT_VERSION,
+            "contract_revision": CONTROL_CONTRACT_REVISION,
             "runtime_version": this_runtime.version,
             "build_id": this_runtime.build_id,
             "operations": registered,
         })
     );
-}
-
-#[tokio::test]
-async fn a_client_built_against_another_contract_version_is_refused_naming_both() {
-    let served = ControlServedWithAnMcpClient::over_the_stub().await;
-    let other_version = CONTROL_CONTRACT_VERSION + 1;
-    let refused = served
-        .control_call("discover", json!({ "contract_version": other_version }))
-        .await;
-    assert_eq!(refused["error"]["code"], 3, "{refused}");
-    let message = refused["error"]["message"].as_str().unwrap();
-    assert!(message.contains(&other_version.to_string()), "{message}");
-    assert!(
-        message.contains(&CONTROL_CONTRACT_VERSION.to_string()),
-        "{message}"
-    );
-    assert_eq!(
-        refused["error"]["data"],
-        json!({
-            "client_contract_version": other_version,
-            "runtime_contract_version": CONTROL_CONTRACT_VERSION,
-        })
-    );
-
-    let header = format!("tatolab-control-contract-version: {other_version}\r\n");
-    let (_, refused_by_header) = served
-        .control_post_with_headers(
-            &header,
-            &json!({ "jsonrpc": "2.0", "id": 1, "method": "list_streams" }).to_string(),
-        )
-        .await;
-    assert_eq!(refused_by_header["error"]["code"], 3, "{refused_by_header}");
-
-    let refused_websocket = served
-        .control_websocket_with_headers(&[(
-            "tatolab-control-contract-version",
-            other_version.to_string(),
-        )])
-        .await;
-    assert_eq!(refused_websocket.err(), Some(409));
 }
 
 #[tokio::test]
