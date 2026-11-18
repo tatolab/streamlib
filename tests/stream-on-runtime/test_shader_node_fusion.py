@@ -203,7 +203,6 @@ def test_a_live_edit_splitting_a_running_island_restarts_its_shader_nodes_withou
     assert fused_group_of(graph, "invert")["members"] == ["tint", "invert"]
 
     node_id_of = {node["name"]: node["id"] for node in graph["nodes"]}
-    stream_asset = local_api.stream_asset_of(stream_id)
     reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
     local_api.call_tool(
         "transact",
@@ -212,13 +211,13 @@ def test_a_live_edit_splitting_a_running_island_restarts_its_shader_nodes_withou
             "operations": [
                 {
                     "operation": "disconnect",
-                    "stream": stream_asset,
+                    "stream": stream_id,
                     "source": {"node": node_id_of["tint"], "port": "result"},
                     "target": {"node": node_id_of["invert"], "port": "image"},
                 },
                 {
                     "operation": "connect",
-                    "stream": stream_asset,
+                    "stream": stream_id,
                     "source": {"node": node_id_of["source"], "port": "video"},
                     "target": {"node": node_id_of["invert"], "port": "image"},
                 },
@@ -254,7 +253,6 @@ def test_a_live_link_fusing_two_running_islands_restarts_their_shader_nodes_with
     assert fused_group_of(graph, "invert")["members"] == ["invert"]
 
     node_id_of = {node["name"]: node["id"] for node in graph["nodes"]}
-    stream_asset = local_api.stream_asset_of(stream_id)
     reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
     local_api.call_tool(
         "transact",
@@ -263,19 +261,19 @@ def test_a_live_link_fusing_two_running_islands_restarts_their_shader_nodes_with
             "operations": [
                 {
                     "operation": "disconnect",
-                    "stream": stream_asset,
+                    "stream": stream_id,
                     "source": {"node": node_id_of["tint"], "port": "result"},
                     "target": {"node": node_id_of["discard"], "port": "discarded"},
                 },
                 {
                     "operation": "disconnect",
-                    "stream": stream_asset,
+                    "stream": stream_id,
                     "source": {"node": node_id_of["source"], "port": "video"},
                     "target": {"node": node_id_of["invert"], "port": "image"},
                 },
                 {
                     "operation": "connect",
-                    "stream": stream_asset,
+                    "stream": stream_id,
                     "source": {"node": node_id_of["tint"], "port": "result"},
                     "target": {"node": node_id_of["invert"], "port": "image"},
                 },

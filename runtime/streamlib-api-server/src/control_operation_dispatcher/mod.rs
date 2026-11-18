@@ -26,8 +26,9 @@ use streamlib_control_contract::{
     SubscribeStreamGraphChangesResult,
 };
 use streamlib_project_repository::{
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, StreamGraphAction,
+    GraphEditStream, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
@@ -45,7 +46,6 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
     UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
-use uuid::Uuid;
 
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
 use crate::control_operations_on_loaded_streams::ViewersOneConnectionHoldsOpen;
@@ -775,7 +775,7 @@ impl ControlOperationDispatcher {
     pub(crate) async fn apply_a_graph_transaction(
         &self,
         action_name: &'static str,
-        operations: Vec<StreamGraphAction>,
+        operations: Vec<StreamGraphAction<GraphEditStream>>,
         mode: Option<GraphEditMode>,
         author: Option<ProjectTransactionAuthorArgument>,
         idempotency_key: Option<String>,
@@ -797,8 +797,7 @@ impl ControlOperationDispatcher {
                 .iter()
                 .map(|operation| serde_json::to_value(operation).unwrap_or_default())
                 .collect();
-            let stream_assets_named: Vec<Uuid> =
-                operations.iter().map(StreamGraphAction::stream).collect();
+            let stream_assets_named = executor.the_stream_assets_the_operations_name(&operations);
             let (idempotency_key, applied) =
                 match the_idempotency_key_a_caller_sent(idempotency_key) {
                     Ok(idempotency_key) => {
