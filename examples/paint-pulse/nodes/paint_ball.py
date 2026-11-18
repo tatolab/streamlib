@@ -52,11 +52,15 @@ FRAME_PUSH_CONSTANT_SIZE = struct.calcsize(FRAME_PUSH_CONSTANT_FORMAT)
 MOTION_RECORD_NAMES = ("clocks", "levels", "beat", "energy")
 CAMERA_RECORD_NAMES = ("yaw", "pitch", "distance", "burst")
 BURST_SECONDS = 1.4
-# How far the camera is blown back when the ball flies apart, as a multiple of its distance, and
-# how quickly it is thrown out and drifts back in.
-MOST_PULLBACK = 2.4
-PULLBACK_OUT_PER_SECOND = 9.0
-PULLBACK_IN_PER_SECOND = 0.9
+# The camera rides a spring that each explosion throws outward: a stiff spring out, so it is
+# thrown back within a few frames, then a soft one that glides it home after a short hold.
+MOST_PULLBACK = 2.6
+PULLBACK_FROM_SCATTER = 0.04
+PULLBACK_FULL_AT_SCATTER = 0.45
+PULLBACK_HOLD_FALLS_PER_SECOND = 0.35
+SPRING_OUT = (60.0, 11.0)
+SPRING_IN = (5.0, 3.6)
+THROW_PER_SCATTER_JUMP = 9.0
 
 _SHARED_SLANG = f"""
 static const int BAND_COUNT = {BAND_COUNT};
@@ -303,6 +307,9 @@ class PaintBall:
         self.bursts_seen: int | None = None
         self.burst = 0.0
         self.pullback = 1.0
+        self.pullback_speed = 0.0
+        self.held_scatter = 0.0
+        self.last_scatter = 0.0
         self.last_time_ns: int | None = None
 
     def configure(self, config: PaintBallConfig) -> None:
@@ -350,13 +357,22 @@ class PaintBall:
             beat = float(self.latest_motion["beat"])
         words = [half_pair_word(c, lv) for c, lv in zip(clocks, levels)]
 
-        # The camera is blown back with the cubes: thrown out at once by the widest bands, then
-        # drifting back in, so even a big explosion stays in frame.
+        # The camera is blown back with the cubes: a jump in how far the widest bands have flown
+        # throws it outward on a stiff spring, the reach holds a moment, and a soft spring glides
+        # it home, so the move reads as the camera's own.
         widest = sorted(clocks, reverse=True)[:6]
         scatter = max(sum(widest) / (len(widest) * 3.0), self.burst)
-        target = 1.0 + (MOST_PULLBACK - 1.0) * min(1.0, scatter) ** 0.8
-        rate = PULLBACK_OUT_PER_SECOND if target > self.pullback else PULLBACK_IN_PER_SECOND
-        self.pullback += (target - self.pullback) * min(1.0, rate * min(dt, 0.1))
+        step = min(dt, 0.05)
+        self.held_scatter = max(scatter, self.held_scatter - PULLBACK_HOLD_FALLS_PER_SECOND * step)
+        reach = min(1.0, max(0.0, (self.held_scatter - PULLBACK_FROM_SCATTER) / (PULLBACK_FULL_AT_SCATTER - PULLBACK_FROM_SCATTER)))
+        target = 1.0 + (MOST_PULLBACK - 1.0) * reach * reach * (3.0 - 2.0 * reach)
+        jump = scatter - self.last_scatter
+        self.last_scatter = scatter
+        if jump > 0.02:
+            self.pullback_speed += THROW_PER_SCATTER_JUMP * jump
+        stiffness, damping = SPRING_OUT if target > self.pullback else SPRING_IN
+        self.pullback_speed += (stiffness * (target - self.pullback) - damping * self.pullback_speed) * step
+        self.pullback = min(MOST_PULLBACK + 0.4, max(0.85, self.pullback + self.pullback_speed * step))
         distance *= self.pullback
 
         texture = self.output_ring.next_texture_for_this_frame(ctx.gpu_limited_access, self.width, self.height)
