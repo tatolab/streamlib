@@ -54,12 +54,8 @@ CAMERA_RECORD_NAMES = ("yaw", "pitch", "distance", "burst")
 BURST_SECONDS = 1.4
 # The camera rides a spring that each explosion throws outward: a stiff spring out, so it is
 # thrown back within a few frames, then a soft one that glides it home after a short hold.
-MOST_PULLBACK = 2.6
 PULLBACK_FROM_SCATTER = 0.04
 PULLBACK_FULL_AT_SCATTER = 0.45
-PULLBACK_HOLD_FALLS_PER_SECOND = 0.35
-SPRING_OUT = (60.0, 11.0)
-SPRING_IN = (5.0, 3.6)
 THROW_PER_SCATTER_JUMP = 9.0
 
 _SHARED_SLANG = f"""
@@ -286,6 +282,10 @@ class PaintBallConfig:
     width: int = 1280
     height: int = 720
     flow: bool = True
+    pullback: float = 2.6
+    push_out: float = 60.0
+    spring_back: float = 5.0
+    hold: float = 0.35
 
 
 @node.meta(
@@ -316,6 +316,14 @@ class PaintBall:
         self.width = max(64, int(config.width))
         self.height = max(64, int(config.height))
         self.flow = 1.0 if config.flow else 0.0
+        # The camera spring: how far it is thrown, how hard, how softly it comes home and how long
+        # the reach holds. Each damping is set near critical for its stiffness.
+        self.most_pullback = max(1.0, float(config.pullback))
+        out = max(1.0, float(config.push_out))
+        back = max(0.5, float(config.spring_back))
+        self.spring_out = (out, 1.4 * out**0.5)
+        self.spring_in = (back, 1.6 * back**0.5)
+        self.hold_falls_per_second = 1.0 / max(0.05, float(config.hold) * 8.0)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(TEXTURE_FORMAT, RENDER_ATTACHMENT_AND_SAMPLED)
@@ -363,16 +371,16 @@ class PaintBall:
         widest = sorted(clocks, reverse=True)[:6]
         scatter = max(sum(widest) / (len(widest) * 3.0), self.burst)
         step = min(dt, 0.05)
-        self.held_scatter = max(scatter, self.held_scatter - PULLBACK_HOLD_FALLS_PER_SECOND * step)
+        self.held_scatter = max(scatter, self.held_scatter - self.hold_falls_per_second * step)
         reach = min(1.0, max(0.0, (self.held_scatter - PULLBACK_FROM_SCATTER) / (PULLBACK_FULL_AT_SCATTER - PULLBACK_FROM_SCATTER)))
-        target = 1.0 + (MOST_PULLBACK - 1.0) * reach * reach * (3.0 - 2.0 * reach)
+        target = 1.0 + (self.most_pullback - 1.0) * reach * reach * (3.0 - 2.0 * reach)
         jump = scatter - self.last_scatter
         self.last_scatter = scatter
         if jump > 0.02:
             self.pullback_speed += THROW_PER_SCATTER_JUMP * jump
-        stiffness, damping = SPRING_OUT if target > self.pullback else SPRING_IN
+        stiffness, damping = self.spring_out if target > self.pullback else self.spring_in
         self.pullback_speed += (stiffness * (target - self.pullback) - damping * self.pullback_speed) * step
-        self.pullback = min(MOST_PULLBACK + 0.4, max(0.85, self.pullback + self.pullback_speed * step))
+        self.pullback = min(self.most_pullback + 0.4, max(0.85, self.pullback + self.pullback_speed * step))
         distance *= self.pullback
 
         texture = self.output_ring.next_texture_for_this_frame(ctx.gpu_limited_access, self.width, self.height)
