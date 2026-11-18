@@ -196,12 +196,11 @@ impl LocalApiMcpServerHandler {
                 stream_id_as_the_graph_reports_it.clone(),
             ))
             .map(|(stream_asset, _)| stream_asset)
-            .ok()
-            .ok_or_else(|| {
+            .map_err(|runtime_words| {
                 McpError::invalid_params(
                     format!(
-                        "stream `{stream_id_as_the_graph_reports_it}` is not loaded, so no graph \
-                         edit can name it by its stream asset"
+                        "no graph edit can name the stream `{stream_id_as_the_graph_reports_it}` \
+                         by its stream asset: {runtime_words}"
                     ),
                     None,
                 )

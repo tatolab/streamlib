@@ -267,8 +267,8 @@ fn the_range_a_graph_input_config_declares(
 
 /// Resolve the `value` input among `ports`, of a `GraphInput` whose config is `config`, against
 /// what that config declares of it: the family it carries, the range a number takes and the
-/// lifetime of a value set live. A config naming no family, or no valid one, leaves the family
-/// it declares.
+/// lifetime of a value set live. A config naming no family, or no valid one, gives it the
+/// family the `GraphInput` type declares, so each config resolves it alike.
 pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
     ports: &mut GraphNodePorts,
     config: Option<&serde_json::Value>,
@@ -280,9 +280,8 @@ pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
     else {
         return;
     };
-    if let Some(family) = the_family_a_graph_input_config_names(config) {
-        value.family.family = family;
-    }
+    value.family.family = the_family_a_graph_input_config_names(config)
+        .unwrap_or(crate::core::nodes::THE_FAMILY_A_GRAPH_INPUT_DECLARES);
     value.range = the_range_a_graph_input_config_declares(config).map(InputNumberRange);
     value.lifetime = the_value_lifetime_a_graph_input_config_declares(config).unwrap_or_default();
 }

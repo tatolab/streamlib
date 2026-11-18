@@ -114,12 +114,16 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     )
 }
 
+/// The family the `value` ports of a `GraphInput` declare, which they carry while its config
+/// names none.
+pub(crate) const THE_FAMILY_A_GRAPH_INPUT_DECLARES: PortFamily = PortFamily::Records;
+
 /// The descriptor of the node type every top-level `GraphInput` runs as: a `value` input, a
 /// setting read each run that holds what a client sets, and a `value` output carrying it as a
 /// value, which keeps its last message for a reader that connects later; both of the family its
 /// config names.
 pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescriptor> {
-    let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
+    let mut value_family = PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
     value_family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
     let carried_as_a_value = |former_names: Vec<String>| PinDeclaration {
         pin_type: DeclaredPinType::Any,
