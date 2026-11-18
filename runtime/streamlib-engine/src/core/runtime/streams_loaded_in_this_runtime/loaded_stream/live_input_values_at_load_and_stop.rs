@@ -11,17 +11,21 @@ use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
 use super::input_values_set_live::is_held_on_the_graph;
+use crate::core::graph::graph_interface_resolution::{
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME,
+};
 use crate::core::graph::input_values::{
     NodeAnInputValueIsSetOn, refuse_an_input_value_its_input_does_not_take, the_input_value_change,
     the_lifetime_of_the_input,
 };
 use crate::core::graph::legacy_config_of_a_node::input_values_of_a_config_and_pin_values;
-use crate::core::graph::{Graph, GraphNode};
+use crate::core::graph::{Graph, GraphNode, NodeRunId};
 
 impl LoadedStreamInThisRuntime {
     /// Hold as live each value the project's store keeps for an input of a node this stream's
     /// graph holds, as the stream loads; a value its input no longer keeps live or takes is
-    /// forgotten there, and the input reads its saved value.
+    /// forgotten there, and the input reads its saved value. The value each top-level
+    /// `GraphInput` kept before its value was an input is carried into the store first.
     ///
     /// An input holding values under names it had holds the one it reads, by the one order
     /// [`crate::core::graph::GraphNodePorts::inputs_holding_a_value_under_a_name_they_had`]
@@ -34,6 +38,19 @@ impl LoadedStreamInThisRuntime {
             let Some(project_store) = live_values.project_store_mirrored_into() else {
                 return;
             };
+            for graph_input in graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter(|node| node.node_type.as_str() == GRAPH_INPUT_NODE_TYPE)
+            {
+                project_store.carry_the_value_a_graph_input_kept_under_its_old_key(
+                    graph_input.node_uuid,
+                    GRAPH_INTERFACE_VALUE_PORT_NAME,
+                    the_lifetime_of_the_input(graph_input, GRAPH_INTERFACE_VALUE_PORT_NAME)
+                        .is_kept(),
+                );
+            }
             let mut kept_for_each_node: BTreeMap<Uuid, serde_json::Map<String, serde_json::Value>> =
                 BTreeMap::new();
             for (node, input, value) in
@@ -77,6 +94,28 @@ impl LoadedStreamInThisRuntime {
                     }
                 }
             }
+        });
+    }
+
+    /// Hold each value set live on an input of the node `node_run_id` under the lifetime its
+    /// input declares now, as a change of its config may name another, as a `GraphInput`'s
+    /// `lifetime` does: a value now `kept` is mirrored into the project's store, and one now
+    /// `reset` forgotten there.
+    pub(in crate::core::runtime) fn hold_each_live_value_of_the_node_under_the_lifetime_its_input_declares(
+        &self,
+        node_run_id: &NodeRunId,
+    ) {
+        self.with_no_other_input_value_change(|| {
+            self.compiler.scope_reading(|graph| {
+                let Some(node) = graph.traversal().v(node_run_id).first() else {
+                    return;
+                };
+                let live_values = graph.live_input_values();
+                for (input, value) in live_values.values_of_the_node(node.node_uuid) {
+                    let lifetime = the_lifetime_of_the_input(node, &input);
+                    live_values.set(node.node_uuid, &input, Some(value), lifetime);
+                }
+            });
         });
     }
 

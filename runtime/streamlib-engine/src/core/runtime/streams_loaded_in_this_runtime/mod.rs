@@ -19,6 +19,7 @@ pub(super) mod stream_actions_of_this_runtime;
 pub(super) mod stream_environment;
 pub(super) mod stream_graph_operation_applied_live;
 pub(super) mod stream_graph_operation_under_the_current_port_names;
+pub(super) mod stream_input_declared_by_a_graph_input;
 pub(super) mod stream_location_and_id;
 pub(super) mod stream_step_coordinator;
 pub(super) mod view_node_output_written_by_a_panel;

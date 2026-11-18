@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use super::live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime};
+use crate::core::graph::graph_interface_resolution::the_value_lifetime_a_graph_input_config_declares;
 use crate::core::graph::{Graph, GraphNode, PortInfo, WhyTheNodeLeaves};
 use crate::core::pubsub::RuntimeEvent;
 
@@ -191,11 +192,17 @@ impl LiveInputValuesOfAStream {
     }
 }
 
-/// The lifetime input `input` of `node` declares; kept for an input it does not have.
+/// The lifetime input `input` of `node` declares, the one its config's `lifetime` names for the
+/// `value` input of a top-level `GraphInput`; kept for an input it does not have.
 pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeValueLifetime {
-    node.input_port(input)
-        .map(|port| port.lifetime)
-        .unwrap_or_default()
+    let Some(port) = node.input_port(input) else {
+        return NodeValueLifetime::default();
+    };
+    if super::is_the_value_input_of_a_graph_input(&node.node_type, port) {
+        return the_value_lifetime_a_graph_input_config_declares(node.config.as_ref())
+            .unwrap_or_default();
+    }
+    port.lifetime
 }
 
 /// Where the value an input reads comes from, as `graph` renders it.
@@ -271,7 +278,9 @@ pub(crate) fn the_value_an_input_reads(
         });
     }
     let exposed_config_field = node.is_an_exposed_config_field_input(&port.name);
-    if !exposed_config_field && !the_input_port_takes_a_value(node.node_kind(), port) {
+    let takes_a_value = the_input_port_takes_a_value(node.node_kind(), port)
+        || super::is_the_value_input_of_a_graph_input(&node.node_type, port);
+    if !exposed_config_field && !takes_a_value {
         return None;
     }
     let saved = if exposed_config_field {

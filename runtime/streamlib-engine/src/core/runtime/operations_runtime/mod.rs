@@ -522,7 +522,10 @@ fn refuse_a_destination_this_graph_cannot_take(
             direction: PortDirection::Input,
         });
     }
-    Ok(())
+    crate::core::graph::graph_interface_resolution::refuse_a_link_into_a_graph_input(
+        to_node,
+        to.port_name(),
+    )
 }
 
 /// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
@@ -611,6 +614,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<()> {
         self.log_a_node_config_update_for_the_next_commit_built_from(node_run_id, build)?;
         commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+        self.hold_each_live_value_of_the_node_under_the_lifetime_its_input_declares(node_run_id);
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
     }
@@ -915,13 +919,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
-    fn write_a_value_to_a_top_level_graph_input(
+    fn the_top_level_graph_input_declaring(
         &self,
         input_name: String,
-        value: serde_json::Value,
-    ) -> BoxFuture<'_, Result<crate::core::descriptors::PortFamily>> {
+    ) -> BoxFuture<'_, Result<crate::core::runtime::TopLevelGraphInputDeclaringAStreamInput>> {
         self.in_this_streams_log_route(
-            self.hand_a_value_written_to_a_top_level_graph_input(input_name, value),
+            LoadedStreamInThisRuntime::the_top_level_graph_input_declaring(self, input_name),
         )
     }
 

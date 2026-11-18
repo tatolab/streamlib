@@ -18,7 +18,8 @@ use streamlib_project_repository::{
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
     NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
-    NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
+    NOTE_TEXT_ARGUMENT_DESCRIPTION, SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION,
+    StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
 };
 use uuid::Uuid;
 
@@ -227,9 +228,9 @@ pub struct SetNodeInputValueRequest {
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
     pub level: Option<Vec<Uuid>>,
-    /// The node, by its UUID.
-    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-    pub node: String,
+    /// The node, by its UUID; omitted, `input` names one of the stream's own inputs.
+    #[schemars(description = SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION)]
+    pub node: Option<String>,
     /// The input, by name.
     #[schemars(description = NODE_INPUT_ARGUMENT_DESCRIPTION)]
     pub input: String,

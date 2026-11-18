@@ -42,6 +42,8 @@ pub const DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION: &str = "The imported project's
 /// How `use_dependency_stream`'s `name` is described to its caller.
 pub const DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. Any node of that name already in the graph refuses the placement.";
 
+/// How `set_node_input_value`'s `node` is described to its caller.
+pub const SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, and the set is made on that node's `value`, refused naming the stream's inputs when none declares it.";
 /// How `set_node_input_value`'s `input` is described to its caller.
 pub const NODE_INPUT_ARGUMENT_DESCRIPTION: &str = "The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`.";
 /// How `set_node_input_value`'s `value` is described to its caller.
@@ -460,8 +462,9 @@ pub enum StreamGraphAction {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION))]
-        node: String,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NODE_INPUT_ARGUMENT_DESCRIPTION))]
         input: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION))]

@@ -142,7 +142,7 @@ fn the_input_values_a_transaction_sets_live(
     {
         let (StreamGraphAction::SetNodeInputValue {
             level,
-            node,
+            node: Some(node),
             input,
             value,
             ..

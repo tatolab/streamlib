@@ -63,6 +63,9 @@ use input_value_sets::*;
 use request_to_graph_operation::graph_operation_for_the_request;
 use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
 
+/// The input of a `GraphInput` whose value is the value of the stream input it declares.
+const GRAPH_INPUT_VALUE_INPUT: &str = "value";
+
 /// The node, link and field `action` names, as its caller named them.
 fn what_a_graph_action_names(action: &StreamGraphAction) -> WhatAGraphOperationNames {
     let names_a_node = |node: &str| WhatAGraphOperationNames {
@@ -75,10 +78,14 @@ fn what_a_graph_action_names(action: &StreamGraphAction) -> WhatAGraphOperationN
         | StreamGraphAction::RenameNode { node, .. }
         | StreamGraphAction::SetStudioFields { node, .. }
         | StreamGraphAction::SetExposedConfigFields { node, .. } => names_a_node(node),
-        StreamGraphAction::SetPinValue { node, input, .. }
-        | StreamGraphAction::SetNodeInputValue { node, input, .. } => WhatAGraphOperationNames {
+        StreamGraphAction::SetPinValue { node, input, .. } => WhatAGraphOperationNames {
             field: Some(input.clone()),
             ..names_a_node(node)
+        },
+        StreamGraphAction::SetNodeInputValue { node, input, .. } => WhatAGraphOperationNames {
+            node: node.clone(),
+            field: Some(input.clone()),
+            ..WhatAGraphOperationNames::default()
         },
         StreamGraphAction::Connect { source, target, .. }
         | StreamGraphAction::Disconnect { source, target, .. } => WhatAGraphOperationNames {
@@ -322,6 +329,14 @@ impl GraphRequestRefusal {
         }
     }
 
+    /// A refusal of a port a request names that is not there, in the runtime's words.
+    fn of_a_port_not_found(runtime_words: String) -> Self {
+        Self {
+            refusal_code: ControlOperationRefusalCode::PortNotFound,
+            ..Self::from(runtime_words)
+        }
+    }
+
     /// The refusal naming `input` as the field refused.
     fn of_the_field(self, input: &str) -> Self {
         Self {
@@ -434,6 +449,8 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let stream_locations = self.the_location_of_each_loaded_stream();
         let stream_id_of_each_request = self.the_loaded_stream_each_request_names(&requests)?;
+        let requests =
+            self.each_request_naming_the_graph_input_it_sets(requests, &stream_id_of_each_request)?;
         let mut stream_ids_in_order: Vec<String> = Vec::new();
         for stream_id in &stream_id_of_each_request {
             if !stream_ids_in_order.contains(stream_id) {
@@ -598,6 +615,75 @@ impl StreamGraphTransactionExecutor<'_> {
                             ),
                         )
                     })
+            })
+            .collect()
+    }
+
+    /// `requests` with each `set_node_input_value` naming no node made the set of the `value`
+    /// input of the top-level `GraphInput` declaring the stream input it names, in the stream
+    /// `stream_id_of_each_request` holds for it. Refused for one below the top level, or naming
+    /// an input no top-level `GraphInput` declares.
+    fn each_request_naming_the_graph_input_it_sets(
+        &self,
+        requests: Vec<StreamGraphAction>,
+        stream_id_of_each_request: &[String],
+    ) -> Result<Vec<StreamGraphAction>, GraphTransactionRefusal> {
+        requests
+            .into_iter()
+            .zip(stream_id_of_each_request)
+            .enumerate()
+            .map(|(request_index, (request, stream_id))| {
+                let StreamGraphAction::SetNodeInputValue {
+                    stream,
+                    level,
+                    node: None,
+                    input,
+                    value,
+                } = request
+                else {
+                    return Ok(request);
+                };
+                let refused = |refusal: GraphRequestRefusal| {
+                    GraphTransactionRefusal::of_the_operation(
+                        request_index,
+                        WhatAGraphOperationNames {
+                            field: Some(input.clone()),
+                            ..WhatAGraphOperationNames::default()
+                        },
+                        refusal.of_the_field(&input),
+                    )
+                };
+                if !level.is_empty() {
+                    return Err(refused(GraphRequestRefusal::from(format!(
+                        "a `set_node_input_value` naming no node sets an input of the stream, \
+                         which a top-level `GraphInput` declares, so its `level` is the top \
+                         level; the input `{input}` was named at a level below it. To fix: \
+                         leave `level` out, or name the node whose input it is"
+                    ))));
+                }
+                let graph_input = self
+                    .operations_on_the_loaded_streams
+                    .runtime_operations_of_the_stream_a_call_names(stream_id)
+                    .and_then(|stream_operations| {
+                        self.async_runtime.block_on(
+                            stream_operations.the_top_level_graph_input_declaring(input.clone()),
+                        )
+                    })
+                    .map_err(|refusal| {
+                        refused(match refusal {
+                            streamlib::sdk::error::Error::NodeNotFound(runtime_words) => {
+                                GraphRequestRefusal::of_a_port_not_found(runtime_words)
+                            }
+                            refusal => GraphRequestRefusal::from(refusal.to_string()),
+                        })
+                    })?;
+                Ok(StreamGraphAction::SetNodeInputValue {
+                    stream,
+                    level,
+                    node: Some(graph_input.node.to_string()),
+                    input: GRAPH_INPUT_VALUE_INPUT.to_owned(),
+                    value,
+                })
             })
             .collect()
     }

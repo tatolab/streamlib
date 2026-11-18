@@ -15,8 +15,13 @@ use uuid::Uuid;
 
 use crate::core::context::{
     LIVE_INPUT_VALUES_TABLE, ProjectStoresOpenInThisRuntime, key_of_the_node,
-    the_node_a_key_leads_with,
+    take_out_the_value_the_node_keeps_under, the_node_a_key_leads_with,
 };
+
+/// The key of its own store a top-level `GraphInput` kept its last value under before its value
+/// was an input, which [`LiveInputValuesKeptInTheProjectStore::carry_the_value_a_graph_input_kept_under_its_old_key`]
+/// carries into this table once.
+const GRAPH_INPUT_KEPT_VALUE_STORE_KEY: &str = "value";
 
 /// One stream's project's store, where the live values of its `kept` inputs are mirrored. A
 /// store that does not open, read or take a write is logged and leaves the live value as set:
@@ -67,6 +72,36 @@ impl LiveInputValuesKeptInTheProjectStore {
     pub(crate) fn forget(&self, node: Uuid, input: &str) {
         if let Some(project_store) = self.the_project_store_when_the_project_has_one() {
             project_store.remove(LIVE_INPUT_VALUES_TABLE, &key_of_the_node(node, input));
+        }
+    }
+
+    /// Carry the value the top-level `GraphInput` `node` kept in its own store before its value
+    /// was an input: taken out of the `node_store` table and, when `its_value_is_kept`, kept here
+    /// as the live value of its input `input`. The old key is gone once taken out, so the carry
+    /// runs once and needs no marker.
+    pub(crate) fn carry_the_value_a_graph_input_kept_under_its_old_key(
+        &self,
+        node: Uuid,
+        input: &str,
+        its_value_is_kept: bool,
+    ) {
+        let Some(project_store) = self.the_project_store_when_the_project_has_one() else {
+            return;
+        };
+        match take_out_the_value_the_node_keeps_under(
+            &project_store,
+            node,
+            GRAPH_INPUT_KEPT_VALUE_STORE_KEY,
+        ) {
+            Ok(Some(kept)) if its_value_is_kept => {
+                self.keep(node, input, &kept);
+            }
+            Ok(_) => {}
+            Err(not_read) => tracing::error!(
+                %node,
+                "the value a `GraphInput` kept before its value was an input was not read, so it \
+                 reads its saved value: {not_read}"
+            ),
         }
     }
 

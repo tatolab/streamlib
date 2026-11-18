@@ -568,7 +568,7 @@ impl ControlOperationDispatcher {
                 .await
                 .map(ControlOperationAnswer::WriteStudioViewOutput),
             ControlOperationCall::WriteGraphInput(request) => self
-                .write_graph_input(request)
+                .write_graph_input(request, request_origin)
                 .await
                 .map(ControlOperationAnswer::WriteGraphInput),
             ControlOperationCall::ImportProject(request) => self

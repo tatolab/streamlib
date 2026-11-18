@@ -7,7 +7,8 @@
 use std::path::Path;
 
 use streamlib_project_repository::{
-    ProjectViewFolderRead, TatolabViewDeclaredPort, every_view_a_project_and_its_imports_bring,
+    ProjectViewFolderRead, StreamGraphAction, TatolabViewDeclaredPort,
+    every_view_a_project_and_its_imports_bring,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListProjectViewsToolResult, ProjectViewDeclaredPort, ProjectViewListed,
@@ -15,7 +16,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::control_operation_dispatcher::the_refusal_of_a_reach_for_a_node;
-use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
+use crate::control_operation_dispatcher::{
+    ControlOperationDispatcher, ControlOperationRefusal, ControlRequestOrigin,
+};
 
 fn the_declared_port_on_the_wire(port: &TatolabViewDeclaredPort) -> ProjectViewDeclaredPort {
     ProjectViewDeclaredPort {
@@ -72,7 +75,8 @@ fn the_view_on_the_wire(
 }
 
 use streamlib_control_contract::{
-    ListProjectViewsRequest, WriteGraphInputRequest, WriteStudioViewOutputRequest,
+    ControlOperation, GraphEditMode, ListProjectViewsRequest, WriteGraphInput,
+    WriteGraphInputRequest, WriteStudioViewOutputRequest,
 };
 impl ControlOperationDispatcher {
     pub(crate) async fn list_project_views(
@@ -123,6 +127,8 @@ impl ControlOperationDispatcher {
         Ok(WriteStudioViewOutputToolResult { stream, node, port })
     }
 
+    /// `write_graph_input`, replaced by `set_node_input_value` naming no node: the one live set
+    /// of the `value` input of the top-level `GraphInput` declaring the stream input `input`.
     pub(crate) async fn write_graph_input(
         &self,
         WriteGraphInputRequest {
@@ -130,24 +136,48 @@ impl ControlOperationDispatcher {
             input,
             value,
         }: WriteGraphInputRequest,
+        request_origin: &ControlRequestOrigin,
     ) -> Result<WriteGraphInputToolResult, ControlOperationRefusal> {
-        let stream_operations = self.the_stream_a_call_names("write_graph_input", &stream)?;
-        let family = stream_operations
-            .write_a_value_to_a_top_level_graph_input(input.clone(), value)
-            .await;
-        let family = match family {
-            Ok(family) => family,
-            Err(refusal) => {
-                return Err(the_refusal_of_a_reach_for_a_node(
-                    "write_graph_input",
-                    refusal,
-                ));
-            }
-        };
+        const ACTION_NAME: &str = <WriteGraphInput as ControlOperation>::METHOD_NAME;
+        let stream_operations = self.the_stream_a_call_names(ACTION_NAME, &stream)?;
+        let graph_input = stream_operations
+            .the_top_level_graph_input_declaring(input.clone())
+            .await
+            .map_err(|refusal| the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal))?;
+        if let Some(refusal) = graph_input.refusal_while_its_node_does_not_run {
+            return Err(the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal));
+        }
+        let stream_asset = self
+            .operations_on_the_loaded_streams
+            .list_streams()
+            .into_iter()
+            .filter(|listing| listing.stream_id == stream)
+            .find_map(|listing| Some(listing.stream_location?.stream_asset))
+            .ok_or_else(|| {
+                ControlOperationRefusal::Failed(format!(
+                    "{ACTION_NAME} failed: the stream `{stream}` runs no stream asset of a \
+                     project, so it has no graph to set the input `{input}` on"
+                ))
+            })?;
+        self.apply_a_graph_transaction(
+            ACTION_NAME,
+            vec![StreamGraphAction::SetNodeInputValue {
+                stream: stream_asset,
+                level: Vec::new(),
+                node: None,
+                input: input.clone(),
+                value: Some(value),
+            }],
+            Some(GraphEditMode::Live),
+            None,
+            None,
+            request_origin,
+        )
+        .await?;
         Ok(WriteGraphInputToolResult {
             stream,
             input,
-            family: family.wire_name().to_owned(),
+            family: graph_input.family.wire_name().to_owned(),
         })
     }
 }

@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A node whose outputs a client writes: a node of a project view's type, the plug a Tato Studio
-//! view takes in a stream, whose inputs a panel reads through a viewer and whose outputs carry
-//! what a panel writes onto them; and a stream's top-level `GraphInput`, whose one `value` output
-//! carries what a client writes to the Input.
+//! The value source: a node of a project view's type, the plug a Tato Studio view takes in a
+//! stream, whose inputs a panel reads through a viewer and whose outputs carry what a panel
+//! writes onto them; and a stream's top-level `GraphInput`, whose `value` output carries the
+//! value its `value` input is set to.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,19 +18,17 @@ use streamlib_project_repository::{
     ProjectViewFolderRead, TatolabViewDeclaredPort, TatolabViewPlacement,
 };
 
-use crate::core::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess, StoreScopedToThisNode,
-};
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
-    NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeValueLifetime, PortDescriptor,
-    PortFamily, PortFamilyDeclaration,
+    DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeValueLifetime,
+    PinAnnotations, PinDeclaration, PinFlow, PortDescriptor, PortFamily, PortFamilyDeclaration,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::GraphNode;
 use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INPUT_DEFAULT_CONFIG_KEY, GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-    GRAPH_INTERFACE_VALUE_PORT_NAME, the_value_lifetime_a_graph_input_config_declares,
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME,
 };
 use crate::core::nodes::DynGeneratedNode;
 use crate::iceoryx2::{
@@ -120,14 +118,9 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     }
 }
 
-/// The key a top-level `GraphInput` keeps its value under in its own store.
-const GRAPH_INPUT_KEPT_VALUE_STORE_KEY: &str = "value";
-
-/// How often a top-level `GraphInput` looks for a reader its current value has not reached.
-const GRAPH_INPUT_INTERVAL_BETWEEN_LOOKS_FOR_A_NEW_READER_MS: u32 = 100;
-
-/// The descriptor of the node type every top-level `GraphInput` runs as: one `value` output,
-/// of the family its config names.
+/// The descriptor of the node type every top-level `GraphInput` runs as: a `value` input, which
+/// takes no wire and holds what a client sets, read each time it changes, and a `value` output
+/// carrying it, both of the family its config names. The input had the name `default`.
 pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescriptor> {
     let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
     value_family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
@@ -136,12 +129,31 @@ pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescripto
             .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
         NodeClassImportPath::new(GRAPH_INPUT_NODE_TYPE.to_string())
             .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
-        "One Input of a stream: every port `value` is linked to reads what a client writes."
+        "One Input of a stream: every port `value` is linked to reads what a client sets."
             .to_string(),
     );
+    descriptor.inputs = vec![PortDescriptor {
+        name: GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
+        description: "What a client sets on the Input, of the declared family; it takes no wire."
+            .to_string(),
+        required: false,
+        delivery_profile: None,
+        borrow_quota: None,
+        audio_window: None,
+        family: value_family.clone(),
+        pin_default: None,
+        pin_declaration: Some(PinDeclaration {
+            pin_type: DeclaredPinType::Any,
+            flow: PinFlow::Value,
+            annotations: PinAnnotations::default(),
+            former_names: vec![GRAPH_INPUT_VALUE_FORMER_NAME.to_string()],
+            may_be_unset: false,
+        }),
+        lifetime: NodeValueLifetime::Kept,
+    }];
     descriptor.outputs = vec![PortDescriptor {
         name: GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
-        description: "What a client writes to the Input, of the declared family.".to_string(),
+        description: "What a client sets on the Input, of the declared family.".to_string(),
         required: false,
         delivery_profile: None,
         borrow_quota: None,
@@ -154,21 +166,23 @@ pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescripto
     Ok(descriptor)
 }
 
-pub(crate) struct NodeWhoseOutputsAClientWrites {
+/// The node that is the source of the values a client sets: a stream's top-level `GraphInput`
+/// and a view node. It publishes the value each of its inputs reads on its output of the same
+/// name, once as it is handed its values when it starts and again each time one changes, and a
+/// value a panel writes onto a view node's output. It runs on no schedule, and each output keeps
+/// its last message, which a reader that connects later is sent.
+pub(crate) struct ValueSourceNode {
     node_name: String,
     descriptor: NodeDescriptor,
     config_json: JsonValue,
-    execution: ProcessExecution,
     family_of_each_output: HashMap<String, PortFamily>,
     current_value_of_each_output: HashMap<String, JsonValue>,
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
-    graph_input_value_lifetime: Option<NodeValueLifetime>,
-    store_scoped_to_this_graph_input: Option<StoreScopedToThisNode>,
 }
 
-impl NodeWhoseOutputsAClientWrites {
+impl ValueSourceNode {
     pub(crate) fn for_a_top_level_graph_input(node: &GraphNode) -> Result<Self> {
         let config = node.config.clone().unwrap_or_default();
         let mut descriptor = the_node_type_of_a_top_level_graph_input()?;
@@ -179,68 +193,9 @@ impl NodeWhoseOutputsAClientWrites {
         .map_err(|why| {
             Error::Configuration(format!("`GraphInput` node `{}`: {why}", node.display_name))
         })?;
+        descriptor.inputs[0].family = PortFamilyDeclaration::of_family(family);
         descriptor.outputs[0].family = PortFamilyDeclaration::of_family(family);
-        let mut client_written_node = Self::for_the_node(node, descriptor);
-        client_written_node.graph_input_value_lifetime = Some(
-            the_value_lifetime_a_graph_input_config_declares(Some(&config)).map_err(|why| {
-                Error::Configuration(format!("`GraphInput` node `{}`: {why}", node.display_name))
-            })?,
-        );
-        client_written_node.execution = ProcessExecution::Continuous {
-            interval_ms: GRAPH_INPUT_INTERVAL_BETWEEN_LOOKS_FOR_A_NEW_READER_MS,
-        };
-        if let Some(default) = config.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY) {
-            client_written_node
-                .current_value_of_each_output
-                .insert(GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(), default.clone());
-        }
-        Ok(client_written_node)
-    }
-
-    /// The value the stopped top-level `GraphInput` `node` would carry at its next Play: the
-    /// value it keeps in `store` when its lifetime is kept and its family takes it, else its
-    /// config's `default`.
-    pub(crate) fn the_value_a_stopped_top_level_graph_input_carries(
-        node: &GraphNode,
-        store: Option<StoreScopedToThisNode>,
-    ) -> Result<Option<JsonValue>> {
-        let mut client_written_node = Self::for_a_top_level_graph_input(node)?;
-        if let Some(store) = store {
-            client_written_node.keep_the_graph_input_value_in(store);
-        }
-        Ok(client_written_node
-            .current_value_of_the_output(GRAPH_INTERFACE_VALUE_PORT_NAME)
-            .cloned())
-    }
-
-    /// Keep `value`, written to the stopped top-level `GraphInput` `node` whose lifetime is kept,
-    /// in `store` for its next Play. Refused for a value its family does not take.
-    pub(crate) fn keep_a_value_written_to_a_stopped_top_level_graph_input(
-        node: &GraphNode,
-        store: StoreScopedToThisNode,
-        value: &JsonValue,
-    ) -> Result<()> {
-        let client_written_node = Self::for_a_top_level_graph_input(node)?;
-        if client_written_node.graph_input_value_lifetime != Some(NodeValueLifetime::Kept) {
-            return Err(Error::Configuration(format!(
-                "`GraphInput` node `{}` returns to its default at Stop and keeps nothing",
-                node.display_name
-            )));
-        }
-        let family = client_written_node.family_of_each_output[GRAPH_INTERFACE_VALUE_PORT_NAME];
-        the_message_a_value_written_onto_an_output_is(family, value, 0).map_err(|why| {
-            Error::PortError(format!(
-                "output `{GRAPH_INTERFACE_VALUE_PORT_NAME}` of node `{}` carries {}, and {why}",
-                node.display_name,
-                family.declaration_name()
-            ))
-        })?;
-        store.write(GRAPH_INPUT_KEPT_VALUE_STORE_KEY, value)
-    }
-
-    /// The value output `port` carries now: the last written, else its default.
-    pub(crate) fn current_value_of_the_output(&self, port: &str) -> Option<&JsonValue> {
-        self.current_value_of_each_output.get(port)
+        Ok(Self::for_the_node(node, descriptor))
     }
 
     pub(crate) fn for_the_node(node: &GraphNode, descriptor: NodeDescriptor) -> Self {
@@ -259,159 +214,11 @@ impl NodeWhoseOutputsAClientWrites {
                 .config
                 .clone()
                 .unwrap_or_else(|| JsonValue::Object(Default::default())),
-            execution: ProcessExecution::Reactive,
             family_of_each_output,
             current_value_of_each_output: HashMap::new(),
             next_start_sample_of_each_channels_output: HashMap::new(),
             output_writer: None,
             input_mailboxes: None,
-            graph_input_value_lifetime: None,
-            store_scoped_to_this_graph_input: None,
-        }
-    }
-
-    /// Publish `value`, which a client wrote, on output `port`, and keep it in the node's store
-    /// when the node is a `GraphInput` whose values are kept.
-    pub(crate) fn take_a_value_a_client_wrote(
-        &mut self,
-        port: &str,
-        value: &JsonValue,
-    ) -> Result<()> {
-        self.publish_a_value_written_onto_an_output(port, value)?;
-        if self.graph_input_value_lifetime == Some(NodeValueLifetime::Kept)
-            && let Some(store) = &self.store_scoped_to_this_graph_input
-            && let Err(not_kept) = store.write(GRAPH_INPUT_KEPT_VALUE_STORE_KEY, value)
-        {
-            tracing::warn!(
-                "`GraphInput` node `{}` published the value written to it and could not keep \
-                 it, so a Stop returns it to its default: {not_kept}",
-                self.node_name
-            );
-        }
-        Ok(())
-    }
-
-    /// Open the store a `GraphInput` keeps its value in: a kept one takes the value it kept, and a
-    /// reset one forgets any it kept before.
-    fn take_the_kept_value_of_a_graph_input(&mut self, ctx: &RuntimeContextFullAccess<'_>) {
-        if self.graph_input_value_lifetime.is_none() {
-            return;
-        }
-        match ctx.store() {
-            Ok(store) => self.keep_the_graph_input_value_in(store),
-            Err(not_opened) => tracing::warn!(
-                "`GraphInput` node `{}` keeps its value, and its project's store did not open, \
-                 so it starts from its default and keeps nothing: {not_opened}",
-                self.node_name
-            ),
-        }
-    }
-
-    /// Take the value a kept `GraphInput` kept in `store`, and keep each value written to it
-    /// there; a reset one forgets what it kept.
-    pub(crate) fn keep_the_graph_input_value_in(&mut self, store: StoreScopedToThisNode) {
-        match self.graph_input_value_lifetime {
-            Some(NodeValueLifetime::Kept) => match store.read(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
-                Ok(Some(kept)) => self.take_a_kept_value_its_family_carries(kept, &store),
-                Ok(None) => {}
-                Err(not_read) => tracing::warn!(
-                    "`GraphInput` node `{}` could not read the value it kept, so it starts \
-                         from its default: {not_read}",
-                    self.node_name
-                ),
-            },
-            Some(NodeValueLifetime::Reset) => self.forget_the_kept_value_in(&store),
-            None => return,
-        }
-        self.store_scoped_to_this_graph_input = Some(store);
-    }
-
-    /// Take the lifetime a running `GraphInput`'s new config names: one now kept keeps its
-    /// current value, and one now reset forgets what it kept.
-    fn take_the_graph_input_value_lifetime_of_a_new_config(
-        &mut self,
-        config_json: &JsonValue,
-    ) -> Result<()> {
-        if self.graph_input_value_lifetime.is_none() {
-            return Ok(());
-        }
-        let lifetime = the_value_lifetime_a_graph_input_config_declares(Some(config_json))
-            .map_err(|why| {
-                Error::Configuration(format!("`GraphInput` node `{}`: {why}", self.node_name))
-            })?;
-        if self.graph_input_value_lifetime == Some(lifetime) {
-            return Ok(());
-        }
-        self.graph_input_value_lifetime = Some(lifetime);
-        let Some(store) = &self.store_scoped_to_this_graph_input else {
-            return Ok(());
-        };
-        match lifetime {
-            NodeValueLifetime::Kept => {
-                if let Some(current) = self
-                    .current_value_of_each_output
-                    .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
-                    && let Err(not_kept) = store.write(GRAPH_INPUT_KEPT_VALUE_STORE_KEY, current)
-                {
-                    tracing::warn!(
-                        "`GraphInput` node `{}` keeps its value now and could not keep its \
-                         current one: {not_kept}",
-                        self.node_name
-                    );
-                }
-            }
-            NodeValueLifetime::Reset => self.forget_the_kept_value_in(store),
-        }
-        Ok(())
-    }
-
-    /// Commit the value this `GraphInput` keeps, as its node stops.
-    pub(crate) fn commit_the_kept_value_as_the_node_stops(&mut self) {
-        if let Some(store) = self.store_scoped_to_this_graph_input.take()
-            && let Err(not_committed) = store.commit_every_waiting_write_now()
-        {
-            tracing::warn!(
-                "`GraphInput` node `{}` stopped and its kept value did not reach the disk yet; \
-                 the store's writer tries it again: {not_committed}",
-                self.node_name
-            );
-        }
-    }
-
-    fn take_a_kept_value_its_family_carries(
-        &mut self,
-        kept: JsonValue,
-        store: &StoreScopedToThisNode,
-    ) {
-        let Some(&family) = self
-            .family_of_each_output
-            .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
-        else {
-            return;
-        };
-        match the_message_a_value_written_onto_an_output_is(family, &kept, 0) {
-            Ok(_) => {
-                self.current_value_of_each_output
-                    .insert(GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(), kept);
-            }
-            Err(why) => {
-                tracing::warn!(
-                    "`GraphInput` node `{}` kept {kept}, which the {} it carries now does not \
-                     take, so it forgets it and starts from its default: {why}",
-                    self.node_name,
-                    family.declaration_name()
-                );
-                self.forget_the_kept_value_in(store);
-            }
-        }
-    }
-
-    fn forget_the_kept_value_in(&self, store: &StoreScopedToThisNode) {
-        if let Err(not_removed) = store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
-            tracing::warn!(
-                "`GraphInput` node `{}` could not forget the value it kept: {not_removed}",
-                self.node_name
-            );
         }
     }
 
@@ -467,25 +274,24 @@ impl NodeWhoseOutputsAClientWrites {
         Ok(())
     }
 
-    /// Publish the current value of each output again where a reader now connected missed it.
-    pub(crate) fn hand_each_current_value_to_a_reader_it_has_not_reached(&mut self) -> Result<()> {
-        let Some(output_writer_inner) = self
-            .output_writer
-            .as_ref()
-            .and_then(OutputWriter::inner_arc)
-        else {
-            return Ok(());
-        };
-        let outputs_a_reader_missed: Vec<(String, JsonValue)> = self
-            .current_value_of_each_output
-            .iter()
-            .filter(|(port, _)| output_writer_inner.has_a_reader_the_last_write_missed(port))
-            .map(|(port, value)| (port.clone(), value.clone()))
-            .collect();
-        for (port, value) in outputs_a_reader_missed {
-            self.publish_a_value_written_onto_an_output(&port, &value)?;
+    /// Publish the value each input of `input_values` names reads on its output of the same
+    /// name, where it differs from what that output carries; an output whose input reads nothing
+    /// now keeps what it carries. Answers the values of the inputs no output is named after.
+    fn publish_each_input_value_on_its_output(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+    ) -> Result<serde_json::Map<String, JsonValue>> {
+        let mut read_by_an_input_alone = serde_json::Map::new();
+        for (input, value) in input_values {
+            if !self.family_of_each_output.contains_key(input) {
+                read_by_an_input_alone.insert(input.clone(), value.clone());
+                continue;
+            }
+            if self.current_value_of_each_output.get(input) != Some(value) {
+                self.publish_a_value_written_onto_an_output(input, value)?;
+            }
         }
-        Ok(())
+        Ok(read_by_an_input_alone)
     }
 
     fn take_every_waiting_input_message(&self) -> Result<()> {
@@ -703,14 +509,12 @@ fn the_channels_block_of_a_value(
     ))
 }
 
-impl DynGeneratedNode for NodeWhoseOutputsAClientWrites {
-    fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.take_the_kept_value_of_a_graph_input(ctx);
+impl DynGeneratedNode for ValueSourceNode {
+    fn __generated_setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
 
     fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.commit_the_kept_value_as_the_node_stops();
         Ok(())
     }
 
@@ -723,8 +527,7 @@ impl DynGeneratedNode for NodeWhoseOutputsAClientWrites {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.take_every_waiting_input_message()?;
-        self.hand_each_current_value_to_a_reader_it_has_not_reached()
+        self.take_every_waiting_input_message()
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -750,7 +553,7 @@ impl DynGeneratedNode for NodeWhoseOutputsAClientWrites {
     }
 
     fn execution_config(&self) -> ExecutionConfig {
-        ExecutionConfig::new(self.execution)
+        ExecutionConfig::new(ProcessExecution::Reactive)
     }
 
     fn has_iceoryx2_outputs(&self) -> bool {
@@ -766,8 +569,13 @@ impl DynGeneratedNode for NodeWhoseOutputsAClientWrites {
         output_writer: Option<OutputWriter>,
         input_mailboxes: Option<InputMailboxes>,
     ) -> Result<()> {
-        if output_writer.is_some() {
-            self.output_writer = output_writer;
+        if let Some(output_writer) = output_writer {
+            if let Some(output_writer_inner) = output_writer.inner_arc() {
+                output_writer_inner.keep_the_last_message_of_output_ports(
+                    self.family_of_each_output.keys().cloned(),
+                );
+            }
+            self.output_writer = Some(output_writer);
         }
         if input_mailboxes.is_some() {
             self.input_mailboxes = input_mailboxes;
@@ -788,8 +596,18 @@ impl DynGeneratedNode for NodeWhoseOutputsAClientWrites {
     }
 
     fn apply_config_json(&mut self, config_json: &JsonValue) -> Result<()> {
-        self.take_the_graph_input_value_lifetime_of_a_new_config(config_json)?;
         self.config_json = config_json.clone();
+        Ok(())
+    }
+
+    fn set_unlinked_input_values(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+    ) -> Result<()> {
+        let read_by_an_input_alone = self.publish_each_input_value_on_its_output(input_values)?;
+        if let Some(input_mailboxes) = self.iceoryx2_input_mailboxes_inner() {
+            input_mailboxes.read_each_unlinked_input_as_its_value(&read_by_an_input_alone);
+        }
         Ok(())
     }
 

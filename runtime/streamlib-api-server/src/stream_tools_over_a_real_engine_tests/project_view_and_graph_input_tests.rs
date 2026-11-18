@@ -4,6 +4,8 @@
 //! A project's views listed by view type, a view node loaded with the view's ports, and a top-level
 //! graph input loaded linked to its readers.
 
+use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
+
 use super::*;
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
@@ -300,6 +302,88 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
         refusal.contains("`fader`") && refusal.contains("`cue`"),
         "the refusal names the Inputs the stream has: {refusal}"
     );
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+}
+
+/// `set_node_input_value` naming no node sets the `value` of the top-level `GraphInput`
+/// declaring the stream input it names: saved in the graph document, whose `default` it
+/// replaces, and rendered as the Input's `default`. One naming an input no `GraphInput` declares
+/// is refused with `port_not_found`, naming the inputs the stream has; one below the top level
+/// is refused; neither records anything.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_input() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(
+        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!({ "track": "intro" })),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": stream_asset, "input": "cue", "value": { "track": "drop" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the stream input is saved");
+
+    let document = project.the_graph_document_of("main");
+    let saved_cue = document["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|node| node["id"] == CUE_GRAPH_INPUT_NODE_UUID)
+        .unwrap_or_else(|| panic!("the document holds the Input: {document}"));
+    assert_eq!(
+        saved_cue["input_values"]["value"],
+        json!({ "track": "drop" }),
+        "{saved_cue}"
+    );
+    assert!(
+        saved_cue["input_values"].get("default").is_none(),
+        "{saved_cue}"
+    );
+    let cue = the_node_named(&engine.the_live_graph_of(&stream_id), "cue");
+    assert_eq!(
+        cue["config"]["default"],
+        json!({ "track": "drop" }),
+        "{cue}"
+    );
+    let document_before = project.the_graph_document_of("main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": stream_asset, "input": "fader", "value": 1,
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("an input no GraphInput declares is refused");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::PortNotFound,
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.refused_field.as_deref(),
+        Some("fader"),
+        "{refusal:?}"
+    );
+    assert!(
+        refusal.runtime_words.contains("`fader`") && refusal.runtime_words.contains("`cue`"),
+        "the refusal names the inputs the stream has: {refusal:?}"
+    );
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": stream_asset, "level": [CUE_GRAPH_INPUT_NODE_UUID],
+                    "input": "cue", "value": { "track": "outro" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("a set naming no node below the top level is refused");
+    assert!(refusal.runtime_words.contains("`level`"), "{refusal:?}");
     assert_eq!(project.the_graph_document_of("main"), document_before);
 }
 

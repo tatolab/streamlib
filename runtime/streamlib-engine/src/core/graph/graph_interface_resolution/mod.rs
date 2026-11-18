@@ -17,7 +17,6 @@ use crate::core::descriptors::{
     NodeValueLifetime, PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
     refusal_of_a_link_between_port_families,
 };
-use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, refuse_a_port_the_node_does_not_have,
     the_ports_of_a_graph_document_node,
@@ -25,6 +24,7 @@ use crate::core::graph::graph_snapshot::{
 use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
+use crate::core::graph::{GraphNode, cast_exposed_name_to_url_safe};
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
     PortInfoOutput, PortKindOutput,
@@ -48,15 +48,16 @@ pub use streamlib_project_repository::{
 /// renders what it declares under.
 pub const GRAPH_INTERFACE_COMPONENT_KEY: &str = "graph_interface";
 
-/// The config key of a top-level `GraphInput` holding the value its readers see until a client
-/// writes one.
-pub const GRAPH_INPUT_DEFAULT_CONFIG_KEY: &str = "default";
+/// The name a top-level `GraphInput`'s `value` input had: a stream saved before it was an input
+/// holds its saved value under this key.
+pub const GRAPH_INPUT_VALUE_FORMER_NAME: &str = "default";
 
 /// The config key of a top-level `GraphInput` holding `[lowest, highest]`, the span a control
 /// moves its number in.
 pub const GRAPH_INPUT_RANGE_CONFIG_KEY: &str = "range";
 
-/// The config key of a top-level `GraphInput` naming how long a value a client writes lasts.
+/// The config key of a top-level `GraphInput` naming how long a value set live on its `value`
+/// input lasts.
 pub const GRAPH_INPUT_LIFETIME_CONFIG_KEY: &str = "lifetime";
 
 /// The lifetime a top-level `GraphInput`'s config declares for the value a client writes,
@@ -171,7 +172,10 @@ impl GraphInterfaceNodeAsDrawn {
             GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
             declared.as_component(),
         );
-        let config = config_of_a_node_holding_no_pin_value(&self.node.input_values);
+        let config = the_config_a_graph_interface_node_renders(
+            self.node.node_type.as_str(),
+            config_of_a_node_holding_no_pin_value(&self.node.input_values),
+        );
         GraphNodeOutput {
             id: self
                 .node
@@ -193,6 +197,36 @@ impl GraphInterfaceNodeAsDrawn {
             fragment: None,
         }
     }
+}
+
+/// Refuse a link into the input `port` of `to_node` when it is a `GraphInput`, whose `value` is
+/// set as a value and never fed by a wire.
+pub(crate) fn refuse_a_link_into_a_graph_input(to_node: &GraphNode, port: &str) -> Result<()> {
+    if to_node.node_type.as_str() != GRAPH_INPUT_NODE_TYPE {
+        return Ok(());
+    }
+    Err(Error::InvalidLink(format!(
+        "a link enters `GraphInput` node `{}`, whose `{port}` takes no wire: a `GraphInput` is \
+         where a port enters the graph, and its value is set with `set_node_input_value`",
+        to_node.display_name
+    )))
+}
+
+/// The config an interface node of `node_type` holding `config` renders: a `GraphInput`'s saved
+/// `value` under `default`, the key a published Tato Studio reads it by.
+pub(crate) fn the_config_a_graph_interface_node_renders(
+    node_type: &str,
+    mut config: serde_json::Value,
+) -> serde_json::Value {
+    if node_type != GRAPH_INPUT_NODE_TYPE {
+        return config;
+    }
+    if let Some(config) = config.as_object_mut()
+        && let Some(value) = config.remove(GRAPH_INTERFACE_VALUE_PORT_NAME)
+    {
+        config.insert(GRAPH_INPUT_VALUE_FORMER_NAME.to_string(), value);
+    }
+    config
 }
 
 /// One link with an end on an interface node, as drawn.

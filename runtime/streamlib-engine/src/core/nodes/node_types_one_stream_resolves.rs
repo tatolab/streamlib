@@ -19,8 +19,7 @@ use crate::core::graph::{
 };
 use crate::core::nodes::node_instance_factory::the_node_type_as_registered;
 use crate::core::nodes::project_view_node::{
-    NodeWhoseOutputsAClientWrites, the_node_type_of_a_project_view,
-    the_node_type_of_a_top_level_graph_input,
+    ValueSourceNode, the_node_type_of_a_project_view, the_node_type_of_a_top_level_graph_input,
 };
 use crate::core::nodes::{DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance};
 use crate::core::{NodeDescriptor, PortDirection};
@@ -39,16 +38,15 @@ static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
         .expect("the GraphInput node type's names are valid");
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
         input_and_output_port_info: GraphNodePorts {
-            inputs: Vec::new(),
+            inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
             outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
         },
         descriptor,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
             |node| {
                 Ok(
-                    Box::new(NodeWhoseOutputsAClientWrites::for_a_top_level_graph_input(
-                        node,
-                    )?) as Box<dyn crate::core::nodes::DynGeneratedNode + Send>,
+                    Box::new(ValueSourceNode::for_a_top_level_graph_input(node)?)
+                        as Box<dyn crate::core::nodes::DynGeneratedNode + Send>,
                 )
             },
         )),
@@ -213,7 +211,7 @@ impl NodeTypesOneStreamResolves {
                     input_and_output_port_info,
                     how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
                         Box::new(move |node| {
-                            Ok(Box::new(NodeWhoseOutputsAClientWrites::for_the_node(
+                            Ok(Box::new(ValueSourceNode::for_the_node(
                                 node,
                                 descriptor_for_constructor.clone(),
                             ))
