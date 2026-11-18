@@ -94,6 +94,8 @@ class ContractBackedAgentSession:
              "type": "tatolab.testpattern:TestPatternSource"}
         ]
         self.links: "list[dict[str, Any]]" = []
+        #: The inputs a link from a picture output connects to; `check_link` refuses any other.
+        self.picture_inputs = {"video_from_upstream"}
         self.transactions: "list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]" = []
         self.tool_calls: "list[tuple[str, dict[str, Any]]]" = []
         self.refused_operations: "set[str]" = set()
@@ -171,6 +173,25 @@ class ContractBackedAgentSession:
                 {**arguments, "operation": "add_node"}
             ]
             return self.checked_against_the_result_schema(operation, self.applied(requested))
+        if operation == "check_link":
+            assert arguments["stream"] == self.stream_id, arguments
+            source, target = (
+                self.the_node_of_the_id(arguments[end]["node"]) for end in ("source", "target")
+            )
+            if arguments["target"]["port"] in self.picture_inputs:
+                return self.checked_against_the_result_schema(operation, {"outcome": "connects"})
+            return self.checked_against_the_result_schema(operation, {
+                "outcome": "refused",
+                "refusal": {
+                    "refusal_code": "link_pin_types_do_not_connect", "action": "connect",
+                    "refused_operation_index": 0,
+                    "refused_link": {
+                        "source": {"node": source["id"], "port": arguments["source"]["port"]},
+                        "target": {"node": target["id"], "port": arguments["target"]["port"]},
+                    },
+                    "runtime_words": "a Texture output does not connect to a Float input",
+                },
+            })
         if operation == "graph":
             assert arguments.get("stream") == self.stream_id, arguments
             return {"stream": self.stream_id, "nodes": self.nodes, "links": self.links}
@@ -187,6 +208,10 @@ class ContractBackedAgentSession:
                 "applied_at": "2026-01-01T00:00:00Z",
             })
         raise AssertionError(f"the stand-in session does not answer `{operation}`")
+
+    def the_node_of_the_id(self, node_id: str) -> "dict[str, Any]":
+        [node] = [node for node in self.nodes if node["id"] == node_id]
+        return node
 
     def applied(self, requested: "list[dict[str, Any]]") -> "dict[str, Any]":
         node_by_label: "dict[str, dict[str, Any]]" = {}
@@ -206,7 +231,10 @@ class ContractBackedAgentSession:
                 answer["added_nodes"].append({"stream": self.stream_id, "node": node["id"],
                                               "name": node["name"], "as": each.get("as")})
             elif each["operation"] == "connect":
-                source, target = (node_by_label[each[end]["node"]] for end in ("source", "target"))
+                source, target = (
+                    node_by_label.get(each[end]["node"]) or self.the_node_of_the_id(each[end]["node"])
+                    for end in ("source", "target")
+                )
                 added_links.append({
                     "id": str(uuid.uuid4()),
                     "source": {"node": source["name"], "port": each["source"]["port"]},
@@ -263,8 +291,16 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
 
     called = [name for name, _ in session.tool_calls]
     assert called[:2] == ["list_operation_groups", "describe_operations"]
-    assert session.tool_calls[1][1] == {"operations": ["list_streams", "transact", "graph", "undo"]}
-    assert called[2:] == ["list_streams", "transact", "graph", "undo", "graph"]
+    assert session.tool_calls[1][1] == {
+        "operations": ["list_streams", "transact", "check_link", "graph", "undo"]
+    }
+    assert called[2:] == [
+        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
+        "transact", "graph", "undo", "undo", "graph",
+    ]
+    checked = [arguments["operation"] for name, arguments in session.tool_calls
+               if name == CALL_OPERATION_TOOL_NAME]
+    assert checked == ["check_link", "check_link"]
 
 
 def test_an_operation_that_is_not_a_listed_tool_is_called_through_call_operation() -> None:
@@ -322,8 +358,8 @@ def test_a_literal_the_schema_declares_at_its_own_position_is_allowed() -> None:
 
     played(agent_loop_script_from(document), session)
 
-    [(_, transact_arguments)] = [call for call in session.tool_calls if call[0] == "transact"]
-    assert transact_arguments["mode"] == "commit"
+    transact_arguments = [arguments for name, arguments in session.tool_calls if name == "transact"]
+    assert transact_arguments[0]["mode"] == "commit"
 
 
 def test_a_literal_the_schema_declares_only_at_another_position_fails_the_run() -> None:
@@ -383,3 +419,11 @@ def test_an_expectation_of_no_known_kind_is_malformed() -> None:
 
     with pytest.raises(AgentLoopScriptIsMalformed, match="an expectation is `at` and one of"):
         agent_loop_script_from(document)
+
+
+def test_a_check_that_refuses_the_link_the_script_makes_fails_the_run() -> None:
+    session = ContractBackedAgentSession(the_committed_control_contract())
+    session.picture_inputs = set()
+
+    with pytest.raises(AgentLoopScriptRunFailed, match="link_checked_into_the_sink.*`/outcome`"):
+        played(agent_loop_script_from(build_a_graph_document()), session)

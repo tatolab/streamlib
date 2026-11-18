@@ -61,12 +61,70 @@ mod transaction_answers;
 
 use former_port_names::{
     move_each_former_port_name, the_current_name_of_a_port,
+    the_link_ends_under_their_current_port_names,
     the_placed_streams_with_each_former_port_name_moved, the_request_under_the_current_port_names,
 };
 use input_value_sets::*;
-use request_to_graph_operation::graph_operation_for_the_request;
+use request_to_graph_operation::{
+    graph_operation_for_the_request, refuse_a_link_the_graph_already_holds,
+    the_operation_a_connect_asks,
+};
 use streams_each_operation_names::the_stream_each_operation_names;
 use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
+
+/// The link from `source` to `target` an action on a link names, as its caller named it.
+fn what_a_link_action_names(
+    source: &StreamGraphActionLinkEnd,
+    target: &StreamGraphActionLinkEnd,
+) -> WhatAGraphOperationNames {
+    WhatAGraphOperationNames {
+        link: Some(RefusedGraphLinkOnTheWire {
+            source: GraphLinkEndOnTheWire {
+                node: source.node.clone(),
+                port: source.port.clone(),
+            },
+            target: GraphLinkEndOnTheWire {
+                node: target.node.clone(),
+                port: target.port.clone(),
+            },
+        }),
+        ..WhatAGraphOperationNames::default()
+    }
+}
+
+/// The operation a `connect` from `source` to `target` at the own level of the running stream
+/// `stream_operations` runs asks of it, made as a transaction's `connect` makes it on the
+/// stream's graph as `rendered_graph` renders it: each port under its current name, each node
+/// by its UUID, a loop of function nodes closed by a `PreviousValue` node added on it, and a
+/// link the graph already holds refused, in the order
+/// [`StreamGraphTransactionExecutor::apply_one_request`] takes those steps.
+pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
+    source: StreamGraphActionLinkEnd,
+    target: StreamGraphActionLinkEnd,
+    rendered_graph: &Value,
+    stream_operations: &dyn RuntimeOperations,
+) -> Result<StreamGraphOperation, GraphRequestRefusal> {
+    let level_as_drawn = StreamGraphDocument::from_value(rendered_graph.clone())?;
+    let no_node_by_label = HashMap::new();
+    let (source, target) = the_link_ends_under_their_current_port_names(
+        source,
+        target,
+        &level_as_drawn,
+        &no_node_by_label,
+        stream_operations,
+    );
+    let operation = the_operation_a_connect_asks(
+        &source,
+        &target,
+        &level_as_drawn,
+        &no_node_by_label,
+        &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
+    )?;
+    if let StreamGraphOperation::Connect { link } = &operation {
+        refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
+    }
+    Ok(operation)
+}
 
 /// The node, link and field `action` names, as its caller named them.
 fn what_a_graph_action_names<Stream>(
@@ -88,19 +146,9 @@ fn what_a_graph_action_names<Stream>(
             ..names_a_node(node)
         },
         StreamGraphAction::Connect { source, target, .. }
-        | StreamGraphAction::Disconnect { source, target, .. } => WhatAGraphOperationNames {
-            link: Some(RefusedGraphLinkOnTheWire {
-                source: GraphLinkEndOnTheWire {
-                    node: source.node.clone(),
-                    port: source.port.clone(),
-                },
-                target: GraphLinkEndOnTheWire {
-                    node: target.node.clone(),
-                    port: target.port.clone(),
-                },
-            }),
-            ..WhatAGraphOperationNames::default()
-        },
+        | StreamGraphAction::Disconnect { source, target, .. } => {
+            what_a_link_action_names(source, target)
+        }
         StreamGraphAction::AddNode { label, name, .. }
         | StreamGraphAction::ImportGraphGenerator { label, name, .. }
         | StreamGraphAction::UseDependencyStream { label, name, .. } => WhatAGraphOperationNames {
@@ -295,7 +343,7 @@ pub(crate) struct WhatAGraphOperationNames {
 /// Why one graph action was refused: its code and the place it names, the runtime's own words,
 /// and the JSON pointer, into the action's own params, of the value refused.
 #[derive(Debug)]
-pub(super) struct GraphRequestRefusal {
+pub(crate) struct GraphRequestRefusal {
     code_and_place: Box<RefusalCodeAndPlace>,
     runtime_words: String,
     refused_params_pointer: Option<String>,
@@ -303,7 +351,7 @@ pub(super) struct GraphRequestRefusal {
 
 impl GraphRequestRefusal {
     /// A refusal coded and placed by `code_and_place`, in `runtime_words`.
-    fn coded(code_and_place: RefusalCodeAndPlace, runtime_words: String) -> Self {
+    pub(crate) fn coded(code_and_place: RefusalCodeAndPlace, runtime_words: String) -> Self {
         Self {
             code_and_place: Box::new(code_and_place),
             runtime_words,
@@ -446,6 +494,16 @@ impl GraphTransactionRefusal {
             what_the_refused_operation_names: Box::new(what_the_refused_operation_names),
             refusal: refusal.into(),
         }
+    }
+
+    /// The refusal of a `connect` from `source` to `target`, its one operation, as its caller
+    /// named the link.
+    pub(crate) fn of_a_connect(
+        source: &StreamGraphActionLinkEnd,
+        target: &StreamGraphActionLinkEnd,
+        refusal: GraphRequestRefusal,
+    ) -> Self {
+        Self::of_the_operation(0, what_a_link_action_names(source, target), refusal)
     }
 
     pub(crate) fn of_the_whole_transaction(refusal: impl Into<GraphRequestRefusal>) -> Self {
@@ -762,6 +820,14 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     family_of_an_output_port: &'reads FamilyOfAnOutputPortOfTheRunningStream<'reads>,
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
     config_a_node_takes: &'reads ConfigANodeOfTheRunningStreamTakes<'reads>,
+}
+
+/// The UUID of each node `rendered_graph`, a stream's `graph` render, renders as a function
+/// node, at any level of the fragments it holds.
+fn the_function_nodes_of_the_render(rendered_graph: &Value) -> HashSet<Uuid> {
+    let mut function_nodes = HashSet::new();
+    the_function_nodes_rendered_in(rendered_graph, &mut function_nodes);
+    function_nodes
 }
 
 /// The UUID of each node `rendered_level`, a level of a stream's `graph` render, renders as a

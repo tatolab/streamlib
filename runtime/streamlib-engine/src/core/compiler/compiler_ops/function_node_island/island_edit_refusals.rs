@@ -42,9 +42,7 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
     };
     for link_id in links_to_add {
         let link = link_in(graph, link_id)?;
-        refuse_a_second_link_into_a_port_an_island_feeds(graph, link)?;
-        refuse_an_island_into_a_port_declaring_an_audio_window(graph, link)?;
-        refuse_a_link_closing_a_cycle_of_function_nodes(graph, link)?;
+        refuse_a_link_an_island_cannot_take(graph, link.source(), link.to_port(), Some(link_id))?;
     }
     for link_id in links_to_remove {
         let link = link_in(graph, link_id)?;
@@ -80,6 +78,26 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
         }
     }
     Ok(())
+}
+
+/// Refuse a link from `from` into `to` an island cannot take: a second link into a port an
+/// island feeds, an island into a port declaring an audio window, or a link closing a cycle of
+/// function nodes. `held_as` names the link when `graph` already holds it, so it is counted
+/// once; a link not yet made is judged as if `graph` held it.
+pub(crate) fn refuse_a_link_an_island_cannot_take(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    held_as: Option<&LinkUniqueId>,
+) -> Result<()> {
+    refuse_a_second_link_into_a_port_an_island_feeds(graph, from, to, held_as)?;
+    refuse_an_island_into_a_port_declaring_an_audio_window(graph, from, to)?;
+    refuse_a_link_closing_a_cycle_of_function_nodes(graph, from, to, held_as)
+}
+
+/// Whether `link` is a link other than the one `held_as` names.
+fn is_another_link(link: &Link, held_as: Option<&LinkUniqueId>) -> bool {
+    held_as.is_none_or(|held_as| held_as.as_str() != link.id())
 }
 
 /// Refuse a link from `from` into `to`, before it is made, when it would feed a function node
@@ -140,12 +158,17 @@ pub(super) fn the_refusal_of_an_island_fed_into_the_app_process(
     ))
 }
 
-/// Refuse `link`, between two function nodes, when what it feeds already
-/// reaches what it reads through other function nodes, naming the cycle: an
-/// island evaluates each node after what it reads.
-fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -> Result<()> {
-    let source_id = link.source().node_run_id();
-    let destination_id = link.to_port().node_run_id();
+/// Refuse a link from `from` into `to`, between two function nodes, when what it feeds already
+/// reaches what it reads through other function nodes, naming the cycle: an island evaluates
+/// each node after what it reads.
+fn refuse_a_link_closing_a_cycle_of_function_nodes(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    held_as: Option<&LinkUniqueId>,
+) -> Result<()> {
+    let source_id = from.node_run_id();
+    let destination_id = to.node_run_id();
     if !runs_inside_the_read_of_each_node_it_feeds(graph, source_id)
         || !runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
         || is_a_previous_value_node(graph, destination_id)
@@ -163,11 +186,10 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
                 .chain(path.iter().map(ToString::to_string))
                 .collect();
             return Err(Error::InvalidGraph(format!(
-                "linking `{}` closes a cycle of function nodes, {}; an island evaluates each \
-                 node after what it reads, so a cycle closes only through a `PreviousValue` node, \
-                 which hands out its input as it was at the last evaluation. To fix: link the \
-                 loop's way back through a `PreviousValue` node",
-                link.id,
+                "linking `{from}` to `{to}` closes a cycle of function nodes, {}; an island \
+                 evaluates each node after what it reads, so a cycle closes only through a \
+                 `PreviousValue` node, which hands out its input as it was at the last \
+                 evaluation. To fix: link the loop's way back through a `PreviousValue` node",
                 cycle.join(" → ")
             )));
         }
@@ -175,7 +197,7 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
             continue;
         }
         for downstream_link in graph.traversal().e(()).iter() {
-            if downstream_link.id == link.id
+            if !is_another_link(downstream_link, held_as)
                 || downstream_link.source().node_run_id() != following_id
             {
                 continue;
@@ -193,47 +215,56 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
     Ok(())
 }
 
-/// Refuse `link` when it and another link both feed one input port and either
-/// comes from a function node: an island answers each read of its port, so it
-/// shares the port with no other producer.
-fn refuse_a_second_link_into_a_port_an_island_feeds(graph: &Graph, link: &Link) -> Result<()> {
-    let links_into_the_port: Vec<&Link> = graph
+/// Refuse a link from `from` into `to` when it and another link both feed one input port and
+/// either comes from a function node: an island answers each read of its port, so it shares
+/// the port with no other producer.
+fn refuse_a_second_link_into_a_port_an_island_feeds(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    held_as: Option<&LinkUniqueId>,
+) -> Result<()> {
+    let other_links_into_the_port: Vec<&Link> = graph
         .traversal()
         .e(())
         .iter()
         .filter(|other_link| {
-            other_link.to_port().node_run_id() == link.to_port().node_run_id()
-                && other_link.to_port().port_name() == link.to_port().port_name()
+            is_another_link(other_link, held_as)
+                && other_link.to_port().node_run_id() == to.node_run_id()
+                && other_link.to_port().port_name() == to.port_name()
         })
         .collect();
-    let an_island_feeds_the_port = links_into_the_port.iter().any(|link_into| {
-        runs_inside_the_read_of_each_node_it_feeds(graph, link_into.source().node_run_id())
-    });
-    if links_into_the_port.len() > 1 && an_island_feeds_the_port {
+    let an_island_feeds_the_port =
+        runs_inside_the_read_of_each_node_it_feeds(graph, from.node_run_id())
+            || other_links_into_the_port.iter().any(|link_into| {
+                runs_inside_the_read_of_each_node_it_feeds(graph, link_into.source().node_run_id())
+            });
+    if !other_links_into_the_port.is_empty() && an_island_feeds_the_port {
         return Err(Error::InvalidLink(format!(
             "`{}`'s input `{}` is fed by {} links, and one comes from a function node; an \
              island answers each read of its port, so it shares the port with no other link. \
              To fix: give each its own input port",
-            link.to_port().node_run_id(),
-            link.to_port().port_name(),
-            links_into_the_port.len()
+            to.node_run_id(),
+            to.port_name(),
+            other_links_into_the_port.len() + 1
         )));
     }
     Ok(())
 }
 
-/// Refuse `link` from a function node into an input port declaring an
-/// `audio_window`: an island answers one control value per read, never a
-/// window of audio samples.
+/// Refuse a link from `from`, a function node, into `to`, an input port declaring an
+/// `audio_window`: an island answers one control value per read, never a window of audio
+/// samples.
 fn refuse_an_island_into_a_port_declaring_an_audio_window(
     graph: &Graph,
-    link: &Link,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
 ) -> Result<()> {
-    if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()) {
+    if !runs_inside_the_read_of_each_node_it_feeds(graph, from.node_run_id()) {
         return Ok(());
     }
-    let reader_id = link.to_port().node_run_id();
-    let port_name = link.to_port().port_name();
+    let reader_id = to.node_run_id();
+    let port_name = to.port_name();
     let declares_an_audio_window = graph
         .traversal()
         .v(reader_id)

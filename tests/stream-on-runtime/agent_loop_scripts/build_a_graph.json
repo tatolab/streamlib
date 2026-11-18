@@ -1,7 +1,7 @@
 {
   "script": "build_a_graph",
   "task": {
-    "statement": "On the one stream the runtime holds, add a test pattern source and a frame sink in one edit, link the source's video output to the sink's input, read the graph back to see both nodes and the link, then undo the edit and read the graph back to see them gone.",
+    "statement": "On the one stream the runtime holds, add a test pattern source, a frame sink and a clamp in one edit; check a link from the source's video output into the clamp's number input and read why it would be refused; check the link from the source's video output to the sink's input and read that it connects; make that link; read the graph back to see the nodes and the link; then undo both edits and read the graph back to see them gone.",
     "givens": {
       "source_node_type": "tatolab.testpattern:TestPatternSource",
       "source_label": "source",
@@ -9,7 +9,10 @@
       "source_output": "video",
       "sink_node_type": "nodes.frame_sink:FrameSink",
       "sink_label": "sink",
-      "sink_input": "video_from_upstream"
+      "sink_input": "video_from_upstream",
+      "clamp_node_type": "nodes.clamp:Clamp",
+      "clamp_label": "clamp",
+      "clamp_input": "x"
     }
   },
   "steps": [
@@ -41,18 +44,62 @@
             "as": { "$given": "sink_label" }
           },
           {
-            "operation": "connect",
+            "operation": "add_node",
             "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
-            "source": { "node": { "$given": "source_label" }, "port": { "$given": "source_output" } },
-            "target": { "node": { "$given": "sink_label" }, "port": { "$given": "sink_input" } }
+            "type": { "$given": "clamp_node_type" },
+            "as": { "$given": "clamp_label" }
           }
         ]
       },
       "expect": [
         { "at": "/mode", "equals": "commit" },
-        { "at": "/added_nodes", "has_length": 2 },
+        { "at": "/added_nodes", "has_length": 3 },
         { "at": "/added_nodes/0/as", "equals": { "$given": "source_label" } },
         { "at": "/added_nodes/1/as", "equals": { "$given": "sink_label" } },
+        { "at": "/added_nodes/2/as", "equals": { "$given": "clamp_label" } }
+      ]
+    },
+    {
+      "name": "link_checked_into_the_clamp",
+      "tool": "check_link",
+      "arguments": {
+        "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+        "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
+        "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/2/node" } }, "port": { "$given": "clamp_input" } }
+      },
+      "expect": [
+        { "at": "/outcome", "equals": "refused" },
+        { "at": "/refusal/refusal_code", "equals": "link_pin_types_do_not_connect" },
+        { "at": "/refusal/action", "equals": "connect" }
+      ]
+    },
+    {
+      "name": "link_checked_into_the_sink",
+      "tool": "check_link",
+      "arguments": {
+        "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+        "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
+        "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } }, "port": { "$given": "sink_input" } }
+      },
+      "expect": [
+        { "at": "/outcome", "equals": "connects" }
+      ]
+    },
+    {
+      "name": "connected",
+      "tool": "transact",
+      "arguments": {
+        "operations": [
+          {
+            "operation": "connect",
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+            "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
+            "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } }, "port": { "$given": "sink_input" } }
+          }
+        ]
+      },
+      "expect": [
+        { "at": "/mode", "equals": "commit" },
         { "at": "/connected_links", "has_length": 1 },
         { "at": "/connected_links/0/source/node", "equals": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } } },
         { "at": "/connected_links/0/target/node", "equals": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } } },
@@ -92,6 +139,16 @@
       ]
     },
     {
+      "name": "link_undone",
+      "tool": "undo",
+      "arguments": {
+        "project_directory": { "$read": { "step": "streams", "pointer": "/streams/0/location/project_directory" } }
+      },
+      "expect": [
+        { "at": "/undoes", "equals": { "$read": { "step": "connected", "pointer": "/transaction" } } }
+      ]
+    },
+    {
       "name": "undone",
       "tool": "undo",
       "arguments": {
@@ -118,6 +175,12 @@
           "at": "/nodes",
           "holds_no_item_where": {
             "/id": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } }
+          }
+        },
+        {
+          "at": "/nodes",
+          "holds_no_item_where": {
+            "/id": { "$read": { "step": "edit", "pointer": "/added_nodes/2/node" } }
           }
         },
         {

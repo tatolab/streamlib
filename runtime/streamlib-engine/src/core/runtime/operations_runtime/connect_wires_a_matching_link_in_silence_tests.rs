@@ -11,7 +11,7 @@ use serde_json::Value;
 use parking_lot::Mutex;
 
 use super::{
-    ALinkThePinTypesRefuse, LiveGraphChangeOnOneStream, connect_impl, disconnect_impl,
+    ALinkConnected, LiveGraphChangeOnOneStream, connect_impl, disconnect_impl,
     mark_the_node_and_each_of_its_links_pending_deletion, the_node_this_stream_names,
 };
 use crate::core::compiler::{Compiler, PendingOperation};
@@ -145,7 +145,7 @@ fn connect_wires_a_producer_to_a_consumer_without_warning() {
                 a_fixture_graph_change(compiler),
                 from,
                 to,
-                ALinkThePinTypesRefuse::IsRefused,
+                ALinkConnected::MadeNow,
             ))
     });
 
@@ -170,7 +170,7 @@ fn removing_a_node_logs_every_incident_link_ahead_of_the_node() {
             a_fixture_graph_change(Arc::clone(&compiler)),
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
         .expect("the link is created");
     compiler
@@ -220,7 +220,7 @@ fn connect_on_this_thread(
             a_fixture_graph_change(Arc::clone(compiler)),
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
 }
 

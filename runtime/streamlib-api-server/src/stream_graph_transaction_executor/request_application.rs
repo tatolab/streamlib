@@ -331,9 +331,7 @@ impl StreamGraphTransactionExecutor<'_> {
             let rendered_graph = self
                 .async_runtime
                 .block_on(stream_operations.to_json_async())?;
-            let mut function_nodes = HashSet::new();
-            the_function_nodes_rendered_in(&rendered_graph, &mut function_nodes);
-            Ok(function_nodes)
+            Ok(the_function_nodes_of_the_render(&rendered_graph))
         };
         let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
             stream_operations
@@ -355,14 +353,8 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             &mut placed_stream_a_collapse_saves,
         )?;
-        if let StreamGraphOperation::Connect { link } = &edit_as_drawn
-            && level_as_drawn.links().contains(link)
-        {
-            return Err(format!(
-                "the graph already links {}/{} -> {}/{}",
-                link.source.node, link.source.port, link.target.node, link.target.port
-            )
-            .into());
+        if let StreamGraphOperation::Connect { link } = &edit_as_drawn {
+            refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
         }
         let overridden_by_a_link = match &edit_as_drawn {
             StreamGraphOperation::SetNodeInputValue {

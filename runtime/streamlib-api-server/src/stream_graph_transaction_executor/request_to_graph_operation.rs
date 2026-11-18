@@ -4,6 +4,85 @@
 use super::*;
 use streamlib_project_repository::NodeNotRead;
 
+/// The node `node` names: its UUID, or the `as` of a node an earlier add of the transaction
+/// adds, in `node_by_label`.
+fn the_node_named(
+    node: &str,
+    node_by_label: &HashMap<String, Uuid>,
+) -> Result<Uuid, GraphRequestRefusal> {
+    node_by_label
+        .get(node)
+        .copied()
+        .or_else(|| Uuid::parse_str(node).ok())
+        .ok_or_else(|| {
+            GraphRequestRefusal::of_a_node_not_found(
+                node,
+                format!(
+                    "`{node}` is neither a node's UUID nor the `as` of a node an earlier \
+                     `add_node` of this transaction adds"
+                ),
+            )
+        })
+}
+
+/// The link from `source` to `target`, each node as [`the_node_named`] reads it.
+pub(super) fn the_link_named(
+    source: &StreamGraphActionLinkEnd,
+    target: &StreamGraphActionLinkEnd,
+    node_by_label: &HashMap<String, Uuid>,
+) -> Result<StreamGraphDocumentLink, GraphRequestRefusal> {
+    Ok(StreamGraphDocumentLink {
+        source: StreamGraphDocumentLinkEnd {
+            node: the_node_named(&source.node, node_by_label)?,
+            port: source.port.clone(),
+        },
+        target: StreamGraphDocumentLinkEnd {
+            node: the_node_named(&target.node, node_by_label)?,
+            port: target.port.clone(),
+        },
+    })
+}
+
+/// The operation a connect from `source` to `target` asks of the graph `staged_graph` holds:
+/// the link between them, or, when it closes a loop of function nodes no `PreviousValue` node
+/// is in, a `PreviousValue` node added on it.
+pub(super) fn the_operation_a_connect_asks(
+    source: &StreamGraphActionLinkEnd,
+    target: &StreamGraphActionLinkEnd,
+    staged_graph: &StreamGraphDocument,
+    node_by_label: &HashMap<String, Uuid>,
+    function_nodes_of_the_running_stream: &FunctionNodesOfTheRunningStream<'_>,
+) -> Result<StreamGraphOperation, GraphRequestRefusal> {
+    let link = the_link_named(source, target, node_by_label)?;
+    if the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+        staged_graph,
+        &link,
+        function_nodes_of_the_running_stream,
+    )? {
+        Ok(the_previous_value_node_added_on_the_link(
+            staged_graph,
+            link,
+        ))
+    } else {
+        Ok(StreamGraphOperation::Connect { link })
+    }
+}
+
+/// Refuse a connect of `link` when `graph` already holds it.
+pub(super) fn refuse_a_link_the_graph_already_holds(
+    graph: &StreamGraphDocument,
+    link: &StreamGraphDocumentLink,
+) -> Result<(), GraphRequestRefusal> {
+    if graph.links().contains(link) {
+        return Err(format!(
+            "the graph already links {}/{} -> {}/{}",
+            link.source.node, link.source.port, link.target.node, link.target.port
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// The operation `request` asks of the graph `staged_graph` holds, with everything its inverse
 /// needs read from it; an added node takes a new UUID, recorded under its `as` when it has one.
 pub(super) fn graph_operation_for_the_request(
@@ -21,37 +100,6 @@ pub(super) fn graph_operation_for_the_request(
         function_nodes_of_the_running_stream,
         config_a_node_takes,
     } = what_the_request_reads;
-    let node_named =
-        |node: &str, node_by_label: &HashMap<String, Uuid>| -> Result<Uuid, GraphRequestRefusal> {
-            node_by_label
-                .get(node)
-                .copied()
-                .or_else(|| Uuid::parse_str(node).ok())
-                .ok_or_else(|| {
-                    GraphRequestRefusal::of_a_node_not_found(
-                        node,
-                        format!(
-                            "`{node}` is neither a node's UUID nor the `as` of a node an earlier \
-                         `add_node` of this transaction adds"
-                        ),
-                    )
-                })
-        };
-    let link_between = |source: &StreamGraphActionLinkEnd,
-                        target: &StreamGraphActionLinkEnd,
-                        node_by_label: &HashMap<String, Uuid>|
-     -> Result<StreamGraphDocumentLink, GraphRequestRefusal> {
-        Ok(StreamGraphDocumentLink {
-            source: StreamGraphDocumentLinkEnd {
-                node: node_named(&source.node, node_by_label)?,
-                port: source.port.clone(),
-            },
-            target: StreamGraphDocumentLinkEnd {
-                node: node_named(&target.node, node_by_label)?,
-                port: target.port.clone(),
-            },
-        })
-    };
     let label_the_node = |label: Option<String>,
                           node: Uuid,
                           node_by_label: &mut HashMap<String, Uuid>|
@@ -174,34 +222,26 @@ pub(super) fn graph_operation_for_the_request(
             })
         }
         StreamGraphAction::RemoveNode { node, .. } => {
-            let node = node_named(&node, node_by_label)?;
+            let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::RemoveNode {
                 node: the_node_the_document_holds(staged_graph, node)?,
                 links: staged_graph.links_touching(node),
             })
         }
-        StreamGraphAction::Connect { source, target, .. } => {
-            let link = link_between(&source, &target, node_by_label)?;
-            if the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
-                staged_graph,
-                &link,
-                function_nodes_of_the_running_stream,
-            )? {
-                Ok(the_previous_value_node_added_on_the_link(
-                    staged_graph,
-                    link,
-                ))
-            } else {
-                Ok(StreamGraphOperation::Connect { link })
-            }
-        }
+        StreamGraphAction::Connect { source, target, .. } => the_operation_a_connect_asks(
+            &source,
+            &target,
+            staged_graph,
+            node_by_label,
+            function_nodes_of_the_running_stream,
+        ),
         StreamGraphAction::Disconnect { source, target, .. } => {
             Ok(StreamGraphOperation::Disconnect {
-                link: link_between(&source, &target, node_by_label)?,
+                link: the_link_named(&source, &target, node_by_label)?,
             })
         }
         StreamGraphAction::SetNodeConfig { node, config, .. } => {
-            let node = node_named(&node, node_by_label)?;
+            let node = the_node_named(&node, node_by_label)?;
             let configured = the_node_the_document_holds(staged_graph, node)?;
             Ok(StreamGraphOperation::set_node_config_of(
                 &configured,
@@ -212,7 +252,7 @@ pub(super) fn graph_operation_for_the_request(
         StreamGraphAction::SetPinValue {
             node, input, value, ..
         } => {
-            let node = node_named(&node, node_by_label)?;
+            let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::set_pin_value_of(
                 &the_node_the_document_holds(staged_graph, node)?,
                 input,
@@ -222,7 +262,7 @@ pub(super) fn graph_operation_for_the_request(
         StreamGraphAction::SetNodeInputValue {
             node, input, value, ..
         } => {
-            let node = node_named(&node, node_by_label)?;
+            let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::set_node_input_value_of(
                 &the_node_the_document_holds(staged_graph, node)?,
                 input,
@@ -230,7 +270,7 @@ pub(super) fn graph_operation_for_the_request(
             ))
         }
         StreamGraphAction::RenameNode { node, name, .. } => {
-            let node = node_named(&node, node_by_label)?;
+            let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::RenameNode {
                 node,
                 from: the_node_the_document_holds(staged_graph, node)?.name,
@@ -238,7 +278,7 @@ pub(super) fn graph_operation_for_the_request(
             })
         }
         StreamGraphAction::SetStudioFields { node, studio, .. } => {
-            let node = node_named(&node, node_by_label)?;
+            let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::SetStudioFields {
                 node,
                 from: the_node_the_document_holds(staged_graph, node)?.studio,
@@ -250,7 +290,7 @@ pub(super) fn graph_operation_for_the_request(
             exposed_config_fields,
             ..
         } => {
-            let node = node_named(&node, node_by_label)?;
+            let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::SetExposedConfigFields {
                 node,
                 from: the_node_the_document_holds(staged_graph, node)?.exposed_config_fields,
@@ -269,7 +309,7 @@ pub(super) fn graph_operation_for_the_request(
             }
             let nodes = nodes
                 .iter()
-                .map(|node| node_named(node, node_by_label))
+                .map(|node| the_node_named(node, node_by_label))
                 .collect::<Result<Vec<Uuid>, GraphRequestRefusal>>()?;
             Ok(StreamGraphOperation::AddGroup {
                 group: StreamGraphDocumentGroup {
@@ -412,7 +452,7 @@ pub(super) fn graph_operation_for_the_request(
         } => {
             let nodes = nodes
                 .iter()
-                .map(|node| node_named(node, node_by_label))
+                .map(|node| the_node_named(node, node_by_label))
                 .collect::<Result<Vec<Uuid>, GraphRequestRefusal>>()?;
             let name = streamlib::sdk::graph::cast_exposed_name_to_url_safe(&name)
                 .map_err(|casts_to_nothing| {
@@ -462,7 +502,7 @@ pub(super) fn graph_operation_for_the_request(
             Ok(StreamGraphOperation::UnfoldFragment {
                 fold: staged_graph
                     .the_fold_a_fragment_unfolds(
-                        node_named(&fragment, node_by_label)?,
+                        the_node_named(&fragment, node_by_label)?,
                         &|held_stream| {
                             document_of_a_placed_stream(held_stream)
                                 .map_err(|refusal| refusal.words_kept_in(&kept))

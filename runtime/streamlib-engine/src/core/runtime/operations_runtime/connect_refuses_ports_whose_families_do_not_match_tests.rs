@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{ALinkThePinTypesRefuse, LiveGraphChangeOnOneStream, connect_impl};
+use super::{ALinkConnected, LiveGraphChangeOnOneStream, connect_impl};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, OutputPortDeclaredNames,
@@ -161,7 +161,7 @@ fn connect_on_this_thread(
             },
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
 }
 

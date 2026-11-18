@@ -36,7 +36,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
     DescribeAssetToolResult, DescribeRuntimeToolResult, DescribeStreamActionToolResult,
     DuplicateProjectToolResult, GraphTransactionToolResult, ImportProjectToolResult,
-    ListAssetsToolResult, ListDependenciesToolResult, ListProjectFilesToolResult,
+    LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult, ListProjectFilesToolResult,
     ListProjectNodeTypesToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
     ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
     PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
@@ -110,6 +110,8 @@ pub(crate) enum ControlOperationAnswer {
     Graph(Value),
     /// A graph edit's: the transaction it applied.
     GraphTransaction(GraphTransactionToolResult),
+    /// `check_link`'s: what `connect` would answer.
+    CheckLink(LinkCheckResult),
     /// A queued project stream action's: its id and its project.
     ProjectStreamActionQueued(ProjectStreamActionQueuedToolResult),
     /// `remove_project`'s.
@@ -438,6 +440,10 @@ impl ControlOperationDispatcher {
             ControlOperationCall::Connect(request) => {
                 self.answer_connect(request, request_origin).await
             }
+            ControlOperationCall::CheckLink(request) => self
+                .check_link(request)
+                .await
+                .map(ControlOperationAnswer::CheckLink),
             ControlOperationCall::ImportGraphGenerator(request) => {
                 self.answer_import_graph_generator(request, request_origin)
                     .await

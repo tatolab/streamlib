@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{ALinkThePinTypesRefuse, LiveGraphChangeOnOneStream, connect_impl};
+use super::{
+    ALinkConnected, LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link,
+};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
-    NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    OutputPortDeclaredNames, PinDeclaration, PinLinkRefusal, PinType, PortDescriptor, PortFamily,
-    PortFamilyDeclaration, SettingReadTime,
+    FreePinConversion, NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName,
+    NodeDescriptor, NodeInputMode, OutputPortDeclaredNames, PinDeclaration, PinLinkOutcome,
+    PinLinkRefusal, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime,
 };
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
@@ -260,14 +262,14 @@ fn connect_on_this_thread(
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
-    connect_on_this_thread_as(compiler, from, to, ALinkThePinTypesRefuse::IsRefused)
+    connect_on_this_thread_as(compiler, from, to, ALinkConnected::MadeNow)
 }
 
 fn connect_on_this_thread_as(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
-    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
+    a_link_connected: ALinkConnected,
 ) -> Result<LinkUniqueId> {
     tokio::runtime::Builder::new_current_thread()
         .build()
@@ -284,7 +286,7 @@ fn connect_on_this_thread_as(
             },
             from,
             to,
-            a_link_the_pin_types_refuse,
+            a_link_connected,
         ))
 }
 
@@ -573,7 +575,7 @@ fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take
         &compiler,
         OutputLinkPortRef::new(source, "temperature"),
         InputLinkPortRef::new(sink, "temperature"),
-        ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+        ALinkConnected::OfASavedGraph,
     )
     .expect("a saved link both ends' families take is kept");
     assert_eq!(the_links_in(&compiler), 1);
@@ -585,7 +587,7 @@ fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take
             &compiler,
             OutputLinkPortRef::new(level, "value"),
             InputLinkPortRef::new(numbers, "gain"),
-            ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+            ALinkConnected::OfASavedGraph,
         )
         .expect_err("a setting takes no wire, saved or not"),
     );
@@ -651,4 +653,54 @@ fn a_link_a_conversion_an_installed_module_declares_bridges_is_refused_naming_it
         )),
         "{refusal}"
     );
+}
+
+/// The verdict connect takes on a link, made nowhere, is the one connect acts on: a Float into
+/// an Integer connects for free, and each link connect refuses, a link a built-in conversion
+/// bridges among them, is refused in connect's very words; no link is made by any check.
+///
+/// Mental-revert: a check judging by the verdict alone would answer the convert node connect
+/// refuses, and one adding the link would leave it in the graph.
+#[test]
+fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing() {
+    register_the_verdict_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let float_source = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let number_sink = a_node_of(&compiler, class_path(NUMBER_SINK));
+    let celsius_source = a_node_of(&compiler, class_path(CELSIUS_SOURCE));
+    let fahrenheit_sink = a_node_of(&compiler, class_path(FAHRENHEIT_SINK));
+
+    let verdict = the_verdict_connect_takes_on_a_link(
+        &compiler,
+        OutputLinkPortRef::new(float_source.clone(), "value"),
+        InputLinkPortRef::new(number_sink.clone(), "count"),
+    )
+    .expect("a Float is read as an Integer for free")
+    .expect("two typed ends have a verdict");
+    assert_eq!(
+        verdict.outcome,
+        PinLinkOutcome::ConnectsWithFreeConversion(FreePinConversion::BetweenNumbers)
+    );
+
+    for (output, input) in [
+        (
+            OutputLinkPortRef::new(float_source.clone(), "value"),
+            InputLinkPortRef::new(number_sink.clone(), "label"),
+        ),
+        (
+            OutputLinkPortRef::new(float_source.clone(), "value"),
+            InputLinkPortRef::new(number_sink.clone(), "gain"),
+        ),
+        (
+            OutputLinkPortRef::new(celsius_source.clone(), "temperature"),
+            InputLinkPortRef::new(fahrenheit_sink.clone(), "temperature"),
+        ),
+    ] {
+        let checked = the_verdict_connect_takes_on_a_link(&compiler, output.clone(), input.clone())
+            .expect_err("connect refuses the link");
+        let refused =
+            connect_on_this_thread(&compiler, output, input).expect_err("connect refuses the link");
+        assert_eq!(checked.to_string(), refused.to_string());
+    }
+    assert_eq!(the_links_in(&compiler), 0);
 }

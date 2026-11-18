@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    GraphTransactionToolResult, ProjectTransactionOnTheWire, WriteGraphInputToolResult,
+    GraphTransactionToolResult, LinkCheckResult, ProjectTransactionOnTheWire,
+    WriteGraphInputToolResult,
 };
 
 use super::EVERY_SURFACE;
@@ -11,12 +12,12 @@ use crate::control_operation::{
     ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
 };
 use crate::control_operation_requests::{
-    AddGroupRequest, AddNodeRequest, AddNoteRequest, CollapseSelectionIntoSubgraphRequest,
-    ImportGraphGeneratorRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
-    RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest,
-    SetGroupFieldsRequest, SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest,
-    SetPinValueRequest, SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest,
-    UnlockSubgraphRequest, WriteGraphInputRequest,
+    AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkRequest,
+    CollapseSelectionIntoSubgraphRequest, ImportGraphGeneratorRequest, OneLinkGraphEditRequest,
+    OneNodeGraphEditRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
+    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
+    SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
+    TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest, WriteGraphInputRequest,
 };
 
 /// `transact`: several graph operations of one project as one transaction.
@@ -72,6 +73,25 @@ impl ControlOperation for Connect {
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `check_link`: what `connect` would answer for one link, made nowhere.
+pub struct CheckLink;
+
+impl ControlOperation for CheckLink {
+    type Request = CheckLinkRequest;
+    type Result = LinkCheckResult;
+    const METHOD_NAME: &'static str = "check_link";
+    const ONE_LINE_DOC: &'static str =
+        "Answer what `connect` would answer for one link in a loaded stream, changing nothing.";
+    const AGENT_USAGE_NOTE: &'static str = "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect` or `input_takes_no_wire`. A link that needs a convert node is refused today, as `connect` refuses it. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }

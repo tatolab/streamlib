@@ -3,13 +3,14 @@
 
 //! `connect` refuses a link from a function node into a node that runs in the app process, on a
 //! stream no commit builds, in the words its wiring would refuse it in at play, so the link is
-//! never in the graph a stopped stream saves.
+//! never in the graph a stopped stream saves; and refuses, by the same judgement a link check
+//! makes, a link an island cannot take.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{LiveGraphChangeOnOneStream, connect_impl};
+use super::{LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
@@ -17,7 +18,7 @@ use crate::core::descriptors::{
 };
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
 use crate::core::graph::{
-    ALinkThePinTypesRefuse, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+    ALinkConnected, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
 };
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::pubsub::LoadedStreamIdentity;
@@ -128,7 +129,7 @@ fn connect_on_this_thread(
             },
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
 }
 
@@ -192,5 +193,47 @@ fn a_function_node_into_another_function_node_connects() {
         InputLinkPortRef::new(downstream, "x"),
     )
     .expect("the two run in one island");
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A link an island cannot take, a second link into a port an island feeds or one closing a
+/// cycle of function nodes, is refused by `connect` on a stream no commit builds, and the
+/// judgement a link check makes refuses it in the same words; neither makes it.
+///
+/// Mental-revert: without the island's own refusals among connect's, a stopped stream would
+/// take both links and save them.
+#[test]
+fn a_link_an_island_cannot_take_is_refused_by_connect_and_its_check_alike() {
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let first = a_node_of(&compiler, FUNCTION_NODE);
+    let second = a_node_of(&compiler, FUNCTION_NODE);
+    let third = a_node_of(&compiler, FUNCTION_NODE);
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(first.clone(), "result"),
+        InputLinkPortRef::new(second.clone(), "x"),
+    )
+    .expect("the two run in one island");
+
+    for (output, input, words) in [
+        (
+            OutputLinkPortRef::new(third.clone(), "result"),
+            InputLinkPortRef::new(second.clone(), "x"),
+            "shares the port with no other link",
+        ),
+        (
+            OutputLinkPortRef::new(second.clone(), "result"),
+            InputLinkPortRef::new(first.clone(), "x"),
+            "closes a cycle of function nodes",
+        ),
+    ] {
+        let checked = the_verdict_connect_takes_on_a_link(&compiler, output.clone(), input.clone())
+            .expect_err("the check refuses the link");
+        let refused =
+            connect_on_this_thread(&compiler, output, input).expect_err("connect refuses the link");
+
+        assert_eq!(checked.to_string(), refused.to_string());
+        assert!(refused.to_string().contains(words), "{refused}");
+    }
     assert_eq!(the_links_in(&compiler), 1);
 }
