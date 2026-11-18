@@ -767,8 +767,7 @@ fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_stud
         json!({"level": 0.0})
     );
     let properties_of = |component: &str| {
-        crate::core::test_support::the_control_contract_schema_named(component)["properties"]
-            .clone()
+        crate::core::json_schema::the_control_contract_schema_named(component)["properties"].clone()
     };
     for key in ["config", "pins", "exposed_config_fields", "components"] {
         assert!(

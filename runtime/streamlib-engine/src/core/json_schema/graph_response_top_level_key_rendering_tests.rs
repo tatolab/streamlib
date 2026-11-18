@@ -16,7 +16,7 @@ fn a_graph_renders_no_extensions_key_and_its_schema_declares_none() {
     assert_eq!(keys, ["nodes", "links", "machine"]);
 
     let schema =
-        crate::core::test_support::the_control_contract_schema_named("StreamGraphOnTheWire");
+        crate::core::json_schema::the_control_contract_schema_named("StreamGraphOnTheWire");
     let mut declared: Vec<&String> = schema["properties"]
         .as_object()
         .expect("the contract's schema of a stream's graph declares its properties")

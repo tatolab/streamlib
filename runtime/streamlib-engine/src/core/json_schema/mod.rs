@@ -887,6 +887,21 @@ impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
     }
 }
 
+/// The schema the control contract file states under `name`: how the contract types an answer
+/// the engine builds, such as `StreamGraphOnTheWire` for `graph`.
+#[cfg(test)]
+pub(crate) fn the_control_contract_schema_named(name: &str) -> serde_json::Value {
+    let contract: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../streamlib-control-contract/contract.json"
+    )))
+    .expect("the control contract file is JSON");
+    contract["components"]["schemas"]
+        .get(name)
+        .unwrap_or_else(|| panic!("the control contract states `{name}`"))
+        .clone()
+}
+
 #[cfg(test)]
 mod link_rendering_tests;
 

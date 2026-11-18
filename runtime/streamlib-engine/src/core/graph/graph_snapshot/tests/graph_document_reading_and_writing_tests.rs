@@ -444,9 +444,9 @@ fn a_key_this_runtime_does_not_read_is_refused_from_a_json_string_too() {
 #[test]
 fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
     let render_schema =
-        crate::core::test_support::the_control_contract_schema_named("StreamGraphOnTheWire");
+        crate::core::json_schema::the_control_contract_schema_named("StreamGraphOnTheWire");
     let node_schema =
-        crate::core::test_support::the_control_contract_schema_named("GraphNodeOnTheWire");
+        crate::core::json_schema::the_control_contract_schema_named("GraphNodeOnTheWire");
     let link_schema =
         serde_json::to_value(schemars::schema_for!(crate::core::json_schema::LinkOutput)).unwrap();
     let link_definitions = link_schema
