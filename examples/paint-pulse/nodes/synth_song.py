@@ -189,7 +189,7 @@ def render_the_loop() -> numpy.ndarray:
 class SynthSongConfig:
     """How loud the loop plays."""
 
-    volume: float = 0.8
+    volume: float = 0.13
 
 
 @node.meta(

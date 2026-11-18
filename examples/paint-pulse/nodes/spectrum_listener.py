@@ -86,8 +86,8 @@ class BandState:
 class SpectrumListenerConfig:
     """How strongly the music moves the ball."""
 
-    sensitivity: float = 1.25
-    spread: float = 1.0
+    sensitivity: float = 0.5
+    spread: float = 0.65
 
 
 @node.meta(

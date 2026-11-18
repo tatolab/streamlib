@@ -22,9 +22,9 @@ const AUDIO_MOST_LEAD_SECONDS = 0.4;
 const CONTROLS = [
   { group: "Music" },
   { label: "Source", options: ["Song", "My computer (Wave Link)", "Mic"], value: 0, sets: [["source_switch", "source"]] },
-  { label: "Volume", min: 0, max: 1, step: 0.01, value: 0.8, sets: [["synth_song", "volume"]] },
-  { label: "Sensitivity", min: 0.3, max: 3, step: 0.05, value: 1.25, sets: [["spectrum_listener", "sensitivity"]] },
-  { label: "Explosion", min: 0, max: 2, step: 0.05, value: 1.2, sets: [["spectrum_listener", "spread"]] },
+  { label: "Volume", min: 0, max: 1, step: 0.01, value: 0.13, sets: [["synth_song", "volume"]] },
+  { label: "Sensitivity", min: 0.3, max: 3, step: 0.05, value: 0.5, sets: [["spectrum_listener", "sensitivity"]] },
+  { label: "Explosion", min: 0, max: 2, step: 0.05, value: 0.65, sets: [["spectrum_listener", "spread"]] },
   { group: "Ball" },
   { label: "Spin", min: -0.6, max: 0.6, step: 0.01, value: 0.12, sets: [["spin", "rate"]] },
   { label: "Flow", toggle: true, value: true, sets: [["paint_ball", "flow"]] },

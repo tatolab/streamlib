@@ -52,6 +52,11 @@ FRAME_PUSH_CONSTANT_SIZE = struct.calcsize(FRAME_PUSH_CONSTANT_FORMAT)
 MOTION_RECORD_NAMES = ("clocks", "levels", "beat", "energy")
 CAMERA_RECORD_NAMES = ("yaw", "pitch", "distance", "burst")
 BURST_SECONDS = 1.4
+# How far the camera is blown back when the ball flies apart, as a multiple of its distance, and
+# how quickly it is thrown out and drifts back in.
+MOST_PULLBACK = 2.4
+PULLBACK_OUT_PER_SECOND = 9.0
+PULLBACK_IN_PER_SECOND = 0.9
 
 _SHARED_SLANG = f"""
 static const int BAND_COUNT = {BAND_COUNT};
@@ -297,6 +302,7 @@ class PaintBall:
         self.latest_camera: dict[str, Any] = {"yaw": 0.0, "pitch": 0.14, "distance": 11.5, "burst": 0}
         self.bursts_seen: int | None = None
         self.burst = 0.0
+        self.pullback = 1.0
         self.last_time_ns: int | None = None
 
     def configure(self, config: PaintBallConfig) -> None:
@@ -343,6 +349,15 @@ class PaintBall:
             levels = list(self.latest_motion["levels"])[:BAND_COUNT]
             beat = float(self.latest_motion["beat"])
         words = [half_pair_word(c, lv) for c, lv in zip(clocks, levels)]
+
+        # The camera is blown back with the cubes: thrown out at once by the widest bands, then
+        # drifting back in, so even a big explosion stays in frame.
+        widest = sorted(clocks, reverse=True)[:6]
+        scatter = max(sum(widest) / (len(widest) * 3.0), self.burst)
+        target = 1.0 + (MOST_PULLBACK - 1.0) * min(1.0, scatter) ** 0.8
+        rate = PULLBACK_OUT_PER_SECOND if target > self.pullback else PULLBACK_IN_PER_SECOND
+        self.pullback += (target - self.pullback) * min(1.0, rate * min(dt, 0.1))
+        distance *= self.pullback
 
         texture = self.output_ring.next_texture_for_this_frame(ctx.gpu_limited_access, self.width, self.height)
         self.kernel.draw(

@@ -344,7 +344,7 @@
         ]
       },
       "input_values": {
-        "volume": 0.8
+        "volume": 0.13
       }
     },
     {
@@ -359,8 +359,8 @@
         ]
       },
       "input_values": {
-        "sensitivity": 1.25,
-        "spread": 1.2
+        "sensitivity": 0.5,
+        "spread": 0.65
       }
     },
     {
