@@ -338,7 +338,7 @@
     {
       "id": "2544046a-114a-57c2-90b0-6d29931c105e",
       "name": "spin",
-      "type": "core_nodes.animation:Speed",
+      "type": "imports/core-nodes/core_nodes.animation:Speed",
       "studio": {
         "contract": 1,
         "position": [
@@ -386,7 +386,7 @@
     {
       "id": "ce35f7a9-1132-5104-b715-977e81fef375",
       "name": "clock",
-      "type": "core_nodes.animation:Timer",
+      "type": "imports/core-nodes/core_nodes.animation:Timer",
       "studio": {
         "contract": 1,
         "position": [
@@ -398,7 +398,7 @@
     {
       "id": "31d11287-2618-52a0-b0e0-0aa46a8eef60",
       "name": "sky",
-      "type": "core_nodes.generators:Gradient",
+      "type": "imports/core-nodes/core_nodes.generators:Gradient",
       "studio": {
         "contract": 1,
         "position": [
@@ -419,7 +419,7 @@
     {
       "id": "5cf24689-51da-544e-b2ce-2adaa7dfd0f8",
       "name": "haze",
-      "type": "core_nodes.generators:Noise",
+      "type": "imports/core-nodes/core_nodes.generators:Noise",
       "studio": {
         "contract": 1,
         "position": [
@@ -436,7 +436,7 @@
     {
       "id": "c54e1988-7771-5889-889b-b71eb36566b5",
       "name": "backdrop",
-      "type": "core_nodes.composite:Mix",
+      "type": "imports/core-nodes/core_nodes.composite:Mix",
       "studio": {
         "contract": 1,
         "position": [
@@ -451,7 +451,7 @@
     {
       "id": "5a7f0184-7851-5225-9dee-fc097eb5c546",
       "name": "ball_over_backdrop",
-      "type": "core_nodes.composite:Over",
+      "type": "imports/core-nodes/core_nodes.composite:Over",
       "studio": {
         "contract": 1,
         "position": [
@@ -466,7 +466,7 @@
     {
       "id": "b633b5f3-a3be-5a4a-91a5-2cf488d6fd6c",
       "name": "bass_lag",
-      "type": "core_nodes.animation:Lag",
+      "type": "imports/core-nodes/core_nodes.animation:Lag",
       "studio": {
         "contract": 1,
         "position": [
@@ -481,7 +481,7 @@
     {
       "id": "9869725a-fecd-5fc7-95c3-78183e3780dd",
       "name": "stroke_from_bass",
-      "type": "core_nodes.math_nodes:Remap",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -518,7 +518,7 @@
     {
       "id": "972ea8d2-e682-591a-82de-b068181be6b1",
       "name": "split_from_beat",
-      "type": "core_nodes.math_nodes:Remap",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -536,7 +536,7 @@
     {
       "id": "488ad2b5-8dd2-5813-b03b-d656787d8678",
       "name": "beat_split",
-      "type": "core_nodes.filters:RgbSplit",
+      "type": "imports/core-nodes/core_nodes.filters:RgbSplit",
       "studio": {
         "contract": 1,
         "position": [
@@ -551,7 +551,7 @@
     {
       "id": "5b5be77a-75d5-5003-bb13-7d0a21039df2",
       "name": "energy_lag",
-      "type": "core_nodes.animation:Lag",
+      "type": "imports/core-nodes/core_nodes.animation:Lag",
       "studio": {
         "contract": 1,
         "position": [
@@ -566,7 +566,7 @@
     {
       "id": "0440ef9f-0bc0-55bd-b38d-67d71ef5a46e",
       "name": "saturation_from_energy",
-      "type": "core_nodes.math_nodes:Remap",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -584,7 +584,7 @@
     {
       "id": "d9ca7a7f-f68f-50a4-b4af-1769e9fecb09",
       "name": "colour",
-      "type": "core_nodes.color:HsvAdjust",
+      "type": "imports/core-nodes/core_nodes.color:HsvAdjust",
       "studio": {
         "contract": 1,
         "position": [
@@ -600,7 +600,7 @@
     {
       "id": "3e35c490-fa67-571b-bf15-3b0a7928c173",
       "name": "vignette",
-      "type": "core_nodes.filters:Vignette",
+      "type": "imports/core-nodes/core_nodes.filters:Vignette",
       "studio": {
         "contract": 1,
         "position": [

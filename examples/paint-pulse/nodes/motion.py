@@ -30,7 +30,7 @@ class MotionReading:
     description="Unpack the listener's motion record into Float pins: beat, energy, bass and highs.",
 )
 @node.function
-def MotionReadout(motion: dict | None = None) -> MotionReading:
+def MotionReadout(motion: dict) -> MotionReading:
     """Each named number of `motion`, or 0 before the first record arrives."""
     if motion is None:
         return MotionReading(0.0, 0.0, 0.0, 0.0)
@@ -48,7 +48,7 @@ def MotionReadout(motion: dict | None = None) -> MotionReading:
 )
 @node.function
 def OrbitCamera(
-    view: dict | None = None,
+    view: dict,
     spin: float = 0.0,
     tilt: float = 0.14,
     distance: float = 11.5,

@@ -288,7 +288,7 @@ class PaintBall:
     """Motion in, a rendered frame of the ball out (transparent where there is no ball)."""
 
     motion = Input(Records, delivery="newest", requires=MOTION_RECORD_NAMES, description="From SpectrumListener")
-    camera = Input(Records, delivery="newest", requires=CAMERA_RECORD_NAMES, description="From OrbitCamera")
+    camera = Input(Records, delivery="newest", description="From OrbitCamera")
     ball = Output(Image, description="The ball, on a transparent background")
 
     def __init__(self, config: PaintBallConfig) -> None:
