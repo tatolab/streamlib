@@ -15,9 +15,9 @@ use streamlib::sdk::runtime::{
     StreamListingState, StreamLocation,
 };
 use streamlib_control_contract::{
-    CONTROL_CONTRACT_VERSION, ControlContractVersionMismatch, ControlOperationCall,
-    DescribeRuntimeRequest, DiscoverRequest, DiscoverResult, GraphEditMode, GraphRequest,
-    ListStreamsRequest, OneProjectByItsDirectoryRequest, ProjectTransactionAuthorArgument,
+    ControlContractVersionMismatch, ControlOperationCall, DescribeRuntimeRequest, DiscoverRequest,
+    DiscoverResult, GraphEditMode, GraphRequest, ListStreamsRequest,
+    OneProjectByItsDirectoryRequest, ProjectTransactionAuthorArgument,
     ProjectTransactionAuthorKindArgument, SubscribeInputValueChangesRequest,
     SubscribeInputValueChangesResult, SubscribeProjectChangesRequest,
     SubscribeProjectChangesResult, SubscribeProjectLogRecordsRequest,
@@ -60,10 +60,13 @@ use crate::stream_graph_transaction_executor::{
     GraphTransactionRefusal, StreamGraphTransactionExecutor,
 };
 
+mod contract_a_client_names;
 mod discovery_and_subscription_operation_answers;
 mod graph_edit_operation_answers;
 mod playback_and_stream_action_operation_answers;
 mod project_lifecycle_operation_answers;
+
+pub(crate) use contract_a_client_names::ContractAClientNames;
 
 use discovery_and_subscription_operation_answers::subscribe_to_project_log_records;
 
@@ -375,8 +378,14 @@ impl ControlOperationDispatcher {
         request_origin: &ControlRequestOrigin,
     ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
         match call {
-            ControlOperationCall::Discover(DiscoverRequest { contract_version }) => self
-                .discover(contract_version)
+            ControlOperationCall::Discover(DiscoverRequest {
+                contract_version,
+                contract_revision,
+            }) => self
+                .discover(ContractAClientNames {
+                    version: contract_version,
+                    revision: contract_revision,
+                })
                 .map(ControlOperationAnswer::Discover),
             ControlOperationCall::SubscribeProjectChanges(SubscribeProjectChangesRequest {
                 projects,
@@ -823,21 +832,6 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
             "{action_name} failed: the transaction"
         )))?
-    }
-}
-
-/// Refuse a client that names another contract version than the runtime serves.
-pub(crate) fn refuse_another_contract_version(
-    client_contract_version: Option<u32>,
-) -> Result<(), ControlContractVersionMismatch> {
-    match client_contract_version {
-        Some(client_contract_version) if client_contract_version != CONTROL_CONTRACT_VERSION => {
-            Err(ControlContractVersionMismatch {
-                client_contract_version,
-                runtime_contract_version: CONTROL_CONTRACT_VERSION,
-            })
-        }
-        _ => Ok(()),
     }
 }
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { CONTROL_CONTRACT_VERSION } from "./control_contract.js";
+import { CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION } from "./control_contract.js";
 import { controlAnswerResult, controlNotificationParams, controlRequestMessage } from "./control_messages.js";
 import { ControlWebSocketTransport } from "./control_transports.js";
 
@@ -18,7 +18,11 @@ export class TatolabRuntimeClientCallsOverATransport {
     const transport = await ControlWebSocketTransport.open({ socketPath, clientName, signal });
     const client = new this(transport);
     try {
-      client.discovered = await client.call("discover", { contract_version: CONTROL_CONTRACT_VERSION }, { signal });
+      client.discovered = await client.call(
+        "discover",
+        { contract_version: CONTROL_CONTRACT_VERSION, contract_revision: CONTROL_CONTRACT_REVISION },
+        { signal },
+      );
     } catch (discoverRefusal) {
       await client.close();
       throw discoverRefusal;
@@ -35,7 +39,7 @@ export class TatolabRuntimeClientCallsOverATransport {
   async call(method, params, { signal } = {}) {
     const requestMessage = controlRequestMessage(method, params, this.#nextRequestId++);
     const answerMessage = await this.#transport.sendRequest(requestMessage, { signal });
-    return controlAnswerResult(method, answerMessage);
+    return controlAnswerResult(method, answerMessage, this.discovered?.contract_revision);
   }
 
   onNotification(method, listener) {

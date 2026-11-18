@@ -10,7 +10,7 @@ use rmcp::model::ProtocolVersion;
 use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService};
 use serde_json::{Value, json};
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
-use streamlib_control_contract::CONTROL_CONTRACT_VERSION;
+use streamlib_control_contract::{CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION};
 use streamlib_project_repository::{ProjectRepository, ProjectTransactionAuthor};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -89,11 +89,11 @@ impl ControlServedWithAnMcpClient {
     }
 
     /// A WebSocket opened at `/control/ws` with `extra_headers`, or the status the
-    /// runtime refused it with.
+    /// runtime refused it with and the refusal's body, `Null` when it is not JSON.
     pub(crate) async fn control_websocket_with_headers(
         &self,
         extra_headers: &[(&str, String)],
-    ) -> Result<ControlWebSocketMessages, u16> {
+    ) -> Result<ControlWebSocketMessages, (u16, Value)> {
         let stream = UnixStream::connect(&self.served.local_api_socket_path)
             .await
             .unwrap();
@@ -106,9 +106,14 @@ impl ControlServedWithAnMcpClient {
         }
         match tokio_tungstenite::client_async(request, stream).await {
             Ok((websocket, _)) => Ok(ControlWebSocketMessages { websocket }),
-            Err(tokio_tungstenite::tungstenite::Error::Http(refusal)) => {
-                Err(refusal.status().as_u16())
-            }
+            Err(tokio_tungstenite::tungstenite::Error::Http(refusal)) => Err((
+                refusal.status().as_u16(),
+                refusal
+                    .body()
+                    .as_deref()
+                    .and_then(|body| serde_json::from_slice(body).ok())
+                    .unwrap_or(Value::Null),
+            )),
             Err(not_opened) => panic!("the control WebSocket did not open: {not_opened}"),
         }
     }
@@ -345,6 +350,7 @@ async fn discover_answers_the_contract_this_runtime_serves() {
         discovered["result"],
         json!({
             "contract_version": CONTROL_CONTRACT_VERSION,
+            "contract_revision": CONTROL_CONTRACT_REVISION,
             "runtime_version": this_runtime.version,
             "build_id": this_runtime.build_id,
             "operations": registered,
@@ -352,44 +358,180 @@ async fn discover_answers_the_contract_this_runtime_serves() {
     );
 }
 
-#[tokio::test]
-async fn a_client_built_against_another_contract_version_is_refused_naming_both() {
-    let served = ControlServedWithAnMcpClient::over_the_stub().await;
-    let other_version = CONTROL_CONTRACT_VERSION + 1;
-    let refused = served
-        .control_call("discover", json!({ "contract_version": other_version }))
-        .await;
-    assert_eq!(refused["error"]["code"], 3, "{refused}");
-    let message = refused["error"]["message"].as_str().unwrap();
-    assert!(message.contains(&other_version.to_string()), "{message}");
-    assert!(
-        message.contains(&CONTROL_CONTRACT_VERSION.to_string()),
-        "{message}"
-    );
-    assert_eq!(
-        refused["error"]["data"],
-        json!({
-            "client_contract_version": other_version,
-            "runtime_contract_version": CONTROL_CONTRACT_VERSION,
-        })
-    );
+/// The record a runtime refuses a client of `client_version` and `client_revision` with.
+fn the_mismatch_of_a_client(client_version: u32, client_revision: u32, older_side: &str) -> Value {
+    json!({
+        "client_contract_version": client_version,
+        "runtime_contract_version": CONTROL_CONTRACT_VERSION,
+        "client_contract_revision": client_revision,
+        "runtime_contract_revision": CONTROL_CONTRACT_REVISION,
+        "older_side": older_side,
+        "runtime_version": the_stub_runtimes_description().version,
+    })
+}
 
-    let header = format!("tatolab-control-contract-version: {other_version}\r\n");
-    let (_, refused_by_header) = served
+/// The record each way a client connects refuses it with: `discover`, a request's headers and
+/// the WebSocket upgrade's 409 body.
+async fn the_mismatch_on_every_way_a_client_connects(
+    served: &ControlServedWithAnMcpClient,
+    client_version: u32,
+    client_revision: u32,
+) -> [Value; 3] {
+    let discovered = served
+        .control_call(
+            "discover",
+            json!({ "contract_version": client_version, "contract_revision": client_revision }),
+        )
+        .await;
+    assert_eq!(discovered["error"]["code"], 3, "{discovered}");
+    let headers = format!(
+        "tatolab-control-contract-version: {client_version}\r\n\
+         tatolab-control-contract-revision: {client_revision}\r\n"
+    );
+    let (_, requested) = served
         .control_post_with_headers(
-            &header,
+            &headers,
             &json!({ "jsonrpc": "2.0", "id": 1, "method": "list_streams" }).to_string(),
         )
         .await;
-    assert_eq!(refused_by_header["error"]["code"], 3, "{refused_by_header}");
+    assert_eq!(requested["error"]["code"], 3, "{requested}");
+    assert_eq!(
+        requested["error"]["message"], discovered["error"]["message"],
+        "a request and `discover` carry the same words"
+    );
+    let Err((status, upgrade_refusal)) = served
+        .control_websocket_with_headers(&[
+            (
+                "tatolab-control-contract-version",
+                client_version.to_string(),
+            ),
+            (
+                "tatolab-control-contract-revision",
+                client_revision.to_string(),
+            ),
+        ])
+        .await
+    else {
+        panic!("the runtime opened the control WebSocket for a client of another contract");
+    };
+    assert_eq!(status, 409);
+    [
+        discovered["error"]["data"].clone(),
+        requested["error"]["data"].clone(),
+        upgrade_refusal,
+    ]
+}
 
-    let refused_websocket = served
-        .control_websocket_with_headers(&[(
-            "tatolab-control-contract-version",
-            other_version.to_string(),
-        )])
+#[tokio::test]
+async fn a_client_of_a_higher_revision_is_refused_naming_the_runtime_older_on_every_way_it_connects()
+ {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let higher_revision = CONTROL_CONTRACT_REVISION + 1;
+    let expected = the_mismatch_of_a_client(CONTROL_CONTRACT_VERSION, higher_revision, "runtime");
+    for refused in the_mismatch_on_every_way_a_client_connects(
+        &served,
+        CONTROL_CONTRACT_VERSION,
+        higher_revision,
+    )
+    .await
+    {
+        assert_eq!(refused, expected);
+    }
+    let discovered = served
+        .control_call(
+            "discover",
+            json!({ "contract_version": CONTROL_CONTRACT_VERSION, "contract_revision": higher_revision }),
+        )
         .await;
-    assert_eq!(refused_websocket.err(), Some(409));
+    let message = discovered["error"]["message"].as_str().unwrap();
+    assert!(message.contains("update the runtime"), "{message}");
+    assert!(
+        message.contains(&the_stub_runtimes_description().version),
+        "the words name the runtime's release: {message}"
+    );
+}
+
+#[tokio::test]
+async fn a_client_of_another_version_is_refused_naming_the_side_of_the_lower_version() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    for (client_version, older_side) in [
+        (CONTROL_CONTRACT_VERSION + 1, "runtime"),
+        (CONTROL_CONTRACT_VERSION - 1, "client"),
+    ] {
+        let expected = the_mismatch_of_a_client(client_version, 0, older_side);
+        for refused in the_mismatch_on_every_way_a_client_connects(&served, client_version, 0).await
+        {
+            assert_eq!(refused, expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_client_of_a_lower_revision_or_naming_no_contract_is_served() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let lower_revision = CONTROL_CONTRACT_REVISION.saturating_sub(1);
+    let discovered = served
+        .control_call(
+            "discover",
+            json!({ "contract_version": CONTROL_CONTRACT_VERSION, "contract_revision": lower_revision }),
+        )
+        .await;
+    assert_eq!(
+        discovered["result"]["contract_revision"], CONTROL_CONTRACT_REVISION,
+        "{discovered}"
+    );
+    let served_by_version_alone = served
+        .control_call(
+            "discover",
+            json!({ "contract_version": CONTROL_CONTRACT_VERSION }),
+        )
+        .await;
+    assert!(
+        served_by_version_alone.get("result").is_some(),
+        "{served_by_version_alone}"
+    );
+    let headers = format!(
+        "tatolab-control-contract-version: {CONTROL_CONTRACT_VERSION}\r\n\
+         tatolab-control-contract-revision: {lower_revision}\r\n"
+    );
+    let (_, requested) = served
+        .control_post_with_headers(
+            &headers,
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "list_streams" }).to_string(),
+        )
+        .await;
+    assert!(requested.get("result").is_some(), "{requested}");
+    served
+        .control_websocket_with_headers(&[
+            (
+                "tatolab-control-contract-version",
+                CONTROL_CONTRACT_VERSION.to_string(),
+            ),
+            (
+                "tatolab-control-contract-revision",
+                lower_revision.to_string(),
+            ),
+        ])
+        .await
+        .unwrap_or_else(|refused| panic!("the runtime refused a lower revision: {refused:?}"));
+    let unversioned = served.control_call("discover", json!({})).await;
+    assert!(unversioned.get("result").is_some(), "{unversioned}");
+}
+
+#[tokio::test]
+async fn a_contract_revision_header_that_is_not_a_whole_number_is_an_invalid_request() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let (_, refused) = served
+        .control_post_with_headers(
+            "tatolab-control-contract-revision: one\r\n",
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "list_streams" }).to_string(),
+        )
+        .await;
+    assert_eq!(refused["error"]["code"], -32600, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "`tatolab-control-contract-revision` must be a contract revision, a whole number"
+    );
 }
 
 #[tokio::test]

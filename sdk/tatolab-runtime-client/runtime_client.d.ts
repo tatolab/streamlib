@@ -39,7 +39,7 @@ export declare class TatolabRuntimeClientCallsOverATransport {
   constructor(transport: ControlTransport);
   /** What `discover` answered, when the client was opened with `connect`; undefined for a client made over a transport. */
   readonly discovered: DiscoverResult | undefined;
-  /** Call one operation: rejects with `ControlRequestInvalid` before sending params that do not match the contract, `ControlOperationError` for the runtime's refusal or failure, and `ControlAnswerInvalid` for an answer that does not match. */
+  /** Call one operation: rejects with `ControlRequestInvalid` before sending params that do not match the contract, `ControlContractMismatch` when the runtime refuses the client's contract, `ControlOperationError` for the runtime's refusal or failure, and `ControlAnswerInvalid` for an answer that does not match. */
   call<Method extends ControlOperationMethodName>(
     method: Method,
     params: ControlOperations[Method]["params"],

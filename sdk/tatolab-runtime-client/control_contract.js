@@ -5,6 +5,8 @@
 
 export const CONTROL_CONTRACT_VERSION = 3;
 
+export const CONTROL_CONTRACT_REVISION = 1;
+
 export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "discover",
   "subscribe_project_changes",
@@ -87,11 +89,24 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "redo",
 ]);
 
+export const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES = Object.freeze([
+  "subscribe_project_changes",
+  "subscribe_stream_graph_changes",
+  "subscribe_input_value_changes",
+  "subscribe_stream_action_changes",
+  "subscribe_project_log_records",
+  "graph",
+  "set_node_input_value",
+  "read_project_changes",
+]);
+
 export const CONTROL_JSON_RPC_ROUTE_PATH = "/control";
 
 export const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET = "/control/ws";
 
 export const CONTROL_CONTRACT_VERSION_HEADER_NAME = "tatolab-control-contract-version";
+
+export const CONTROL_CONTRACT_REVISION_HEADER_NAME = "tatolab-control-contract-revision";
 
 export const CONTROL_CLIENT_NAME_HEADER_NAME = "tatolab-control-client-name";
 

@@ -7,10 +7,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CONTROL_CONTRACT_VERSION, CONTROL_OPERATION_METHOD_NAMES } from "../index.js";
+import { CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATION_METHOD_NAMES } from "../index.js";
 
 /** What `discover` answers, in the shape `DiscoverResult` takes. */
-export const DISCOVERED = { contract_version: CONTROL_CONTRACT_VERSION, runtime_version: "0.68.76", build_id: "stand-in", operations: [...CONTROL_OPERATION_METHOD_NAMES] };
+export const DISCOVERED = { contract_version: CONTROL_CONTRACT_VERSION, contract_revision: CONTROL_CONTRACT_REVISION, runtime_version: "0.68.76", build_id: "stand-in", operations: [...CONTROL_OPERATION_METHOD_NAMES] };
 
 /** A `describe_runtime` result naming `version`, in the shape `DescribeRuntimeToolResult` takes. */
 export function describedRuntime(version) {
@@ -45,12 +45,19 @@ function theClientFramesOf(bytes) {
   return { frames, bytesLeft: bytes };
 }
 
-/** A local API stand-in on a Unix socket: it answers `discover` on a WebSocket, and every other request on it or in a POST only when told to. */
-export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade = true, endsTheConnectionWhenTheClientDoes = true } = {}) {
+/** A local API stand-in on a Unix socket: it answers `discover` on a WebSocket with `discovered`, and every other request on it or in a POST only when told to; `refusesTheUpgradeWith`, a status and a body, refuses the WebSocket instead. */
+export async function startALocalApiThatAnswersOnlyWhenTold({
+  answersTheUpgrade = true,
+  endsTheConnectionWhenTheClientDoes = true,
+  discovered = DISCOVERED,
+  refusesTheUpgradeWith = undefined,
+} = {}) {
   const socketDirectory = await mkdtemp(join(tmpdir(), "runtime-client-test-"));
   const socketPath = join(socketDirectory, "local-api.sock");
   const requestsHeardOnTheConnection = [];
   const upgradedSockets = [];
+  const upgradeRequestsHeard = [];
+  const discoverParamsHeard = [];
   const postRequestsHeard = [];
   const postResponsesUnsent = [];
   const localApi = createServer((postRequest, postResponse) => {
@@ -59,6 +66,12 @@ export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade 
   });
   localApi.on("upgrade", (upgradeRequest, socket) => {
     upgradedSockets.push(socket);
+    upgradeRequestsHeard.push(upgradeRequest);
+    if (refusesTheUpgradeWith !== undefined) {
+      const { statusCode, body } = refusesTheUpgradeWith;
+      socket.end(`HTTP/1.1 ${statusCode} Refused\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+      return;
+    }
     if (!answersTheUpgrade) return;
     const acceptKey = createHash("sha1").update(`${upgradeRequest.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${acceptKey}\r\n\r\n`);
@@ -74,7 +87,8 @@ export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade 
         }
         const message = JSON.parse(frame.payload.toString("utf8"));
         if (message.method === "discover") {
-          socket.write(aServerTextFrame(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: DISCOVERED })));
+          discoverParamsHeard.push(message.params);
+          socket.write(aServerTextFrame(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: discovered })));
         } else {
           requestsHeardOnTheConnection.push(message);
         }
@@ -86,6 +100,8 @@ export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade 
     socketPath,
     requestsHeardOnTheConnection,
     postRequestsHeard,
+    upgradeRequestsHeard,
+    discoverParamsHeard,
     writeOnTheConnection(messageText) {
       upgradedSockets[0].write(aServerTextFrame(messageText));
     },

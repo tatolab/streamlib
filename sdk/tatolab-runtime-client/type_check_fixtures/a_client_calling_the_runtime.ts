@@ -4,6 +4,7 @@
 import {
   CONTROL_OPERATION_METHOD_NAMES,
   ControlAnswerInvalid,
+  ControlContractMismatch,
   ControlOperationError,
   ControlPostTransport,
   ControlRequestInvalid,
@@ -84,7 +85,13 @@ export async function aClientCallingEveryKindOfOperation(
   try {
     await client.graph({});
   } catch (callError) {
-    if (callError instanceof ControlOperationError) {
+    if (callError instanceof ControlContractMismatch) {
+      const sideToUpdate: "runtime" | "client" = callError.olderSide;
+      const runtimeRelease: string = callError.mismatch.runtime_version;
+      // @ts-expect-error the older side is one of the two the contract names.
+      const neitherSide: typeof callError.olderSide = "both";
+      void [sideToUpdate, runtimeRelease, neitherSide];
+    } else if (callError instanceof ControlOperationError) {
       const refusedAction: string | undefined = callError.refusal?.action;
       void refusedAction;
     } else if (callError instanceof ControlRequestInvalid || callError instanceof ControlAnswerInvalid) {

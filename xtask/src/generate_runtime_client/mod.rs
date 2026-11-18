@@ -30,8 +30,9 @@ use streamlib_control_contract::{
 };
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_VERSION_HEADER_NAME,
-    CONTROL_JSON_RPC_ROUTE_PATH, CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
+    CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_REVISION_HEADER_NAME,
+    CONTROL_CONTRACT_VERSION_HEADER_NAME, CONTROL_JSON_RPC_ROUTE_PATH,
+    CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
 };
 
 /// The client package's directory, relative to the workspace.
@@ -114,6 +115,11 @@ const CONTROL_LOCAL_API_WIRE_CONSTANTS: &[(&str, &str, &str)] = &[
         "CONTROL_CONTRACT_VERSION_HEADER_NAME",
         CONTROL_CONTRACT_VERSION_HEADER_NAME,
         "The header naming the contract version a client was built against.",
+    ),
+    (
+        "CONTROL_CONTRACT_REVISION_HEADER_NAME",
+        CONTROL_CONTRACT_REVISION_HEADER_NAME,
+        "The header naming the contract revision a client was built against.",
     ),
     (
         "CONTROL_CLIENT_NAME_HEADER_NAME",
@@ -247,6 +253,22 @@ pub fn runtime_client_generated_files(
     ])
 }
 
+/// The `x-stability` of an entry whose shape may change within a contract version.
+const EXPERIMENTAL_STABILITY: &str = "experimental";
+
+/// `export const <constant_name> = Object.freeze([...]);`, one name per line.
+fn write_a_frozen_array_of_names<'name>(
+    constants: &mut String,
+    constant_name: &str,
+    names: impl Iterator<Item = &'name str>,
+) {
+    let _ = writeln!(constants, "export const {constant_name} = Object.freeze([");
+    for name in names {
+        let _ = writeln!(constants, "  {},", json_string_literal(name));
+    }
+    constants.push_str("]);\n");
+}
+
 /// One method or notification of the contract file, as the generator reads it.
 pub(crate) struct ControlContractEntryRead<'contract> {
     pub(crate) name: &'contract str,
@@ -264,6 +286,7 @@ pub(crate) struct ControlContractEntryRead<'contract> {
 /// The parts of the contract file the generator writes from.
 struct ControlContractRead<'contract> {
     contract_version: u64,
+    contract_revision: u64,
     methods: Vec<ControlContractEntryRead<'contract>>,
     notifications: Vec<ControlContractEntryRead<'contract>>,
     component_schemas: &'contract Map<String, Value>,
@@ -275,6 +298,9 @@ impl<'contract> ControlContractRead<'contract> {
         let contract_version = contract["info"]["x-contract-version"]
             .as_u64()
             .context("the contract file names no `info.x-contract-version`")?;
+        let contract_revision = contract["info"]["x-contract-revision"]
+            .as_u64()
+            .context("the contract file names no `info.x-contract-revision`")?;
         let component_schemas = component_schemas_of(contract)?;
         let entries_of = |key: &str| -> Result<Vec<ControlContractEntryRead<'contract>>> {
             contract[key]
@@ -312,6 +338,7 @@ impl<'contract> ControlContractRead<'contract> {
         }
         Ok(Self {
             contract_version,
+            contract_revision,
             methods,
             notifications: entries_of("x-notifications")?,
             component_schemas,
@@ -386,9 +413,13 @@ impl<'contract> ControlContractRead<'contract> {
             declarations,
             "/** The contract version this package was generated from. */\n\
              export declare const CONTROL_CONTRACT_VERSION: {};\n\n\
+             /** The contract revision this package was generated from: the additions made within its version. */\n\
+             export declare const CONTROL_CONTRACT_REVISION: {};\n\n\
              /** Every method name the contract declares, in its order. */\n\
-             export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];\n",
-            self.contract_version
+             export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];\n\n\
+             /** Every method the contract marks `experimental`, whose shape may change within a version. */\n\
+             export declare const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];\n",
+            self.contract_version, self.contract_revision
         );
         for (constant_name, value, one_line_doc) in CONTROL_LOCAL_API_WIRE_CONSTANTS {
             let _ = writeln!(
@@ -411,14 +442,24 @@ impl<'contract> ControlContractRead<'contract> {
         let mut constants = String::from(GENERATED_SOURCE_HEADER);
         let _ = writeln!(
             constants,
-            "\nexport const CONTROL_CONTRACT_VERSION = {};\n",
-            self.contract_version
+            "\nexport const CONTROL_CONTRACT_VERSION = {};\n\n\
+             export const CONTROL_CONTRACT_REVISION = {};\n",
+            self.contract_version, self.contract_revision
         );
-        constants.push_str("export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([\n");
-        for method in &self.methods {
-            let _ = writeln!(constants, "  {},", json_string_literal(method.name));
-        }
-        constants.push_str("]);\n");
+        write_a_frozen_array_of_names(
+            &mut constants,
+            "CONTROL_OPERATION_METHOD_NAMES",
+            self.methods.iter().map(|method| method.name),
+        );
+        constants.push('\n');
+        write_a_frozen_array_of_names(
+            &mut constants,
+            "CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES",
+            self.methods
+                .iter()
+                .filter(|method| method.stability == EXPERIMENTAL_STABILITY)
+                .map(|method| method.name),
+        );
         for (constant_name, value, _) in CONTROL_LOCAL_API_WIRE_CONSTANTS {
             let _ = writeln!(
                 constants,
@@ -487,7 +528,7 @@ impl<'contract> ControlContractRead<'contract> {
              import type {\n  ControlCallOptions,\n  TatolabRuntimeClientCallsOverATransport,\n  TatolabRuntimeClientConnectOptions,\n  TatolabRuntimeClientDiscovered,\n} from \"./runtime_client.js\";\n\n\
              /** A client of the runtime's control API: one method per operation, each request, answer and notification checked against the contract. */\n\
              export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATransport {\n\
-             \x20 /** Open a connection on the runtime's local API socket and `discover` over it; refused when the runtime serves another contract version. */\n\
+             \x20 /** Open a connection on the runtime's local API socket and `discover` over it; rejects with `ControlContractMismatch`, naming the older side, when the runtime serves another contract version or a lower revision. */\n\
              \x20 static connect(connectOptions: TatolabRuntimeClientConnectOptions): Promise<TatolabRuntimeClient & TatolabRuntimeClientDiscovered>;\n",
         );
         for method in &self.methods {
@@ -543,10 +584,10 @@ impl<'contract> ControlContractRead<'contract> {
         let mut reference = format!(
             "# Tatolab runtime control API\n\n\
              Generated by `cargo xtask generate-runtime-client` from `contract.json`, contract \
-             version {}. Every method is a JSON-RPC 2.0 method on the runtime's local API socket: \
+             version {} revision {}. Every method is a JSON-RPC 2.0 method on the runtime's local API socket: \
              one request per `POST /control`, or one message per text frame on a WebSocket \
              opened at `/control/ws`, which also carries notifications.\n",
-            self.contract_version
+            self.contract_version, self.contract_revision
         );
         let mut methods_by_group: BTreeMap<&str, Vec<&ControlContractEntryRead<'_>>> =
             BTreeMap::new();
