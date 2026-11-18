@@ -86,6 +86,14 @@ pub trait RuntimeOperations: Send + Sync {
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<serde_json::Value>;
 
+    /// The ports a node of type `node_type` has, as this stream resolves the type: the way in,
+    /// from outside the engine, to the one lookup of a port by its current name or a name it
+    /// had, and to the one order a value held under several of its names is read in.
+    fn the_ports_a_node_type_declares(
+        &self,
+        node_type: &str,
+    ) -> Option<crate::core::GraphNodePorts>;
+
     /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
     /// with `None` taking it off, when the input does not take it, as this stream resolves the
     /// type; `input_values_after_the_set` are every input value the node holds once it is made.

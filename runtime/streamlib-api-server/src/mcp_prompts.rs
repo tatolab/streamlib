@@ -20,8 +20,8 @@ use rmcp::{prompt, prompt_router};
 use serde::Deserialize;
 use serde_json::json;
 use streamlib::sdk::descriptors::{NodeClassImportPath, NodeDescriptor};
-use streamlib::sdk::error::Error;
-use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
+use streamlib::sdk::error::{Error, PortDirection};
+use streamlib::sdk::graph::{GraphNodePorts, cast_exposed_name_to_url_safe};
 use streamlib::sdk::json_schema::{
     GraphNodeOutput, GraphResponse, NodeDescriptorOutput, PortDescriptorOutput, PortInfoOutput,
 };
@@ -107,7 +107,7 @@ impl LocalApiMcpServerHandler {
         self.render_a_recipe_against_the_stream_it_names(
             &arguments.stream,
             INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION,
-            |live_graph, node_catalog| {
+            |live_graph, node_catalog, _| {
                 insert_node_between_linked_nodes_recipe(live_graph, node_catalog, &arguments)
             },
         )
@@ -125,8 +125,13 @@ impl LocalApiMcpServerHandler {
         self.render_a_recipe_against_the_stream_it_names(
             &arguments.stream,
             FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION,
-            |live_graph, node_catalog| {
-                fan_output_to_another_consumer_recipe(live_graph, node_catalog, &arguments)
+            |live_graph, node_catalog, ports_of_a_type| {
+                fan_output_to_another_consumer_recipe(
+                    live_graph,
+                    node_catalog,
+                    ports_of_a_type,
+                    &arguments,
+                )
             },
         )
         .await
@@ -143,8 +148,13 @@ impl LocalApiMcpServerHandler {
         self.render_a_recipe_against_the_stream_it_names(
             &arguments.stream,
             SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION,
-            |live_graph, node_catalog| {
-                show_channel_on_virtual_camera_recipe(live_graph, node_catalog, &arguments)
+            |live_graph, node_catalog, ports_of_a_type| {
+                show_channel_on_virtual_camera_recipe(
+                    live_graph,
+                    node_catalog,
+                    ports_of_a_type,
+                    &arguments,
+                )
             },
         )
         .await
@@ -159,7 +169,11 @@ impl LocalApiMcpServerHandler {
         &self,
         stream_id: &str,
         description: &str,
-        recipe_for: impl FnOnce(&GraphResponse, &[NodeDescriptor]) -> Result<GraphRecipe, McpError>,
+        recipe_for: impl FnOnce(
+            &GraphResponse,
+            &[NodeDescriptor],
+            &PortsOfANodeType<'_>,
+        ) -> Result<GraphRecipe, McpError>,
     ) -> Result<GetPromptResult, McpError> {
         let operations_on_the_loaded_streams = &self.operations_on_the_loaded_streams;
         let stream_operations =
@@ -190,11 +204,15 @@ impl LocalApiMcpServerHandler {
                     None,
                 )
             })?;
-        Ok(recipe_for(&live_graph, &node_catalog)?.prompt_result(
-            &stream_id_as_the_graph_reports_it,
-            stream_asset,
-            description,
-        ))
+        let ports_of_a_type =
+            |node_type: &str| stream_operations.the_ports_a_node_type_declares(node_type);
+        Ok(
+            recipe_for(&live_graph, &node_catalog, &ports_of_a_type)?.prompt_result(
+                &stream_id_as_the_graph_reports_it,
+                stream_asset,
+                description,
+            ),
+        )
     }
 }
 
@@ -345,14 +363,25 @@ fn input_port_of<'graph>(
     node.ports.inputs.iter().find(|port| port.name == port_name)
 }
 
-/// The node `from_node` names, having checked `from_port` is one of
-/// its outputs.
+/// The ports of a node type as the stream resolves it, by its import path.
+type PortsOfANodeType<'stream> = dyn Fn(&str) -> Option<GraphNodePorts> + 'stream;
+
+/// The node `from_node` names and the current name of its output `from_port`, which may be a
+/// name the output had, as `ports_of_a_type` finds it; refused when it has no such output.
 fn node_with_output_port_named<'graph>(
     graph: &'graph GraphResponse,
+    ports_of_a_type: &PortsOfANodeType<'_>,
     from_node: &str,
     from_port: &str,
-) -> Result<&'graph GraphNodeOutput, McpError> {
+) -> Result<(&'graph GraphNodeOutput, String), McpError> {
     let node = node_with_uuid_or_name(graph, from_node)?;
+    let from_port = ports_of_a_type(node.node_type.as_str())
+        .and_then(|ports| {
+            ports
+                .current_name(PortDirection::Output, from_port)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| from_port.to_string());
     if !node.ports.outputs.iter().any(|port| port.name == from_port) {
         let output_port_names: Vec<&str> = node
             .ports
@@ -368,7 +397,7 @@ fn node_with_output_port_named<'graph>(
             None,
         ));
     }
-    Ok(node)
+    Ok((node, from_port))
 }
 
 /// A registered type's input that takes a wire, when it has exactly one for a recipe to wire.
@@ -545,10 +574,16 @@ fn insert_node_between_linked_nodes_recipe(
 fn fan_output_to_another_consumer_recipe(
     graph: &GraphResponse,
     node_catalog: &[NodeDescriptor],
+    ports_of_a_type: &PortsOfANodeType<'_>,
     arguments: &FanOutputToAnotherConsumerPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
-    let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
-    let from_port = arguments.from_port.as_str();
+    let (source, from_port) = node_with_output_port_named(
+        graph,
+        ports_of_a_type,
+        &arguments.from_node,
+        &arguments.from_port,
+    )?;
+    let from_port = from_port.as_str();
     let node_type = arguments.node_type.as_str();
     let source_name = source.name.as_str();
     let source_uuid = source.id.as_str();
@@ -589,10 +624,16 @@ fn fan_output_to_another_consumer_recipe(
 fn show_channel_on_virtual_camera_recipe(
     graph: &GraphResponse,
     node_catalog: &[NodeDescriptor],
+    ports_of_a_type: &PortsOfANodeType<'_>,
     arguments: &ShowChannelOnVirtualCameraPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
-    let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
-    let from_port = arguments.from_port.as_str();
+    let (source, from_port) = node_with_output_port_named(
+        graph,
+        ports_of_a_type,
+        &arguments.from_node,
+        &arguments.from_port,
+    )?;
+    let from_port = from_port.as_str();
     let camera_name = arguments.camera_name.as_deref();
     let virtual_camera_sink = catalog_entry_for(
         node_catalog,

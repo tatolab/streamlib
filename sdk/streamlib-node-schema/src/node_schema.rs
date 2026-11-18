@@ -422,6 +422,12 @@ pub struct NodePortSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub flow: Option<crate::pin_type::PinFlow>,
+    /// Names this port had before, each of which still finds it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub former_names: Vec<String>,
+    /// Whether this input may hold no value, and then reads as nothing; never on an output.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_be_unset: bool,
 }
 
 /// Config definition within a node schema.

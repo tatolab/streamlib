@@ -133,6 +133,12 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn the_ports_a_node_type_declares(
+            &self,
+            _node_type: &str,
+        ) -> ::std::option::Option<::streamlib::sdk::graph::GraphNodePorts> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn the_config_a_node_holding_the_input_values_takes(
             &self,
             _node_type: &str,

@@ -4,8 +4,7 @@
 use std::collections::HashSet;
 use streamlib_project_repository::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
-    is_a_graph_interface_node_type,
+    StreamGraphDocumentLink, StreamGraphOperation, is_a_graph_interface_node_type,
 };
 
 use uuid::Uuid;
@@ -27,17 +26,34 @@ use crate::core::runtime::operations_runtime::{
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
+    /// Apply `graph_operation` to the live graph, each port it names under its current name,
+    /// answering it as applied.
+    ///
+    /// The live graph holds each link once, under its ports' current names, while a document
+    /// may hold one link under several names a port had: a link it already holds is not
+    /// connected again, and a disconnect naming a port by a name it had leaves the graph as it
+    /// is when it holds no such link. A request to connect a link its document already holds is
+    /// refused before it reaches here, so only an undo or a redo of an edit meets a link held.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
         graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
+        let link_as_given = match &graph_operation {
+            StreamGraphOperation::Disconnect { link } => Some(link.clone()),
+            _ => None,
+        };
+        let graph_operation = self.the_operation_under_the_current_port_names(graph_operation);
+        let disconnects_a_port_by_a_name_it_had = match (&graph_operation, &link_as_given) {
+            (StreamGraphOperation::Disconnect { link }, Some(as_given)) => link != as_given,
+            _ => false,
+        };
         if self.the_operation_touches_a_node_no_node_runs_as(&graph_operation) {
             return self
                 .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                 .await;
         }
         match graph_operation {
-            StreamGraphOperation::AddNode { mut node, links } => {
+            StreamGraphOperation::AddNode { node, links } => {
                 let node_type = NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
                     Error::GraphError(format!("node {} `type`: {refusal}", node.id))
                 })?;
@@ -48,6 +64,8 @@ impl LoadedStreamInThisRuntime {
                     ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
                 )
                 .await?;
+                let (mut node, links) =
+                    self.the_added_node_under_the_current_port_names(node, links);
                 let mut spec = node_spec_holding_the_input_values(
                     self.node_types_this_stream_resolves(),
                     node_type,
@@ -87,12 +105,26 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::RemoveNode { node, links })
             }
             StreamGraphOperation::Connect { link } => {
-                self.connect_the_link(&link).await?;
+                if self.the_link_held_between(&link)?.is_none() {
+                    self.connect_the_link(&link).await?;
+                }
                 Ok(StreamGraphOperation::Connect { link })
             }
             StreamGraphOperation::Disconnect { link } => {
-                let link_id = self.the_link_between(&link)?;
-                self.disconnect_async(link_id).await?;
+                match self.the_link_held_between(&link)? {
+                    Some(link_id) => self.disconnect_async(link_id).await?,
+                    None if disconnects_a_port_by_a_name_it_had => {}
+                    None => {
+                        return Err(Error::GraphError(format!(
+                            "stream `{}` holds no link {}/{} -> {}/{}",
+                            self.stream_id(),
+                            link.source.node,
+                            link.source.port,
+                            link.target.node,
+                            link.target.port
+                        )));
+                    }
+                }
                 Ok(StreamGraphOperation::Disconnect { link })
             }
             StreamGraphOperation::SetNodeConfig { node, from, to } => {
@@ -426,14 +458,17 @@ impl LoadedStreamInThisRuntime {
         self.connect_async(from, to).await
     }
 
-    /// The live link `link` names by its ends.
-    fn the_link_between(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {
+    /// The live link `link` names by its ends; `None` when the live graph holds none, and
+    /// refused when either end names a node it does not hold or a name that does not cast.
+    fn the_link_held_between(
+        &self,
+        link: &StreamGraphDocumentLink,
+    ) -> Result<Option<LinkUniqueId>> {
         let source = self.the_node_of_the_node(link.source.node)?;
         let target = self.the_node_of_the_node(link.target.node)?;
-        let end = |end: &StreamGraphDocumentLinkEnd| format!("{}/{}", end.node, end.port);
         let source_port = cast_exposed_name_to_url_safe(&link.source.port)?;
         let target_port = cast_exposed_name_to_url_safe(&link.target.port)?;
-        self.compiler.scope(|graph, _tx| {
+        Ok(self.compiler.scope(|graph, _tx| {
             graph
                 .traversal()
                 .v(&source)
@@ -445,15 +480,7 @@ impl LoadedStreamInThisRuntime {
                         && held.target.port_name() == target_port
                 })
                 .map(|held| held.id.clone())
-                .ok_or_else(|| {
-                    Error::GraphError(format!(
-                        "stream `{}` holds no link {} -> {}",
-                        self.stream_id(),
-                        end(&link.source),
-                        end(&link.target)
-                    ))
-                })
-        })
+        }))
     }
 }
 

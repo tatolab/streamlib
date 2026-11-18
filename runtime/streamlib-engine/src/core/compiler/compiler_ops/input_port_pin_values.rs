@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The pin value each helper's unlinked Channels input reads: the one set on
-//! its node, else the one its port declares.
+//! The config fields a helper's node exposes as inputs, the number a Channels input reads of a
+//! pin value, and the function node inputs no value reaches.
 
-use crate::core::descriptors::{NodeKind, PortFamily};
+use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNode, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
@@ -15,34 +15,6 @@ use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::graph::input_values::{
     refuse_a_value_the_input_port_does_not_take, the_pin_values_with_the_live_ones_over_them,
 };
-
-/// Hand each helper the pin values its input ports read while unlinked, when
-/// they differ from those it holds.
-pub(crate) fn hand_each_helper_the_pin_values_its_input_ports_read(graph: &Graph) -> Result<()> {
-    for node in graph.traversal().v(()).iter() {
-        hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, node)?;
-    }
-    Ok(())
-}
-
-/// Hand the helper `node` runs in, when it runs in one of its own, the pin values its input
-/// ports read while unlinked, when they differ from those it holds.
-pub(crate) fn hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(
-    graph: &Graph,
-    node: &GraphNode,
-) -> Result<()> {
-    if runs_inside_the_read_of_each_node_it_feeds(graph, &node.id) {
-        return Ok(());
-    }
-    let Some(link_wiring) = node.get::<OutOfProcessLinkWiringComponent>() else {
-        return Ok(());
-    };
-    link_wiring
-        .0
-        .record_the_pin_values_and_hand_them_to_a_far_side_past_its_setup_command(
-            the_pin_values_its_input_ports_read(graph, node),
-        )
-}
 
 /// Hand each helper the config fields its node takes as inputs, when they
 /// differ from those it holds.
@@ -65,38 +37,9 @@ pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
     Ok(())
 }
 
-/// The value each Channels input of `node` in `graph` reads while unlinked, by
-/// port: the value set on it live, else its pin value, else its declared
-/// default, as a number.
-fn the_pin_values_its_input_ports_read(
-    graph: &Graph,
-    node: &GraphNode,
-) -> serde_json::Map<String, JsonValue> {
-    let pin_values = the_pin_values_with_the_live_ones_over_them(graph, node);
-    node.ports
-        .inputs
-        .iter()
-        .filter(|port| port.family.family == PortFamily::Channels)
-        .filter_map(|port| {
-            let pin_value = pin_values.get(&port.name).or(port.pin_default.as_ref())?;
-            the_control_value_of_a_pin(pin_value)
-                .map(|control_value| (port.name.clone(), JsonValue::from(control_value)))
-        })
-        .collect()
-}
-
-/// The number a Channels input reads of `pin_value`: the number, or 1 and 0 for a bool.
-pub(crate) fn the_control_value_of_a_pin(pin_value: &JsonValue) -> Option<f64> {
-    match pin_value {
-        JsonValue::Bool(pin_is_on) => Some(if *pin_is_on { 1.0 } else { 0.0 }),
-        JsonValue::Number(number) => number.as_f64(),
-        _ => None,
-    }
-}
-
 /// The inputs of function node `node` in `graph` that no link feeds, that carry
-/// no pin value and that declare no default, so the node has no value to
-/// evaluate them with; none for a node of any other kind.
+/// no pin value, that declare no default and that may not be unset, so the node
+/// has no value to evaluate them with; none for a node of any other kind.
 pub(crate) fn the_inputs_a_function_node_has_no_value_for(
     graph: &Graph,
     node: &GraphNode,
@@ -120,6 +63,7 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .iter()
         .filter(|port| {
             port.pin_default.is_none()
+                && !port.may_be_unset
                 && !node.is_an_exposed_config_field_input(&port.name)
                 && !pin_values.contains_key(&port.name)
                 && !linked_input_ports.contains(&port.name)
@@ -295,38 +239,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_helpers_setup_carries_each_declared_default_and_a_pin_edit_after_it_is_handed_over() {
-        let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
-        let level_meter = a_level_meter_in_a_helper(&mut graph);
-        hand_each_helper_the_pin_values_its_input_ports_read(&graph).unwrap();
-        assert_eq!(
-            the_link_wiring_of(&graph, &level_meter).as_setup_command_ports()["pins"],
-            serde_json::json!({"level": 0.5}),
-            "an input declaring a default reads it, and one declaring none reads only its links"
-        );
-
-        let delivery = RecordingOutOfProcessFarSideLinkDelivery::default();
-        the_link_wiring_of(&graph, &level_meter)
-            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
-            .unwrap();
-        set_a_pin(&mut graph, &level_meter, "gain", serde_json::json!(2));
-        set_a_pin(&mut graph, &level_meter, "level", serde_json::json!(true));
-        hand_each_helper_the_pin_values_its_input_ports_read(&graph).unwrap();
-        hand_each_helper_the_pin_values_its_input_ports_read(&graph).unwrap();
-        assert_eq!(
-            *delivery.pin_values_handed_over.lock(),
-            vec![
-                serde_json::json!({"gain": 2.0, "level": 1.0})
-                    .as_object()
-                    .unwrap()
-                    .clone()
-            ],
-            "a pin set wins over the default, a bool reads as 1 or 0, and pin values that did \
-             not change are not handed over again"
-        );
-    }
-
-    #[test]
     fn a_helpers_setup_carries_the_config_fields_its_node_exposes_and_a_later_change_is_handed_over()
      {
         let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
@@ -442,6 +354,50 @@ pub(crate) mod tests {
         set_a_pin(&mut graph, &remap, "gain", serde_json::json!(2.0));
         set_a_pin(&mut graph, &mix, "a", serde_json::json!(0.25));
         assert!(waiting(&graph, &remap).is_empty() && waiting(&graph, &mix).is_empty());
+        refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph).unwrap();
+    }
+
+    /// A function node input that may be unset has a value with no link, pin or default: it
+    /// reads as nothing, so the node waits on none of it and the stream starts; an input that
+    /// declares the same pin but may not be unset still waits.
+    ///
+    /// Mental-revert: dropping the `may_be_unset` filter names `trim` as waiting and refuses the
+    /// stream as it starts.
+    #[test]
+    fn a_function_node_input_that_may_be_unset_never_waits_for_a_value() {
+        use crate::core::compiler::compiler_ops::function_node_island::tests::{
+            a_function_node_type, a_graph_resolving_these_function_node_types, add_a_node,
+        };
+        use crate::core::descriptors::{PinDeclaration, PinType};
+        let a_float_input = |name: &str, may_be_unset: bool| {
+            PortDescriptor::new(
+                name,
+                "",
+                true,
+                PortFamilyDeclaration::of_family(PortFamily::Channels),
+            )
+            .with_pin_declaration(PinDeclaration {
+                may_be_unset,
+                ..PinDeclaration::exactly(PinType::Float { exact_size: None })
+            })
+        };
+        let graph = a_graph_resolving_these_function_node_types([a_function_node_type(
+            "test_ops:trim",
+            &[],
+            &["result"],
+        )
+        .with_input(a_float_input("trim", true))
+        .with_input(a_float_input("gain", false))]);
+        let mut graph = graph;
+        let trim = add_a_node(&mut graph, "test_ops:trim", JsonValue::Null);
+        assert_eq!(
+            the_inputs_a_function_node_has_no_value_for(
+                &graph,
+                graph.traversal().v(&trim).first().unwrap()
+            ),
+            vec!["gain".to_string()]
+        );
+        set_a_pin(&mut graph, &trim, "gain", serde_json::json!(1.0));
         refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph).unwrap();
     }
 

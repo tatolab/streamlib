@@ -30,8 +30,8 @@ use streamlib_project_repository::{
     asset_references_made_references_into_the_import,
     config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
-    is_a_graph_interface_node_type, the_fragment_a_stream_fragment_places,
-    the_stream_document_of_an_import,
+    is_a_graph_interface_node_type, stream_assets_of_the_project_a_graph_document_places,
+    the_fragment_a_stream_fragment_places, the_stream_document_of_an_import,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
@@ -48,6 +48,7 @@ use crate::control_operations_on_project_assets::{
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
+mod former_port_names;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
@@ -55,6 +56,10 @@ mod request_application;
 mod request_to_graph_operation;
 mod transaction_answers;
 
+use former_port_names::{
+    move_each_former_port_name, the_placed_streams_with_each_former_port_name_moved,
+    the_request_under_the_current_port_names,
+};
 use input_value_sets::*;
 use request_to_graph_operation::graph_operation_for_the_request;
 use transaction_answers::WhatAnAnswerNamesBesideItsOperations;

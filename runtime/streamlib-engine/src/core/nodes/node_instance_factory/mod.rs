@@ -11,7 +11,7 @@ use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess
 use crate::core::descriptors::{NodeClassImportPath, NodeKind};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
-use crate::core::graph::{GraphNode, PortInfo, is_in_exposed_name_cast_form};
+use crate::core::graph::{GraphNode, GraphNodePorts, PortInfo, is_in_exposed_name_cast_form};
 use crate::core::nodes::{Config, DynGeneratedNode, GeneratedNode};
 
 pub struct NodeInstance(Box<dyn DynGeneratedNode + Send>);
@@ -169,6 +169,14 @@ impl NodeInstance {
         self.0.apply_config_json(config_json)
     }
 
+    /// Hand the node `input_values`, the value each input reads while no link feeds it.
+    pub(crate) fn set_unlinked_input_values(
+        &mut self,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        self.0.set_unlinked_input_values(input_values)
+    }
+
     pub fn to_runtime_json(&self) -> serde_json::Value {
         self.0.to_runtime_json()
     }
@@ -201,7 +209,7 @@ struct HostCompiledRustTypeRegistration {
 
 pub struct NodeInstanceFactory {
     registrations: RwLock<HashMap<NodeClassImportPath, HostCompiledRustTypeRegistration>>,
-    port_info: RwLock<HashMap<NodeClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
+    port_info: RwLock<HashMap<NodeClassImportPath, GraphNodePorts>>,
     descriptors: RwLock<HashMap<NodeClassImportPath, NodeDescriptor>>,
     /// Each former built-in node type, with the module node that replaced it.
     built_in_node_types_moved_to_modules:
@@ -313,9 +321,10 @@ impl NodeInstanceFactory {
             return Err(duplicate_class_import_path(&node_class_import_path));
         }
 
-        self.port_info
-            .write()
-            .insert(node_class_import_path.clone(), (inputs, outputs));
+        self.port_info.write().insert(
+            node_class_import_path.clone(),
+            GraphNodePorts { inputs, outputs },
+        );
 
         self.registrations
             .write()
@@ -346,9 +355,10 @@ impl NodeInstanceFactory {
             return Err(duplicate_class_import_path(&node_class_import_path));
         }
 
-        self.port_info
-            .write()
-            .insert(node_class_import_path.clone(), (inputs, outputs));
+        self.port_info.write().insert(
+            node_class_import_path.clone(),
+            GraphNodePorts { inputs, outputs },
+        );
 
         descriptors.insert(node_class_import_path.clone(), descriptor);
         drop(descriptors);
@@ -449,10 +459,7 @@ impl NodeInstanceFactory {
         Ok(instance)
     }
 
-    pub fn port_info(
-        &self,
-        node_type: &NodeClassImportPath,
-    ) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+    pub fn port_info(&self, node_type: &NodeClassImportPath) -> Option<GraphNodePorts> {
         self.port_info.read().get(node_type).cloned()
     }
 
@@ -521,10 +528,13 @@ fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> 
 /// `descriptor` as its node type is registered: each input with a pin that
 /// states no delivery profile reads by its pin's default. Refuses a port not in
 /// cast form under a name of its own — every lookup casts its argument, so a
-/// port registered under an uncast name could never be reached — a flow a
-/// port's pin type does not take, and a config field named as an input port.
+/// port registered under an uncast name could never be reached — a name a port
+/// had that would not find that port alone, an output that may be unset, a flow
+/// a port's pin type does not take, and a config field named as an input port.
 pub(crate) fn the_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
     refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+    refuse_former_port_names_that_do_not_find_one_port(&descriptor)?;
+    refuse_an_output_that_may_be_unset(&descriptor)?;
     crate::core::graph::legacy_config_of_a_node::refuse_a_config_field_named_as_an_input_port(
         &descriptor,
     )?;
@@ -550,6 +560,68 @@ fn refuse_port_names_not_cast_or_declared_twice(descriptor: &NodeDescriptor) -> 
         }
     }
     Ok(())
+}
+
+/// Refuse a name a port of `descriptor` had that would not find that port alone: one not in
+/// cast form, one that is the current name of a port of the type, and one two of its ports list.
+fn refuse_former_port_names_that_do_not_find_one_port(descriptor: &NodeDescriptor) -> Result<()> {
+    let node_type = &descriptor.node_class_import_path;
+    let ports: Vec<_> = descriptor
+        .inputs
+        .iter()
+        .chain(&descriptor.outputs)
+        .collect();
+    let mut port_of_each_former_name: HashMap<String, &str> = HashMap::new();
+    for port in &ports {
+        let Some(declared) = port.declared_pin() else {
+            continue;
+        };
+        for former_name in declared.former_names {
+            let refusal = if !is_in_exposed_name_cast_form(&former_name) {
+                Some(format!(
+                    "port `{}` lists `{former_name}` as a name it had, which is not in the cast \
+                     form every port name takes",
+                    port.name
+                ))
+            } else if let Some(holder) = ports.iter().find(|held| held.name == former_name) {
+                Some(format!(
+                    "port `{}` lists `{former_name}` as a name it had, and port `{}` is named \
+                     that now",
+                    port.name, holder.name
+                ))
+            } else if let Some(other) = port_of_each_former_name.get(&former_name) {
+                Some(format!(
+                    "ports `{other}` and `{}` both list `{former_name}` as a name they had",
+                    port.name
+                ))
+            } else {
+                port_of_each_former_name.insert(former_name.clone(), &port.name);
+                None
+            };
+            if let Some(refusal) = refusal {
+                return Err(Error::Configuration(format!(
+                    "`{node_type}`: {refusal}, so the name would not find one port"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse an output of `descriptor` that declares it may be unset, which only an input may.
+fn refuse_an_output_that_may_be_unset(descriptor: &NodeDescriptor) -> Result<()> {
+    match descriptor.outputs.iter().find(|output| {
+        output
+            .declared_pin()
+            .is_some_and(|declared| declared.may_be_unset)
+    }) {
+        Some(output) => Err(Error::Configuration(format!(
+            "`{}`: output `{}` declares it may be unset, which only an input may: an output \
+             holds no value",
+            descriptor.node_class_import_path, output.name
+        ))),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

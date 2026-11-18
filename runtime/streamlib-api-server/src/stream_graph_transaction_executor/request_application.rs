@@ -28,6 +28,7 @@ impl StreamGraphTransactionExecutor<'_> {
         }
 
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
+        let mut former_port_names_moved: Vec<ProjectOperation> = Vec::new();
         for stream_id in &stream_ids_in_order {
             let stream_operations = self
                 .operations_on_the_loaded_streams
@@ -48,7 +49,15 @@ impl StreamGraphTransactionExecutor<'_> {
                             project_repository.project_file().project
                         )));
                     }
-                    project_repository.stream_graph_document(stream_location.stream_asset)?
+                    let mut staged_graph =
+                        project_repository.stream_graph_document(stream_location.stream_asset)?;
+                    move_each_former_port_name(
+                        stream_location.stream_asset,
+                        &mut staged_graph,
+                        stream_operations.as_ref(),
+                        &mut former_port_names_moved,
+                    )?;
+                    staged_graph
                 }
                 _ => StreamGraphDocument::from_value(
                     self.async_runtime
@@ -67,9 +76,18 @@ impl StreamGraphTransactionExecutor<'_> {
             );
         }
 
+        let staged_graph_of_each_stream_not_running = match project_repository_held.as_deref() {
+            Some(project_repository) => the_placed_streams_with_each_former_port_name_moved(
+                &streams,
+                project_repository,
+                &mut former_port_names_moved,
+            )?,
+            None => BTreeMap::new(),
+        };
+
         let mut staged = WhatTheTransactionHasStaged {
             streams,
-            staged_graph_of_each_stream_not_running: BTreeMap::new(),
+            staged_graph_of_each_stream_not_running,
             streams_taking_their_edits_once_the_documents_hold_them: BTreeSet::new(),
             project_repository: project_repository_held.as_deref(),
             node_by_label: HashMap::new(),
@@ -119,6 +137,9 @@ impl StreamGraphTransactionExecutor<'_> {
             labels_of_added_nodes,
             ..
         } = staged;
+        if !project_operations.is_empty() {
+            project_operations.splice(0..0, former_port_names_moved);
+        }
         let (transaction, commit) = match project_repository_held {
             None => (None, None),
             Some(_) if project_operations.is_empty() => (None, None),
@@ -254,6 +275,12 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository,
         )?;
         let level_as_drawn = reached.the_document_as_drawn()?;
+        let request = the_request_under_the_current_port_names(
+            request,
+            &level_as_drawn,
+            node_by_label,
+            stream_operations.as_ref(),
+        );
 
         let run_the_graph_generator =
             |generator: &str,
@@ -328,6 +355,15 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             &mut placed_stream_a_collapse_saves,
         )?;
+        if let StreamGraphOperation::Connect { link } = &edit_as_drawn
+            && level_as_drawn.links().contains(link)
+        {
+            return Err(format!(
+                "the graph already links {}/{} -> {}/{}",
+                link.source.node, link.source.port, link.target.node, link.target.port
+            )
+            .into());
+        }
         let overridden_by_a_link = match &edit_as_drawn {
             StreamGraphOperation::SetNodeInputValue {
                 node, input, to, ..

@@ -5,6 +5,8 @@
 //! project's store as the stream loads and held across Stop, and a `reset` input's value is
 //! forgotten at Stop, its followers told the input reads its saved value again.
 
+use std::collections::BTreeMap;
+
 use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
@@ -20,22 +22,59 @@ impl LoadedStreamInThisRuntime {
     /// Hold as live each value the project's store keeps for an input of a node this stream's
     /// graph holds, as the stream loads; a value its input no longer keeps live or takes is
     /// forgotten there, and the input reads its saved value.
+    ///
+    /// An input holding values under names it had holds the one it reads, by the one order
+    /// [`crate::core::graph::GraphNodePorts::inputs_holding_a_value_under_a_name_they_had`]
+    /// reads them in, live under its current name; the store keeps it under that name from then
+    /// on, each name it had forgotten once the value is written there, and kept when the write
+    /// fails, so a later load moves it again.
     pub(super) fn hold_the_live_values_the_project_store_keeps(&self) {
         self.compiler.scope_reading(|graph| {
             let live_values = graph.live_input_values();
             let Some(project_store) = live_values.project_store_mirrored_into() else {
                 return;
             };
-            let kept =
-                project_store.every_value_kept_for(|node| graph.node_by_uuid(node).is_some());
-            for (node, input, value) in kept {
+            let mut kept_for_each_node: BTreeMap<Uuid, serde_json::Map<String, serde_json::Value>> =
+                BTreeMap::new();
+            for (node, input, value) in
+                project_store.every_value_kept_for(|node| graph.node_by_uuid(node).is_some())
+            {
+                kept_for_each_node
+                    .entry(node)
+                    .or_default()
+                    .insert(input, value);
+            }
+            for (node, mut kept) in kept_for_each_node {
                 let Some(kept_for) = graph.node_by_uuid(node) else {
                     continue;
                 };
-                if its_input_keeps_and_takes_the_live_value(graph, kept_for, &input, &value) {
-                    live_values.hold_the_kept_value_the_store_holds(node, &input, value);
-                } else {
-                    project_store.forget(node, &input);
+                for moved in kept_for
+                    .ports
+                    .inputs_holding_a_value_under_a_name_they_had(|name| kept.contains_key(name))
+                {
+                    let current = moved.current_name.clone();
+                    let Some(value) = kept.get(&moved.name_read).cloned() else {
+                        continue;
+                    };
+                    let the_store_holds_it_under_the_current_name = if moved.name_read == current {
+                        true
+                    } else {
+                        project_store.keep(node, &current, &value)
+                    };
+                    for name_it_had in moved.names_held().filter(|name| **name != current) {
+                        kept.remove(name_it_had);
+                        if the_store_holds_it_under_the_current_name {
+                            project_store.forget(node, name_it_had);
+                        }
+                    }
+                    kept.insert(current, value);
+                }
+                for (input, value) in kept {
+                    if its_input_keeps_and_takes_the_live_value(graph, kept_for, &input, &value) {
+                        live_values.hold_the_kept_value_the_store_holds(node, &input, value);
+                    } else {
+                        project_store.forget(node, &input);
+                    }
                 }
             }
         });

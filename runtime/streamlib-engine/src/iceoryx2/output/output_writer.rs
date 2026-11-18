@@ -7,10 +7,10 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::OutputWriterInner;
+use crate::core::context::stream_time_now_ns_on;
 use crate::core::descriptors::PortStreamFacts;
 use crate::core::error::{Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
-use crate::core::media_clock::MediaClock;
 use crate::iceoryx2::{DataChannelPayloadDescriptor, MessageGroupBoundary};
 
 // =============================================================================
@@ -83,7 +83,7 @@ impl OutputWriter {
 
     pub fn stream_time_now_ns(&self) -> i64 {
         self.host_inner().map_or_else(
-            || MediaClock::now().as_nanos() as i64,
+            || stream_time_now_ns_on(None),
             OutputWriterInner::implicit_stamp_now_ns,
         )
     }

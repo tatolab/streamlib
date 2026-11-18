@@ -126,7 +126,8 @@ pub use stream_document_upgrade::{
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
     graph_document_with_each_stream_fragment_reference_resolved,
-    stream_assets_another_stream_of_the_project_places, the_fragment_a_stream_fragment_places,
+    stream_assets_another_stream_of_the_project_places,
+    stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
     the_stream_document_of_an_import,
 };
 pub use stream_graph_action::{

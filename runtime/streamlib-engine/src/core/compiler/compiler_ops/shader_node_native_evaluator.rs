@@ -32,6 +32,7 @@ use crate::core::context::{
 use crate::core::descriptors::NodeDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::core::graph::{GraphNode, GraphNodeWithComponents, ShaderNodeFusedGroupOfAnIsland};
 use crate::core::nodes::DynGeneratedNode;
 use crate::core::rhi::{ShaderCompilationTargetStage, StorageBuffer, TextureFormat};
@@ -121,6 +122,12 @@ impl ShaderNodeNativeEvaluator {
             value_by_float_input_port,
             refusal_last_logged: None,
         }
+    }
+
+    /// The value float input `input_port` of the island reads while nothing arrives on it.
+    #[cfg(test)]
+    pub(crate) fn the_value_a_float_input_reads(&self, input_port: &str) -> Option<f32> {
+        self.value_by_float_input_port.get(input_port).copied()
     }
 
     /// Each Image input port the island reads, with the member and its own
@@ -722,6 +729,28 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
             "shader node `{}` declares no configuration; its settings are its float inputs",
             self.node_name
         )))
+    }
+
+    /// Read each float input of the island no link feeds as its number in `input_values`, keyed
+    /// by the input port it is read at, and one `input_values` holds no number for as 0, as a
+    /// freshly built island reads it; a linked input goes on reading its link.
+    fn set_unlinked_input_values(
+        &mut self,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        let input_mailboxes = self.input_mailboxes.as_ref();
+        for (input_port, float_input) in &mut self.value_by_float_input_port {
+            if input_mailboxes
+                .is_some_and(|input_mailboxes| input_mailboxes.is_fed_by_a_link(input_port))
+            {
+                continue;
+            }
+            *float_input = input_values
+                .get(input_port)
+                .and_then(the_control_value_of_a_pin)
+                .unwrap_or(0.0) as f32;
+        }
+        Ok(())
     }
 
     fn to_runtime_json(&self) -> serde_json::Value {

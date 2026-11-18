@@ -44,6 +44,10 @@ mod live_input_values_at_load_and_stop;
 mod shutdown_and_teardown;
 mod start_and_stop;
 
+pub(in crate::core::runtime) use live_graph_edits::{
+    SavedValuesOfAKeptNode, set_the_saved_values_of_each_kept_node_and_hand_them_over,
+};
+
 /// A loaded stream's process-unique tag: non-zero, never reused in one
 /// process, so it tells two streams apart where several runtimes each load a
 /// stream of the same name.

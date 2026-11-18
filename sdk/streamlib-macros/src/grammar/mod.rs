@@ -251,6 +251,12 @@ pub(crate) struct ParsedPort {
     /// The flow the port states with `flow = …`; `None` reads in its pin
     /// type's default flow.
     pub flow: Option<streamlib_node_schema::pin_type::PinFlow>,
+    /// The names the port had before, as `former_names = [...]` states them, each cast as every
+    /// exposed name is.
+    pub former_names: Vec<String>,
+    /// Whether the input may hold no value, as `may_be_unset = true` states; always false on an
+    /// output.
+    pub may_be_unset: bool,
 }
 
 pub(crate) struct ParsedNodeAttr {
@@ -288,6 +294,8 @@ impl ParsedNodeAttr {
             pin_type: p.pin_type.clone(),
             lifetime: p.lifetime,
             flow: p.flow,
+            former_names: p.former_names.clone(),
+            may_be_unset: p.may_be_unset,
         };
 
         NodeSchema {

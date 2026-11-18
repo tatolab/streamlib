@@ -307,6 +307,13 @@ mod tests {
             "the sample that keeps the old starter's halftone lens and brightness meter ships: \
              {converted_examples:?}"
         );
+        assert!(
+            converted_examples
+                .iter()
+                .any(|name| name == "every-pin-kind"),
+            "the sample the Studio's recordings are made from, declaring each kind of pin, \
+             ships: {converted_examples:?}"
+        );
     }
 
     #[test]

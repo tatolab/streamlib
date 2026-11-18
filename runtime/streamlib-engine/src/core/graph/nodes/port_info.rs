@@ -44,10 +44,19 @@ pub struct PortInfo {
         skip_serializing_if = "crate::core::descriptors::NodeValueLifetime::is_kept"
     )]
     pub lifetime: crate::core::descriptors::NodeValueLifetime,
+    /// Names this port had before, each of which still finds it. Mirrors the declaration's on
+    /// [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub former_names: Vec<String>,
+    /// Whether this input may hold no value, and then reads as nothing. Mirrors the
+    /// declaration's on [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_be_unset: bool,
 }
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
     fn from(port: &crate::core::descriptors::PortDescriptor) -> Self {
+        let declared_pin = port.declared_pin();
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
@@ -56,15 +65,33 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             audio_window: port.audio_window.clone(),
             family: port.family.clone(),
             pin_default: port.pin_default.clone(),
-            pin: port
-                .declared_pin()
-                .and_then(crate::core::descriptors::PinDeclaration::into_resolved),
+            former_names: declared_pin
+                .as_ref()
+                .map(|declared| declared.former_names.clone())
+                .unwrap_or_default(),
+            may_be_unset: declared_pin
+                .as_ref()
+                .is_some_and(|declared| declared.may_be_unset),
+            pin: declared_pin.and_then(crate::core::descriptors::PinDeclaration::into_resolved),
             lifetime: port.lifetime,
         }
     }
 }
 
 impl PortInfo {
+    /// The value `value` taken as this input's stored value, or what it takes instead, by the
+    /// pin it declares; `None` for a port that names no pin type.
+    pub fn check_value(
+        &self,
+        value: &serde_json::Value,
+    ) -> Option<Result<(), crate::core::descriptors::PinValueNotTaken>> {
+        let pin = self.pin.as_ref()?;
+        if value.is_null() && self.may_be_unset {
+            return Some(Ok(()));
+        }
+        Some(pin.pin_type.check_value(value))
+    }
+
     /// A port named `name` that declares only `family`, typed as any port declaring that family
     /// is.
     pub fn declaring_only_a_family(

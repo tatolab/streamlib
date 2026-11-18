@@ -184,6 +184,69 @@ fn a_lifetime_on_an_output_or_naming_no_lifetime_is_an_error() {
     );
 }
 
+/// A renamed port lists the names it had, each cast, and an input states it may be unset; a
+/// picture port that states either carries its Texture so the declaration reaches the
+/// descriptor.
+///
+/// Mental-revert: drop the `former_names` arm and the declaration is refused as an unknown port
+/// key; keep a picture port's pin type `None` and its former name never reaches the schema's
+/// pin.
+#[test]
+fn a_port_states_the_names_it_had_and_an_input_that_it_may_be_unset() {
+    let parsed = parse_ok(quote! {
+        execution = manual,
+        input("gain", pin_type = Float, former_names = ["Level", "amount"], may_be_unset = true),
+        input("frames", family = Image, delivery_profile = "newest", former_names = ["video"]),
+        output("out", pin_type = Float),
+    });
+    assert_eq!(parsed.inputs[0].former_names, ["level", "amount"]);
+    assert!(parsed.inputs[0].may_be_unset);
+    assert!(parsed.inputs[1].pin_type.is_some());
+    assert!(!parsed.inputs[1].may_be_unset);
+    assert!(parsed.outputs[0].former_names.is_empty());
+    let schema = parsed.to_node_schema();
+    assert_eq!(schema.inputs[0].former_names, ["level", "amount"]);
+    assert!(schema.inputs[0].may_be_unset);
+}
+
+/// `may_be_unset` is an input's, and both facts need a pin to be stated on; a port does not list
+/// its own name, or one name twice, as a name it had.
+#[test]
+fn a_former_name_or_may_be_unset_that_cannot_hold_is_an_error() {
+    let on_an_output = parse_err(quote! {
+        execution = manual,
+        output("level", pin_type = Float, may_be_unset = true),
+    });
+    assert!(
+        on_an_output.contains("`may_be_unset` is declared by an input"),
+        "{on_an_output}"
+    );
+    let with_no_pin = parse_err(quote! {
+        execution = manual,
+        input("records", family = Records, delivery_profile = "newest", former_names = ["rows"]),
+    });
+    assert!(
+        with_no_pin.contains("has no pin type to state them on"),
+        "{with_no_pin}"
+    );
+    let its_own_name = parse_err(quote! {
+        execution = manual,
+        input("gain", pin_type = Float, former_names = ["Gain"]),
+    });
+    assert!(
+        its_own_name.contains("lists its own name `Gain`"),
+        "{its_own_name}"
+    );
+    let twice = parse_err(quote! {
+        execution = manual,
+        input("gain", pin_type = Float, former_names = ["level", "Level"]),
+    });
+    assert!(
+        twice.contains("lists the name `Level` it had twice"),
+        "{twice}"
+    );
+}
+
 #[test]
 fn input_without_a_delivery_profile_is_an_error() {
     let msg = parse_err(quote! {
