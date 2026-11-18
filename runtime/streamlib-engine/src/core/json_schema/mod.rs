@@ -100,15 +100,17 @@ impl InputValuesRendered {
 }
 
 /// Redraw `node` from `input_values`, as a graph document holds them, over the values its inputs
-/// already hold: every other value is its config. Its pins stay as they are.
+/// already hold: every other value is its config. Its pins stay as they are, and its input values
+/// are that config with its pins drawn over it, so a pin set since `input_values` were read shows
+/// its own value.
 pub(crate) fn redraw_a_node_over_its_pins(
     node: &mut GraphNodeOutput,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) {
     let config = config_of_a_node_as_drawn(input_values, &node.pins);
     node.config_checksum = crate::core::utils::compute_json_checksum(&config);
+    node.input_values = input_values_of_a_config_and_pin_values(Some(&config), &node.pins);
     node.config = Some(config);
-    node.input_values = input_values.clone();
 }
 
 /// A link (connection) between two node ports.

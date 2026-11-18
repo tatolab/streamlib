@@ -434,7 +434,7 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
                     {"name": "level", "description": "", "port_kind": "data",
                      "delivery_profile": "newest", "value_comes_from": "wire"},
                     {"name": "bias", "description": "", "port_kind": "data",
-                     "delivery_profile": "newest", "value": null},
+                     "delivery_profile": "newest", "pin_default": null, "value": null},
                     {"name": "video", "description": "", "port_kind": "data",
                      "delivery_profile": "newest"},
                 ],
@@ -493,6 +493,21 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         ),
         (&None, &None),
         "an input with neither key, and an output, read no value"
+    );
+    assert_eq!(
+        inputs
+            .iter()
+            .map(|input| input.pin_default.clone())
+            .collect::<Vec<_>>(),
+        [
+            None,
+            None,
+            Some(serde_json::json!(0.0)),
+            None,
+            Some(serde_json::Value::Null),
+            None
+        ],
+        "a declared null default reads apart from no default"
     );
     assert!(inputs[0].pin.is_some() && inputs[1].pin.is_none());
     assert_eq!(serde_json::to_value(&read_one).unwrap(), one_stream);

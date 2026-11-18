@@ -303,8 +303,12 @@ pub struct GraphNodePortOnTheWire {
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
     pub family: Option<streamlib_node_schema::PortFamilyDeclaration>,
     /// The value this input reads while nothing is linked into it and no value is set on its
-    /// node; absent on a port that declares none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// node, null when it declares a null default; absent on a port that declares none.
+    #[serde(
+        default,
+        deserialize_with = "a_value_that_may_be_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub pin_default: Option<Value>,
     /// The pin type the port carries, resolved, as `pin_type`, and its flow, as `flow`. Both
     /// are absent on a port whose type the code does not state exactly, which links by its

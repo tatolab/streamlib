@@ -6555,7 +6555,7 @@
             "description": "The port family this port declares and its family's keys. Absent on a graph variable's\nvalue port, which keeps the family of the setter's source port. Served for a client that\nreads no `pin_type`."
           },
           "pin_default": {
-            "description": "The value this input reads while nothing is linked into it and no value is set on its\nnode; absent on a port that declares none."
+            "description": "The value this input reads while nothing is linked into it and no value is set on its\nnode, null when it declares a null default; absent on a port that declares none."
           },
           "pin_type": {
             "$ref": "#/components/schemas/PinType",

@@ -17,9 +17,8 @@ use std::sync::Arc;
 use streamlib::sdk::descriptors::NodeDescriptor;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{
-    GraphResponse, MachineWideGraphResponse, MachineWideRegistryResponse, NodeDescriptorOutput,
-    NodeTypeAnInstalledModuleDeclaresOutput, NodeTypesDescribedInOneStreamOutput,
-    PortFamilyDescriptorOutput, RegistryResponse,
+    MachineWideRegistryResponse, NodeDescriptorOutput, NodeTypeAnInstalledModuleDeclaresOutput,
+    NodeTypesDescribedInOneStreamOutput, PortFamilyDescriptorOutput, RegistryResponse,
 };
 use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
@@ -179,25 +178,6 @@ fn stream_operations_or_refusal(
         .map_err(|refusal| Box::new(stream_resolution_refusal_response(&refusal)))
 }
 
-/// What `GET /api/graph` answers: one stream's graph, or every loaded
-/// stream's under the machine's name, each as the control contract's `graph`
-/// answer types it, which this description leaves open.
-#[derive(Serialize, utoipa::ToSchema)]
-#[serde(untagged)]
-#[expect(
-    dead_code,
-    reason = "documents the route's two answers; each is served as the engine renders it"
-)]
-pub(crate) enum GraphOfOneStreamOrOfEveryStream {
-    /// The graph of the stream `stream` named: the contract's `StreamGraphOnTheWire`.
-    #[schema(value_type = Object)]
-    OneStream(Box<GraphResponse>),
-    /// Every loaded stream's graph, when no `stream` was named: the contract's
-    /// `MachineWideGraphOnTheWire`.
-    #[schema(value_type = Object)]
-    EveryStream(MachineWideGraphResponse),
-}
-
 /// What `GET /api/registry` answers: one stream's node catalog, or the native
 /// types and each loaded stream's own.
 #[derive(Serialize, utoipa::ToSchema)]
@@ -292,7 +272,7 @@ pub(crate) fn error_response(status: StatusCode, error: &impl std::fmt::Display)
         ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export, by its stream id; absent exports every loaded stream's under the machine's name")
     ),
     responses(
-        (status = 200, description = "With `stream`, that stream's current graph; without, `{machine, streams}` holding every loaded stream's", body = GraphOfOneStreamOrOfEveryStream),
+        (status = 200, description = "With `stream`, that stream's current graph; without, `{machine, streams}` holding every loaded stream's. Each is an object the control contract's `graph` answer types: `StreamGraphOnTheWire` and `MachineWideGraphOnTheWire`", body = Object),
         (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
@@ -543,9 +523,9 @@ pub(crate) mod router_surface_tests {
 
     /// The registry's machine-wide answer is documented under the type the
     /// schema generator writes, so a generated client parses both forms, each
-    /// node type's kind and language naming one of theirs; the
-    /// graph's two forms are documented as open objects, which the control
-    /// contract's `graph` answer types.
+    /// node type's kind and language naming one of theirs; the graph's two
+    /// forms are documented as one open object, which the control contract's
+    /// `graph` answer types.
     #[test]
     fn the_openapi_spec_documents_both_forms_of_the_graph_and_registry_answers() {
         let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
@@ -569,13 +549,13 @@ pub(crate) mod router_surface_tests {
             ),
             "a node type's kind and language name one of theirs: {descriptor}"
         );
-        let graph_forms = schemas["GraphOfOneStreamOrOfEveryStream"]["oneOf"]
-            .as_array()
-            .unwrap_or_else(|| panic!("the graph's answer has two forms: {spec}"));
-        assert_eq!(graph_forms.len(), 2, "{graph_forms:?}");
-        for form in graph_forms {
-            assert_eq!(form["type"], "object", "{form}");
-        }
+        let graph_answer = &spec["paths"]["/api/graph"]["get"]["responses"]["200"]["content"]["application/json"]
+            ["schema"];
+        assert_eq!(
+            graph_answer,
+            &serde_json::json!({ "type": "object" }),
+            "one open object holds both forms of the graph's answer, so a validator takes either"
+        );
     }
 
     /// Without `stream`, `/api/graph` renders every loaded stream under the

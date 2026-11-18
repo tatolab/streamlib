@@ -727,7 +727,7 @@ export interface GraphNodePortOnTheWire {
   family?: unknown;
   /**
    * The value this input reads while nothing is linked into it and no value is set on its
-   * node; absent on a port that declares none.
+   * node, null when it declares a null default; absent on a port that declares none.
    */
   pin_default?: unknown;
   /**
