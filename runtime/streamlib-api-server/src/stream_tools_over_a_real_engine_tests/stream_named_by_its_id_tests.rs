@@ -86,13 +86,33 @@ async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
         json!({ "stream": stream_id, "node": mixer, "input": "gain", "value": 0.25 }),
     )
     .await;
+    let refused_exposure = engine
+        .the_answer_or_the_refusal_of(
+            "set_exposed_config_fields",
+            json!({ "stream": stream_id, "node": mixer, "exposed_config_fields": ["frame_width"],
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("a natively compiled node exposes no config field");
+    assert_eq!(
+        refused_exposure.refused_node.as_deref(),
+        Some(mixer.as_str()),
+        "{refused_exposure:?}"
+    );
+    assert!(
+        refused_exposure
+            .runtime_words
+            .contains("node `mixer` exposes frame_width"),
+        "{refused_exposure:?}"
+    );
+    // Exposing an input of a node type that takes no config is checked and records no commit.
     let exposed = the_edit_applied(
         &engine,
         "set_exposed_config_fields",
-        json!({ "stream": stream_id, "node": monitor,
-                "exposed_config_fields": ["video"] }),
+        json!({ "stream": stream_id, "node": monitor, "exposed_config_fields": ["video"] }),
     )
     .await;
+    assert!(exposed.get("transaction").is_none(), "{exposed}");
     assert_eq!(exposed["operations"], json!([]), "{exposed}");
     let link = json!({ "stream": stream_id,
                        "source": { "node": SOURCE_NODE_UUID, "port": "video" },
@@ -192,7 +212,9 @@ async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
         ["camera", "mixer", "spare"],
         "{live}"
     );
-    let recorded = the_actions_recorded_oldest_first(&project, 17);
+    // Every edit above commits once but the two `set_exposed_config_fields`: one refused, one
+    // recording no commit.
+    let recorded = the_actions_recorded_oldest_first(&project, 64);
     assert_eq!(recorded.len(), 17, "{recorded:?}");
     let actions: Vec<Value> = recorded
         .iter()
