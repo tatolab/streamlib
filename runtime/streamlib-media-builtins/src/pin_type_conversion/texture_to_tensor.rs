@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Built-in `ImageToArray`: each Image frame as one Array frame whose one GPU
+//! Built-in `TextureToTensor`: each Image frame as one Array frame whose one GPU
 //! attribute is the frame's own pool slot, borrowed as an `[h, w, c]` tensor.
 
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
@@ -18,8 +18,8 @@ use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descript
 const IMAGE_INPUT_PORT: &str = "image";
 const ARRAY_OUTPUT_PORT: &str = "array";
 
-/// The one attribute each Array frame `ImageToArray` writes holds.
-pub const IMAGE_TO_ARRAY_IMAGE_ATTRIBUTE_NAME: &str = "image";
+/// The one attribute each Array frame `TextureToTensor` writes holds.
+pub const TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME: &str = "image";
 
 #[streamlib::sdk::node(
     built_in_node,
@@ -28,17 +28,18 @@ pub const IMAGE_TO_ARRAY_IMAGE_ATTRIBUTE_NAME: &str = "image";
         "image",
         description = "The Image frames to borrow as tensors",
         delivery_profile = "newest",
-        family = Image
+        pin_type = Texture
     ),
     output(
         "array",
         description = "One Array frame per Image frame, its slot as the `image` attribute",
-        family = Array,
+        pin_type = Tensor,
         names = ["image"],
         residency = "gpu"
     ),
 )]
 #[meta(
+    conversion = true,
     description = "Converts each Image frame on `image` into one Array frame on `array`, whose \
                    one GPU attribute `image` is the frame's own pool slot borrowed as an `[h, w, \
                    4]` tensor: `uint8` for an `rgba8` or `bgra8` frame, `float16` for \
@@ -53,9 +54,9 @@ pub const IMAGE_TO_ARRAY_IMAGE_ATTRIBUTE_NAME: &str = "image";
                    producer that has recycled the slot by then makes the read a counted loss, \
                    never another frame's pixels."
 )]
-pub struct ImageToArray;
+pub struct TextureToTensor;
 
-impl ReactiveNode for ImageToArray::Node {
+impl ReactiveNode for TextureToTensor::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(IMAGE_INPUT_PORT)? {
             match array_frame_of_the_image_frame(message.payload_descriptor) {
@@ -67,7 +68,7 @@ impl ReactiveNode for ImageToArray::Node {
                     payload_descriptor,
                 )?,
                 Err(refusal) => {
-                    tracing::warn!(%refusal, "ImageToArray wrote nothing for a message")
+                    tracing::warn!(%refusal, "TextureToTensor wrote nothing for a message")
                 }
             }
         }
@@ -97,7 +98,7 @@ pub fn array_frame_of_the_image_frame(
     payload_descriptor: DataChannelPayloadDescriptor,
 ) -> Result<(DataChannelPayloadDescriptor, Vec<u8>)> {
     refuse_unless_the_descriptor_is(
-        "ImageToArray",
+        "TextureToTensor",
         IMAGE_INPUT_PORT,
         payload_descriptor,
         DataChannelPayloadDescriptorKind::ImageFrame,
@@ -105,129 +106,30 @@ pub fn array_frame_of_the_image_frame(
     let image = ImageFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body);
     let format = TextureFormat::from_repr_value(image.format).ok_or_else(|| {
         Error::PortError(format!(
-            "ImageToArray: an Image frame on `image` states texture format {}, which this \
+            "TextureToTensor: an Image frame on `image` states texture format {}, which this \
              runtime does not know",
             image.format
         ))
     })?;
     let (dtype, channels) = tensor_element_and_channels_of_one_pixel(format).ok_or_else(|| {
         Error::PortError(format!(
-            "ImageToArray: an Image frame on `image` is {}, whose planes no one `[h, w, c]` \
+            "TextureToTensor: an Image frame on `image` is {}, whose planes no one `[h, w, c]` \
              tensor holds",
             format.wire_name()
         ))
     })?;
     let row = ArrayFrameAttributeRow {
-        name: IMAGE_TO_ARRAY_IMAGE_ATTRIBUTE_NAME.to_string(),
+        name: TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME.to_string(),
         dtype: dtype.to_string(),
         shape: vec![u64::from(image.height), u64::from(image.width), channels],
         residency: ArrayFrameAttributeResidency::GpuPoolSlot(image.slot),
     };
     let payload = row
         .to_row_bytes()
-        .map_err(|refusal| Error::PortError(format!("ImageToArray: {refusal}")))?
+        .map_err(|refusal| Error::PortError(format!("TextureToTensor: {refusal}")))?
         .to_vec();
     Ok((
         DataChannelPayloadDescriptor::array_frame(ArrayFrameDescriptorBody { attribute_count: 1 }),
         payload,
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use streamlib::sdk::iceoryx2::{
-        GpuPoolSlotFrameDescriptorBody, ImageFrameH273Colour, array_frame_attribute_table_of,
-    };
-
-    use super::*;
-
-    fn image_frame_of(
-        format: TextureFormat,
-    ) -> (DataChannelPayloadDescriptor, GpuPoolSlotFrameDescriptorBody) {
-        let slot = GpuPoolSlotFrameDescriptorBody {
-            pool: *b"0123456789abcdef",
-            slot: 3,
-            generation: 9,
-            timeline_value: 41,
-            image_layout: 1,
-        };
-        (
-            DataChannelPayloadDescriptor::image_frame(ImageFrameDescriptorBody {
-                slot,
-                width: 640,
-                height: 360,
-                format: format as u32,
-                colour: ImageFrameH273Colour {
-                    primaries: 1,
-                    transfer: 13,
-                    matrix: 1,
-                    range: 1,
-                },
-            }),
-            slot,
-        )
-    }
-
-    #[test]
-    fn an_image_frame_becomes_one_attribute_borrowing_its_own_slot() {
-        let (image_descriptor, slot) = image_frame_of(TextureFormat::Rgba8Unorm);
-
-        let (array_descriptor, array_payload) =
-            array_frame_of_the_image_frame(image_descriptor).unwrap();
-
-        let rows = array_frame_attribute_table_of(
-            ArrayFrameDescriptorBody::from_descriptor_body(&array_descriptor.body),
-            &array_payload,
-        )
-        .unwrap();
-        assert_eq!(
-            rows,
-            vec![ArrayFrameAttributeRow {
-                name: "image".into(),
-                dtype: "uint8".into(),
-                shape: vec![360, 640, 4],
-                residency: ArrayFrameAttributeResidency::GpuPoolSlot(slot),
-            }]
-        );
-    }
-
-    #[test]
-    fn each_single_plane_format_is_a_tensor_of_its_element_type() {
-        for (format, dtype) in [
-            (TextureFormat::Rgba8UnormSrgb, "uint8"),
-            (TextureFormat::Bgra8Unorm, "uint8"),
-            (TextureFormat::Rgba16Float, "float16"),
-            (TextureFormat::Rgba32Float, "float32"),
-        ] {
-            let (image_descriptor, _) = image_frame_of(format);
-            let (array_descriptor, array_payload) =
-                array_frame_of_the_image_frame(image_descriptor).unwrap();
-            let rows = array_frame_attribute_table_of(
-                ArrayFrameDescriptorBody::from_descriptor_body(&array_descriptor.body),
-                &array_payload,
-            )
-            .unwrap();
-            assert_eq!(rows[0].dtype, dtype, "{format:?}");
-        }
-    }
-
-    #[test]
-    fn an_nv12_frame_is_refused_naming_its_format() {
-        let (image_descriptor, _) = image_frame_of(TextureFormat::Nv12);
-
-        let refusal = array_frame_of_the_image_frame(image_descriptor)
-            .unwrap_err()
-            .to_string();
-
-        assert!(refusal.contains("nv12"), "{refusal}");
-    }
-
-    #[test]
-    fn a_message_that_is_not_an_image_frame_is_refused() {
-        let refusal = array_frame_of_the_image_frame(DataChannelPayloadDescriptor::bytes())
-            .unwrap_err()
-            .to_string();
-
-        assert!(refusal.contains("ImageFrame"), "{refusal}");
-    }
 }

@@ -51,8 +51,10 @@ fn golden_graph_document(path: &Path) -> serde_json::Value {
         .expect("a golden graph is JSON")
 }
 
+/// The type of each node in `graph_document`, as the runtime reads it: a type renamed since the
+/// golden was recorded is read as its new type.
 fn node_types_in(graph_document: &serde_json::Value) -> Vec<NodeClassImportPath> {
-    graph_document["nodes"]
+    streamlib_project_repository::stream_document_in_the_current_shape(graph_document.clone())["nodes"]
         .as_array()
         .expect("a graph holds nodes")
         .iter()

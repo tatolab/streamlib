@@ -187,7 +187,7 @@ fn a_family_mismatch_is_refused_before_any_link_exists() {
     };
     assert!(refusal.contains(".video (Image)"), "{refusal}");
     assert!(refusal.contains(".tensor (Array)"), "{refusal}");
-    assert!(refusal.contains("ImageToArray"), "{refusal}");
+    assert!(refusal.contains("TextureToTensor"), "{refusal}");
     assert_eq!(
         the_links_in(&compiler),
         0,

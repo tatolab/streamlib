@@ -493,10 +493,10 @@ pub(crate) fn node_placed_between_families(
 ) -> Option<&'static str> {
     use PortFamily::*;
     Some(match (from, to) {
-        (Image, Array) => "place an ImageToArray node between them",
-        (Array, Image) => "place an ArrayToImage node between them",
-        (Channels, Array) => "place a ChannelsToArray node between them",
-        (Array, Channels) => "place an ArrayToChannels node between them",
+        (Image, Array) => "place a TextureToTensor node between them",
+        (Array, Image) => "place a TensorToTexture node between them",
+        (Channels, Array) => "place an AudioToTensor node between them",
+        (Array, Channels) => "place a TensorToAudio node between them",
         (Channels, Records) => "place a ChannelsToRecords node between them",
         (Records, Channels) => "place a RecordsToChannels node between them",
         (Image, Packets) => "place a video encoder (H264Encoder, H265Encoder) between them",

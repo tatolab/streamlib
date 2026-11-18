@@ -588,7 +588,7 @@ fn a_started_describe_receives_its_arguments_working_directory_and_python_path()
 fn only_a_module_and_qualname_that_names_no_built_in_is_described() {
     assert!(a_node_interpreter_describes(&import_path(GOOD_TYPE)));
     assert!(!a_node_interpreter_describes(&import_path(
-        "tatolab.stream:ChannelsToArray"
+        "tatolab.stream:AudioToTensor"
     )));
     assert!(!a_node_interpreter_describes(&import_path(
         "my_crate::nodes::Blur"
