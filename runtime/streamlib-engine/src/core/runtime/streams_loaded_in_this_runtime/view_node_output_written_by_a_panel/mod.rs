@@ -9,10 +9,12 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use crate::core::descriptors::PortFamily;
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{Graph, GraphNode, GraphNodeWithComponents, NodeInstanceComponent};
 use crate::core::nodes::{
     a_panel_writes, the_message_a_value_written_onto_an_output_is, the_names_listed,
+    the_refusal_of_a_value_an_output_does_not_carry,
 };
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
@@ -51,14 +53,19 @@ impl LoadedStreamInThisRuntime {
         tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 compiler.scope_reading(|graph| {
-                    let node = the_running_view_node_of_the_id(
+                    let (node, family) = the_running_view_node_of_the_id(
                         graph,
                         &stream_id,
                         &node_id,
                         &port_name,
                         why_a_node_that_has_not_failed_does_not_run,
                     )?;
-                    refuse_a_value_no_panel_writes_onto_the_output(node, &port_name, &value)?;
+                    refuse_a_value_no_panel_writes_onto_the_output(
+                        &node.display_name,
+                        &port_name,
+                        family,
+                        &value,
+                    )?;
                     Ok(node.node_uuid)
                 })
             }),
@@ -78,7 +85,7 @@ fn the_running_view_node_of_the_id<'graph>(
     node_id: &str,
     port_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
-) -> Result<&'graph GraphNode> {
+) -> Result<(&'graph GraphNode, PortFamily)> {
     let no_such_node = || {
         Error::NodeNotFound(format!(
             "no node in the stream `{stream_id}` has the id `{node_id}`"
@@ -107,38 +114,33 @@ fn the_running_view_node_of_the_id<'graph>(
             ),
         ));
     }
-    if !node.has_output(port_name) {
+    let Some(output) = node.output_port(port_name) else {
         return Err(Error::PortError(format!(
             "node `{}` has no output `{port_name}`; its outputs are {}",
             node.display_name,
             the_names_listed(node.ports.outputs.iter().map(|port| &port.name))
         )));
-    }
-    Ok(node)
+    };
+    Ok((node, output.family.family))
 }
 
-/// Refuse `value` written onto output `port_name` of the view node `node` when no panel writes
-/// it there: any value onto an output of a family no panel writes, and `null`, which sets no
-/// value; each in the words of the message the output's family carries.
+/// Refuse `value` written onto output `port_name`, of `family`, of the view node named
+/// `node_name` when no panel writes it there: any value onto an output of a family no panel
+/// writes, and `null`, which sets no value; each in the words of the message the family carries.
 fn refuse_a_value_no_panel_writes_onto_the_output(
-    node: &GraphNode,
+    node_name: &str,
     port_name: &str,
+    family: PortFamily,
     value: &serde_json::Value,
 ) -> Result<()> {
-    let Some(output) = node.output_port(port_name) else {
-        return Ok(());
-    };
-    let family = output.family.family;
     if a_panel_writes(family) && !value.is_null() {
         return Ok(());
     }
     match the_message_a_value_written_onto_an_output_is(family, value, 0) {
         Ok(_) => Ok(()),
-        Err(why) => Err(Error::PortError(format!(
-            "output `{port_name}` of node `{}` carries {}, and {why}",
-            node.display_name,
-            family.declaration_name()
-        ))),
+        Err(why) => Err(the_refusal_of_a_value_an_output_does_not_carry(
+            node_name, port_name, family, &why,
+        )),
     }
 }
 

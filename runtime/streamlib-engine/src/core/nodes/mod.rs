@@ -44,5 +44,6 @@ pub(crate) use project_view_node::{
     THE_FAMILY_A_GRAPH_INPUT_DECLARES, a_panel_writes, is_the_input_of_an_output_a_panel_writes,
     refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes,
     the_message_a_value_written_onto_an_output_is, the_names_listed,
-    the_node_type_of_a_top_level_graph_input,
+    the_node_type_of_a_top_level_graph_input, the_refusal_of_a_value_an_output_does_not_carry,
+    the_saved_values_without_any_on_an_output_a_panel_writes,
 };

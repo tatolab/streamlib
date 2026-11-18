@@ -84,7 +84,8 @@ impl UnlinkedInputValuesDelivery {
     }
 
     /// This delivery, naming `set_live`, the inputs of its node a client has just set live,
-    /// to a node in this process.
+    /// when it is to a node in this process; a delivery to a helper, to an island or to a node
+    /// not built yet is left as it is, none of them telling a value just set from one held.
     pub(crate) fn naming_the_inputs_set_live(self, set_live: Vec<String>) -> Self {
         match self {
             Self::TheNodeInThisProcess {

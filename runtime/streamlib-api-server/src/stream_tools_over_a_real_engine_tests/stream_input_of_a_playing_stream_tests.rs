@@ -77,6 +77,27 @@ async fn a_recorder_reads(record: &Value) {
     }
 }
 
+/// Wait until recorders have read `record` `times` times, each set of it being one message,
+/// failing when they do not within the wait.
+async fn a_recorder_reads_times(record: &Value, times: usize) {
+    let gave_up_at = Instant::now() + ARRIVES_WITHIN;
+    let times_read = || {
+        RECORDS_READ
+            .lock()
+            .iter()
+            .filter(|read| *read == record)
+            .count()
+    };
+    while times_read() < times {
+        assert!(
+            Instant::now() < gave_up_at,
+            "recorders read {record} {} times, not {times}",
+            times_read()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     /// The project `project` opened and playing.
     pub(super) async fn playing(&self, project: &ProjectWithGraphDocuments) {
@@ -130,7 +151,8 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
 
 /// On a playing stream, `write_graph_input` answers the family of the input it names and its
 /// value reaches the node reading the input, and so does a live `set_node_input_value` naming no
-/// node; neither saves anything in the graph document.
+/// node, the same value set again reaching it again; neither saves anything in the graph
+/// document.
 ///
 /// Mental-revert: a set naming no node that is refused without its node, or that sets anything
 /// but the `value` of the `GraphInput` declaring the input, leaves the recorder without the value.
@@ -155,6 +177,11 @@ async fn a_stream_input_set_on_a_playing_stream_reaches_the_node_reading_it() {
         .await
         .expect("a playing stream's input is set live naming no node");
     a_recorder_reads(&set_live).await;
+    engine
+        .set_the_cue_live(&project, set_live.clone())
+        .await
+        .expect("the same value is set live again");
+    a_recorder_reads_times(&set_live, 2).await;
     assert_eq!(project.the_graph_document_of("main"), document_before);
     engine
         .the_project_action_done("stop_playback", &project)

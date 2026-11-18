@@ -25,13 +25,16 @@ const DECK_NODE_UUID: &str = "d0ecd0ec-d0ec-4d0e-8d0e-d0ecd0ecd0ec";
 /// A project whose stream `main` holds a node of its view `deck`, with a Records output `cue`
 /// and an Array output `fader`.
 fn a_project_whose_stream_holds_the_deck() -> ProjectWithGraphDocuments {
+    a_project_bringing_the_deck_whose_stream_holds(json!([
+        { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
+          "config": {} },
+    ]))
+}
+
+/// A project bringing the view `deck`, whose stream `main` holds `nodes`.
+fn a_project_bringing_the_deck_whose_stream_holds(nodes: Value) -> ProjectWithGraphDocuments {
     let project = ProjectWithGraphDocuments::holding(json!({
-        "stream": "main",
-        "nodes": [
-            { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
-              "config": {} },
-        ],
-        "links": [],
+        "stream": "main", "nodes": nodes, "links": [],
     }));
     let folder = project.path().join("views").join("deck");
     std::fs::create_dir_all(&folder).expect("the view's folder");
@@ -220,6 +223,64 @@ async fn a_write_no_panel_makes_or_a_saved_value_on_a_view_outputs_input_is_refu
         "{refusal:?}"
     );
     assert_eq!(project.the_graph_document_of("main"), document_before);
+    engine
+        .the_project_action_done("stop_playback", &project)
+        .await;
+}
+
+/// An `add_node` of the deck saving a value on the input of its output `cue` is refused as
+/// `input_takes_no_value`, at `/pins/cue`, and the graph document keeps nothing of it.
+///
+/// Mental-revert: an `add_node` whose pins go unchecked saves a value the input never holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_add_node_saving_a_value_on_a_view_outputs_input_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_bringing_the_deck_whose_stream_holds(json!([]));
+    engine.playing(&project).await;
+    let document_before = project.the_graph_document_of("main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "add_node",
+            json!({ "stream": project.stream_asset_of("main"),
+                    "type": format!("{TEST_PROJECT_NAME}:deck"), "name": "deck",
+                    "pins": { "cue": { "track": "intro" } } }),
+        )
+        .await
+        .expect_err("the input of a view's output holds no saved value");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::InputTakesNoValue,
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.refused_params_pointer.as_deref(),
+        Some("/pins/cue"),
+        "{refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+    engine
+        .the_project_action_done("stop_playback", &project)
+        .await;
+}
+
+/// A graph document saving a value on the input of a view node's output loads, the value
+/// dropped: the input renders no saved value.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_saving_a_value_on_a_view_outputs_input_loads_with_the_value_dropped() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_bringing_the_deck_whose_stream_holds(json!([
+        { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
+          "config": {}, "pins": { "cue": { "track": "intro" } } },
+    ]));
+    engine.playing(&project).await;
+
+    let live_graph = engine.the_live_graph_of(&project.stream_id_of("main"));
+    let deck = the_node_named(&live_graph, "deck");
+    let cue_input = the_input_named(&deck, "cue");
+    assert_ne!(cue_input["value_comes_from"], "saved", "{cue_input}");
+    assert!(deck["pins"].get("cue").is_none(), "{deck}");
     engine
         .the_project_action_done("stop_playback", &project)
         .await;

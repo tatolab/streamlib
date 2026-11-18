@@ -70,7 +70,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     name,
                     config,
                     pins,
-                    label: Some(label),
+                    label,
                     ..
                 } => {
                     let mut input_values = Map::new();
@@ -79,18 +79,34 @@ impl StreamGraphTransactionExecutor<'_> {
                         pins.clone().unwrap_or_default(),
                         config.clone().unwrap_or_default(),
                     );
-                    node_as_the_transaction_leaves_it.insert(
-                        (stream_id.clone(), level.clone(), label.clone()),
-                        StreamGraphDocumentNode {
-                            id: Uuid::nil(),
-                            name: name.clone().unwrap_or_else(|| label.clone()),
-                            node_type: node_type.clone(),
-                            input_values,
-                            exposed_config_fields: Vec::new(),
-                            studio: Box::default(),
-                            fragment: None,
-                        },
-                    );
+                    let added = StreamGraphDocumentNode {
+                        id: Uuid::nil(),
+                        name: name.clone().or_else(|| label.clone()).unwrap_or_default(),
+                        node_type: node_type.clone(),
+                        input_values,
+                        exposed_config_fields: Vec::new(),
+                        studio: Box::default(),
+                        fragment: None,
+                    };
+                    if let Some(stream) = staged.streams.get(stream_id)
+                        && its_input_values_are_checked(&added)
+                    {
+                        for (input, value) in pins.iter().flatten() {
+                            refuse_a_value_the_input_does_not_take(
+                                stream.stream_operations.as_ref(),
+                                &added,
+                                &added.input_values,
+                                input,
+                                Some(value).filter(|value| !value.is_null()),
+                                Some(&format!("/pins/{input}")),
+                            )
+                            .map_err(refused)?;
+                        }
+                    }
+                    if let Some(label) = label {
+                        node_as_the_transaction_leaves_it
+                            .insert((stream_id.clone(), level.clone(), label.clone()), added);
+                    }
                     continue;
                 }
                 StreamGraphAction::SetNodeInputValue { level, node, .. }

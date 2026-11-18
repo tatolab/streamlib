@@ -238,6 +238,13 @@ impl LoadedStreamInThisRuntime {
                 pin_values: document_pins,
             } = LegacyConfigOfANodeType::of(node_types, &document_node.node_type)
                 .split(&document_node.input_values);
+            let document_pins =
+                crate::core::nodes::the_saved_values_without_any_on_an_output_a_panel_writes(
+                    node_types,
+                    &live_node.node_type,
+                    &live_node.display_name,
+                    document_pins,
+                );
             if live_node.config != document_config {
                 self.update_node_config_compiled_right_away(
                     &live_node.node_run_id,

@@ -97,11 +97,12 @@ pub(crate) fn the_node_type_of_a_project_view(
     descriptor.outputs = manifest
         .outputs
         .iter()
-        .map(|port| match a_panel_writes(port.family) {
-            true => {
+        .map(|port| {
+            if a_panel_writes(port.family) {
                 the_port_a_view_declares(port).with_pin_declaration(carried_as_a_value(Vec::new()))
+            } else {
+                the_port_a_view_declares(port)
             }
-            false => the_port_a_view_declares(port),
         })
         .collect();
     Ok(descriptor)
@@ -191,6 +192,32 @@ pub(crate) fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
             node.name
         ),
     })
+}
+
+/// `pins`, the saved values a graph document holds for the node named `node_name` of
+/// `node_type`, without any on the input of an output a panel writes, which holds no saved value;
+/// each dropped is logged, naming the node and the input.
+pub(crate) fn the_saved_values_without_any_on_an_output_a_panel_writes(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+    node_name: &str,
+    mut pins: serde_json::Map<String, JsonValue>,
+) -> serde_json::Map<String, JsonValue> {
+    pins.retain(|input, _| {
+        let holds_no_saved_value =
+            is_the_input_of_an_output_a_panel_writes(node_types, node_type, input);
+        if holds_no_saved_value {
+            tracing::warn!(
+                node = node_name,
+                input = input.as_str(),
+                "the graph document saves a value on input `{input}` of `{node_name}`, which \
+                 holds what a panel writes onto its output `{input}` and no saved value; the \
+                 value is dropped"
+            );
+        }
+        !holds_no_saved_value
+    });
+    pins
 }
 
 /// The config schema a node of a view takes: the view's `settings`, closed to the settings it
@@ -347,11 +374,12 @@ impl ValueSourceNode {
         let (payload_descriptor, payload) =
             the_message_a_value_written_onto_an_output_is(family, value, next_start_sample)
                 .map_err(|why| {
-                    Error::PortError(format!(
-                        "output `{port}` of node `{}` carries {}, and {why}",
-                        self.node_name,
-                        family.declaration_name()
-                    ))
+                    the_refusal_of_a_value_an_output_does_not_carry(
+                        &self.node_name,
+                        port,
+                        family,
+                        &why,
+                    )
                 })?;
         let output_writer = self.output_writer.as_ref().ok_or_else(|| {
             Error::Runtime(format!(
@@ -424,6 +452,20 @@ pub(crate) fn the_names_listed<'a>(names: impl Iterator<Item = &'a String>) -> S
     }
     names.sort();
     names.join(", ")
+}
+
+/// The refusal of a value output `port` of the node named `node_name`, of `family`, does not
+/// carry, for `why`.
+pub(crate) fn the_refusal_of_a_value_an_output_does_not_carry(
+    node_name: &str,
+    port: &str,
+    family: PortFamily,
+    why: &str,
+) -> Error {
+    Error::PortError(format!(
+        "output `{port}` of node `{node_name}` carries {}, and {why}",
+        family.declaration_name()
+    ))
 }
 
 /// The message `value`, written onto an output of `family`, is sent as: a Records output takes
