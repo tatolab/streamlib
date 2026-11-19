@@ -25,6 +25,8 @@ fn watch_over(tracks: &[(&str, PageInputTrackKind)]) -> PageAudioSilenceWatch {
     PageAudioSilenceWatch::of_the_page_input_tracks(&tracks)
 }
 
+/// Counters of a page handed `input_audio_blocks_delivered` blocks, all with
+/// sound, that has published `audio_blocks_published`.
 fn counters_with(
     input_audio_blocks_delivered: u64,
     audio_blocks_published: u64,
@@ -32,6 +34,9 @@ fn counters_with(
     let counters = BrowserPageCounters::default();
     counters
         .page_input_audio_blocks_delivered
+        .store(input_audio_blocks_delivered, Ordering::Relaxed);
+    counters
+        .page_input_audio_blocks_with_sound_delivered
         .store(input_audio_blocks_delivered, Ordering::Relaxed);
     counters
         .audio_blocks_published
@@ -124,4 +129,53 @@ fn a_page_with_no_wired_audio_input_is_never_warned_about() {
         watch.warning_due(FIRST_SEEN_AT_NS + 10 * grace_ns(), &counters_with(1, 0)),
         None
     );
+}
+
+#[test]
+fn inputs_that_carried_only_digital_silence_are_named_as_the_silent_source() {
+    let mut watch = watch_over(&[
+        ("audio_in_0", PageInputTrackKind::Audio),
+        ("audio_in_1", PageInputTrackKind::Audio),
+    ]);
+    let only_silence_delivered = BrowserPageCounters::default();
+    only_silence_delivered
+        .page_input_audio_blocks_delivered
+        .store(1, Ordering::Relaxed);
+    assert_eq!(
+        watch.warning_due(FIRST_SEEN_AT_NS, &only_silence_delivered),
+        None
+    );
+
+    only_silence_delivered
+        .page_input_audio_blocks_delivered
+        .store(250, Ordering::Relaxed);
+    let warning = watch
+        .warning_due(FIRST_SEEN_AT_NS + grace_ns(), &only_silence_delivered)
+        .expect("a page handed only silence for the whole grace is warned about");
+    assert!(warning.contains("(audio_in_0, audio_in_1)"), "{warning}");
+    assert!(warning.contains("digital silence"), "{warning}");
+    assert!(warning.contains("check the source"), "{warning}");
+    assert!(!warning.contains("inputTrack"), "{warning}");
+}
+
+#[test]
+fn one_block_with_sound_makes_it_the_page_that_is_warned_about() {
+    let mut watch = watch_over(&[("audio_in_0", PageInputTrackKind::Audio)]);
+    let one_block_with_sound = BrowserPageCounters::default();
+    one_block_with_sound
+        .page_input_audio_blocks_delivered
+        .store(250, Ordering::Relaxed);
+    one_block_with_sound
+        .page_input_audio_blocks_with_sound_delivered
+        .store(1, Ordering::Relaxed);
+    assert_eq!(
+        watch.warning_due(FIRST_SEEN_AT_NS, &one_block_with_sound),
+        None
+    );
+
+    let warning = watch
+        .warning_due(FIRST_SEEN_AT_NS + grace_ns(), &one_block_with_sound)
+        .expect("a page handed sound for the whole grace is warned about");
+    assert!(warning.contains("published no audio"), "{warning}");
+    assert!(!warning.contains("digital silence"), "{warning}");
 }
