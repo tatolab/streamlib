@@ -108,7 +108,7 @@ run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_com
 run_lint "ast-grep rule tests" env PATH="${ast_grep_directory}:${PATH}" \
   ast-grep test --skip-snapshot-tests
 for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_check_ast_grep_required_matches.py \
-  scripts/test_check_processor_word.py; do
+  scripts/test_check_processor_word.py scripts/ci/test_check_in_tree_projects_node_code.py; do
   run_lint "${script_test}" "${python_command[@]}" "${script_test}"
 done
 run_lint "ast-grep suppressions" "${python_command[@]}" scripts/check_ast_grep_suppressions.py

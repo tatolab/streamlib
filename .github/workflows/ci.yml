@@ -611,6 +611,17 @@ jobs:
             ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
           key: ${{ steps.restore.outputs.cache-primary-key }}
 
+      # The node code of every in-tree project is checked on this unit in a job
+      # of its own, which builds each module's native half from source.
+      - name: Hand the runtime unit to the in-tree project check
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-unit-linux
+          path: ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
       # Where every suite looks for it by default, `<repository>/target/tatolab-runtime`.
       - name: Unpack the runtime unit
         run: |
@@ -730,6 +741,121 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+
+  # `tatolab check` on the built unit over every in-tree project and every
+  # first-party module, a module with no project file included: a declaration
+  # error fails it, and each declaration in a retired form is printed by project
+  # with the total, which says when the retired forms can be deleted. A project's
+  # venv builds each module it depends on from source, so it runs nightly, on
+  # the unit the integration suite ran on.
+  node-code-of-in-tree-projects-linux:
+    name: Node code of every in-tree project (Linux)
+    needs: integration-test-linux
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+
+      # What the modules' build scripts reach for: bindgen's libclang, cmake's
+      # C toolchain, and for tatolab-rive clang, libuuid's headers,
+      # glslangValidator and spirv-opt.
+      # `timeout-minutes` is the backstop the composite action cannot declare itself.
+      - name: Install system dependencies
+        timeout-minutes: 15
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            libclang1-18
+            libclang-common-18-dev
+            python3-dev
+            clang
+            uuid-dev
+            glslang-tools
+            spirv-tools
+
+      - name: Cache Rust dependencies
+        uses: ./.github/actions/cache-rust-dependencies
+        with:
+          shared-key: linux-in-tree-project-modules
+          workspaces: |
+            packages/streamlib-h264 -> target
+            packages/streamlib-h265 -> target
+            packages/streamlib-webrtc -> target
+            packages/tatolab-browser -> target
+            packages/tatolab-camera -> target
+            packages/tatolab-microphone -> target
+            packages/tatolab-moq -> target
+            packages/tatolab-opus -> target
+            packages/tatolab-rive -> target
+            packages/tatolab-speaker -> target
+            packages/tatolab-virtualcamera -> target
+
+      - name: Cache the Slang compiler build
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
+      # The H.264 and H.265 modules' Vulkan Video build script compiles its
+      # shaders through it.
+      - name: Stage the Slang compiler
+        run: bash scripts/stage_slang_compiler_libraries.sh
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # Each project's venv requires this checkout's `tatolab-stream`, which
+      # only this run's build has once `main`'s version is ahead of PyPI's.
+      - name: Build this checkout's tatolab-stream
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+
+      - name: Fetch the runtime unit the integration suite ran on
+        uses: actions/download-artifact@v7
+        with:
+          name: runtime-unit-linux
+          path: ${{ runner.temp }}
+
+      - name: Unpack the runtime unit
+        run: |
+          rm -rf target/tatolab-runtime
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
+
+      # A project holding a declaration the reader refuses must fail the check
+      # with that refusal's code, or a green run below proves nothing.
+      - name: A planted declaration error fails the check
+        env:
+          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist
+        run: |
+          planted="$RUNNER_TEMP/planted-declaration-error"
+          mkdir -p "$planted/nodes"
+          printf '%s\n' '{"dependencies": [], "description": "A declaration the reader refuses", "name": "planted-declaration-error", "project": "5b0c7f0e-2a4d-4e8b-9a51-6f1d3c2b8e47"}' \
+            > "$planted/tatolab-project.json"
+          printf '%s\n' '[project]' 'name = "planted-declaration-error"' 'version = "0.1.0"' \
+            'requires-python = ">=3.12"' 'dependencies = ["tatolab-stream"]' > "$planted/pyproject.toml"
+          printf '%s\n' 'from tatolab.stream import node' '' '' '@node' \
+            'def PlantedLevel(level: float) -> float:' '    return level' > "$planted/nodes/planted_level.py"
+          exit_code=0
+          python3 scripts/ci/check_in_tree_projects_node_code.py --runtime-unit target/tatolab-runtime \
+            --project "$planted" > "$RUNNER_TEMP/planted-report.txt" || exit_code=$?
+          cat "$RUNNER_TEMP/planted-report.txt"
+          [ "$exit_code" -eq 1 ] || { echo "the planted error exited $exit_code, not 1" >&2; exit 1; }
+          grep -q 'nodes/planted_level.py:5: value_input_has_no_default' "$RUNNER_TEMP/planted-report.txt" \
+            || { echo "the report does not name the planted refusal" >&2; exit 1; }
+
+      - name: Check the node code of every in-tree project
+        env:
+          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist
+        run: python3 scripts/ci/check_in_tree_projects_node_code.py --runtime-unit target/tatolab-runtime
 
   # The Apple path on every change that can break it: macOS is a supported
   # floor, and an Apple-path change merges only with this lane green.
@@ -1184,7 +1310,7 @@ jobs:
   # edited the cron line.
   report-failed-nightly-integration:
     name: Report a failed nightly integration run
-    needs: [integration-test-linux, integration-test-macos]
+    needs: [integration-test-linux, node-code-of-in-tree-projects-linux, integration-test-macos]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     steps:
@@ -1195,9 +1321,10 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           FAILED_NIGHTLY_ISSUE_TITLE: "streamlib: nightly integration run failed"
           LINUX_RESULT: ${{ needs.integration-test-linux.result }}
+          IN_TREE_PROJECTS_RESULT: ${{ needs.node-code-of-in-tree-projects-linux.result }}
           MACOS_RESULT: ${{ needs.integration-test-macos.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          body="$(printf 'The nightly run on `%s` failed: %s\n\n- Integration test (Linux): %s\n- Integration test (macOS): %s\n' \
-            "$GITHUB_SHA" "$RUN_URL" "$LINUX_RESULT" "$MACOS_RESULT")"
+          body="$(printf 'The nightly run on `%s` failed: %s\n\n- Integration test (Linux): %s\n- Node code of every in-tree project (Linux): %s\n- Integration test (macOS): %s\n' \
+            "$GITHUB_SHA" "$RUN_URL" "$LINUX_RESULT" "$IN_TREE_PROJECTS_RESULT" "$MACOS_RESULT")"
           scripts/ci/report_failed_nightly_to_linear.sh "$FAILED_NIGHTLY_ISSUE_TITLE" "$body"
