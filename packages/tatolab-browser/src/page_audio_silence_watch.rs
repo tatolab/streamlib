@@ -100,10 +100,11 @@ impl PageAudioSilenceWatch {
         let first_wired = self.wired_audio_input_port_names.first()?;
         let wired = self.wired_audio_input_port_names.join(", ");
         Some(format!(
-            "the page has published no audio in the {} s since its wired audio inputs \
-             ({wired}) began reaching it, so `audio` stays silent; a page plays an input \
-             by playing `window.tatolab.inputTrack(\"{first_wired}\")` through an audio \
-             element or a started AudioContext",
+            "the page has published no audio in the {} s since input audio began \
+             reaching it, so `audio` stays silent; its wired audio inputs are ({wired}), \
+             and a page plays one by playing, for example, \
+             `window.tatolab.inputTrack(\"{first_wired}\")` through an audio element or a \
+             started AudioContext",
             silent_for.as_secs()
         ))
     }
