@@ -20,6 +20,7 @@ mod local_api_unix_socket_http_client;
 mod machine_runtime_local_api_socket;
 mod operation_call_verb;
 mod process_signal_handling;
+mod project_code_check_verb;
 mod project_log_records_from_the_runtime;
 mod project_source_change_watcher;
 mod runtime_gone_while_following_a_stream;
@@ -339,6 +340,30 @@ enum TatolabVerb {
         )]
         params: Option<serde_json::Map<String, serde_json::Value>>,
     },
+    /// Check this project's code without running a stream, printing each finding at its place.
+    #[command(
+        long_about = "The runtime checks the project's code as it is on disk, with no stream \
+                      loaded: each Python module its node type listing names, or each PATH, is \
+                      imported in the project's interpreter by the reader that loads the node. \
+                      Prints one line per finding, `path:line:column: finding_code: words` — a \
+                      declaration the reader refuses, a module that does not import, or a node \
+                      declared in a retired form, a warning naming its replacement — then a \
+                      line with the verdict. With --json, prints the runtime's answer whole. \
+                      Exits 0 when the check passed (warnings alone pass), 1 when it found an \
+                      error, and 2 when it did not run to its end or did not run at all, such as \
+                      a check that ran past its 60 seconds or no runtime answering."
+    )]
+    Check {
+        /// The files to check (default: every module the project's node type listing names).
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
+        /// Print the runtime's answer as JSON instead of one line per finding.
+        #[arg(long = "json")]
+        answer_as_json: bool,
+    },
     /// Read a project's log: every record its streams and their loads wrote.
     #[command(
         long_about = "Reads a project's log as the runtime reads it from the project's folder, \
@@ -536,6 +561,20 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
                 params.unwrap_or_default(),
             )
         }
+        TatolabVerb::Check {
+            paths,
+            project_directory,
+            answer_as_json,
+        } => caller_working_directory().and_then(|caller_working_directory| {
+            project_code_check_verb::check_the_project_code_on_the_running_runtime(
+                &project_code_check_verb::ProjectCodeCheckAsked {
+                    caller_working_directory: &caller_working_directory,
+                    project_directory: project_directory.as_deref(),
+                    paths: &paths,
+                    answer_as_json,
+                },
+            )
+        }),
         TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),
         TatolabVerb::Mcp => local_api_mcp_stdio_pipe::pipe_stdio_to_the_running_runtimes_mcp_server(),
         TatolabVerb::EnableVirtualCamera {

@@ -51,12 +51,12 @@ pub use control_operation_refusals::{
 pub use control_operation_requests::{
     ASSET_ARGUMENT_DESCRIPTION, ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION,
     AUTHOR_ARGUMENT_DESCRIPTION, AddDependencyRequest, AddGroupRequest, AddNodeRequest,
-    AddNoteRequest, CheckLinkRequest, CloseViewerRequest, CollapseSelectionIntoSubgraphRequest,
-    CreateNodeFileRequest, CreateProjectRequest, CreateStreamRequest, DeleteAssetRequest,
-    DeleteStreamRequest, DescribeAssetRequest, DescribeRuntimeRequest, DiscoverRequest,
-    DuplicateProjectRequest, GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION,
-    GRAPH_STREAM_ARGUMENT_DESCRIPTION, GraphEditMode, GraphRequest,
-    IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, IMPORT_SOURCE_ARGUMENT_DESCRIPTION,
+    AddNoteRequest, CheckLinkRequest, CheckProjectCodeRequest, CloseViewerRequest,
+    CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest, CreateProjectRequest,
+    CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest, DescribeAssetRequest,
+    DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest,
+    GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION, GRAPH_STREAM_ARGUMENT_DESCRIPTION, GraphEditMode,
+    GraphRequest, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, IMPORT_SOURCE_ARGUMENT_DESCRIPTION,
     IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, ImportAssetRequest,
     ImportGraphGeneratorRequest, ImportProjectRequest, ListAssetsRequest, ListDependenciesRequest,
     ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectViewsRequest,
@@ -86,7 +86,7 @@ pub use control_operation_results::{
 };
 pub use control_operations::{
     AddDependency, AddGroup, AddNode, AddNote, CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION,
-    CONTROL_OPERATIONS, CancelStreamAction, CheckLink, CloseProject, CloseViewer,
+    CONTROL_OPERATIONS, CancelStreamAction, CheckLink, CheckProjectCode, CloseProject, CloseViewer,
     CollapseSelectionIntoSubgraph, Connect, ControlOperationCall, ControlOperationCallParseRefusal,
     CreateNodeFile, CreateProject, CreateStream, DeleteAsset, DeleteProject, DeleteStream,
     DescribeAsset, DescribeRuntime, DescribeStreamAction, Disconnect, Discover, DuplicateProject,

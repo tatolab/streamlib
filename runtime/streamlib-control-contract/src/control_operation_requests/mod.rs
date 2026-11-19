@@ -48,7 +48,7 @@ pub use playback_and_stream_action_requests::{
     STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION, SetStreamClockScaleRequest,
 };
 pub use project_file_and_view_requests::{
-    CloseViewerRequest, CreateNodeFileRequest, ListProjectFilesRequest,
+    CheckProjectCodeRequest, CloseViewerRequest, CreateNodeFileRequest, ListProjectFilesRequest,
     ListProjectNodeTypesRequest, ListProjectViewsRequest, OpenViewerRequest,
     PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION, ReadProjectFileRequest, STREAM_ARGUMENT_DESCRIPTION,
     WriteProjectFileRequest, WriteStudioViewOutputRequest,

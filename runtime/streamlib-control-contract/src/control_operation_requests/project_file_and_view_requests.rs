@@ -106,6 +106,20 @@ pub struct ListProjectNodeTypesRequest {
     pub project_directory: PathBuf,
 }
 
+/// `check_project_code`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckProjectCodeRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The files to check, each `/`-separated and relative to the project directory.
+    #[schemars(
+        description = "The files to check, each `/`-separated and relative to the project directory, such as `nodes/blur.py`; every module the project's node type listing names when omitted. Refused for a path that is not a file of the project."
+    )]
+    pub paths: Option<Vec<String>>,
+}
+
 /// `list_project_views`'s params.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

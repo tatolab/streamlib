@@ -10,6 +10,7 @@ mod control_operations_on_new_projects;
 mod control_operations_on_one_project;
 mod control_operations_on_project_archives;
 mod control_operations_on_project_assets;
+mod control_operations_on_project_code;
 mod control_operations_on_project_dependencies;
 mod control_operations_on_project_files;
 mod control_operations_on_project_node_types;

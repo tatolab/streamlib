@@ -12,11 +12,11 @@ use crate::control_operation::{
 use crate::control_operation_refusals::{ParamsThatDoNotMatchTheirSchema, the_params_read_as};
 use crate::control_operation_requests::{
     AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkRequest,
-    CloseViewerRequest, CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest,
-    CreateProjectRequest, CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest,
-    DescribeAssetRequest, DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest,
-    GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest,
-    ListAssetsRequest, ListDependenciesRequest, ListProjectFilesRequest,
+    CheckProjectCodeRequest, CloseViewerRequest, CollapseSelectionIntoSubgraphRequest,
+    CreateNodeFileRequest, CreateProjectRequest, CreateStreamRequest, DeleteAssetRequest,
+    DeleteStreamRequest, DescribeAssetRequest, DescribeRuntimeRequest, DiscoverRequest,
+    DuplicateProjectRequest, GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest,
+    ImportProjectRequest, ListAssetsRequest, ListDependenciesRequest, ListProjectFilesRequest,
     ListProjectNodeTypesRequest, ListProjectViewsRequest, ListSamplesRequest, ListStreamsRequest,
     LogsRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest,
     OneStreamActionRequest, OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest,
@@ -64,8 +64,8 @@ pub use playback_and_stream_actions::{
     StartPlayback, StopPlayback,
 };
 pub use project_files_and_views::{
-    CloseViewer, CreateNodeFile, ListProjectFiles, ListProjectNodeTypes, ListProjectViews,
-    OpenViewer, ReadProjectFile, WriteProjectFile, WriteStudioViewOutput,
+    CheckProjectCode, CloseViewer, CreateNodeFile, ListProjectFiles, ListProjectNodeTypes,
+    ListProjectViews, OpenViewer, ReadProjectFile, WriteProjectFile, WriteStudioViewOutput,
 };
 pub use project_lifecycle::{
     CloseProject, CreateProject, DeleteProject, DuplicateProject, ImportProject, ListSamples,
@@ -77,7 +77,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 10;
+pub const CONTROL_CONTRACT_REVISION: u32 = 11;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -158,6 +158,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<ReadProjectFile>(),
     ControlOperationDeclaration::of::<CreateNodeFile>(),
     ControlOperationDeclaration::of::<WriteProjectFile>(),
+    ControlOperationDeclaration::of::<CheckProjectCode>(),
     ControlOperationDeclaration::of::<ListProjectNodeTypes>(),
     ControlOperationDeclaration::of::<ListProjectViews>(),
     ControlOperationDeclaration::of::<WriteStudioViewOutput>(),
@@ -310,6 +311,8 @@ pub enum ControlOperationCall {
     CreateNodeFile(CreateNodeFileRequest),
     /// A `write_project_file` call.
     WriteProjectFile(WriteProjectFileRequest),
+    /// A `check_project_code` call.
+    CheckProjectCode(CheckProjectCodeRequest),
     /// A `list_project_node_types` call.
     ListProjectNodeTypes(ListProjectNodeTypesRequest),
     /// A `list_project_views` call.
@@ -566,6 +569,9 @@ impl ControlOperationCall {
             WriteProjectFile::METHOD_NAME => {
                 the_request_of::<WriteProjectFile>(params).map(Self::WriteProjectFile)
             }
+            CheckProjectCode::METHOD_NAME => {
+                the_request_of::<CheckProjectCode>(params).map(Self::CheckProjectCode)
+            }
             ListProjectNodeTypes::METHOD_NAME => {
                 the_request_of::<ListProjectNodeTypes>(params).map(Self::ListProjectNodeTypes)
             }
@@ -675,6 +681,7 @@ impl ControlOperationCall {
             Self::ReadProjectFile(_) => ReadProjectFile::METHOD_NAME,
             Self::CreateNodeFile(_) => CreateNodeFile::METHOD_NAME,
             Self::WriteProjectFile(_) => WriteProjectFile::METHOD_NAME,
+            Self::CheckProjectCode(_) => CheckProjectCode::METHOD_NAME,
             Self::ListProjectNodeTypes(_) => ListProjectNodeTypes::METHOD_NAME,
             Self::ListProjectViews(_) => ListProjectViews::METHOD_NAME,
             Self::WriteStudioViewOutput(_) => WriteStudioViewOutput::METHOD_NAME,
