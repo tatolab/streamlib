@@ -14,6 +14,7 @@ import type {
   NamedPinTypeImportPath,
   PinFlow,
   BuiltInPinTypeName,
+  PinAnnotationName,
   DeclaredPinType,
   PinAnnotations,
   PinNumberRange,
@@ -49,6 +50,7 @@ export type {
   NamedPinTypeImportPath,
   PinFlow,
   BuiltInPinTypeName,
+  PinAnnotationName,
   DeclaredPinType,
   PinAnnotations,
   PinNumberRange,
@@ -4616,11 +4618,6 @@ export interface PinTypeListed {
    */
   converts_to: Array<PinTypeConversionListed>;
 }
-
-/**
- * An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
- */
-export type PinAnnotationName = "range" | "step" | "unit" | "meaning" | "control" | "frame_rate" | "sample_rate" | "sample_type" | "residency" | "project_asset";
 
 /**
  * One conversion a node type states: its one wired input's type into its output's.

@@ -172,6 +172,11 @@ export type PinFlow = "value" | "stream" | "trigger";
 export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
 
 /**
+ * An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
+ */
+export type PinAnnotationName = "range" | "step" | "unit" | "meaning" | "control" | "frame_rate" | "sample_rate" | "sample_type" | "residency" | "project_asset";
+
+/**
  * The pin type a port declares, or how it is found.
  */
 export type DeclaredPinType = {
@@ -449,9 +454,6 @@ export interface PinDeclaration {
 
 /** A contract component that states a built-in pin type's stored value. */
 export type PinValueComponentName = "BooleanPinValue" | "IntegerPinValue" | "FloatPinValue" | "StringPinValue" | "MenuPinValue" | "ColorPinValue" | "VectorPinValue" | "RectanglePinValue" | "TransformPinValue" | "AssetPinValue" | "ListPinValue" | "BundlePinValue" | "NodeReferenceInConfig" | "PinType";
-
-/** An annotation a pin may state: a key of `PinAnnotations`. */
-export type PinAnnotationName = keyof PinAnnotations;
 
 /** The value of each built-in type that stores one. A type with no key stores none. */
 export interface PinValues {
