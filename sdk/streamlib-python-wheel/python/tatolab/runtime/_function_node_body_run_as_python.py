@@ -21,6 +21,12 @@ from tatolab.runtime._function_node_carried_values import (
     UNREAD_MESSAGE_VALUE_TYPE,
     value_class_of_a_part_value_type,
 )
+from tatolab.runtime._function_node_stored_values import (
+    STORED_VALUE_RECORD_KEY,
+    STORED_VALUE_TYPES,
+    the_stored_value_of,
+    the_value_a_body_takes,
+)
 
 
 class FunctionNodeBodyRunAsPython:
@@ -38,6 +44,9 @@ class FunctionNodeBodyRunAsPython:
         signature = run_as_python.function_signature
         self._value_type_by_input_parameter = {
             each_input["parameter"]: each_input["value_type"] for each_input in signature["inputs"]
+        }
+        self._pin_type_by_input_parameter: "dict[str, Any]" = {
+            each_input["parameter"]: each_input.get("pin_type") for each_input in signature["inputs"]
         }
         self._input_parameters = list(self._value_type_by_input_parameter)
         self._positional_only_parameters = [
@@ -58,7 +67,8 @@ class FunctionNodeBodyRunAsPython:
         """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.
 
         A number or bool output is answered as a `float`, a Color, Vector, Rectangle or
-        Transform as the `tuple` of its parts, a `dict` as given.
+        Transform as the `tuple` of its parts, a String, Menu, Asset or List as the record
+        `{"value": <stored JSON form>}` it travels as, a `dict` as given.
         The new state is kept only once every output is answered.
         """
         signature = self._run_as_python.function_signature
@@ -150,6 +160,17 @@ class FunctionNodeBodyRunAsPython:
             return copy.deepcopy(input_value)
         if value_type in PART_VALUE_TYPES:
             return value_class_of_a_part_value_type(value_type).from_parts(input_value)
+        if value_type in STORED_VALUE_TYPES:
+            what_it_is = f"function node `{self._node_id}`'s input `{parameter_name}`"
+            if not isinstance(input_value, dict) or STORED_VALUE_RECORD_KEY not in input_value:
+                raise TypeError(
+                    f"{what_it_is} takes a {value_type} value, and was handed {input_value!r}"
+                )
+            return the_value_a_body_takes(
+                self._pin_type_by_input_parameter[parameter_name],
+                input_value[STORED_VALUE_RECORD_KEY],
+                what_it_is,
+            )
         return _python_value_of_an_f64(float(input_value), value_type)
 
     def _the_output_the_evaluator_takes(
@@ -184,6 +205,12 @@ class FunctionNodeBodyRunAsPython:
                     f"{type(output_value).__name__}"
                 )
             return output_value.parts
+        if each_output["value_type"] in STORED_VALUE_TYPES:
+            return {
+                STORED_VALUE_RECORD_KEY: the_stored_value_of(
+                    each_output["pin_type"], output_value, what_it_is
+                )
+            }
         if not isinstance(output_value, (bool, int, float)):
             raise TypeError(
                 f"{what_it_is} is {each_output['value_type']}, and the body gave "

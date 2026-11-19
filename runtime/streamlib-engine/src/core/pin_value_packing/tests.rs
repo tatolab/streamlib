@@ -429,3 +429,169 @@ fn a_client_writes_array_channels_and_records_values_alone() {
         "a client writes Array, Channels and Records values, never Packets"
     );
 }
+
+fn a_list_of(element_type: PinType) -> PinType {
+    PinType::ListOf {
+        element_type: Box::new(element_type),
+    }
+}
+
+fn a_menu(option_names: &[&str]) -> PinType {
+    PinType::Menu {
+        option_names: option_names.iter().map(|name| (*name).to_owned()).collect(),
+    }
+}
+
+/// The msgpack bytes of the Records message `{"value": value}`, written out by hand.
+fn golden_records_bytes(value_bytes: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0x81, 0xa5];
+    bytes.extend_from_slice(b"value");
+    bytes.extend_from_slice(value_bytes);
+    bytes
+}
+
+#[test]
+fn a_string_a_menu_and_an_asset_pack_as_a_records_message_of_their_value() {
+    let asset = "0eaf9ee2-0f73-4154-a3f6-a99c261b850d";
+    let mut asset_bytes = vec![0x81, 0xa5];
+    asset_bytes.extend_from_slice(b"asset");
+    asset_bytes.push(0xd9);
+    asset_bytes.push(asset.len() as u8);
+    asset_bytes.extend_from_slice(asset.as_bytes());
+    let packed_as = [
+        (PinType::String {}, json!("title"), {
+            let mut bytes = vec![0xa5];
+            bytes.extend_from_slice(b"title");
+            bytes
+        }),
+        (PinType::String {}, json!(""), vec![0xa0]),
+        (a_menu(&["sine", "square"]), json!("sine"), {
+            let mut bytes = vec![0xa4];
+            bytes.extend_from_slice(b"sine");
+            bytes
+        }),
+        (
+            PinType::Asset { media: vec![] },
+            json!({ "asset": asset }),
+            asset_bytes,
+        ),
+        (a_list_of(PinType::String {}), json!([]), vec![0x90]),
+    ];
+    for (pin_type, value, value_bytes) in packed_as {
+        let packed = pack_pin_value(&pin_type, &value, 0).unwrap();
+        assert_eq!(
+            DataChannelPayloadDescriptorKind::from_wire(packed.payload_descriptor.kind),
+            Some(DataChannelPayloadDescriptorKind::RecordsMessage),
+            "{pin_type}"
+        );
+        assert_eq!(
+            packed.payload,
+            golden_records_bytes(&value_bytes),
+            "{pin_type}"
+        );
+        assert_eq!(
+            unpack_pin_value(&pin_type, packed.as_ref()),
+            Ok(value),
+            "{pin_type}"
+        );
+    }
+}
+
+#[test]
+fn a_list_of_floats_packs_as_one_float64_attribute_of_shape_n() {
+    let list_of_floats = a_list_of(PinType::Float { exact_size: None });
+    let packed = pack_pin_value(&list_of_floats, &json!([0.1, 0.2, 3]), 0).unwrap();
+    let body = ArrayFrameDescriptorBody::from_descriptor_body(&packed.payload_descriptor.body);
+    let [row] = array_frame_attribute_table_of(body, &packed.payload)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        (row.name.as_str(), row.dtype.as_str(), row.shape.as_slice()),
+        ("values", "float64", &[3][..])
+    );
+    let ArrayFrameAttributeResidency::Cpu {
+        payload_byte_offset,
+        byte_len,
+    } = row.residency
+    else {
+        panic!("a List is packed on the CPU");
+    };
+    assert_eq!(
+        &packed.payload[payload_byte_offset as usize..][..byte_len as usize],
+        golden_bytes(&[0.1, 0.2, 3.0]).as_slice()
+    );
+    assert_eq!(
+        unpack_pin_value(&list_of_floats, packed.as_ref()),
+        Ok(json!([0.1, 0.2, 3.0]))
+    );
+}
+
+#[test]
+fn a_list_of_values_of_parts_packs_as_shape_n_by_parts_and_travels_unchanged() {
+    let list_of_colours = a_list_of(PinType::Color {});
+    let colours = json!([
+        {"red": 1.0, "green": 0.5, "blue": 0.25, "alpha": 1.0},
+        {"red": 0.0, "green": 0.0, "blue": 0.0, "alpha": 0.5},
+    ]);
+    let packed = pack_pin_value(&list_of_colours, &colours, 0).unwrap();
+    let body = ArrayFrameDescriptorBody::from_descriptor_body(&packed.payload_descriptor.body);
+    let rows = array_frame_attribute_table_of(body, &packed.payload).unwrap();
+    assert_eq!(rows[0].shape, vec![2, 4]);
+    assert_eq!(
+        unpack_pin_value(&list_of_colours, packed.as_ref()),
+        Ok(colours)
+    );
+
+    let empty = pack_pin_value(&list_of_colours, &json!([]), 0).unwrap();
+    assert_eq!(
+        unpack_pin_value(&list_of_colours, empty.as_ref()),
+        Ok(json!([]))
+    );
+}
+
+#[test]
+fn a_list_of_one_element_type_is_refused_on_a_list_of_another() {
+    let list_of_floats = a_list_of(PinType::Float { exact_size: None });
+    let refusal = pack_pin_value(&list_of_floats, &json!(["loud"]), 0).unwrap_err();
+    assert!(refusal.contains("each element a number"), "{refusal}");
+    let strings = pack_pin_value(&a_list_of(PinType::String {}), &json!(["loud"]), 0).unwrap();
+    let refusal = unpack_pin_value(&list_of_floats, strings.as_ref()).unwrap_err();
+    assert!(refusal.contains("Array frame"), "{refusal}");
+    let refusal = unpack_pin_value(&a_list_of(a_menu(&["sine"])), strings.as_ref()).unwrap_err();
+    assert!(refusal.contains("`sine`"), "{refusal}");
+}
+
+#[test]
+fn a_menu_value_that_is_none_of_its_options_is_refused_with_the_options() {
+    let waveform = a_menu(&["sine", "square"]);
+    let refusal = pack_pin_value(&waveform, &json!("saw"), 0).unwrap_err();
+    assert!(refusal.contains("one of `sine`, `square`"), "{refusal}");
+    let saw = pack_pin_value(&PinType::String {}, &json!("saw"), 0).unwrap();
+    let refusal = unpack_pin_value(&waveform, saw.as_ref()).unwrap_err();
+    assert!(refusal.contains("one of `sine`, `square`"), "{refusal}");
+    let sine = pack_pin_value(&waveform, &json!("sine"), 0).unwrap();
+    assert_eq!(
+        unpack_pin_value(&PinType::String {}, sine.as_ref()),
+        Ok(json!("sine")),
+        "a Menu feeds a String input as its option name"
+    );
+}
+
+#[test]
+fn an_asset_takes_only_the_object_form() {
+    let asset = PinType::Asset { media: vec![] };
+    for refused in [
+        json!("0eaf9ee2-0f73-4154-a3f6-a99c261b850d"),
+        json!({"asset": "0eaf9ee2-0f73-4154-a3f6-a99c261b850d", "kind": "image"}),
+        json!({"asset": "not a uuid"}),
+    ] {
+        assert!(pack_pin_value(&asset, &refused, 0).is_err(), "{refused}");
+    }
+    let imported = json!({
+        "asset": "0eaf9ee2-0f73-4154-a3f6-a99c261b850d",
+        "from": "5f0c3b1e-27a4-4bd3-9b51-6f0d5bd0b7a2",
+    });
+    let packed = pack_pin_value(&asset, &imported, 0).unwrap();
+    assert_eq!(unpack_pin_value(&asset, packed.as_ref()), Ok(imported));
+}

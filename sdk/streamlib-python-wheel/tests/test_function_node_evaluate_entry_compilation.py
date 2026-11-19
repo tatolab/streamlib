@@ -359,6 +359,8 @@ def test_a_rust_gate_carries_its_message_and_its_handed_out_flag_as_a_compiled_p
         "inputs_carrying_an_unread_message": [0],
         "outputs_carrying_an_unread_message": [0],
         "outputs_that_may_hand_out_nothing": [0],
+        "inputs_carrying_a_stored_value": [],
+        "outputs_carrying_a_stored_value": [],
     }
 
 
