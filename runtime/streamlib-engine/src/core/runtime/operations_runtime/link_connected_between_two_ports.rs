@@ -135,16 +135,11 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
                 else {
                     return Err(refusal);
                 };
-                let conversion = &convert_node.conversion;
                 refuse_the_links_through_a_node_not_yet_added(
                     graph,
                     &from,
                     &to,
-                    (
-                        &conversion.node_type,
-                        &conversion.input_port_name,
-                        &conversion.output_port_name,
-                    ),
+                    &convert_node.conversion,
                 )?;
                 Ok(Some(verdict))
             }

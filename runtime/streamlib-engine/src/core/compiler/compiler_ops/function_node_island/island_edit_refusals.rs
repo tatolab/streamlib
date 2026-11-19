@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use serde_json::Value as JsonValue;
 
 use crate::core::NodeRunId;
-use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassImportPath, PinConversion};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
@@ -95,8 +95,8 @@ pub(crate) fn refuse_a_link_an_island_cannot_take(
     refuse_a_link_closing_a_cycle_of_function_nodes(graph, from, to, held_as)
 }
 
-/// Refuse the two links a node of `node_type`, not yet in `graph`, would carry: from `from` into
-/// its input `input_port`, and from its output `output_port` into `to`, as
+/// Refuse the two links a node of `conversion`, not yet in `graph`, would carry: from `from` into
+/// its input, and from its output into `to`, as
 /// [`refuse_a_link_feeding_an_island_into_the_app_process`] and
 /// [`refuse_a_link_an_island_cannot_take`] refuse each once the node and both links are made.
 /// The node runs inside no island, as every convert node a transaction places does: a built-in,
@@ -105,11 +105,12 @@ pub(crate) fn refuse_the_links_through_a_node_not_yet_added(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-    (node_type, input_port, output_port): (&NodeClassImportPath, &str, &str),
+    conversion: &PinConversion,
 ) -> Result<()> {
+    let (node_type, input_port) = (&conversion.node_type, &conversion.input_port_name);
     let node_not_yet_added = NodeRunId::new();
     let into_it = InputLinkPortRef::new(node_not_yet_added.clone(), input_port);
-    let out_of_it = OutputLinkPortRef::new(node_not_yet_added, output_port);
+    let out_of_it = OutputLinkPortRef::new(node_not_yet_added, &conversion.output_port_name);
     let node_types = graph.node_types_this_stream_resolves();
     if runs_inside_the_read_of_each_node_it_feeds(graph, from.node_run_id()) {
         if runs_each_of_its_nodes_in_the_app_process(node_types, node_type) {

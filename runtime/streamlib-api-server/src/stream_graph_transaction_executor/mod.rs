@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use streamlib::sdk::descriptors::{ConvertNodeToInsert, PinLinkOutcome, PinLinkVerdict};
+use streamlib::sdk::descriptors::{ConvertNodeToInsert, PinLinkOutcome};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, PortOfANodeOfAType, RuntimeOperations,
     StreamLocation, WhatALiveConnectMakesOfALink,
@@ -56,6 +56,7 @@ mod graph_request_refusals;
 use graph_request_refusals::what_a_graph_action_names;
 pub(crate) use graph_request_refusals::{
     GraphRequestRefusal, GraphTransactionRefusal, WhereAnOperationEdits,
+    the_level_holds_both_ends_by_uuid,
 };
 mod input_value_sets;
 mod input_values_set_live;
@@ -82,7 +83,7 @@ use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
 
 /// What a `connect` from `source` to `target` at the own level of the running stream
 /// `stream_operations` runs asks of it, made as a transaction's `connect` makes it on the
-/// stream's graph as `rendered_graph` renders it: each port under its current name, each node
+/// stream's graph as `rendered_graph` renders it and `level_as_drawn` reads that render: each port under its current name, each node
 /// by its UUID, a loop of function nodes closed by a `PreviousValue` node added on it, a link
 /// whose pin types connect through a built-in conversion carried through its convert node added
 /// on it, and a link the graph already holds refused, in the order
@@ -91,27 +92,27 @@ pub(crate) fn what_a_connect_asks_of_the_running_stream(
     source: StreamGraphActionLinkEnd,
     target: StreamGraphActionLinkEnd,
     rendered_graph: &Value,
+    level_as_drawn: &StreamGraphDocument,
     stream_operations: &dyn RuntimeOperations,
 ) -> Result<WhatAConnectAsks, GraphRequestRefusal> {
-    let level_as_drawn = StreamGraphDocument::from_value(rendered_graph.clone())?;
     let no_node_by_label = HashMap::new();
     let (source, target) = the_link_ends_under_their_current_port_names(
         source,
         target,
-        &level_as_drawn,
+        level_as_drawn,
         &no_node_by_label,
         stream_operations,
     );
     let asked = the_operation_a_connect_asks(
         &source,
         &target,
-        &level_as_drawn,
+        level_as_drawn,
         &no_node_by_label,
         &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
         &|link| the_convert_node_a_live_connect_places(stream_operations, link),
     )?;
     if let WhatAConnectAsks::Link(link) = &asked {
-        refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
+        refuse_a_link_the_graph_already_holds(level_as_drawn, link)?;
     }
     Ok(asked)
 }
@@ -125,12 +126,6 @@ fn the_convert_node_a_live_connect_places(
     stream_operations: &dyn RuntimeOperations,
     link: &StreamGraphDocumentLink,
 ) -> Result<Option<ConvertNodeToInsert>, GraphRequestRefusal> {
-    let connects_through_a_convert_node = |verdict: &PinLinkVerdict| {
-        matches!(
-            verdict.outcome,
-            PinLinkOutcome::ConnectsThroughConvertNode(_)
-        )
-    };
     match stream_operations.what_a_live_connect_makes_of_the_link(link) {
         Ok(WhatALiveConnectMakesOfALink::Makes(Some(verdict))) => match verdict.outcome {
             PinLinkOutcome::ConnectsThroughConvertNode(convert_node) => Ok(Some(*convert_node)),
@@ -141,8 +136,13 @@ fn the_convert_node_a_live_connect_places(
         Ok(_) => Ok(None),
         Err(refusal)
             if stream_operations
-                .the_verdict_of_a_link_it_holds(link)
-                .is_some_and(|verdict| connects_through_a_convert_node(&verdict)) =>
+                .the_verdict_of_a_link_between_two_running_nodes(link)
+                .is_some_and(|verdict| {
+                    matches!(
+                        verdict.outcome,
+                        PinLinkOutcome::ConnectsThroughConvertNode(_)
+                    )
+                }) =>
         {
             Err(refusal.into())
         }
@@ -150,20 +150,31 @@ fn the_convert_node_a_live_connect_places(
     }
 }
 
-/// The convert node a transaction's `connect` would place on `link`, judged by the node types of
-/// `level_as_drawn`, the own level of a running stream that takes this transaction's edits once
-/// the documents hold them, refused before anything is written: the stream does not hold the
-/// level as drawn, so no convert node is placed on it in this transaction.
-fn refuse_a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later(
+/// Where a transaction's `connect` places no convert node on a link that needs one.
+#[derive(Clone, Copy)]
+enum WhyNoConvertNodeIsPlaced {
+    /// The link is inside a placed stream, not at the stream's own level.
+    TheLinkIsAtAPlacedLevel,
+    /// An earlier operation of the transaction has the stream take its edits once the
+    /// documents hold them.
+    TheStreamTakesItsEditsLater,
+}
+
+/// Refuse `link`, drawn at `level_as_drawn`, before anything is written, when its two typed
+/// ends, judged by the node types of that level as the running stream `stream_operations`
+/// resolves them, connect only through a convert node, which `connect` does not place there
+/// `because`.
+fn refuse_a_link_needing_a_convert_node_connect_does_not_place(
     stream_operations: &dyn RuntimeOperations,
     level_as_drawn: &StreamGraphDocument,
     link: &StreamGraphDocumentLink,
-) -> Result<Option<ConvertNodeToInsert>, GraphRequestRefusal> {
+    because: WhyNoConvertNodeIsPlaced,
+) -> Result<(), GraphRequestRefusal> {
     let (Ok(source), Ok(target)) = (
         level_as_drawn.node(link.source.node),
         level_as_drawn.node(link.target.node),
     ) else {
-        return Ok(None);
+        return Ok(());
     };
     let verdict = stream_operations.the_verdict_of_a_link_between_two_node_types(
         PortOfANodeOfAType {
@@ -180,16 +191,24 @@ fn refuse_a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later(
     let Some(PinLinkOutcome::ConnectsThroughConvertNode(convert_node)) =
         verdict.map(|verdict| verdict.outcome)
     else {
-        return Ok(None);
+        return Ok(());
     };
-    Err(GraphRequestRefusal::coded(
-        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::LinkPinTypesDoNotConnect),
-        format!(
+    let words = match because {
+        WhyNoConvertNodeIsPlaced::TheLinkIsAtAPlacedLevel => format!(
+            "{}: `connect` places that node itself only at a stream's own level, and this link \
+             is inside a placed stream; add the node and its two links there yourself",
+            convert_node.refusal_without_it
+        ),
+        WhyNoConvertNodeIsPlaced::TheStreamTakesItsEditsLater => format!(
             "{}, or connect the link in a transaction of its own: `connect` places that node \
              itself only on a stream that takes the edit live, and an earlier operation of this \
              transaction has the stream take its edits once the documents hold them",
             convert_node.refusal_without_it
         ),
+    };
+    Err(GraphRequestRefusal::coded(
+        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::LinkPinTypesDoNotConnect),
+        words,
     ))
 }
 
@@ -342,14 +361,12 @@ struct WhatTheAnswerNamesOfAnAddedNode {
 }
 
 /// Record what the answer names of the node `operation` adds, under the UUID `drawn_uuid_of`
-/// gives it: its `as` in `labels_of_added_nodes`, and why a `connect` inserted it in
-/// `why_each_node_was_inserted`.
+/// gives it, in `named_of_each_added_node`, when it names anything.
 fn record_what_the_answer_names_of_the_node_the_operation_adds(
     named: WhatTheAnswerNamesOfAnAddedNode,
     operation: &StreamGraphOperation,
     drawn_uuid_of: &dyn Fn(Uuid) -> Uuid,
-    labels_of_added_nodes: &mut HashMap<Uuid, String>,
-    why_each_node_was_inserted: &mut HashMap<Uuid, GraphTransactionNodeInsertedBecause>,
+    named_of_each_added_node: &mut HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
 ) {
     let added_node = match operation {
         StreamGraphOperation::AddNode { node, .. } => Some(node.id),
@@ -359,11 +376,8 @@ fn record_what_the_answer_names_of_the_node_the_operation_adds(
     let Some(added_node) = added_node.map(drawn_uuid_of) else {
         return;
     };
-    if let Some(label) = named.label {
-        labels_of_added_nodes.insert(added_node, label);
-    }
-    if let Some(inserted_because) = named.inserted_because {
-        why_each_node_was_inserted.insert(added_node, inserted_because);
+    if named.label.is_some() || named.inserted_because.is_some() {
+        named_of_each_added_node.insert(added_node, named);
     }
 }
 

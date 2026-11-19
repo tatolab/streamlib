@@ -68,7 +68,7 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
         }
-        fn the_verdict_of_a_link_it_holds(
+        fn the_verdict_of_a_link_between_two_running_nodes(
             &self,
             _link: &::streamlib_project_repository::StreamGraphDocumentLink,
         ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {

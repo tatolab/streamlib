@@ -239,8 +239,7 @@ impl StreamGraphTransactionExecutor<'_> {
             &|asked| (asked == stream_id).then(|| Arc::clone(&stream_operations)),
             operations_answered,
             WhatAnAnswerNamesBesideItsOperations {
-                labels_of_added_nodes: &HashMap::new(),
-                why_each_node_was_inserted: &HashMap::new(),
+                named_of_each_added_node: &HashMap::new(),
                 overridden_by_links,
             },
         )))

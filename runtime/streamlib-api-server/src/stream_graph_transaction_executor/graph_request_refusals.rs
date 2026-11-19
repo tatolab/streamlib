@@ -5,9 +5,12 @@
 //! names, as the wire carries the refusal.
 
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use streamlib::sdk::descriptors::PinConversion;
+use streamlib_control_contract::{ControlOperation, Transact};
+
 use streamlib_project_repository::{
-    ProjectRepositoryRefusal, StreamGraphAction, StreamGraphActionLinkEnd,
+    ProjectRepositoryRefusal, StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, NodeNotRunningBecauseOnTheWire,
@@ -42,6 +45,20 @@ pub(crate) struct WhereAnOperationEdits<'stream> {
     pub(crate) stream_id: &'stream str,
     pub(crate) level: &'stream [Uuid],
     pub(crate) level_holds_both_link_ends: bool,
+}
+
+/// Whether `level` holds the node at each end, `source` and `target`, each named by its UUID and
+/// neither by an `as` of `node_by_label`.
+pub(crate) fn the_level_holds_both_ends_by_uuid(
+    level: &StreamGraphDocument,
+    source: &StreamGraphActionLinkEnd,
+    target: &StreamGraphActionLinkEnd,
+    node_by_label: &HashMap<String, Uuid>,
+) -> bool {
+    [source, target].into_iter().all(|end| {
+        !node_by_label.contains_key(&end.node)
+            && Uuid::parse_str(&end.node).is_ok_and(|node| level.node(node).is_ok())
+    })
 }
 
 impl WhatAGraphOperationNames {
@@ -90,7 +107,7 @@ impl WhatAGraphOperationNames {
             })),
         ];
         streamlib_control_contract::the_suggested_call(
-            <streamlib_control_contract::Transact as streamlib_control_contract::ControlOperation>::METHOD_NAME,
+            Transact::METHOD_NAME,
             Map::from_iter([("operations".to_owned(), Value::Array(operations))]),
         )
     }
@@ -364,7 +381,7 @@ impl GraphTransactionRefusal {
                     .the_transact_placing_the_conversion_on_its_link(&conversion)
             });
         let refused_params_pointer = match (refused_params_pointer, self.refused_operation_index) {
-            (Some(pointer), Some(index)) if tool_name == <streamlib_control_contract::Transact as streamlib_control_contract::ControlOperation>::METHOD_NAME => {
+            (Some(pointer), Some(index)) if tool_name == Transact::METHOD_NAME => {
                 Some(format!("/operations/{index}{pointer}"))
             }
             (pointer, _) => pointer,

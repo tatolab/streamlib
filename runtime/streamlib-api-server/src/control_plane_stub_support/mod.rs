@@ -126,7 +126,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn the_verdict_of_a_link_it_holds(
+        fn the_verdict_of_a_link_between_two_running_nodes(
             &self,
             _link: &::streamlib_project_repository::StreamGraphDocumentLink,
         ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {

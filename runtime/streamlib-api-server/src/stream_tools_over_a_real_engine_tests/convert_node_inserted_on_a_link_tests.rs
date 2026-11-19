@@ -272,6 +272,14 @@ async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_pla
         .as_array()
         .expect("connected_links");
     assert_eq!(connected_links.len(), 2, "{applied}");
+    assert_eq!(
+        connected_links[1]["target"]["port"], "bgra_video",
+        "{applied}"
+    );
+    assert!(
+        connected_links[1]["state"].is_string(),
+        "the link out of the node is read from the graph: {applied}"
+    );
     assert!(
         connected_links[1].get("warnings").is_none(),
         "the node's output is judged by the format it holds: {applied}"
@@ -523,6 +531,64 @@ async fn a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later_is_ref
         "{refusal:?}"
     );
     assert_eq!(project.the_graph_document_of("main"), saved_before);
+}
+
+/// A Tensor linked into a Texture input that takes `bgra8_unorm` inside a placed stream, where
+/// `connect` places no convert node, is refused before anything is written, naming the node to
+/// add there; neither graph document changes.
+///
+/// Mental-revert: connecting it as it is writes the link to the placed stream's document.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_needing_a_convert_node_inside_a_placed_stream_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let collapsed = engine
+        .the_answer_or_the_refusal_of(
+            "collapse_selection_into_subgraph",
+            json!({ "stream": stream_asset, "nodes": [CAMERA_NODE_UUID, MODEL_NODE_UUID],
+                    "name": "sub", "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the camera and the model collapse into `sub`");
+    let subgraph = collapsed["added_nodes"][0]["node"]
+        .as_str()
+        .expect("the subgraph node")
+        .to_owned();
+    let drawn = |name: &str| {
+        let held = the_node_named(&project.the_graph_document_of("sub"), name);
+        the_uuid_a_held_node_takes_under(&subgraph, held["id"].as_str().unwrap())
+    };
+    let (camera_drawn, model_drawn) = (drawn("camera"), drawn("model"));
+    let main_before = project.the_graph_document_of("main");
+    let sub_before = project.the_graph_document_of("sub");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            json!({ "stream": stream_asset, "level": [subgraph],
+                    "source": { "node": camera_drawn, "port": "tensor_out" },
+                    "target": { "node": model_drawn, "port": "bgra_video" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("no convert node is placed inside a placed stream");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+        "{refusal:?}"
+    );
+    assert!(
+        refusal
+            .runtime_words
+            .contains("`tatolab.stream:TensorToTexture`")
+            && refusal.runtime_words.contains("inside a placed stream"),
+        "{refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
+    assert_eq!(project.the_graph_document_of("main"), main_before);
 }
 
 const TENSOR_ISLAND_TYPE: &str = "convert_node_test:TensorIsland";

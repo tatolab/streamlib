@@ -40,6 +40,18 @@ fn the_typed_link_end<'graph>(
     })
 }
 
+/// The input end of a link at `port` of the node named `node_name`, as
+/// [`the_typed_link_end`] gives it, with the port's input mode.
+fn the_typed_input_end<'graph>(
+    node_name: &'graph str,
+    port: &'graph PortInfo,
+) -> Option<PinLinkInputEnd<'graph>> {
+    Some(PinLinkInputEnd {
+        end: the_typed_link_end(node_name, port)?,
+        input_mode: port.input_mode,
+    })
+}
+
 /// Whose link a connect makes, which decides how leniently it is judged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ALinkConnected {
@@ -81,10 +93,7 @@ fn the_typed_ends_of<'graph>(
         output: the_typed_link_end(&from_node.display_name, output_port)?,
         to_node,
         input_port,
-        input: PinLinkInputEnd {
-            end: the_typed_link_end(&to_node.display_name, input_port)?,
-            input_mode: input_port.input_mode,
-        },
+        input: the_typed_input_end(&to_node.display_name, input_port)?,
     })
 }
 
@@ -196,10 +205,7 @@ pub(crate) fn the_verdict_of_a_link_between_declared_ports(
 ) -> Option<PinLinkVerdict> {
     Some(pin_link_verdict(
         the_typed_link_end(output_node_name, output_port)?,
-        PinLinkInputEnd {
-            end: the_typed_link_end(input_node_name, input_port)?,
-            input_mode: input_port.input_mode,
-        },
+        the_typed_input_end(input_node_name, input_port)?,
         conversions,
     ))
 }

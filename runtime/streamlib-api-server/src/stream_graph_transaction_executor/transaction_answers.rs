@@ -10,9 +10,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 /// each node added, why a `connect` inserted each node it added on its link, and each input
 /// value set that a link overrides.
 pub(super) struct WhatAnAnswerNamesBesideItsOperations<'named> {
-    pub(super) labels_of_added_nodes: &'named HashMap<Uuid, String>,
-    pub(super) why_each_node_was_inserted:
-        &'named HashMap<Uuid, GraphTransactionNodeInsertedBecause>,
+    pub(super) named_of_each_added_node: &'named HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
     pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
 }
 
@@ -53,8 +51,7 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             applied_live,
             WhatAnAnswerNamesBesideItsOperations {
-                labels_of_added_nodes: &HashMap::new(),
-                why_each_node_was_inserted: &HashMap::new(),
+                named_of_each_added_node: &HashMap::new(),
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
             },
         )
@@ -68,8 +65,7 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_operations_of: &dyn Fn(&str) -> Option<Arc<dyn RuntimeOperations>>,
         applied_live: Vec<(String, StreamGraphOperation)>,
         WhatAnAnswerNamesBesideItsOperations {
-            labels_of_added_nodes,
-            why_each_node_was_inserted,
+            named_of_each_added_node,
             overridden_by_links,
         }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
@@ -86,13 +82,16 @@ impl StreamGraphTransactionExecutor<'_> {
                         stream: stream_id.clone(),
                         node: node.id.to_string(),
                         name: node.name.clone(),
-                        label: labels_of_added_nodes.get(&node.id).cloned(),
-                        inserted: why_each_node_was_inserted.get(&node.id).map(
-                            |&inserted_because| InsertedNodeOnTheWire {
+                        label: named_of_each_added_node
+                            .get(&node.id)
+                            .and_then(|named| named.label.clone()),
+                        inserted: named_of_each_added_node
+                            .get(&node.id)
+                            .and_then(|named| named.inserted_because)
+                            .map(|inserted_because| InsertedNodeOnTheWire {
                                 node_type: node.node_type.clone(),
                                 inserted_because,
-                            },
-                        ),
+                            }),
                     });
                 }
                 StreamGraphOperation::FoldIntoFragment { fold } => {
@@ -101,7 +100,9 @@ impl StreamGraphTransactionExecutor<'_> {
                             stream: stream_id.clone(),
                             node: fragment.to_string(),
                             name: fold.fragment_name().to_owned(),
-                            label: labels_of_added_nodes.get(&fragment).cloned(),
+                            label: named_of_each_added_node
+                                .get(&fragment)
+                                .and_then(|named| named.label.clone()),
                             inserted: None,
                         });
                     }
@@ -236,9 +237,16 @@ fn how_the_graph_reads_the_link(
         return HowTheGraphReadsALink::default();
     };
     let text_at = |key: &str| rendered_link[key].as_str().map(str::to_owned);
+    let marks = PinLinkMarksOnTheWire::deserialize(rendered_link).unwrap_or_else(|not_read| {
+        tracing::warn!(
+            %not_read,
+            "the graph render of a link a transaction connected names marks no client reads"
+        );
+        PinLinkMarksOnTheWire::default()
+    });
     HowTheGraphReadsALink {
         state: text_at("state"),
         error_reason: text_at("error_reason"),
-        marks: serde_json::from_value(rendered_link.clone()).unwrap_or_default(),
+        marks,
     }
 }

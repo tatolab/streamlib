@@ -490,11 +490,11 @@ impl LoadedStreamInThisRuntime {
             .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
     }
 
-    /// The verdict of `link`, a link the live graph holds, each node by its UUID and each port
-    /// under its current name, by its two typed ends, a convert node's output judged by the type
-    /// it gives under the settings it holds; `None` when either end is no typed port of a node
-    /// that runs.
-    pub(crate) fn the_verdict_of_a_held_link(
+    /// The verdict of `link`, between two nodes the live graph runs, held or not, each node by
+    /// its UUID and each port under its current name, by its two typed ends, a convert node's
+    /// output judged by the type it gives under the settings it holds; `None` when either end is
+    /// no typed port of a node that runs.
+    pub(crate) fn the_verdict_of_a_link_between_two_running_nodes(
         &self,
         link: &StreamGraphDocumentLink,
     ) -> Option<crate::core::descriptors::PinLinkVerdict> {

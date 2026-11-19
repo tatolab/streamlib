@@ -4,19 +4,21 @@
 //! `check_link`: what `connect` would answer for one link, judged against the stream's running
 //! graph by the engine's own judgement of a connect, and made nowhere.
 
+use std::collections::HashMap;
 use streamlib::sdk::runtime::WhatALiveConnectMakesOfALink;
 use streamlib_control_contract::{CheckLink, CheckLinkRequest, Connect, ControlOperation};
-use streamlib_project_repository::{StreamGraphActionLinkEnd, StreamGraphDocument};
+
+use streamlib_project_repository::StreamGraphDocument;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphTransactionNodeInsertedBecause, LinkCheckResult,
 };
-use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 use crate::stream_graph_transaction_executor::{
     GraphRequestRefusal, GraphTransactionRefusal, StreamsTheRuntimeHolds, WhatAConnectAsks,
-    WhereAnOperationEdits, what_a_connect_asks_of_the_running_stream,
+    WhereAnOperationEdits, the_level_holds_both_ends_by_uuid,
+    what_a_connect_asks_of_the_running_stream,
 };
 
 impl ControlOperationDispatcher {
@@ -85,19 +87,25 @@ impl ControlOperationDispatcher {
             .to_json_async()
             .await
             .map_err(of_an_engine_error)?;
+        let level_as_drawn = match StreamGraphDocument::from_value(rendered_graph.clone()) {
+            Ok(level_as_drawn) => level_as_drawn,
+            Err(not_read) => return Ok(refused_as_connect_refuses(None, not_read.into())),
+        };
         let at_its_own_level = WhereAnOperationEdits {
             stream_id: &stream_id,
             level: &[],
-            level_holds_both_link_ends: the_graph_holds_both_ends_by_uuid(
-                &rendered_graph,
+            level_holds_both_link_ends: the_level_holds_both_ends_by_uuid(
+                &level_as_drawn,
                 &source,
                 &target,
+                &HashMap::new(),
             ),
         };
         let asked = match what_a_connect_asks_of_the_running_stream(
             source.clone(),
             target.clone(),
             &rendered_graph,
+            &level_as_drawn,
             stream_operations.as_ref(),
         ) {
             Ok(asked) => asked,
@@ -133,19 +141,4 @@ impl ControlOperationDispatcher {
             )),
         }
     }
-}
-
-/// Whether the graph `rendered_graph` renders holds the node at each end, `source` and `target`,
-/// each named by its UUID.
-fn the_graph_holds_both_ends_by_uuid(
-    rendered_graph: &serde_json::Value,
-    source: &StreamGraphActionLinkEnd,
-    target: &StreamGraphActionLinkEnd,
-) -> bool {
-    let Ok(graph) = StreamGraphDocument::from_value(rendered_graph.clone()) else {
-        return false;
-    };
-    [source, target]
-        .into_iter()
-        .all(|end| Uuid::parse_str(&end.node).is_ok_and(|node| graph.node(node).is_ok()))
 }

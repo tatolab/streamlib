@@ -95,7 +95,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// The verdict of `link`, between two nodes this stream's live graph runs, each by its UUID,
     /// by its two typed ends, whether the graph holds the link or not; `None` when either end is
     /// no typed port of a node that runs.
-    fn the_verdict_of_a_link_it_holds(
+    fn the_verdict_of_a_link_between_two_running_nodes(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Option<crate::core::descriptors::PinLinkVerdict>;

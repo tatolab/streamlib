@@ -670,11 +670,11 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.what_a_connect_makes_of_the_link(link)
     }
 
-    fn the_verdict_of_a_link_it_holds(
+    fn the_verdict_of_a_link_between_two_running_nodes(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Option<crate::core::descriptors::PinLinkVerdict> {
-        self.the_verdict_of_a_held_link(link)
+        self.the_verdict_of_a_link_between_two_running_nodes(link)
     }
 
     fn the_verdict_of_a_link_between_two_node_types(
