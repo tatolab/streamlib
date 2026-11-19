@@ -13,7 +13,7 @@ use streamlib_control_contract::{
 };
 use streamlib_project_repository::{
     AppliedProjectTransaction, ProjectRepositoryRefusal, ProjectSettingsAction,
-    ProjectTransactionAuthor,
+    ProjectTransactionAuthor, TatolabProjectFile,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DeleteProjectToolResult, DuplicateProjectToolResult, ProjectSettingsTransactionToolResult,
@@ -149,6 +149,42 @@ impl ControlOperationDispatcher {
         idempotency_key: Option<String>,
         action: ProjectSettingsAction,
     ) -> Result<ProjectSettingsTransactionToolResult, ControlOperationRefusal> {
+        self.one_project_settings_change_answered_by(
+            method_name,
+            project_directory,
+            author,
+            idempotency_key,
+            action,
+            |project_file,
+             AppliedProjectTransaction {
+                 transaction,
+                 commit,
+                 ..
+             }| {
+                ProjectSettingsTransactionToolResult {
+                    project: project_file.project.to_string(),
+                    project_name: project_file.name.clone(),
+                    project_description: project_file.description.clone(),
+                    project_cover: project_file.cover.map(|cover| cover.to_string()),
+                    transaction: transaction.transaction.to_string(),
+                    commit,
+                }
+            },
+        )
+        .await
+    }
+
+    /// `action` applied as one transaction on the project's history, announced whether it is
+    /// applied or refused, and answered by `answer` from the project file it leaves.
+    pub(crate) async fn one_project_settings_change_answered_by<Answer: Send + 'static>(
+        &self,
+        method_name: &'static str,
+        project_directory: PathBuf,
+        author: ProjectTransactionAuthor,
+        idempotency_key: Option<String>,
+        action: ProjectSettingsAction,
+        answer: impl FnOnce(&TatolabProjectFile, AppliedProjectTransaction) -> Answer + Send + 'static,
+    ) -> Result<Answer, ControlOperationRefusal> {
         let project_repositories = Arc::clone(&self.project_repositories);
         self.a_project_repository_call_off_the_async_runtime(
             method_name,
@@ -163,20 +199,10 @@ impl ControlOperationDispatcher {
                     })?;
                 project_repositories
                     .announce_the_transaction_if_applied_now(project_repository, &outcome);
-                let AppliedProjectTransaction {
-                    transaction,
-                    commit,
-                    ..
-                } = outcome.into_applied_transaction();
-                let project_file = project_repository.project_file();
-                Ok::<_, ProjectRepositoryRefusal>(ProjectSettingsTransactionToolResult {
-                    project: project_file.project.to_string(),
-                    project_name: project_file.name.clone(),
-                    project_description: project_file.description.clone(),
-                    project_cover: project_file.cover.map(|cover| cover.to_string()),
-                    transaction: transaction.transaction.to_string(),
-                    commit,
-                })
+                Ok::<_, ProjectRepositoryRefusal>(answer(
+                    project_repository.project_file(),
+                    outcome.into_applied_transaction(),
+                ))
             },
         )
         .await

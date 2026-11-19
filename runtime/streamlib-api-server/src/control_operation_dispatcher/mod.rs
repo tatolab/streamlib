@@ -44,9 +44,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectCodeCheckResult, ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
     ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
     ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
-    RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
-    StreamActionStepOnTheWire, StreamLocationOnTheWire, UpdateDependencyToolResult,
-    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    RemoveProjectToolResult, ResumePlaybackToolResult, SetNodeTypeGroupToolResult,
+    SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
@@ -168,6 +168,8 @@ pub(crate) enum ControlOperationAnswer {
     ListNodeTypes(ListNodeTypesToolResult),
     /// `describe_node_types`'.
     DescribeNodeTypes(DescribeNodeTypesToolResult),
+    /// `set_node_type_group`'s.
+    SetNodeTypeGroup(SetNodeTypeGroupToolResult),
     /// `list_project_views`'s.
     ListProjectViews(ListProjectViewsToolResult),
     /// `write_studio_view_output`'s.
@@ -665,6 +667,10 @@ impl ControlOperationDispatcher {
                 .describe_node_types(request)
                 .await
                 .map(ControlOperationAnswer::DescribeNodeTypes),
+            ControlOperationCall::SetNodeTypeGroup(request) => self
+                .set_node_type_group(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::SetNodeTypeGroup),
             ControlOperationCall::ListProjectViews(request) => self
                 .list_project_views(request)
                 .await

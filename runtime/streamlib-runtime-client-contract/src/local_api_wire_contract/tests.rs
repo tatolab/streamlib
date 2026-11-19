@@ -306,6 +306,7 @@ fn a_node_type_source_spells_its_origin_flat_and_keeps_a_null_default() {
             "kind": "function",
             "description": "",
             "category": null,
+            "category_from": null,
             "inputs": [{"name": "grip", "family": "channels", "description": "", "annotation": "float | None", "pin_default": null}],
             "outputs": null,
             "path": "nodes/gripper.py",

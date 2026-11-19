@@ -6,7 +6,11 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION;
+use super::{
+    ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, AUTHOR_ARGUMENT_DESCRIPTION,
+    IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION,
+    ProjectTransactionAuthorArgument,
+};
 
 /// `list_pin_types`' params.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -54,4 +58,29 @@ where
         ));
     }
     Ok(node_types)
+}
+
+/// `set_node_type_group`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetNodeTypeGroupRequest {
+    /// The project's directory.
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The node type to move, as `list_node_types` names it.
+    #[schemars(
+        description = "The node type to move, as `list_node_types` names it under `node_type`: the project's own, an import's, an installed distribution's or a built-in."
+    )]
+    pub node_type: String,
+    /// The group to file it under.
+    #[schemars(
+        description = "The group to file it under, a path where the group is inside another, as `Effects/Stylize`; a group no node type is filed under yet is made by filing one there. `null` puts it back where an import or its author files it."
+    )]
+    pub group: Option<String>,
+    /// Who the change is by.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// The key the caller minted for this gesture.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
 }
