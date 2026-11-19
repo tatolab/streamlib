@@ -6,7 +6,9 @@
 use std::collections::HashSet;
 
 use super::pin_type_resolution::{
-    PinTypeInItsGraph, states_one_type_exactly, the_pin_type_of_a_port_in_its_graph,
+    PinTypeInItsGraph, states_one_type_exactly, the_conversion_whose_output_follows_a_setting,
+    the_pin_type_it_states, the_pin_type_of_a_port_in_its_graph,
+    the_type_a_convert_node_gives_under,
 };
 use super::port_family_link_checks::{
     FamiliesTakeTheLink, refuse_a_link_between_ports_whose_families_do_not_match,
@@ -18,9 +20,9 @@ use super::{
     PendingDeletionComponent, PortInfo,
 };
 use crate::core::descriptors::{
-    DeclaredPinType, PinConversion, PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkRefusal,
-    PinLinkVerdict, PinType, PortFamilyDeclaration, PortFamilyLinkEndpoint, pin_link_verdict,
-    refusal_of_the_names_and_codec_a_link_carries,
+    ConvertNodeToInsert, DeclaredPinType, PinConversion, PinLinkEnd, PinLinkInputEnd,
+    PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType, PortFamilyDeclaration,
+    PortFamilyLinkEndpoint, pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
 };
 use crate::core::{Error, PortDirection, Result};
 
@@ -72,6 +74,54 @@ impl TypedLinkEnds<'_> {
             conversions,
         )
     }
+}
+
+/// The verdict of a link from `output_port` of the node named `output_node_name` to
+/// `input_port` of the one named `input_node_name`, judged by the one type each port states, as
+/// their node types declare them, among `conversions`, before either node is in a graph; `None`
+/// when either port states no one type.
+pub(crate) fn the_verdict_of_a_link_between_declared_ports(
+    (output_node_name, output_port): (&str, &PortInfo),
+    (input_node_name, input_port): (&str, &PortInfo),
+    conversions: &[PinConversion],
+) -> Option<PinLinkVerdict> {
+    let the_one_type_it_states = |port: &PortInfo| {
+        let declared = port
+            .declared_pin_type
+            .as_ref()
+            .map(|declared| &declared.pin_type);
+        match (declared, the_pin_type_it_states(port)) {
+            (Some(DeclaredPinType::Is { .. }) | None, PinTypeInItsGraph::Is(pin_type)) => {
+                Some(pin_type)
+            }
+            _ => None,
+        }
+    };
+    let (output_pin_type, input_pin_type) = (
+        the_one_type_it_states(output_port)?,
+        the_one_type_it_states(input_port)?,
+    );
+    fn end<'end>(
+        node_name: &'end str,
+        port: &'end PortInfo,
+        pin_type: &'end PinType,
+    ) -> PinLinkEnd<'end> {
+        PinLinkEnd {
+            node_name,
+            port_name: &port.name,
+            member_name: None,
+            pin_type,
+            meaning: port.meaning.as_deref(),
+        }
+    }
+    Some(pin_link_verdict(
+        end(output_node_name, output_port, &output_pin_type),
+        PinLinkInputEnd {
+            end: end(input_node_name, input_port, &input_pin_type),
+            input_mode: input_port.input_mode,
+        },
+        conversions,
+    ))
 }
 
 /// One typed end of a link: its node, its port and what the port carries in its graph.
@@ -126,10 +176,10 @@ fn verdict_between(
             outcome: if input.port.takes_a_wire() {
                 PinLinkOutcome::Connects
             } else {
-                PinLinkOutcome::Refused(PinLinkRefusal::input_takes_no_wire(
+                PinLinkOutcome::Refused(Box::new(PinLinkRefusal::input_takes_no_wire(
                     &input.node.display_name,
                     &input.port.name,
-                ))
+                )))
             },
             warnings: Vec::new(),
         };
@@ -232,7 +282,8 @@ pub(crate) fn the_ends_a_link_is_judged_by(
 }
 
 /// The judgement of a link from `from` to `to` by its two ends' pin types, among
-/// `conversions`; `None` when either end is no node of `graph`, or either port is untyped.
+/// `conversions`: a convert node's output judged by the type it gives under the settings it
+/// holds. `None` when either end is no node of `graph`, or either port is untyped.
 pub(crate) fn the_verdict_on_a_link_between_typed_ends(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -240,6 +291,154 @@ pub(crate) fn the_verdict_on_a_link_between_typed_ends(
     conversions: &[PinConversion],
 ) -> Option<PinLinkVerdict> {
     the_typed_ends_of(graph, from, to).map(|ends| ends.verdict(conversions))
+}
+
+/// Refuse the two links a node of `convert_node`'s conversion, not yet in `graph`, would carry
+/// between `from` and `to` by the names and codec each carries, as connect refuses each link
+/// once the node is made: from `from` into the node's input, and from its output, holding the
+/// settings `convert_node` picked, into `to`. A conversion whose node type `graph`'s stream does
+/// not describe is left for connect to judge.
+pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    convert_node: &ConvertNodeToInsert,
+) -> Result<()> {
+    let conversion = &convert_node.conversion;
+    let (Some(from_node), Some(to_node)) = (
+        graph.traversal().v(from.node_run_id()).first(),
+        graph.traversal().v(to.node_run_id()).first(),
+    ) else {
+        return Ok(());
+    };
+    let (Some(output_port), Some(input_port)) = (
+        from_node.output_port(from.port_name()),
+        to_node.input_port(to.port_name()),
+    ) else {
+        return Ok(());
+    };
+    let Some(ports) = graph
+        .node_types_this_stream_resolves()
+        .port_info(&conversion.node_type)
+    else {
+        return Ok(());
+    };
+    let a_port_named =
+        |ports: &[PortInfo], name: &str| ports.iter().find(|port| port.name == name).cloned();
+    let (Some(into_it), Some(out_of_it)) = (
+        a_port_named(&ports.inputs, &conversion.input_port_name),
+        a_port_named(&ports.outputs, &conversion.output_port_name),
+    ) else {
+        return Ok(());
+    };
+    let convert_node_name = conversion.node_type.to_string();
+    let held = serde_json::Value::Object(convert_node.input_values.clone());
+    let refusal = refusal_of_the_names_and_codec_a_link_carries(
+        PortFamilyLinkEndpoint {
+            node_name: &from_node.display_name,
+            port_name: &output_port.name,
+            declaration: &output_port.family,
+        },
+        output_port.family.family,
+        from_node.config.as_ref(),
+        PortFamilyLinkEndpoint {
+            node_name: &convert_node_name,
+            port_name: &into_it.name,
+            declaration: &into_it.family,
+        },
+    )
+    .or_else(|| {
+        refusal_of_the_names_and_codec_a_link_carries(
+            PortFamilyLinkEndpoint {
+                node_name: &convert_node_name,
+                port_name: &out_of_it.name,
+                declaration: &out_of_it.family,
+            },
+            out_of_it.family.family,
+            Some(&held),
+            PortFamilyLinkEndpoint {
+                node_name: &to_node.display_name,
+                port_name: &input_port.name,
+                declaration: &input_port.family,
+            },
+        )
+    });
+    refusal.map_or(Ok(()), |refusal| Err(Error::InvalidLink(refusal)))
+}
+
+/// Refuse `config_to_apply` for the node `node_run_id` names when it is a node of a conversion
+/// whose output follows a setting, and under it that output gives a type a wired link out of it
+/// refuses, or that a wired link past the input it feeds then refuses, naming that link.
+pub(crate) fn refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse(
+    graph: &Graph,
+    node_run_id: &NodeRunId,
+    config_to_apply: &serde_json::Value,
+) -> Result<()> {
+    let Some(node) = graph.traversal().v(node_run_id).first() else {
+        return Ok(());
+    };
+    let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+    for output in &node.ports.outputs {
+        let Some(given) =
+            the_type_a_convert_node_gives_under(graph, node, output, Some(config_to_apply))
+        else {
+            continue;
+        };
+        let carried = PinTypeInItsGraph::Is(given);
+        for link in the_wired_links_out_of(graph, node, &output.name) {
+            let Some(to_node) = graph.traversal().v(link.to_port().node_run_id()).first() else {
+                continue;
+            };
+            let Some(input_port) = to_node.input_port(link.to_port().port_name()) else {
+                continue;
+            };
+            let input_pin_type = the_pin_type_of_a_port_in_its_graph(
+                graph,
+                to_node,
+                input_port,
+                PortDirection::Input,
+            );
+            let refused = if is_typed(&input_pin_type) {
+                verdict_between(
+                    TypedEnd {
+                        node,
+                        port: output,
+                        pin_type: &carried,
+                    },
+                    TypedEnd {
+                        node: to_node,
+                        port: input_port,
+                        pin_type: &input_pin_type,
+                    },
+                    &conversions,
+                )
+                .refusal_of_the_link_made_as_it_is()
+                .map(ToString::to_string)
+            } else {
+                None
+            }
+            .or_else(|| {
+                the_first_wired_link_past_an_input_refused(
+                    graph,
+                    to_node,
+                    &input_port.name,
+                    &carried,
+                    &conversions,
+                )
+            });
+            if let Some(refused) = refused {
+                return Err(Error::Config(format!(
+                    "config update for {} refused: under it the wired link {} → {} is refused: \
+                     {refused}. To fix: choose a setting that link connects to, or remove the \
+                     link first",
+                    node.display_name,
+                    link.source(),
+                    link.to_port(),
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether `connect` would refuse a link from `from` to `to` made now in `graph`.
@@ -575,7 +774,7 @@ pub(crate) fn refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
             Some(DeclaredPinType::SameAsInput { input_port_name }) => {
                 inputs_it_types.contains(&input_port_name.as_str())
             }
-            _ => false,
+            _ => the_conversion_whose_output_follows_a_setting(graph, node, port).is_some(),
         })
         .collect();
     if inputs_it_types.is_empty() && outputs_it_types.is_empty() {

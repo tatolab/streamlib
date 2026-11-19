@@ -108,8 +108,8 @@ pub use project_transaction::{
     ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
     ProjectSettingsAction, ProjectSettingsOperation, ProjectStreamDocumentOperation,
     ProjectTransaction, ProjectTransactionAsSentAndAnswered, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
-    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionNodeInsertedOnALink,
+    ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 pub use project_views::{
     PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,

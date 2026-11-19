@@ -322,11 +322,23 @@ fn a_node_type_with_a_port_meaning(
     }
 }
 
-/// Register each node type the link check tests below place, once per test binary.
-fn register_the_link_check_node_types_once() {
+/// Register each node type the link check tests below place, `PreviousValue` among them as the
+/// function node a stream's node interpreter describes it as, once per test binary.
+pub(super) fn register_the_link_check_node_types_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         for descriptor in [
+            a_function_node_type(
+                streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE,
+                &[(
+                    streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT,
+                    None,
+                )],
+                &[(
+                    streamlib_project_repository::PREVIOUS_VALUE_NODE_OUTPUT_PORT,
+                    PortFamily::Records,
+                )],
+            ),
             a_function_node_type(LFO_TYPE, &[], &[("result", PortFamily::Records)]),
             a_function_node_type(WAVE_TYPE, &[], &[("result", PortFamily::Channels)]),
             a_function_node_type(
@@ -448,7 +460,7 @@ async fn check_link_answers_the_refusal_connect_answers_for_each_link_an_island_
 
 /// A link closing a loop of function nodes no `PreviousValue` node is in, which `connect`
 /// closes through a `PreviousValue` node it adds, is refused unchecked, and the graph is left as
-/// it was.
+/// it was; `connect` then names the node it adds, its type and why.
 ///
 /// Mental-revert: a check judging the drawn link alone would answer what the engine makes of a
 /// link `connect` never makes.
@@ -465,7 +477,7 @@ async fn check_link_refuses_unchecked_a_link_connect_closes_through_a_previous_v
     );
 
     let refusal = engine
-        .the_answer_or_the_refusal_of("check_link", closing_the_loop)
+        .the_answer_or_the_refusal_of("check_link", closing_the_loop.clone())
         .await
         .expect_err("a link connect closes through a PreviousValue node is not checked");
 
@@ -476,6 +488,52 @@ async fn check_link_refuses_unchecked_a_link_connect_closes_through_a_previous_v
         "{refusal:?}"
     );
     assert_eq!(engine.the_live_graph_of(&stream_id)["links"], links_before);
+
+    let closed = engine
+        .the_answer_or_the_refusal_of("connect", connected_by_alice(&closing_the_loop))
+        .await
+        .unwrap_or_else(|refusal| panic!("connect closes the loop: {refusal:?}"));
+    assert_eq!(
+        closed["added_nodes"][0]["node_type"], "tatolab.stream:PreviousValue",
+        "{closed}"
+    );
+    assert_eq!(
+        closed["added_nodes"][0]["inserted_because"], "closes_a_loop",
+        "{closed}"
+    );
+}
+
+/// Each link a transaction connects carries the warnings its verdict gives: a Float `seconds`
+/// read as an Integer `frames` warns that the meanings differ.
+///
+/// Mental-revert: an answer that never judges its links carries no `warnings`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connected_link_carries_the_warnings_its_verdict_gives() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+
+    let connected = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            connected_by_alice(&the_link(
+                json!(project.stream_asset_of("main")),
+                (SECONDS_UUID, "elapsed"),
+                (FRAMES_UUID, "count"),
+            )),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("a Float is read as an Integer: {refusal:?}"));
+
+    assert_eq!(
+        connected["connected_links"][0]["warnings"],
+        json!([{
+            "warning": "meanings_differ",
+            "output_meaning": "seconds",
+            "input_meaning": "frames",
+        }]),
+        "{connected}"
+    );
 }
 
 /// A Float output into an Integer input, each stating another meaning, connects for free with a

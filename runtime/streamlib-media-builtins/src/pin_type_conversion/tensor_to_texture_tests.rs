@@ -128,3 +128,104 @@ fn a_format_with_no_one_tensor_layout_is_refused_at_setup() {
         Some(TextureFormat::Rgba8Unorm)
     );
 }
+
+/// Placed to feed a Texture input, the node holds the first format that input takes which one
+/// tensor holds, `rgba8_unorm` for an input that takes any, and writes a Texture of it; an input
+/// taking only formats no tensor holds, or no Texture at all, is fed by no `TensorToTexture`.
+///
+/// Mental-revert: picking `rgba8_unorm` whatever the input takes writes a format a
+/// `bgra8_unorm` input does not read.
+#[test]
+fn the_format_picked_for_an_input_is_the_first_it_takes_that_one_tensor_holds() {
+    use streamlib::sdk::descriptors::{PinType, TexturePixelFormat};
+    let texture_of = |pixel_formats: &[TexturePixelFormat]| PinType::Texture {
+        pixel_formats: pixel_formats.to_vec(),
+    };
+    let picked_for = |input: &PinType| {
+        the_format_picked_for_the_input(input).map(|picked| {
+            (
+                picked.input_values["format"].clone(),
+                picked.output_pin_type,
+            )
+        })
+    };
+
+    assert_eq!(
+        picked_for(&texture_of(&[
+            TexturePixelFormat::Nv12,
+            TexturePixelFormat::Bgra8Unorm,
+            TexturePixelFormat::Rgba8Unorm,
+        ])),
+        Some((
+            "bgra8_unorm".into(),
+            texture_of(&[TexturePixelFormat::Bgra8Unorm])
+        ))
+    );
+    assert_eq!(
+        picked_for(&texture_of(&[])),
+        Some((
+            "rgba8_unorm".into(),
+            texture_of(&[TexturePixelFormat::Rgba8Unorm])
+        ))
+    );
+    assert_eq!(picked_for(&texture_of(&[TexturePixelFormat::Nv12])), None);
+    assert_eq!(picked_for(&PinType::Tensor {}), None);
+}
+
+/// A `TensorToTexture` writes a Texture of the `format` it holds, or of `rgba8_unorm` when it
+/// holds none; a `format` no one tensor holds, or one that is no name, gives no type.
+///
+/// Mental-revert: reading the output as it states itself, a Texture of no format, gives that
+/// whatever the node holds.
+#[test]
+fn the_texture_written_is_of_the_format_the_node_holds() {
+    use streamlib::sdk::descriptors::{PinType, TexturePixelFormat};
+    use streamlib::sdk::serde_json::{Map, Value, json};
+    let held =
+        |value: Value| -> Map<String, Value> { value.as_object().cloned().expect("an object") };
+    let texture_of = |format: TexturePixelFormat| PinType::Texture {
+        pixel_formats: vec![format],
+    };
+
+    assert_eq!(
+        the_texture_written_under_the_settings(&Map::new()),
+        Some(texture_of(TexturePixelFormat::Rgba8Unorm))
+    );
+    assert_eq!(
+        the_texture_written_under_the_settings(&held(json!({ "format": "bgra8_unorm" }))),
+        Some(texture_of(TexturePixelFormat::Bgra8Unorm))
+    );
+    assert_eq!(
+        the_texture_written_under_the_settings(&held(json!({ "format": "nv12" }))),
+        None
+    );
+    assert_eq!(
+        the_texture_written_under_the_settings(&held(json!({ "format": 3 }))),
+        None
+    );
+}
+
+/// A `TensorToTexture` that takes a new config live writes the format that config names from the
+/// next frame, the format a link's verdict reads from the config it holds.
+///
+/// Mental-revert: a format read once at setup keeps writing `rgba8_unorm` after the config names
+/// `bgra8_unorm`.
+#[test]
+fn a_config_taken_live_changes_the_format_written() {
+    use streamlib::sdk::nodes::GeneratedNode;
+    let mut node =
+        <TensorToTexture::Node as GeneratedNode>::from_config(TensorToTextureConfig::default())
+            .expect("a TensorToTexture of the default config");
+    assert_eq!(
+        node.image_format_it_writes().unwrap(),
+        TextureFormat::Rgba8Unorm
+    );
+
+    node.apply_config_json(&streamlib::sdk::serde_json::json!({ "format": "bgra8_unorm" }))
+        .expect("the config is taken live");
+
+    assert_eq!(
+        node.image_format_it_writes().unwrap(),
+        TextureFormat::Bgra8Unorm
+    );
+}

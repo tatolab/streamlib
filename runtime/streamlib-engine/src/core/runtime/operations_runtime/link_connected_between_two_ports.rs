@@ -15,6 +15,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     link_in, refuse_a_link_an_island_cannot_take,
     refuse_a_link_feeding_an_island_into_the_app_process,
     refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands,
+    refuse_the_links_through_a_node_not_yet_added,
 };
 use crate::core::compiler::compiler_ops::refuse_a_link_a_channel_cannot_carry;
 use crate::core::compiler::{Compiler, PendingOperation};
@@ -26,6 +27,8 @@ use crate::core::graph::legacy_config_of_a_node::node_spec_holding_the_input_val
 use crate::core::graph::{
     ALinkConnected, Graph, Link, LinkUniqueId, NodeRunId, WhyTheNodeLeaves,
     cast_exposed_name_to_url_safe, refuse_a_link_its_pin_types_or_families_refuse,
+    refuse_the_names_and_codec_the_links_through_a_convert_node_refuse,
+    the_verdict_on_a_link_between_typed_ends,
 };
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::pubsub::RuntimeEvent;
@@ -186,7 +189,11 @@ fn refuse_a_link_connect_refuses(
 /// holds, judged as [`connect_impl`] judges it under [`ALinkConnected::MadeNow`] and
 /// [`WhenTheEngineCannotWireALink::Refuse`], and left out of the graph: the verdict of two
 /// typed ends that connect, `None` for ends their families judge, refused as connect refuses
-/// the link.
+/// the link; but a link whose two typed ends connect through a built-in conversion answers that
+/// verdict, naming the convert node a transaction's `connect` places between them, once each of
+/// the two links through it is one an island takes, carrying the names and codec the end it
+/// feeds requires. Connect itself never places it, so a graph written in code stays what its
+/// code says.
 pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
@@ -194,7 +201,35 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
 ) -> Result<Option<PinLinkVerdict>> {
     compiler.scope(|graph, _tx| {
         let (from, to) = the_ends_connect_links(graph, from, to)?;
-        the_verdict_a_connect_made_now_takes(graph, from, to)
+        match the_verdict_a_connect_made_now_takes(graph, from.clone(), to.clone()) {
+            Ok(verdict) => Ok(verdict),
+            Err(refusal @ Error::PinLinkRefused(_)) => {
+                let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+                let Some(verdict) =
+                    the_verdict_on_a_link_between_typed_ends(graph, &from, &to, &conversions)
+                else {
+                    return Err(refusal);
+                };
+                let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome
+                else {
+                    return Err(refusal);
+                };
+                refuse_the_links_through_a_node_not_yet_added(
+                    graph,
+                    &from,
+                    &to,
+                    &convert_node.conversion,
+                )?;
+                refuse_the_names_and_codec_the_links_through_a_convert_node_refuse(
+                    graph,
+                    &from,
+                    &to,
+                    convert_node,
+                )?;
+                Ok(Some(verdict))
+            }
+            Err(refusal) => Err(refusal),
+        }
     })
 }
 

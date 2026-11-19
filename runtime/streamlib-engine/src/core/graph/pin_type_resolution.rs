@@ -7,11 +7,12 @@
 
 use std::collections::HashSet;
 
+use super::input_values::the_pin_values_with_the_live_ones_over_them;
 use super::{
     Graph, GraphEdgeWithComponents, GraphNode, NodeRunId, PendingDeletionComponent, PortInfo,
 };
 use crate::core::PortDirection;
-use crate::core::descriptors::{DeclaredPinType, PinType, ResolvedPin};
+use crate::core::descriptors::{DeclaredPinType, PinConversion, PinType, ResolvedPin};
 
 /// What a port of a placed node carries, resolved against its graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,13 +109,56 @@ fn the_pin_type_followed_upstream<'graph>(
             the_pin_type_a_setting_chooses(node, input_name)
                 .map_or(PinTypeInItsGraph::Untyped, PinTypeInItsGraph::Is)
         }
-        Some(DeclaredPinType::Is { .. }) | None => the_pin_type_it_states(port),
+        Some(DeclaredPinType::Is { .. }) | None => match direction {
+            PortDirection::Output => {
+                the_type_a_convert_node_gives_under(graph, node, port, node.config.as_ref())
+                    .map_or_else(|| the_pin_type_it_states(port), PinTypeInItsGraph::Is)
+            }
+            PortDirection::Input => the_pin_type_it_states(port),
+        },
     }
+}
+
+/// The conversion `output_port` of `node` is the output of when `node` is a node of a
+/// conversion whose output follows a setting, among those `graph`'s stream resolves.
+pub(crate) fn the_conversion_whose_output_follows_a_setting(
+    graph: &Graph,
+    node: &GraphNode,
+    output_port: &PortInfo,
+) -> Option<PinConversion> {
+    graph
+        .node_types_this_stream_resolves()
+        .pin_conversions()
+        .iter()
+        .find(|conversion| {
+            conversion.node_type == node.node_type
+                && conversion.output_port_name == output_port.name
+                && conversion.output_picked_for_the_input.is_some()
+        })
+        .cloned()
+}
+
+/// The type `output_port` of `node` gives while `node` holds `config` with its pin values over
+/// it, when `node` is a node of a conversion whose output follows a setting; `None` for any
+/// other output, and for settings that give no type, which leave it carrying the type it states.
+pub(crate) fn the_type_a_convert_node_gives_under(
+    graph: &Graph,
+    node: &GraphNode,
+    output_port: &PortInfo,
+    config: Option<&serde_json::Value>,
+) -> Option<PinType> {
+    let conversion = the_conversion_whose_output_follows_a_setting(graph, node, output_port)?;
+    let mut held = config
+        .and_then(|config| config.as_object())
+        .cloned()
+        .unwrap_or_default();
+    held.extend(the_pin_values_with_the_live_ones_over_them(graph, node));
+    conversion.output_given_under(&held)
 }
 
 /// The type `port` states exactly, unless a config key or another input sets its family, which
 /// keeps such a port, not yet typed, judged by its family.
-fn the_pin_type_it_states(port: &PortInfo) -> PinTypeInItsGraph {
+pub(crate) fn the_pin_type_it_states(port: &PortInfo) -> PinTypeInItsGraph {
     let family = &port.family;
     let family_set_another_way = family.family_from_config_key.is_some()
         || family.codec_from_config_key.is_some()

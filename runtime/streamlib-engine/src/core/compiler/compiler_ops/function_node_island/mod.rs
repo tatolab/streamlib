@@ -17,7 +17,7 @@ pub(crate) use island_edit_refusals::{
     is_a_reactive_reader_only_islands_feed, refuse_a_link_an_island_cannot_take,
     refuse_a_link_feeding_an_island_into_the_app_process,
     refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands,
-    refuse_an_edit_an_island_cannot_take,
+    refuse_an_edit_an_island_cannot_take, refuse_the_links_through_a_node_not_yet_added,
     the_island_links_into_a_reactive_reader_only_islands_feed, the_reader_a_removal_strands,
     the_refusal_of_a_removal_stranding,
 };

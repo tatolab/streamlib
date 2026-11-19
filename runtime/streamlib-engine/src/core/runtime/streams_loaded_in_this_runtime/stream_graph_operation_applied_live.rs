@@ -16,9 +16,8 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    ALinkConnected, LinkUniqueId, NodeRunId,
-    WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
-    the_default_name_a_new_node_takes,
+    ALinkConnected, LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
+    the_default_name_a_new_node_takes, the_verdict_on_a_link_between_typed_ends,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
@@ -532,10 +531,14 @@ impl LoadedStreamInThisRuntime {
         &self,
         link: &StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink> {
-        let connect =
-            self.the_operation_under_the_current_port_names(StreamGraphOperation::Connect {
-                link: link.clone(),
-            });
+        let link = self
+            .the_link_under_the_current_port_names(link)
+            .ok_or_else(|| {
+                Error::GraphError(
+                    "a connect read under its ports' current names is no longer a connect".into(),
+                )
+            })?;
+        let connect = StreamGraphOperation::Connect { link: link.clone() };
         if self.the_operation_is_drawn_before_the_live_graph_takes_it(&connect) {
             StreamGraphDocument::from_value(self.to_json()?)
                 .map_err(Error::GraphError)?
@@ -543,14 +546,60 @@ impl LoadedStreamInThisRuntime {
                 .map_err(Error::GraphError)?;
             return Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade);
         }
-        let StreamGraphOperation::Connect { link } = &connect else {
-            return Err(Error::GraphError(
-                "a connect read under its ports' current names is no longer a connect".into(),
-            ));
-        };
-        let (from, to) = self.the_ends_of_the_link(link)?;
+        let (from, to) = self.the_ends_of_the_link(&link)?;
         the_verdict_connect_takes_on_a_link(&self.compiler, from, to)
             .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
+    }
+
+    /// The verdict of `link`, between two nodes the live graph runs, held or not, each node by
+    /// its UUID and each port under its current name, by its two typed ends, a convert node's
+    /// output judged by the type it gives under the settings it holds; `None` when either end is
+    /// no typed port of a node that runs.
+    pub(crate) fn the_verdict_of_a_link_between_two_running_nodes(
+        &self,
+        link: &StreamGraphDocumentLink,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict> {
+        let link = self.the_link_under_the_current_port_names(link)?;
+        let (from, to) = self.the_ends_of_the_link(&link).ok()?;
+        self.compiler.scope_reading(|graph| {
+            let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+            the_verdict_on_a_link_between_typed_ends(graph, &from, &to, &conversions)
+        })
+    }
+
+    /// The verdict of a link from the output `from` names to the input `to` names, judged by the
+    /// ports this stream resolves each node type to declare, among the conversions it resolves,
+    /// before either node runs; `None` when either port is untyped or not declared.
+    pub(crate) fn the_verdict_of_a_link_between_two_node_types(
+        &self,
+        from: crate::core::runtime::PortOfANodeOfAType<'_>,
+        to: crate::core::runtime::PortOfANodeOfAType<'_>,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict> {
+        let node_types = self.node_types_this_stream_resolves();
+        let ports_of = |node_type: &str| {
+            node_types
+                .port_info(&crate::core::descriptors::NodeClassImportPath::new(node_type).ok()?)
+        };
+        let (output_ports, input_ports) = (ports_of(from.node_type)?, ports_of(to.node_type)?);
+        crate::core::graph::the_verdict_of_a_link_between_declared_ports(
+            (from.node_name, output_ports.output_named(from.port)?),
+            (to.node_name, input_ports.input_named(to.port)?),
+            &node_types.pin_conversions(),
+        )
+    }
+
+    /// `link`, each node by its UUID, with each of its ports under its current name; `None` when
+    /// read so it is no longer a link.
+    fn the_link_under_the_current_port_names(
+        &self,
+        link: &StreamGraphDocumentLink,
+    ) -> Option<StreamGraphDocumentLink> {
+        match self.the_operation_under_the_current_port_names(StreamGraphOperation::Connect {
+            link: link.clone(),
+        }) {
+            StreamGraphOperation::Connect { link } => Some(link),
+            _ => None,
+        }
     }
 
     /// What a connect of each link between `held`, an end of the live graph by its node's UUID

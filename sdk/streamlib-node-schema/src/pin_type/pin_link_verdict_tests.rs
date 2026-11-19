@@ -88,6 +88,7 @@ fn a_conversion(node_type: NodeClassImportPath, from: PinType, to: PinType) -> P
         input_pin_type: from,
         output_port_name: "out".to_owned(),
         output_pin_type: to,
+        output_picked_for_the_input: None,
     }
 }
 
@@ -96,7 +97,10 @@ fn the_conversions_named_by(refusal: &PinLinkRefusal) -> Vec<NodeClassImportPath
         PinLinkRefusal::PinTypesDoNotConnect {
             conversions_that_bridge,
             ..
-        } => conversions_that_bridge.clone(),
+        } => conversions_that_bridge
+            .iter()
+            .map(|conversion| conversion.node_type.clone())
+            .collect(),
         other => panic!("a refusal by types, not {other:?}"),
     }
 }
@@ -360,7 +364,7 @@ fn a_link_into_a_setting_is_refused_whatever_the_types() {
     let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
         panic!("a setting takes no wire: {verdict:?}");
     };
-    assert_eq!(refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
+    assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
     assert!(
         refusal
             .to_string()
@@ -879,4 +883,87 @@ fn a_refusal_names_an_encoder_or_decoder_only_of_a_codec_the_encoded_end_states(
         let words = the_refusal_words_between(&output, &input);
         assert!(words.ends_with(placement), "{output} into {input}: {words}");
     }
+}
+
+/// The `format` a Tensor-to-Texture conversion picks for the input it feeds: the first format
+/// that input takes among the two it writes, `rgba8_unorm` for an input that takes any.
+fn the_format_picked_for(input: &PinType) -> Option<PinConversionOutputPicked> {
+    use TexturePixelFormat::{Bgra8Unorm, Rgba8Unorm};
+    let PinType::Texture { pixel_formats } = input else {
+        return None;
+    };
+    let format = match pixel_formats.as_slice() {
+        [] => Rgba8Unorm,
+        taken => *taken
+            .iter()
+            .find(|format| [Rgba8Unorm, Bgra8Unorm].contains(format))?,
+    };
+    Some(PinConversionOutputPicked {
+        input_values: serde_json::Map::from_iter([(
+            "format".to_owned(),
+            serde_json::Value::from(format.wire_name()),
+        )]),
+        output_pin_type: texture(&[format]),
+    })
+}
+
+fn a_tensor_to_texture_conversion_picking_its_format() -> PinConversion {
+    PinConversion {
+        output_picked_for_the_input: Some(PinConversionOutputPick {
+            picked_for: the_format_picked_for,
+            given_under: |_| None,
+        }),
+        ..a_conversion(
+            NodeClassImportPath::of_built_in_node("TensorToTexture"),
+            PinType::Tensor {},
+            texture(&[]),
+        )
+    }
+}
+
+/// A conversion whose output follows a setting is judged by the type it gives under the setting
+/// it picks for the input, and the convert node holds that setting.
+///
+/// Mental-revert: judging the output as it states itself, a Texture of no format, connects into
+/// a `bgra8_unorm` input with a warning and holds no `format`.
+#[test]
+fn a_conversion_picks_the_setting_its_output_follows_for_the_input_it_feeds() {
+    use TexturePixelFormat::{Bgra8Unorm, Nv12};
+    let tensor_to_texture = a_tensor_to_texture_conversion_picking_its_format();
+
+    let verdict = pin_link_verdict(
+        an_output(&PinType::Tensor {}),
+        an_input(&texture(&[Nv12, Bgra8Unorm])),
+        std::slice::from_ref(&tensor_to_texture),
+    );
+
+    let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome else {
+        panic!("the conversion writes bgra8_unorm: {verdict:?}");
+    };
+    assert_eq!(
+        convert_node.input_values,
+        serde_json::Map::from_iter([("format".to_owned(), "bgra8_unorm".into())])
+    );
+    assert!(verdict.warnings.is_empty(), "{verdict:?}");
+}
+
+/// A conversion whose settings give no type the input takes does not bridge the two ends, so the
+/// link is refused naming no node.
+///
+/// Mental-revert: judging the output as it states itself offers the conversion into an `nv12`
+/// input it can never write.
+#[test]
+fn a_conversion_whose_settings_give_no_type_the_input_takes_does_not_bridge() {
+    let tensor_to_texture = a_tensor_to_texture_conversion_picking_its_format();
+
+    let PinLinkOutcome::Refused(refusal) = pin_link_verdict(
+        an_output(&PinType::Tensor {}),
+        an_input(&texture(&[TexturePixelFormat::Nv12])),
+        std::slice::from_ref(&tensor_to_texture),
+    )
+    .outcome
+    else {
+        panic!("the conversion writes no nv12 Texture");
+    };
+    assert!(the_conversions_named_by(&refusal).is_empty(), "{refusal}");
 }
