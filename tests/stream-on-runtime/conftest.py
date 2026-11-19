@@ -637,5 +637,6 @@ class StreamRunWithNoVulkanDriverOutcome:
     #: `working_directory/.venv/bin/python` is the wrapper the runtime started.
     tatolab_run: TatolabRunOfAProject
     #: The graph of each stream the run took in, by stream id, as the runtime served it once
-    #: the run ended, before the fixture removed its project.
+    #: the run ended, before the fixture removed its project; a stream holding no graph, as one
+    #: recorded failed before its graph loaded, is left out.
     graphs_of_the_streams_it_took_in: "dict[str, dict[str, Any]]"
