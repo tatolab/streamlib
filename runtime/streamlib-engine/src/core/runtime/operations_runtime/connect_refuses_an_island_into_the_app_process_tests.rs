@@ -1,14 +1,19 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `connect` refuses a link from a function node into a node that runs in the app process, on a
-//! stream no commit builds, in the words its wiring would refuse it in at play, so the link is
-//! never in the graph a stopped stream saves, while a saved graph holding one still opens; and
-//! refuses, by the same judgement a link check makes, a link an island cannot take.
+//! `connect` refuses a link from a function node into a node that runs in the app process and
+//! that the stream's function node pool does not evaluate, on a stream no commit builds, in the
+//! words its wiring would refuse it in at play, so the link is never in the graph a stopped
+//! stream saves, while a saved graph holding one still opens; and refuses, by the same
+//! judgement a link check makes, a link an island cannot take.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Value, json};
+use streamlib_project_repository::{
+    ProjectBringingAView, ProjectViewFolderRead, read_tatolab_view_manifest,
+};
 
 use super::connect_on_a_test_thread::{
     connect_on_this_thread, connect_on_this_thread_as, the_links_in,
@@ -27,6 +32,7 @@ use crate::core::test_support::{MockInputOnlyNode, ensure_test_mocks_registered}
 
 const FUNCTION_NODE: &str = "app_process_check:switch";
 const HELPER_PROCESS_READER: &str = "app_process_check:meter";
+const VIEW_READER: &str = "app_process_check:program";
 
 fn a_records_port(name: &str) -> PortDescriptor {
     PortDescriptor::new(
@@ -57,8 +63,30 @@ fn a_described_node_type(
     descriptor
 }
 
-/// A compiler of a stopped stream resolving a function node type, `switch`, and a type its node
-/// code runs in a helper process, `meter`, beside the natively compiled mocks.
+/// A view of the stream's project, `program`, reading records on `in1`.
+fn a_view_reading_records() -> ProjectViewFolderRead {
+    let manifest = json!({
+        "contract": "1.0", "title": "Program", "description": "What plays out.",
+        "entry": "index.html", "placement": "node",
+        "inputs": [{ "name": "in1", "family": "records", "description": "What it shows." }],
+        "outputs": []
+    });
+    ProjectViewFolderRead {
+        view_type: VIEW_READER.to_owned(),
+        brought_by: ProjectBringingAView {
+            project: uuid::Uuid::nil(),
+            project_name: "app-process-check".to_owned(),
+            import_folder: None,
+        },
+        folder: PathBuf::from("/app-process-check/views/program"),
+        manifest: read_tatolab_view_manifest(&manifest),
+        manifest_as_written: Some(manifest),
+    }
+}
+
+/// A compiler of a stopped stream resolving a function node type, `switch`, a type its node code
+/// runs in a helper process, `meter`, and a view of its project, `program`, beside the natively
+/// compiled mocks.
 fn a_stopped_stream_resolving_a_function_node_type() -> Arc<Compiler> {
     ensure_test_mocks_registered();
     let node_types = NodeTypesOneStreamResolves::new();
@@ -87,6 +115,13 @@ fn a_stopped_stream_resolving_a_function_node_type() -> Arc<Compiler> {
             })),
         )
         .unwrap();
+    node_types.replace_the_view_types_this_streams_project_brings(&[a_view_reading_records()]);
+    assert!(
+        node_types.is_a_view_type_of_this_streams_project(
+            &NodeClassImportPath::new(VIEW_READER).unwrap()
+        ),
+        "the fixture's view is a node type"
+    );
     Arc::new(Compiler::new_of_a_stream(
         Arc::new(node_types),
         LiveInputValuesOfAStream::default(),
@@ -109,14 +144,38 @@ fn a_node_of(compiler: &Compiler, node_type: &str) -> NodeRunId {
     })
 }
 
+/// A natively compiled node runs in the app process, which runs no node code, so the stream's
+/// function node pool evaluates the island it reads and `connect` makes the link.
+///
+/// Mental-revert: refusing every natively compiled reader refuses a link the pool carries at
+/// play, and a stream built with one never loads.
 #[test]
-fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
+fn a_function_node_into_a_natively_compiled_node_connects_for_the_pool_to_evaluate() {
     let compiler = a_stopped_stream_resolving_a_function_node_type();
     let switch = a_node_of(&compiler, FUNCTION_NODE);
-    let program = a_node_of(
+    let converter = a_node_of(
         &compiler,
         MockInputOnlyNode::node_class_import_path().as_str(),
     );
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(switch, "result"),
+        InputLinkPortRef::new(converter, "in1"),
+    )
+    .expect("the stream's function node pool evaluates the island");
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A view of the stream's project runs in the app process and the pool does not evaluate an
+/// island it reads, so `connect` refuses the link in the words its wiring would at play.
+///
+/// Mental-revert: without the refusal, a stopped stream saves the link and fails at play.
+#[test]
+fn a_function_node_into_a_view_is_refused_and_never_made() {
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let switch = a_node_of(&compiler, FUNCTION_NODE);
+    let program = a_node_of(&compiler, VIEW_READER);
 
     let refusal = connect_on_this_thread(
         &compiler,
@@ -138,18 +197,15 @@ fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
     assert_eq!(the_links_in(&compiler), 0);
 }
 
-/// A saved graph holding a link from a function node into a node in the app process opens with
-/// that link, so the person can see and remove it; the commit that builds the stream refuses it.
+/// A saved graph holding a link from a function node into a view opens with that link, so the
+/// person can see and remove it; the commit that builds the stream refuses it.
 ///
 /// Mental-revert: refusing the link on a saved graph's load too fails the whole graph's open.
 #[test]
-fn a_saved_graphs_function_node_into_a_natively_compiled_node_is_kept_as_it_opens() {
+fn a_saved_graphs_function_node_into_a_view_is_kept_as_it_opens() {
     let compiler = a_stopped_stream_resolving_a_function_node_type();
     let switch = a_node_of(&compiler, FUNCTION_NODE);
-    let program = a_node_of(
-        &compiler,
-        MockInputOnlyNode::node_class_import_path().as_str(),
-    );
+    let program = a_node_of(&compiler, VIEW_READER);
 
     connect_on_this_thread_as(
         &compiler,

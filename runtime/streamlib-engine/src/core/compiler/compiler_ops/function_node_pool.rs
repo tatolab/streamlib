@@ -81,11 +81,23 @@ pub(crate) fn the_function_node_pool_descriptor(
 /// driven manually, whose native half reads without the Python interpreter's
 /// lock, fed an island that runs a node as Python.
 fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
-    let Some(link) = graph.traversal().e(link_id).first() else {
-        return false;
-    };
-    let reader_id = link.to_port().node_run_id();
-    if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
+    graph.traversal().e(link_id).first().is_some_and(|link| {
+        the_function_node_pool_evaluates_an_island_from_into(
+            graph,
+            link.source().node_run_id(),
+            link.to_port().node_run_id(),
+        )
+    })
+}
+
+/// Whether a link from `source_id` into `reader_id` carries an island the stream's function
+/// node pool evaluates, as [`needs_the_function_node_pool`] judges a link already made.
+pub(crate) fn the_function_node_pool_evaluates_an_island_from_into(
+    graph: &Graph,
+    source_id: &NodeRunId,
+    reader_id: &NodeRunId,
+) -> bool {
+    if !runs_inside_the_read_of_each_node_it_feeds(graph, source_id)
         || runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
     {
         return false;
@@ -105,8 +117,7 @@ fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     let is_driven_manually = node_types.the_execution_a_described_class_declares(&reader.node_type)
         == Some(ProcessExecution::Manual);
     runs_in_the_app_process
-        || (is_driven_manually
-            && the_island_upstream_of_runs_a_node_as_python(graph, link.source().node_run_id()))
+        || (is_driven_manually && the_island_upstream_of_runs_a_node_as_python(graph, source_id))
 }
 
 /// Whether `island_output_node` or any function node it reads runs as Python.

@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use serde_json::Value as JsonValue;
 
 use crate::core::NodeRunId;
+use crate::core::compiler::compiler_ops::function_node_pool::the_function_node_pool_evaluates_an_island_from_into;
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
@@ -101,9 +102,9 @@ fn is_another_link(link: &Link, held_as: Option<&LinkUniqueId>) -> bool {
 }
 
 /// Refuse a link from `from` into `to`, before it is made, when it would feed a function node
-/// island into a node of a type that runs in the app process, in the words the wiring of such a
-/// link refuses it in; a stopped stream wires nothing, so this is what keeps the link out of
-/// the graph it saves.
+/// island into a node of a type that runs in the app process and the stream's function node
+/// pool does not evaluate it, in the words the wiring of such a link refuses it in; a stopped
+/// stream wires nothing, so this is what keeps the link out of the graph it saves.
 pub(crate) fn refuse_a_link_feeding_an_island_into_the_app_process(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -121,6 +122,10 @@ pub(crate) fn refuse_a_link_feeding_an_island_into_the_app_process(
     if !runs_each_of_its_nodes_in_the_app_process(
         graph.node_types_this_stream_resolves(),
         reader.node_type(),
+    ) || the_function_node_pool_evaluates_an_island_from_into(
+        graph,
+        from.node_run_id(),
+        reader_id,
     ) {
         return Ok(());
     }
