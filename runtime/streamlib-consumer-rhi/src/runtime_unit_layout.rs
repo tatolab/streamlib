@@ -20,6 +20,16 @@ pub const BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "bin";
 /// unit's `bin/` and the app bundle's `Contents/MacOS` beside `tatolabd`.
 pub const RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME: &str = "uv";
 
+/// The TypeScript compiler a project's views and controls are checked with,
+/// relative to the directory `tatolabd` sits in. It reads its library files
+/// from the directory its own real path sits in, so they travel with it there.
+pub const RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY: &str =
+    "typescript/tsc";
+
+/// The linter a project's views and controls are checked with, beside
+/// `tatolabd`.
+pub const RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME: &str = "oxlint";
+
 /// The lend directory, relative to the runtime unit's root.
 pub const LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "lib/tatolab/lend";
 

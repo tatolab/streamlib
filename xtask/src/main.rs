@@ -34,6 +34,7 @@ pub mod stage_core_projects;
 pub mod stage_first_party_modules;
 pub mod stage_runtime_client_package;
 pub mod stage_runtime_unit_carried_packages;
+pub mod stage_runtime_unit_code_checkers;
 pub mod stage_runtime_unit_uv;
 pub mod stage_sample_projects;
 
@@ -514,6 +515,12 @@ enum Commands {
     /// See [`stage_runtime_unit_uv`].
     StageRuntimeUnitUv,
 
+    /// Download the TypeScript compiler's and oxlint's archives for this host
+    /// at their pinned versions, check their pinned sha256, and unpack both
+    /// into `target/runtime-unit-code-checkers/`; `build-runtime` places them
+    /// in the unit's `bin/`. See [`stage_runtime_unit_code_checkers`].
+    StageRuntimeUnitCodeCheckers,
+
     /// Resolve the core modules' third-party requirements and the scaffold's Python for every
     /// platform the runtime unit ships, download each to learn its sha256, and rewrite
     /// `xtask/runtime_unit_carried_packages.toml`, which `build-runtime` places in the unit. See
@@ -650,6 +657,11 @@ fn main() -> Result<()> {
         )?,
         Commands::StageRuntimeUnitUv => {
             stage_runtime_unit_uv::stage_the_runtime_unit_uv(&workspace_root()?)?;
+        }
+        Commands::StageRuntimeUnitCodeCheckers => {
+            stage_runtime_unit_code_checkers::stage_the_runtime_unit_code_checkers(
+                &workspace_root()?,
+            )?;
         }
         Commands::PinRuntimeUnitCarriedPackages => {
             let workspace_root = workspace_root()?;

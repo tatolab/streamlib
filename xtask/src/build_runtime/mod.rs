@@ -7,14 +7,17 @@ use crate::stage_core_projects::stage_the_core_nodes_project;
 use crate::stage_first_party_modules::stage_the_first_party_modules;
 use crate::stage_runtime_client_package::stage_the_runtime_client_package;
 use crate::stage_runtime_unit_carried_packages::stage_the_carried_packages;
+use crate::stage_runtime_unit_code_checkers::stage_the_runtime_unit_code_checkers;
 use crate::stage_runtime_unit_uv::stage_the_runtime_unit_uv;
 use crate::stage_sample_projects::stage_the_sample_projects;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
 };
 use runtime_unit_layout::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND,
+    RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME,
+    RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY,
     RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME, lend_directory_in_the_runtime_unit,
 };
 #[cfg(test)]
@@ -252,9 +255,19 @@ pub fn run(
         binary_target_name: RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME.to_string(),
         built_executable: stage_the_runtime_unit_uv(workspace_root)?,
     });
+    let code_checkers = stage_the_runtime_unit_code_checkers(workspace_root)?;
+    built_binaries.push(BuiltRuntimeUnitBinary {
+        binary_target_name: RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME.to_string(),
+        built_executable: code_checkers.linter,
+    });
     replace_runtime_unit_binaries_in(&bin_directory, &built_binaries)?;
+    replace_the_typescript_compiler_in(
+        &bin_directory,
+        &code_checkers.typescript_compiler_directory,
+    )?;
     tracing::info!(
-        "build-runtime: tatolabd, tatolab, tatolab-video-poster-frame and uv placed in {}",
+        "build-runtime: tatolabd, tatolab, tatolab-video-poster-frame, uv, oxlint and \
+         {RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY} placed in {}",
         bin_directory.display()
     );
     if machine_directories == RuntimeUnitMachineDirectories::UnderATestRoot {
@@ -439,6 +452,50 @@ pub fn replace_runtime_unit_binaries_in(
                 placed_binary.display()
             )
         })?;
+    }
+    Ok(())
+}
+
+/// Replace the TypeScript compiler's directory in `bin_directory` with a copy
+/// of `compiler_directory`: `tsc` and the library files it reads from beside
+/// its own real path. Copied, never linked, so that path is the unit's own.
+pub fn replace_the_typescript_compiler_in(
+    bin_directory: &Path,
+    compiler_directory: &Path,
+) -> Result<()> {
+    let placed_compiler =
+        bin_directory.join(RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY);
+    let placed_directory = placed_compiler
+        .parent()
+        .with_context(|| format!("{} sits in no directory", placed_compiler.display()))?;
+    if placed_directory.symlink_metadata().is_ok() {
+        std::fs::remove_dir_all(placed_directory)
+            .with_context(|| format!("removing {}", placed_directory.display()))?;
+    }
+    std::fs::create_dir_all(placed_directory)
+        .with_context(|| format!("creating {}", placed_directory.display()))?;
+    for entry in std::fs::read_dir(compiler_directory)
+        .with_context(|| format!("reading {}", compiler_directory.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading {}", compiler_directory.display()))?;
+        let placed_file = placed_directory.join(entry.file_name());
+        std::fs::copy(entry.path(), &placed_file).with_context(|| {
+            format!(
+                "copying {} to {}",
+                entry.path().display(),
+                placed_file.display()
+            )
+        })?;
+    }
+    if !placed_compiler.is_file() {
+        bail!(
+            "{} holds no {}",
+            compiler_directory.display(),
+            placed_compiler
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
     }
     Ok(())
 }
