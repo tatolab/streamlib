@@ -6,7 +6,9 @@
 //! A page hears a wired `audio_in_N` only once it plays the track
 //! `window.tatolab.inputTrack` gives it. A page that never does, or whose
 //! AudioContext never starts, leaves `audio` silent with nothing in the log, and
-//! that silence looks the same as a broken input.
+//! that silence looks the same as a broken input. So does an input that
+//! carries only digital silence: CEF opens no audio stream for a page whose
+//! output is all zeros, so the page publishes nothing however it plays it.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -63,8 +65,9 @@ impl PageAudioSilenceWatch {
     /// The warning to log at `now_ns`, read from what the page's `counters`
     /// say it was handed and has published: once, when the grace has passed
     /// since an input block was first seen to reach the page and the page has
-    /// published no audio. After a warning, or once the page publishes audio,
-    /// it is `None` for good.
+    /// published no audio. The warning says the inputs are silent when no block
+    /// that reached the page held sound, and how to play them otherwise. After
+    /// a warning, or once the page publishes audio, it is `None` for good.
     #[must_use]
     pub fn warning_due(&mut self, now_ns: i64, counters: &BrowserPageCounters) -> Option<String> {
         if self.state == PageAudioSilenceWatchState::Settled {
@@ -99,13 +102,25 @@ impl PageAudioSilenceWatch {
         self.state = PageAudioSilenceWatchState::Settled;
         let first_wired = self.wired_audio_input_port_names.first()?;
         let wired = self.wired_audio_input_port_names.join(", ");
+        let silent_for_s = silent_for.as_secs();
+        if counters
+            .page_input_audio_blocks_with_sound_delivered
+            .load(Ordering::Relaxed)
+            == 0
+        {
+            return Some(format!(
+                "every audio block reaching the page from its wired audio inputs ({wired}) \
+                 in the {silent_for_s} s since they began has been digital silence, so the \
+                 page has nothing to play and `audio` stays silent; check the source \
+                 feeding them"
+            ));
+        }
         Some(format!(
-            "the page has published no audio in the {} s since input audio began \
+            "the page has published no audio in the {silent_for_s} s since input audio began \
              reaching it, so `audio` stays silent; its wired audio inputs are ({wired}), \
              and a page plays one by playing, for example, \
              `window.tatolab.inputTrack(\"{first_wired}\")` through an audio element or a \
-             started AudioContext",
-            silent_for.as_secs()
+             started AudioContext"
         ))
     }
 }

@@ -9,7 +9,6 @@
 //! none. When the host ends, the runtime starts it again and the tab is
 //! opened again in the new one.
 
-use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
 use std::fs::File;
 #[cfg(target_os = "linux")]
@@ -43,7 +42,8 @@ use tatolab_module_sdk::{
 use crate::page_audio_blocks::{PageAudioStreamTimeline, samples_of_little_endian_f32_bytes};
 use crate::page_audio_silence_watch::PageAudioSilenceWatch;
 use crate::page_data_messages::{
-    events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
+    DataMessagesHeldForTheBrowserHost, events_msgpack_map_of_published_json,
+    page_data_detail_json_of_msgpack_map,
 };
 use crate::page_input_messages::{PageInputAudioBlock, PageInputVideoFrameExtent};
 use crate::painted_page_image_frame::image_frame_payload_descriptor_of_a_painted_page;
@@ -83,10 +83,6 @@ const LONGEST_REOPEN_REFUSAL_BY_A_RUNNING_BROWSER_HOST: Duration = Duration::fro
 const PAGE_INPUT_VIDEO_PIXEL_FORMAT: &str = "rgba32";
 
 const DATA_INPUT_WAIT: Duration = Duration::from_millis(50);
-/// How many `data` messages wait for a restarting browser host before the oldest is dropped.
-const MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 256;
-/// How many bytes of `data` JSON a node holds while the host is away.
-const MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 64 * 1024 * 1024;
 /// How long one send to the host may take before the connection ends.
 const SEND_TO_THE_BROWSER_HOST_BUDGET: Duration = Duration::from_secs(5);
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
@@ -183,6 +179,8 @@ pub struct BrowserPageCounters {
     pub data_messages_refused: AtomicU64,
     pub page_input_video_frames_delivered: AtomicU64,
     pub page_input_audio_blocks_delivered: AtomicU64,
+    /// Of `page_input_audio_blocks_delivered`, those holding a sample that is not zero.
+    pub page_input_audio_blocks_with_sound_delivered: AtomicU64,
     /// Input frames and blocks that never reached the page: unreadable, not
     /// read back, or sent while the browser host was away.
     pub page_input_chunks_refused: AtomicU64,
@@ -1352,6 +1350,7 @@ fn deliver_what_one_page_input_holds(
                     });
                 match block {
                     Ok(block) => {
+                        let carries_sound = block.carries_sound();
                         let outcome = tab.send_to_the_browser_host(
                             &TabProtocolMessageFromNode::DeliverPageInputAudioBlock {
                                 input_port_name: input_port_name.clone(),
@@ -1361,6 +1360,11 @@ fn deliver_what_one_page_input_holds(
                                 interleaved_samples_le_f32: block.interleaved_samples_le_f32,
                             },
                         );
+                        if carries_sound && matches!(outcome, SendToTheBrowserHostOutcome::Sent) {
+                            tab.counters
+                                .page_input_audio_blocks_with_sound_delivered
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
                         count_one_page_input_send(
                             tab,
                             input_port_name,
@@ -1462,45 +1466,6 @@ fn count_a_page_input_chunk_that_did_not_reach_the_page(
     }
 }
 
-/// The newest `data` messages, as page JSON, waiting for the host: at most
-/// [`MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] of them and
-/// [`MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] bytes, the newest
-/// one always kept.
-#[derive(Default)]
-struct DataMessagesHeldForTheBrowserHost {
-    detail_jsons: VecDeque<String>,
-    bytes_held: usize,
-}
-
-impl DataMessagesHeldForTheBrowserHost {
-    /// Hold `detail_json`, dropping the oldest past either bound; returns how
-    /// many were dropped.
-    fn hold_newest(&mut self, detail_json: String) -> usize {
-        self.bytes_held += detail_json.len();
-        self.detail_jsons.push_back(detail_json);
-        let mut dropped = 0;
-        while self.detail_jsons.len() > 1
-            && (self.detail_jsons.len() > MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY
-                || self.bytes_held > MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY)
-        {
-            self.take_oldest();
-            dropped += 1;
-        }
-        dropped
-    }
-
-    fn take_oldest(&mut self) -> Option<String> {
-        let oldest = self.detail_jsons.pop_front()?;
-        self.bytes_held -= oldest.len();
-        Some(oldest)
-    }
-
-    fn put_back_as_oldest(&mut self, detail_json: String) {
-        self.bytes_held += detail_json.len();
-        self.detail_jsons.push_front(detail_json);
-    }
-}
-
 /// Send the held `data` messages oldest first, keeping the rest held once a
 /// send fails because the browser host is away.
 fn send_the_data_messages_held_for_the_browser_host(
@@ -1556,27 +1521,6 @@ mod tests {
             audio_sample_rate: 48_000,
             output_pool_rotation_depth: 4,
         }
-    }
-
-    #[test]
-    fn held_data_drops_the_oldest_past_either_bound_and_keeps_the_newest() {
-        let mut held = DataMessagesHeldForTheBrowserHost::default();
-        for index in 0..MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY {
-            assert_eq!(held.hold_newest(index.to_string()), 0);
-        }
-        assert_eq!(held.hold_newest("newest".to_string()), 1);
-        assert_eq!(held.take_oldest().as_deref(), Some("1"));
-
-        let mut held = DataMessagesHeldForTheBrowserHost::default();
-        let half_the_bytes = "x".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY / 2);
-        assert_eq!(held.hold_newest(half_the_bytes.clone()), 0);
-        assert_eq!(held.hold_newest(half_the_bytes), 0);
-        assert_eq!(held.hold_newest("past the bound".to_string()), 1);
-        let larger_than_the_bound =
-            "y".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY + 1);
-        assert_eq!(held.hold_newest(larger_than_the_bound.clone()), 2);
-        assert_eq!(held.take_oldest(), Some(larger_than_the_bound));
-        assert_eq!(held.bytes_held, 0);
     }
 
     #[test]

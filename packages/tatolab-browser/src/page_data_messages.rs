@@ -3,7 +3,10 @@
 
 //! The two message shapes that cross the page boundary: a msgpack map on
 //! `data` becomes the JSON detail of a DOM event, and the JSON text a page
-//! publishes becomes a msgpack map on `events`.
+//! publishes becomes a msgpack map on `events`. The `data` messages held while
+//! the browser host is away wait here too.
+
+use std::collections::VecDeque;
 
 use rmpv::Value as MsgpackValue;
 use serde_json::Value as JsonValue;
@@ -130,9 +133,74 @@ fn msgpack_of_json(value: &JsonValue) -> MsgpackValue {
     }
 }
 
+/// How many `data` messages wait for a restarting browser host before the oldest is dropped.
+const MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 256;
+/// How many bytes of `data` JSON a node holds while the host is away.
+const MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 64 * 1024 * 1024;
+
+/// The newest `data` messages, as page JSON, waiting for the host: at most
+/// [`MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] of them and
+/// [`MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] bytes, the newest
+/// one always kept.
+#[derive(Default)]
+pub(crate) struct DataMessagesHeldForTheBrowserHost {
+    detail_jsons: VecDeque<String>,
+    bytes_held: usize,
+}
+
+impl DataMessagesHeldForTheBrowserHost {
+    /// Hold `detail_json`, dropping the oldest past either bound; returns how
+    /// many were dropped.
+    pub(crate) fn hold_newest(&mut self, detail_json: String) -> usize {
+        self.bytes_held += detail_json.len();
+        self.detail_jsons.push_back(detail_json);
+        let mut dropped = 0;
+        while self.detail_jsons.len() > 1
+            && (self.detail_jsons.len() > MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY
+                || self.bytes_held > MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY)
+        {
+            self.take_oldest();
+            dropped += 1;
+        }
+        dropped
+    }
+
+    pub(crate) fn take_oldest(&mut self) -> Option<String> {
+        let oldest = self.detail_jsons.pop_front()?;
+        self.bytes_held -= oldest.len();
+        Some(oldest)
+    }
+
+    pub(crate) fn put_back_as_oldest(&mut self, detail_json: String) {
+        self.bytes_held += detail_json.len();
+        self.detail_jsons.push_front(detail_json);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_data_drops_the_oldest_past_either_bound_and_keeps_the_newest() {
+        let mut held = DataMessagesHeldForTheBrowserHost::default();
+        for index in 0..MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY {
+            assert_eq!(held.hold_newest(index.to_string()), 0);
+        }
+        assert_eq!(held.hold_newest("newest".to_string()), 1);
+        assert_eq!(held.take_oldest().as_deref(), Some("1"));
+
+        let mut held = DataMessagesHeldForTheBrowserHost::default();
+        let half_the_bytes = "x".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY / 2);
+        assert_eq!(held.hold_newest(half_the_bytes.clone()), 0);
+        assert_eq!(held.hold_newest(half_the_bytes), 0);
+        assert_eq!(held.hold_newest("past the bound".to_string()), 1);
+        let larger_than_the_bound =
+            "y".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY + 1);
+        assert_eq!(held.hold_newest(larger_than_the_bound.clone()), 2);
+        assert_eq!(held.take_oldest(), Some(larger_than_the_bound));
+        assert_eq!(held.bytes_held, 0);
+    }
 
     fn msgpack(value: &MsgpackValue) -> Vec<u8> {
         let mut payload = Vec::new();
