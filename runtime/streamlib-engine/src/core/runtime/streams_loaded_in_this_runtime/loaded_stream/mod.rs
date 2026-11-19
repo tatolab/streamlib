@@ -117,6 +117,13 @@ pub struct LoadedStreamInThisRuntime {
     /// The fragment, variable and interface nodes, and what they resolved to, of the
     /// graph this stream runs, so `graph` renders them as drawn.
     pub(in crate::core::runtime) graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
+    /// Held by the one writer whose graph edits are open on this stream, from the moment they
+    /// open until they close, so two writers' edits never interleave in one commit.
+    pub(in crate::core::runtime) one_writer_of_the_graph_at_a_time: Arc<tokio::sync::Mutex<()>>,
+    /// The thread that opened the batch of graph edits open on this stream, if one is, which a
+    /// start, a stop or a resume on it would wait for itself on.
+    pub(in crate::core::runtime) thread_holding_a_graph_edit_batch:
+        Mutex<Option<std::thread::ThreadId>>,
     /// Whether its playback is stopped and its graph held to read and edit, until its next
     /// start.
     is_held_stopped: AtomicBool,
@@ -331,6 +338,8 @@ impl LoadedStreamInThisRuntime {
             )),
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
+            one_writer_of_the_graph_at_a_time: Arc::new(tokio::sync::Mutex::new(())),
+            thread_holding_a_graph_edit_batch: Mutex::new(None),
             is_held_stopped: AtomicBool::new(false),
             edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             engine_resources_shared_by_every_stream,
@@ -444,7 +453,9 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// What this stream's teardown is waiting on, read by its watchdog.
-    fn teardown_progress_note(&self) -> &TeardownProgressNoteOfOneStream {
+    pub(in crate::core::runtime) fn teardown_progress_note(
+        &self,
+    ) -> &TeardownProgressNoteOfOneStream {
         &self
             .this_streams_identity_and_handles
             .teardown_progress_note
@@ -478,6 +489,18 @@ impl LoadedStreamInThisRuntime {
     pub(in crate::core::runtime) fn publish_on_this_streams_topic(&self, event: RuntimeEvent) {
         self.loaded_stream_identity()
             .publish_on_this_streams_topic(event);
+    }
+
+    /// This stream, held for a task that runs an edit made from synchronous code.
+    pub(in crate::core::runtime) fn this_stream_held_for_a_task(
+        &self,
+    ) -> crate::core::Result<Arc<Self>> {
+        self.this_stream.upgrade().ok_or_else(|| {
+            crate::core::Error::Runtime(format!(
+                "stream `{}` is no longer loaded",
+                self.stream_id()
+            ))
+        })
     }
 
     /// The lifecycle status of this stream.

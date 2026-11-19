@@ -80,7 +80,7 @@ pub(crate) fn the_function_node_pool_descriptor(
 /// which the stream's shader evaluator runs with no node code, or a class
 /// driven manually, whose native half reads without the Python interpreter's
 /// lock, fed an island that runs a node as Python.
-fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
+pub(crate) fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     graph.traversal().e(link_id).first().is_some_and(|link| {
         the_function_node_pool_evaluates_an_island_from_into(
             graph,

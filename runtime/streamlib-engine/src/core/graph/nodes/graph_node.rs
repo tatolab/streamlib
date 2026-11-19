@@ -153,11 +153,14 @@ impl GraphNode {
     }
 
     pub(crate) fn runs_its_node(&self) -> bool {
-        use super::super::components::{
-            NodeInstanceComponent, OutOfProcessLinkWiringComponent, PendingDeletionComponent,
-        };
+        use super::super::components::{NodeInstanceComponent, OutOfProcessLinkWiringComponent};
         (self.has::<NodeInstanceComponent>() || self.has::<OutOfProcessLinkWiringComponent>())
-            && !self.has::<PendingDeletionComponent>()
+            && self.stands()
+    }
+
+    /// Whether this node stands: it is not pending deletion.
+    pub fn stands(&self) -> bool {
+        !self.has::<super::super::components::PendingDeletionComponent>()
     }
 
     /// The entries this node's output ports carry now.

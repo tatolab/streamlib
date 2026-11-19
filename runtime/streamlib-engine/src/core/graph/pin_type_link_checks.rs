@@ -24,17 +24,15 @@ use crate::core::descriptors::{
 };
 use crate::core::{Error, PortDirection, Result};
 
-/// Whose link a connect makes, which decides how leniently it is judged.
+/// Whose link a connect makes, which decides how leniently its pin types are judged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ALinkConnected {
     /// A link made now: one whose two typed ends the verdict finds no rule connecting, or whose
-    /// Image output may write a format an input it reaches does not read, is refused, and one
-    /// an island cannot take is refused before it is made.
+    /// Image output may write a format an input it reaches does not read, is refused.
     MadeNow,
     /// A link a saved graph already holds, so the graph opens: one the verdict refuses by its
     /// pin types alone, or whose Image formats alone are refused, is kept when its ports'
-    /// families, names and codec take it, each refusal logged as a warning, and one an island
-    /// cannot take is left to the commit that builds the stream to refuse.
+    /// families, names and codec take it, each refusal logged as a warning.
     OfASavedGraph,
 }
 

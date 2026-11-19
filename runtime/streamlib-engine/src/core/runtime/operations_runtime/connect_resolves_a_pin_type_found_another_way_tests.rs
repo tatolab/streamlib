@@ -11,10 +11,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{
-    ALinkConnected, InputValueChangesAConnectWaitsFor, LiveGraphChangeOnOneStream, connect_impl,
-    the_verdict_connect_takes_on_a_link,
-};
+use super::connect_on_a_test_thread::connect_on_this_thread_waiting_for;
+use super::{InputValueChangesAConnectWaitsFor, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
@@ -26,7 +24,6 @@ use crate::core::graph::{
     refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
 };
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
-use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::{Error, Result};
 
 const FLOAT_SOURCE: &str = "FoundAnotherWayFloatSource";
@@ -252,26 +249,12 @@ fn connect_holding_input_value_changes_by(
     one_input_value_change_at_a_time: Arc<parking_lot::Mutex<()>>,
 ) -> Result<LinkUniqueId> {
     let output = the_output_of(compiler, from);
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("current-thread runtime")
-        .block_on(connect_impl(
-            LiveGraphChangeOnOneStream {
-                compiler: Arc::clone(compiler),
-                live: None,
-                stream: LoadedStreamIdentity {
-                    runtime_id: "Rfoundanotherway".to_string(),
-                    stream_id: "main".to_string(),
-                    stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
-                },
-                one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor::TheStreamsOne(
-                    one_input_value_change_at_a_time,
-                ),
-            },
-            OutputLinkPortRef::new(from.clone(), output),
-            InputLinkPortRef::new(to.clone(), "value"),
-            ALinkConnected::MadeNow,
-        ))
+    connect_on_this_thread_waiting_for(
+        compiler,
+        OutputLinkPortRef::new(from.clone(), output),
+        InputLinkPortRef::new(to.clone(), "value"),
+        InputValueChangesAConnectWaitsFor::TheStreamsOne(one_input_value_change_at_a_time),
+    )
 }
 
 fn the_outcome_connect_takes(

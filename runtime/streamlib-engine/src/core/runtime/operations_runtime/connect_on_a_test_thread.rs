@@ -6,7 +6,10 @@
 
 use std::sync::Arc;
 
-use super::{LiveGraphChangeOnOneStream, connect_impl};
+use super::{
+    ALinkConnectedOrSetAside, InputValueChangesAConnectWaitsFor, LiveGraphChangeOnOneStream,
+    WhenTheEngineCannotWireALink, connect_impl,
+};
 use crate::core::Result;
 use crate::core::compiler::Compiler;
 use crate::core::graph::{ALinkConnected, InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
@@ -22,13 +25,71 @@ pub(super) fn connect_on_this_thread(
 }
 
 /// Connect `from` to `to` as `a_link_connected` says it is connected, in the stopped stream
-/// `compiler` builds.
+/// `compiler` builds, refusing a link the engine cannot wire.
 pub(super) fn connect_on_this_thread_as(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
     a_link_connected: ALinkConnected,
 ) -> Result<LinkUniqueId> {
+    connect_on_this_thread_judging(
+        compiler,
+        from,
+        to,
+        a_link_connected,
+        WhenTheEngineCannotWireALink::Refuse,
+        InputValueChangesAConnectWaitsFor::default(),
+    )
+    .and_then(ALinkConnectedOrSetAside::connected)
+}
+
+/// Connect `from` to `to` as a link made now, in the stopped stream `compiler` builds, waiting
+/// for the input value changes `one_input_value_change_at_a_time` names.
+pub(super) fn connect_on_this_thread_waiting_for(
+    compiler: &Arc<Compiler>,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+    one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor,
+) -> Result<LinkUniqueId> {
+    connect_on_this_thread_judging(
+        compiler,
+        from,
+        to,
+        ALinkConnected::MadeNow,
+        WhenTheEngineCannotWireALink::Refuse,
+        one_input_value_change_at_a_time,
+    )
+    .and_then(ALinkConnectedOrSetAside::connected)
+}
+
+/// Connect a link of a saved graph `from` to `to` as a load or a reconcile makes it, in the
+/// stopped stream `compiler` builds: one the engine cannot wire is set aside.
+pub(super) fn connect_a_link_of_a_saved_graph_on_this_thread(
+    compiler: &Arc<Compiler>,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+) -> Result<ALinkConnectedOrSetAside> {
+    connect_on_this_thread_judging(
+        compiler,
+        from,
+        to,
+        ALinkConnected::OfASavedGraph,
+        WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,
+        InputValueChangesAConnectWaitsFor::default(),
+    )
+}
+
+/// Connect `from` to `to` as `a_link_connected` says, a link the engine cannot wire handled as
+/// `when_the_engine_cannot_wire_it` says, in the stopped stream `compiler` builds, waiting for
+/// the input value changes `one_input_value_change_at_a_time` names.
+fn connect_on_this_thread_judging(
+    compiler: &Arc<Compiler>,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+    a_link_connected: ALinkConnected,
+    when_the_engine_cannot_wire_it: WhenTheEngineCannotWireALink,
+    one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor,
+) -> Result<ALinkConnectedOrSetAside> {
     tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("current-thread runtime")
@@ -41,11 +102,13 @@ pub(super) fn connect_on_this_thread_as(
                     stream_id: "main".to_string(),
                     stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
                 },
-                one_input_value_change_at_a_time: Default::default(),
+                held_for_one_commit: None,
+                one_input_value_change_at_a_time,
             },
             from,
             to,
             a_link_connected,
+            when_the_engine_cannot_wire_it,
         ))
 }
 

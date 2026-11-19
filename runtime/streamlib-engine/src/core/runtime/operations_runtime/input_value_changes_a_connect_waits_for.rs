@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
-use super::{ALinkConnected, LiveGraphChangeOnOneStream, LoadedStreamInThisRuntime, connect_impl};
+use super::{
+    ALinkConnected, ALinkConnectedOrSetAside, LiveGraphChangeOnOneStream,
+    LoadedStreamInThisRuntime, connect_impl,
+};
 use crate::core::graph::LinkUniqueId;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -38,22 +41,28 @@ impl Default for InputValueChangesAConnectWaitsFor {
 }
 
 impl LoadedStreamInThisRuntime {
-    /// Connect a link `from` to `to` made now, as `connect` does, from code that already holds
-    /// this stream's one input value change at a time.
+    /// Connect a link `from` to `to` made now, as `connect` does, in graph edits held for one
+    /// commit, from code that already holds this stream's one input value change at a time.
     pub(in crate::core::runtime) fn connect_while_no_input_value_changes(
         &self,
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> Result<LinkUniqueId> {
-        self.block_on_the_engines_tokio_runtime(connect_impl(
-            LiveGraphChangeOnOneStream {
-                one_input_value_change_at_a_time:
-                    InputValueChangesAConnectWaitsFor::NoneItsCallerHoldsThem,
-                ..self.live_graph_change()
-            },
-            from,
-            to,
-            ALinkConnected::MadeNow,
-        ))
+        let when_the_engine_cannot_wire_it = self.the_connect_an_edit_makes();
+        self.in_one_commit_from_synchronous_code(move |change| async move {
+            connect_impl(
+                LiveGraphChangeOnOneStream {
+                    one_input_value_change_at_a_time:
+                        InputValueChangesAConnectWaitsFor::NoneItsCallerHoldsThem,
+                    ..change
+                },
+                from,
+                to,
+                ALinkConnected::MadeNow,
+                when_the_engine_cannot_wire_it,
+            )
+            .await
+            .and_then(ALinkConnectedOrSetAside::connected)
+        })
     }
 }

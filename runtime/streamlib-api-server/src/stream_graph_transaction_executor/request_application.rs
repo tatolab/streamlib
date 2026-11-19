@@ -1,6 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use super::live_application_and_reversal::{
+    close_the_graph_edits_of_each_stream, take_back_the_graph_edits_of_each_stream,
+};
 use super::*;
 use streamlib::sdk::graph::input_values::InputValueToSetLive;
 
@@ -37,7 +40,11 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         let mut former_port_names_moved: Vec<ProjectOperation> = Vec::new();
-        for stream_id in &stream_ids_in_order {
+        // Every batch opens before any edit is applied, in the order of the stream ids, so two
+        // transactions editing the same streams never each wait on a batch the other holds.
+        let mut stream_ids_a_batch_opens_on = stream_ids_in_order.clone();
+        stream_ids_a_batch_opens_on.sort();
+        for stream_id in &stream_ids_a_batch_opens_on {
             let stream_operations = match &streams_to_edit {
                 Some(streams_to_edit) => streams_to_edit.runtime_operations_of(stream_id),
                 None => self
@@ -79,11 +86,8 @@ impl StreamGraphTransactionExecutor<'_> {
             };
             streams.insert(
                 stream_id.clone(),
-                StreamATransactionEdits {
-                    stream_operations,
-                    stream_location,
-                    staged_graph,
-                },
+                StreamATransactionEdits::new(stream_operations, stream_location, staged_graph)
+                    .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             );
         }
 
@@ -123,6 +127,7 @@ impl StreamGraphTransactionExecutor<'_> {
             let applied = match self.apply_one_action(request, &stream_id, &mut staged) {
                 Ok(applied) => applied,
                 Err(refusal) => {
+                    take_back_the_graph_edits_of_each_stream(&mut staged.streams);
                     self.reverse_what_was_applied_live(&staged.streams, applied_live);
                     return Err(GraphTransactionRefusal::of_the_operation(
                         request_index,
@@ -143,6 +148,10 @@ impl StreamGraphTransactionExecutor<'_> {
             }
         }
 
+        if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut staged.streams) {
+            self.reverse_what_was_applied_live(&staged.streams, applied_live);
+            return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
+        }
         let WhatTheTransactionHasStaged {
             streams,
             labels_of_added_nodes,
@@ -425,9 +434,10 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
                 _ => None,
             };
+            let graph_edit_batch = the_open_batch_of(streams, stream_id)?;
             let applied = self
                 .async_runtime
-                .block_on(stream_operations.apply_a_stream_graph_operation_live(edit_as_drawn))?;
+                .block_on(graph_edit_batch.apply_a_stream_graph_operation_live(edit_as_drawn))?;
             let applied_on_the_running_stream = match (&applied, value_the_running_input_held) {
                 (
                     StreamGraphOperation::SetNodeInputValue {
@@ -449,13 +459,16 @@ impl StreamGraphTransactionExecutor<'_> {
                 },
                 _ => OneOperationAppliedLive::replacing_no_live_value(applied.clone()),
             };
-            let stream = streams
+            let staged = streams
                 .get_mut(stream_id)
-                .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
-            if let Err(why) = stream.staged_graph.apply(&applied) {
+                .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?
+                .staged_graph
+                .apply(&applied);
+            if let Err(why) = staged {
                 self.reverse_one_operation_applied_live(
                     stream_id,
                     stream_operations.as_ref(),
+                    the_open_batch_of(streams, stream_id).ok(),
                     &applied_on_the_running_stream,
                 );
                 return Err(format!(

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::runtime::a_project_on_disk_for_a_test::{
-    options_loading_a_stream_of_the_test_project_at,
+    THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST, options_loading_a_stream_of_the_test_project_at,
     options_loading_a_stream_of_the_test_project_in,
 };
 use serde_json::json;
@@ -784,4 +784,154 @@ fn a_refused_document_leaves_the_node_types_the_stream_resolves_as_they_were() {
             kept_type.as_str().to_owned()
         )]
     );
+}
+
+const NODE_C: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+/// A function node type of this stream, `switch`, whose `result` carries Records, beside the
+/// natively compiled mocks, which run in the app process.
+fn a_function_node_type_of_records_registered_in(stream: &LoadedStreamInThisRuntime) -> String {
+    use crate::core::descriptors::{
+        FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor,
+        PortFamily, PortFamilyDeclaration,
+    };
+    let switch_type = format!("{}::Switch", module_path!());
+    let mut switch = NodeDescriptor::new(
+        NodeClassShortName::new("Switch").unwrap(),
+        NodeClassImportPath::new(&switch_type).unwrap(),
+        "a fixture",
+    )
+    .with_output(
+        PortDescriptor::new(
+            "result",
+            "",
+            true,
+            PortFamilyDeclaration::of_family(PortFamily::Records),
+        )
+        .with_delivery_profile("newest"),
+    );
+    switch.node_kind = NodeKind::Function {
+        language: FunctionNodeLanguage::Python,
+    };
+    stream
+        .node_types_this_stream_resolves()
+        .register_a_type_described_in_this_streams_node_interpreter(
+            switch,
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                node_once_promoted_to_its_own_process: Box::new(|_node| {
+                    Err(Error::NotSupported("a fixture runs no node".to_owned()))
+                }),
+            },
+        )
+        .unwrap();
+    switch_type
+}
+
+/// The document of `a_document_of_a_linked_into_b` into a mock that takes Records, with a
+/// function node `switch` of `switch_type` beside, its `result` linked into the mock's `in2`
+/// when `linked`.
+fn a_document_feeding_an_island_into_the_app_process(switch_type: &str, linked: bool) -> Value {
+    let mut document = a_document_of_a_linked_into_b(
+        "source",
+        "program",
+        MockInputOnlyNode::node_class_import_path(),
+    );
+    document["nodes"].as_array_mut().unwrap().push(json!({
+        "id": NODE_C, "name": "switch", "type": switch_type, "config": {},
+    }));
+    document["nodes"].as_array_mut().unwrap().push(json!({
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "name": "view",
+        "type": format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:program"),
+        "config": {},
+    }));
+    if linked {
+        document["links"].as_array_mut().unwrap().push(json!({
+            "source": { "node": "switch", "port": "result" },
+            "target": { "node": "view", "port": "in1" },
+        }));
+    }
+    document
+}
+
+/// A saved document holding a link the engine cannot wire, a function node island into a view of
+/// the project, which runs in the app process and which the function node pool does not
+/// evaluate, reconciles with that link set aside, shown failed on the link and made
+/// nowhere, and the stream plays every other node and link; an edit keeps the link set aside,
+/// and taking it out of the document takes it off the graph.
+///
+/// Mental-revert: connecting a saved graph's link as one made now refuses the reconcile; leaving
+/// it to the commit fails the stream at its start.
+#[test]
+#[serial]
+fn a_saved_link_the_engine_cannot_wire_is_set_aside_and_the_stream_plays_without_it() {
+    ensure_test_mocks_registered();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    crate::core::test_support::a_view_reading_records_in(project_directory.path(), "program");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = a_stream_loaded_from(
+        &runner,
+        &project_directory,
+        a_document_of_a_linked_into_b(
+            "source",
+            "program",
+            MockInputOnlyNode::node_class_import_path(),
+        ),
+    );
+    let switch_type = a_function_node_type_of_records_registered_in(&stream);
+    let the_wired_link = vec![format!("{NODE_A}/out1 -> {NODE_B}/in1")];
+    let the_link_set_aside = |stream: &LoadedStreamInThisRuntime| -> Vec<Value> {
+        stream.to_json().unwrap()["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|link| link["state"] == "error")
+            .cloned()
+            .collect()
+    };
+
+    reconcile_making(
+        &stream,
+        a_document_feeding_an_island_into_the_app_process(&switch_type, true),
+        LinksAReconcileMakes::EachAsASavedGraphsLink,
+    )
+    .expect("a saved document holding a link the engine cannot wire reconciles");
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_wired_link);
+    let set_aside = the_link_set_aside(&stream);
+    assert_eq!(set_aside.len(), 1, "{set_aside:?}");
+    assert_eq!(set_aside[0]["source"]["node"], "switch");
+    assert!(
+        set_aside[0]["error_reason"]
+            .as_str()
+            .is_some_and(|why| why.contains("runs in the app process")),
+        "{set_aside:?}"
+    );
+    assert_eq!(
+        stream.why_its_graph_as_held_keeps_this_stream_from_playing(),
+        None
+    );
+
+    stream
+        .start()
+        .expect("the stream plays without the link set aside");
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_wired_link);
+    assert_eq!(the_link_set_aside(&stream).len(), 1);
+
+    reconcile_making(
+        &stream,
+        a_document_feeding_an_island_into_the_app_process(&switch_type, true),
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+    )
+    .expect("an edit keeps the link the stream held set aside");
+    assert_eq!(the_link_set_aside(&stream).len(), 1);
+
+    reconcile_making(
+        &stream,
+        a_document_feeding_an_island_into_the_app_process(&switch_type, false),
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+    )
+    .expect("taking the link out is an edit");
+    assert!(the_link_set_aside(&stream).is_empty());
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_wired_link);
+    stream.stop().expect("the stream stops");
 }

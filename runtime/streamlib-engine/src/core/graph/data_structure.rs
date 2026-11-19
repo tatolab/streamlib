@@ -10,6 +10,7 @@ use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
 use super::nodes::{GraphNode, NodeRunId};
+use super::{GraphEdgeWithComponents, PendingDeletionComponent};
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
@@ -144,6 +145,18 @@ impl Graph {
             .find(|node| node.node_uuid == node_uuid)
     }
 
+    /// Whether `link` stands: neither it nor a node it joins is pending deletion, so an edit
+    /// judges the graph as it is once what is pending deletion leaves.
+    pub fn stands(&self, link: &Link) -> bool {
+        let the_node_stands = |node_run_id: &NodeRunId| {
+            self.node_of_the_run_id(node_run_id)
+                .is_none_or(GraphNode::stands)
+        };
+        !link.has::<PendingDeletionComponent>()
+            && the_node_stands(link.source().node_run_id())
+            && the_node_stands(link.to_port().node_run_id())
+    }
+
     /// The link feeding input `input` of the node `node_run_id`.
     pub fn link_into(&self, node_run_id: &NodeRunId, input: &str) -> Option<&Link> {
         self.digraph.edge_weights().find(|link| {
@@ -181,17 +194,36 @@ impl Graph {
     }
 
     /// Drop the node `node_run_id` and the links into and out of it, then forget the values set
-    /// live on its inputs as `why` it leaves says; whether it was dropped.
+    /// live on its inputs as `why` it leaves says; whether it was dropped. A node the graph
+    /// still holds under the same UUID, one that replaced it while it was pending deletion,
+    /// keeps the value set live on each input that takes the values the leaving node's did; an
+    /// input whose declaration changed, such as its pin type, reads no value set on the one
+    /// before.
     #[must_use]
     pub fn drop_the_node(&mut self, node_run_id: &NodeRunId, why: WhyTheNodeLeaves) -> bool {
-        let node_uuid = self
+        let leaving = self
             .traversal()
             .v(node_run_id)
             .first()
-            .map(|node| node.node_uuid);
+            .map(|node| (node.node_uuid, node.ports.inputs.clone()));
         let dropped = !self.traversal_mut().v(node_run_id).drop().exists();
-        if dropped && let Some(node_uuid) = node_uuid {
-            self.live_input_values.forget_the_node(node_uuid, why);
+        if dropped && let Some((node_uuid, inputs_of_the_node_leaving)) = leaving {
+            let inputs_its_replacement_declares_alike: HashSet<String> = self
+                .node_by_uuid(node_uuid)
+                .into_iter()
+                .flat_map(|replacement| replacement.ports.inputs.iter())
+                .filter(|input| {
+                    inputs_of_the_node_leaving
+                        .iter()
+                        .any(|leaving| leaving.takes_the_values_it_takes(input))
+                })
+                .map(|input| input.name.clone())
+                .collect();
+            self.live_input_values.forget_the_node_but_the_inputs(
+                node_uuid,
+                why,
+                &inputs_its_replacement_declares_alike,
+            );
         }
         dropped
     }
@@ -223,6 +255,11 @@ impl Graph {
             &self.node_types_this_stream_resolves,
             &self.node_names_the_graph_only_nodes_hold,
         )
+    }
+
+    /// The names the graph's graph-only nodes hold, which no node the graph runs may take.
+    pub fn node_names_the_graph_only_nodes_hold(&self) -> &HashSet<String> {
+        &self.node_names_the_graph_only_nodes_hold
     }
 
     /// Record the cast names of the nodes the loaded graph drew that the

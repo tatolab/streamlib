@@ -771,6 +771,56 @@ pub(crate) fn wait_for_every_gpu_submission_made_so_far(gpu: &crate::core::conte
     );
 }
 
+/// A view of a project, of the type `view_type`, reading records on `in1`, as the project's
+/// `views/` folder would bring it: a node type that runs in the app process and that the
+/// stream's function node pool does not evaluate.
+pub(crate) fn a_view_of_a_project_reading_records(
+    view_type: &str,
+) -> streamlib_project_repository::ProjectViewFolderRead {
+    let manifest = a_view_manifest_reading_records();
+    streamlib_project_repository::ProjectViewFolderRead {
+        view_type: view_type.to_owned(),
+        brought_by: streamlib_project_repository::ProjectBringingAView {
+            project: uuid::Uuid::nil(),
+            project_name: "a-project-bringing-a-view".to_owned(),
+            import_folder: None,
+        },
+        folder: std::path::PathBuf::from("/a-project-bringing-a-view/views/program"),
+        manifest: streamlib_project_repository::read_tatolab_view_manifest(&manifest),
+        manifest_as_written: Some(manifest),
+    }
+}
+
+/// Write into `project_directory`'s `views/` the view `view_folder_name`, reading records on
+/// `in1`, which the project then brings as a node type that runs in the app process.
+pub(crate) fn a_view_reading_records_in(
+    project_directory: &std::path::Path,
+    view_folder_name: &str,
+) {
+    let folder = project_directory
+        .join(streamlib_project_repository::PROJECT_VIEWS_DIRECTORY)
+        .join(view_folder_name);
+    streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        &folder,
+        streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+    )
+    .expect("the view's folder");
+    std::fs::write(
+        folder.join(streamlib_project_repository::TATOLAB_VIEW_MANIFEST_FILE_NAME),
+        serde_json::to_vec(&a_view_manifest_reading_records()).expect("the manifest serializes"),
+    )
+    .expect("the view's manifest");
+}
+
+fn a_view_manifest_reading_records() -> serde_json::Value {
+    serde_json::json!({
+        "contract": "1.0", "title": "Program", "description": "What plays out.",
+        "entry": "index.html", "placement": "node",
+        "inputs": [{ "name": "in1", "family": "records", "description": "What it shows." }],
+        "outputs": []
+    })
+}
+
 #[cfg(test)]
 mod rig_only_capability_skip_closed_list_tests {
     use super::rig_only_capability_skip::{
