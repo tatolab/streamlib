@@ -57,6 +57,7 @@ use crate::project_transaction::{
 };
 use crate::stream_document_upgrade::recorded_transaction::upgrade_recorded_transaction_in_place;
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_nodes_input_values_reference};
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 mod asset_effects;
 mod asset_operations;
@@ -285,7 +286,7 @@ fn the_nearest_existing_ancestor_resolved(
 
 /// Copy the folder `source` and everything under it to `destination`, which must not exist.
 fn copy_a_folder_whole(source: &Path, destination: &Path) -> Result<(), ProjectRepositoryRefusal> {
-    std::fs::create_dir_all(destination)?;
+    create_directory_and_its_missing_parents_at_the_process_umask(destination)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
         let copied_to = destination.join(entry.file_name());
@@ -553,7 +554,7 @@ fn apply_operation_to_imports(
 
 fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
     }
     let partial = path.with_extension(format!("partial-{}", Uuid::new_v4()));
     if let Err(not_written) = std::fs::write(&partial, bytes) {

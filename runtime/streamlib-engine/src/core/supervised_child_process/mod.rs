@@ -328,7 +328,7 @@ fn start_the_child(launch: &SupervisedChildProcessLaunch) -> std::io::Result<Chi
         .stderr(Stdio::piped());
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
     give_the_child_no_descriptor_beyond_stdio(&mut command);
-    let mut child = command.spawn()?;
+    let mut child = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(&mut command)?;
     if let Some(standard_output) = child.stdout.take() {
         forward_the_childs_log_lines(&launch.child_name_for_the_log, standard_output);
     }

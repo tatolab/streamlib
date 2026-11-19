@@ -53,18 +53,11 @@ pub fn create_directory_and_its_missing_parents_at_mode(path: &Path, mode: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER, mode_of};
 
     /// Set only in the child process the umask test re-runs itself in.
     const UMASK_CHILD_SCRATCH_DIRECTORY_ENVIRONMENT_VARIABLE: &str =
         "STREAMLIB_TEST_UMASK_CHILD_SCRATCH_DIRECTORY";
-
-    /// The umask iceoryx2 0.10 holds the whole process under while it binds a
-    /// listener's socket.
-    const UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER: libc::mode_t = 0o177;
-
-    fn mode_of(path: &Path) -> u32 {
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
-    }
 
     /// Under the umask iceoryx2 binds a listener with, a plain `create_dir`
     /// comes out 0o600 — no owner search bit, so a plain `create_dir_all`

@@ -7,6 +7,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::core::{Error, Result};
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::{
+    create_directory_and_its_missing_parents_at_the_process_umask,
+    create_directory_at_the_process_umask,
+};
 
 /// How many names are drawn before the draw is refused.
 const NEW_PROJECT_NAME_DRAWS_BEFORE_REFUSING: usize = 8;
@@ -64,7 +68,8 @@ const NEW_PROJECT_NAME_NOUNS: &[&str] = &[
 /// root, created when missing.
 pub(crate) fn draw_new_project_directory_under_the_streams_root() -> Result<PathBuf> {
     let streams_root = the_streams_root_new_projects_are_drawn_under()?;
-    std::fs::create_dir_all(&streams_root).map_err(|not_created| {
+    let made = create_directory_and_its_missing_parents_at_the_process_umask(&streams_root);
+    made.map_err(|not_created| {
         Error::Configuration(format!(
             "the streams root {} could not be created, so no project was created: {not_created}",
             streams_root.display()
@@ -81,7 +86,7 @@ pub(crate) fn draw_new_project_directory_under(streams_root: &Path) -> Result<Pa
     let mut last_refusal = None;
     for _ in 0..NEW_PROJECT_NAME_DRAWS_BEFORE_REFUSING {
         let project_directory = streams_root.join(a_new_project_name_drawn_at_random());
-        match std::fs::create_dir(&project_directory) {
+        match create_directory_at_the_process_umask(&project_directory) {
             Ok(()) => return Ok(project_directory),
             Err(not_created) => last_refusal = Some(not_created),
         }
