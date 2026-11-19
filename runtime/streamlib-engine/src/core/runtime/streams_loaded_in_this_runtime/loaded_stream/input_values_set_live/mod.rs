@@ -5,7 +5,8 @@
 //! values under the graph's read lock, handed to each node set on alone, wherever it is hosted,
 //! with the lock released, and announced as `InputValueDidChange`, so no node, link or port
 //! changes and nothing compiles. A set is whole or not at all: one a node or island is not handed
-//! leaves every value as it was.
+//! leaves every value as it was. A set of no value on an unlinked Trigger input fires it instead,
+//! as `trigger_fires_set_live` says.
 
 use std::collections::HashSet;
 
@@ -20,6 +21,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortFamily};
+use crate::core::error::WhyANodeOfAStreamIsNotRunning;
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
@@ -33,6 +35,12 @@ use crate::core::graph::{Graph, GraphNode, NodeRunId};
 use crate::core::nodes::{NodeTypesOneStreamResolves, is_the_input_of_an_output_a_panel_writes};
 use crate::core::pubsub::RuntimeEvent;
 
+mod trigger_fires_set_live;
+
+use trigger_fires_set_live::{
+    TriggerFiresDelivery, is_a_fire, refuse_a_fire_no_running_node_reads,
+};
+
 impl LoadedStreamInThisRuntime {
     /// Set each of `sets` live, under its input's current name, apart from the graph, when each
     /// is on an input its node reads each run; none when one is held on the graph, so the set
@@ -44,10 +52,11 @@ impl LoadedStreamInThisRuntime {
         sets: &[InputValueToSetLive],
     ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal> {
         self.with_no_other_input_value_change(|| {
-            let playback = if self.is_held_stopped() {
-                PlaybackOfTheStreamSetOn::Stopped
-            } else {
-                PlaybackOfTheStreamSetOn::NotStopped
+            let playback = match self.why_a_node_of_this_stream_that_has_not_failed_does_not_run() {
+                WhyANodeOfAStreamIsNotRunning::PlaybackStopped => PlaybackOfTheStreamSetOn::Stopped,
+                why_a_node_not_built_does_not_run => PlaybackOfTheStreamSetOn::NotStopped {
+                    why_a_node_not_built_does_not_run,
+                },
             };
             let Some(held_live) = set_the_input_values_live_and_hand_each_node_its_own(
                 self.compiler.graph_lock(),
@@ -92,24 +101,28 @@ fn the_sets_under_the_current_input_names(
 }
 
 /// Whether the playback of the stream a live set is made on is stopped, so a `reset` input
-/// holds no live value.
+/// holds no live value and no node runs to read a fire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlaybackOfTheStreamSetOn {
     /// Stopped, its graph held to read and edit: a live set on a `kept` input is held for the
-    /// next Play, and one on a `reset` input refused.
+    /// next Play, and one on a `reset` input refused, as is a fire.
     Stopped,
-    /// Playing, paused or starting.
-    NotStopped,
+    /// Playing, paused or starting; a node not built yet does not run for the reason given.
+    NotStopped {
+        why_a_node_not_built_does_not_run: WhyANodeOfAStreamIsNotRunning,
+    },
 }
 
 /// What a live set held apart from the graph made: each value set, the change of each input to
-/// announce, how each node set on outside an island is handed its values, and the function nodes
-/// set on that run inside an island, whose islands are handed again under the graph's write lock.
+/// announce, how each node set on outside an island is handed its values, the function nodes
+/// set on that run inside an island, whose islands are handed again under the graph's write lock,
+/// and how each node fired takes its fires.
 pub(crate) struct InputValuesHeldLive {
     pub(crate) made: Vec<InputValueSetLive>,
     pub(crate) changes_announced: Vec<RuntimeEvent>,
     deliveries: Vec<UnlinkedInputValuesDelivery>,
     function_nodes_read_inside_an_island: Vec<NodeRunId>,
+    fires: Vec<TriggerFiresDelivery>,
 }
 
 /// Set each of `sets` live, under its input's current name, in the live values of the graph
@@ -117,7 +130,9 @@ pub(crate) struct InputValuesHeldLive {
 /// on its values, its helper or itself with the lock released and its islands under the write
 /// lock; `None`, with nothing set, when one is held on the graph. A value its input does not
 /// take, and a value on a `reset` input while `playback` is stopped, is refused before any is
-/// set, and a node or island not handed its values leaves every live value as it was.
+/// set, and a node or island not handed its values leaves every live value as it was. Each fire
+/// is queued once every value is handed over; a fire not queued puts the values back, though a
+/// fire queued before it stays queued.
 pub(crate) fn set_the_input_values_live_and_hand_each_node_its_own(
     graph: &RwLock<Graph>,
     sets: &[InputValueToSetLive],
@@ -141,30 +156,38 @@ pub(crate) fn set_the_input_values_live_and_hand_each_node_its_own(
         hand_back_each(handed_back);
         return Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over));
     }
-    if held_live.function_nodes_read_inside_an_island.is_empty() {
-        return Ok(Some(held_live));
+    if !held_live.function_nodes_read_inside_an_island.is_empty() {
+        let handed_to_each_island = hand_each_island_again_or_put_the_values_back(
+            &mut graph.write(),
+            &held_live.function_nodes_read_inside_an_island,
+            |graph| put_back_the_live_set(graph, sets, &held_live.made),
+        );
+        if let Err((not_handed_over, handed_back)) = handed_to_each_island {
+            hand_back_each(handed_back);
+            return Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over));
+        }
     }
-    let handed_to_each_island = hand_each_island_again_or_put_the_values_back(
-        &mut graph.write(),
-        &held_live.function_nodes_read_inside_an_island,
-        |graph| put_back_the_live_set(graph, sets, &held_live.made),
-    );
-    if let Err((not_handed_over, handed_back)) = handed_to_each_island {
+    let fired = std::mem::take(&mut held_live.fires)
+        .into_iter()
+        .try_for_each(TriggerFiresDelivery::hand_over);
+    if let Err(not_fired) = fired {
+        let handed_back = put_back_the_live_set(&graph.read(), sets, &held_live.made);
         hand_back_each(handed_back);
-        return Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over));
+        return Err(not_fired);
     }
     Ok(Some(held_live))
 }
 
 /// Refuse `sets` when two of them name one input of one node, at the second, whatever else
-/// they set: the second value would replace the first before the node is handed either.
+/// they set: the second value would replace the first before the node is handed either. A fire
+/// replaces nothing, so an input fired twice fires twice.
 fn refuse_an_input_set_twice(
     graph: &Graph,
     sets: &[InputValueToSetLive],
 ) -> std::result::Result<(), LiveInputValueSetRefusal> {
     let mut inputs_set = HashSet::with_capacity(sets.len());
     for (set_index, set) in sets.iter().enumerate() {
-        if !inputs_set.insert((set.node, set.input.as_str())) {
+        if !is_a_fire(graph, set) && !inputs_set.insert((set.node, set.input.as_str())) {
             let node_name = graph
                 .node_by_uuid(set.node)
                 .map_or_else(|| set.node.to_string(), |node| node.display_name.clone());
@@ -178,20 +201,40 @@ fn refuse_an_input_set_twice(
 }
 
 /// Set each of `sets` live in `graph`'s live values and answer how each node set on takes its
-/// values; `None`, with nothing set, when one is held on the graph. A value its input does not
-/// take, a second value on one input of one node, and a value on a `reset` input while
-/// `playback` is stopped, is refused before any is set.
+/// values and each node fired its fires; `None`, with nothing set, when one is held on the graph.
+/// A value its input does not take, a second value on one input of one node, a value on a
+/// `reset` input while `playback` is stopped, and a fire no running node reads, is refused
+/// before any is set.
 fn set_the_input_values_live(
     graph: &Graph,
     sets: &[InputValueToSetLive],
     playback: PlaybackOfTheStreamSetOn,
 ) -> std::result::Result<Option<InputValuesHeldLive>, LiveInputValueSetRefusal> {
     refuse_an_input_set_twice(graph, sets)?;
+    let why_a_node_not_built_does_not_run = match playback {
+        PlaybackOfTheStreamSetOn::Stopped => WhyANodeOfAStreamIsNotRunning::PlaybackStopped,
+        PlaybackOfTheStreamSetOn::NotStopped {
+            why_a_node_not_built_does_not_run,
+        } => why_a_node_not_built_does_not_run,
+    };
+    let mut value_sets: Vec<(usize, &InputValueToSetLive)> = Vec::with_capacity(sets.len());
     let mut set_on_each: Vec<&GraphNode> = Vec::with_capacity(sets.len());
+    let mut fires: Vec<(usize, &InputValueToSetLive)> = Vec::new();
     for (set_index, set) in sets.iter().enumerate() {
         let Some(set_on) = graph.node_by_uuid(set.node) else {
             return Ok(None);
         };
+        if is_a_fire(graph, set) {
+            refuse_a_fire_no_running_node_reads(
+                graph,
+                set_on,
+                set_index,
+                set,
+                why_a_node_not_built_does_not_run,
+            )?;
+            fires.push((set_index, set));
+            continue;
+        }
         if is_held_on_the_graph(graph, set_on, &set.input) {
             return Ok(None);
         }
@@ -220,20 +263,21 @@ fn set_the_input_values_live(
             set_index,
             refusal,
         })?;
+        value_sets.push((set_index, set));
         set_on_each.push(set_on);
     }
     if playback == PlaybackOfTheStreamSetOn::Stopped {
         refuse_a_value_on_a_reset_input_while_stopped(
             graph.node_types_this_stream_resolves(),
-            sets,
+            &value_sets,
             &set_on_each,
         )?;
     }
 
-    let made: Vec<InputValueSetLive> = sets
+    let mut value_sets_made = value_sets
         .iter()
         .zip(&set_on_each)
-        .map(|(set, set_on)| InputValueSetLive {
+        .map(|((_, set), set_on)| InputValueSetLive {
             input: set.input.clone(),
             live_value_before: graph.live_input_values().set(
                 set.node,
@@ -243,12 +287,28 @@ fn set_the_input_values_live(
             ),
             saved_value: set_on.pins.get(&set.input).cloned(),
             linked_from: the_output_feeding_the_input(graph, set_on, &set.input),
+        });
+    let made: Vec<InputValueSetLive> = sets
+        .iter()
+        .map(|set| {
+            if is_a_fire(graph, set) {
+                InputValueSetLive {
+                    input: set.input.clone(),
+                    live_value_before: None,
+                    saved_value: None,
+                    linked_from: None,
+                }
+            } else {
+                value_sets_made
+                    .next()
+                    .expect("one value made for each set that is no fire")
+            }
         })
         .collect();
-    let changes_announced = sets
+    let changes_announced = value_sets
         .iter()
         .zip(&set_on_each)
-        .filter_map(|(set, set_on)| the_input_value_change(graph, set_on, &set.input))
+        .filter_map(|((_, set), set_on)| the_input_value_change(graph, set_on, &set.input))
         .collect();
     let mut deliveries = Vec::new();
     let mut function_nodes_read_inside_an_island = Vec::new();
@@ -259,9 +319,10 @@ fn set_the_input_values_live(
             }
             delivery => deliveries.push(
                 delivery.naming_the_inputs_set_live(
-                    sets.iter()
-                        .filter(|set| set.node == set_on.node_uuid)
-                        .map(|set| set.input.clone())
+                    value_sets
+                        .iter()
+                        .filter(|(_, set)| set.node == set_on.node_uuid)
+                        .map(|(_, set)| set.input.clone())
                         .collect(),
                 ),
             ),
@@ -272,6 +333,7 @@ fn set_the_input_values_live(
         changes_announced,
         deliveries,
         function_nodes_read_inside_an_island,
+        fires: TriggerFiresDelivery::of_each_node_fired(graph, &fires),
     }))
 }
 
@@ -359,23 +421,20 @@ fn refuse_a_value_its_own_helper_does_not_read(
     })
 }
 
-/// Refuse the first of `sets`, each set on the node `set_on_each` names at its index, that sets
-/// a value on a `reset` input: the stream's playback is stopped, and a `reset` input holds no
-/// live value until it plays. Taking a live value off is no refusal, there being none to take.
+/// Refuse the first of `sets`, each with its index among those asked and set on the node
+/// `set_on_each` names at its place, that sets a value on a `reset` input: the stream's playback
+/// is stopped, and a `reset` input holds no live value until it plays. Taking a live value off is
+/// no refusal, there being none to take.
 fn refuse_a_value_on_a_reset_input_while_stopped(
     node_types: &NodeTypesOneStreamResolves,
-    sets: &[InputValueToSetLive],
+    sets: &[(usize, &InputValueToSetLive)],
     set_on_each: &[&GraphNode],
 ) -> std::result::Result<(), LiveInputValueSetRefusal> {
-    let refused = sets
-        .iter()
-        .zip(set_on_each)
-        .enumerate()
-        .find(|(_, (set, set_on))| {
-            set.value.is_some()
-                && the_lifetime_of_the_input(set_on, &set.input) == NodeValueLifetime::Reset
-        });
-    let Some((set_index, (set, set_on))) = refused else {
+    let refused = sets.iter().zip(set_on_each).find(|((_, set), set_on)| {
+        set.value.is_some()
+            && the_lifetime_of_the_input(set_on, &set.input) == NodeValueLifetime::Reset
+    });
+    let Some(((set_index, set), set_on)) = refused else {
         return Ok(());
     };
     let what_it_returns_to =
@@ -385,7 +444,7 @@ fn refuse_a_value_on_a_reset_input_while_stopped(
             "its saved value"
         };
     Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
-        set_index,
+        set_index: *set_index,
         runtime_words: format!(
             "input `{}` of `{}` returns to {what_it_returns_to} at Stop, so it keeps no value set \
              live while the stream is stopped; `start_playback` plays it",
@@ -406,7 +465,7 @@ fn each_once<'graph>(nodes: &[&'graph GraphNode]) -> Vec<&'graph GraphNode> {
 }
 
 /// Set back, last first, the live value each of `sets` replaced, as `made` holds it, skipping a
-/// node the graph no longer holds; answers how each node set on outside an island is handed back
+/// fire, which replaced none, and a node the graph no longer holds; answers how each node set on outside an island is handed back
 /// the values it reads now.
 fn put_back_the_live_set(
     graph: &Graph,
@@ -418,6 +477,9 @@ fn put_back_the_live_set(
         let Some(set_on) = graph.node_by_uuid(set.node) else {
             continue;
         };
+        if is_a_fire(graph, set) {
+            continue;
+        }
         graph.live_input_values().set(
             set.node,
             &set.input,
@@ -448,3 +510,5 @@ pub(crate) fn the_output_feeding_the_input(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trigger_fires_set_live_tests;

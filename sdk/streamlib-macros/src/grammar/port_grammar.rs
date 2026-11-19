@@ -289,6 +289,11 @@ pub(super) fn parse_port(
     };
 
     if direction == PortDirection::Input {
+        if let (Some(stated), Some(pin)) = (&delivery_profile, &pin)
+            && let Some(refusal) = pin.refusal_of_its_stated_delivery_profile(&name, stated)
+        {
+            return Err(syn::Error::new(name_lit.span(), refusal));
+        }
         let delivery_profile_read_by = delivery_profile.as_deref().or_else(|| {
             pin.as_ref()
                 .and_then(PinDeclaration::default_input_delivery_profile)
@@ -476,7 +481,7 @@ fn texture_of_the_formats_stated(
 
 /// Each pin type a Rust port declares by name alone, taking any size, format or layout: the
 /// types whose family carries them today as it carries that family's messages.
-const RUST_DECLARED_PIN_TYPES: [(&str, PinType); 6] = [
+const RUST_DECLARED_PIN_TYPES: [(&str, PinType); 7] = [
     ("Boolean", PinType::Boolean {}),
     ("Integer", PinType::Integer { exact_size: None }),
     ("Float", PinType::Float { exact_size: None }),
@@ -488,6 +493,7 @@ const RUST_DECLARED_PIN_TYPES: [(&str, PinType); 6] = [
     ),
     ("Audio", PinType::Audio {}),
     ("Tensor", PinType::Tensor {}),
+    ("Trigger", PinType::Trigger {}),
 ];
 
 fn rendered_rust_declared_pin_type_names() -> String {

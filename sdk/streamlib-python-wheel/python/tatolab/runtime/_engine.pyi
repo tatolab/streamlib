@@ -42,6 +42,7 @@ __all__ = [
     "note_stop_request_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
+    "queue_a_fire_of_each_trigger_input",
     "read_each_unlinked_input_port_as_its_pin_value",
     "read_the_control_value_at_an_input_port",
     "read_the_parts_at_an_input_port",
@@ -198,6 +199,13 @@ def read_each_unlinked_input_port_as_its_pin_value(
     pin_values: dict[str, float],
 ) -> None:
     """Read each input port of `pin_values` as its pin value while no link feeds it, in place of the pin values read before; a port left out reads only its links again."""
+
+def queue_a_fire_of_each_trigger_input(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    fired: list[str],
+) -> None:
+    """Queue one fire of each Trigger input of `fired`, in order and stamped with this helper's stream time, for its node to read as a Trigger message; an input named twice fires twice."""
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
     """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.
