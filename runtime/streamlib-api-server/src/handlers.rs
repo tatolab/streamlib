@@ -207,7 +207,7 @@ pub(crate) async fn machine_wide_graph_json(
             Err(Error::NotFound(_)) => continue,
             Err(other) => return Err(other),
         };
-        stream_graphs.push(stream_operations.to_json_async().await?);
+        stream_graphs.push(stream_operations.the_graph_as_answered_async().await?);
     }
     give_the_stream_graphs_their_condition(operations_on_the_loaded_streams, &mut stream_graphs)
         .await?;
@@ -357,7 +357,7 @@ async fn the_stream_graph_with_its_condition(
     state: &AppState,
     stream_operations: &dyn RuntimeOperations,
 ) -> Result<Value> {
-    let mut graph = stream_operations.to_json_async().await?;
+    let mut graph = stream_operations.the_graph_as_answered_async().await?;
     give_the_stream_graphs_their_condition(
         &state.operations_on_the_loaded_streams,
         std::slice::from_mut(&mut graph),
@@ -450,6 +450,9 @@ pub(crate) mod router_surface_tests {
     impl RuntimeOperations for ControlPlaneRouterStubRuntime {
         fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
             Box::pin(async { Ok(serde_json::json!({})) })
+        }
+        fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+            self.to_json_async()
         }
         fn to_json(&self) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))

@@ -53,30 +53,31 @@ impl fmt::Display for StreamFailure {
 }
 
 /// The condition of a stream with `load` and `playback`: failed for `failure` when it has one,
-/// its diagnostic first, else degraded while any of `node_diagnostics` holds, else healthy. A
-/// failure a node already carries as its own diagnostic is answered by that node's alone.
+/// its diagnostic first, else degraded while any of `diagnostics_while_loaded` — each of its
+/// nodes', then each edit its document holds not live — holds, else healthy. A failure a node
+/// already carries as its own diagnostic is answered by that node's alone.
 pub(crate) fn the_condition_of_a_stream(
     load: StreamLoadOnTheWire,
     playback: StreamPlaybackOnTheWire,
     failure: Option<DiagnosticOnTheWire>,
-    node_diagnostics: Vec<DiagnosticOnTheWire>,
+    diagnostics_while_loaded: Vec<DiagnosticOnTheWire>,
 ) -> StreamConditionOnTheWire {
     let health = if failure.is_some() {
         StreamHealthOnTheWire::Failed
-    } else if node_diagnostics.is_empty() {
+    } else if diagnostics_while_loaded.is_empty() {
         StreamHealthOnTheWire::Healthy
     } else {
         StreamHealthOnTheWire::Degraded
     };
     let failure_a_node_carries = |failure: &DiagnosticOnTheWire| {
-        node_diagnostics
+        diagnostics_while_loaded
             .iter()
             .any(|of_a_node| of_a_node.kind == failure.kind && of_a_node.place == failure.place)
     };
     let diagnostics = failure
         .filter(|failure| !failure_a_node_carries(failure))
         .into_iter()
-        .chain(node_diagnostics)
+        .chain(diagnostics_while_loaded)
         .collect();
     StreamConditionOnTheWire {
         load,

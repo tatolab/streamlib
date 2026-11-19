@@ -4,8 +4,8 @@
 """Read the node types and graph generators a module declares from its source, never running it.
 
 A module is parsed with `ast` and its decorators are matched against the names it imports
-from `tatolab.stream`: `@node.process` classes, `@node.function` and `@node.shader`
-functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
+from `tatolab.stream`: `@node.process` classes, `@node.function`, bare `@node` and
+`@node.shader` functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
 node's `@node.meta` beside its kind decorator. A
 port is listed where the declaration states it in source; one whose family is computed at
 import is listed with no family, and a node whose ports only its native half knows is listed
@@ -30,6 +30,7 @@ __all__ = [
 
 SDK_MODULE_NAME = "tatolab.stream"
 
+TYPED_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node"
 PROCESS_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.process"
 FUNCTION_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.function"
 SHADER_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.shader"
@@ -193,14 +194,17 @@ class _ModuleDeclarationReading:
         qualname = f"{qualname_prefix}{function.name}"
         if at_module_scope and self._decorated_with(function, GRAPH_GENERATOR_DECORATOR) is not None:
             self.graph_generators.append(self._graph_generator(function, qualname))
-        for decorator_name, kind in (
-            (FUNCTION_NODE_DECORATOR, "function"),
-            (SHADER_NODE_DECORATOR, "shader"),
+        for decorator_name, kind, reads_pin_types in (
+            (FUNCTION_NODE_DECORATOR, "function", False),
+            (TYPED_NODE_DECORATOR, "function", True),
+            (SHADER_NODE_DECORATOR, "shader", False),
         ):
             decorator = self._decorated_with(function, decorator_name)
             if decorator is not None:
                 self.node_types.append(
-                    self._function_or_shader_node_type(function, qualname, kind)
+                    self._function_or_shader_node_type(
+                        function, qualname, kind, reads_pin_types=reads_pin_types
+                    )
                 )
 
     def _decorated_with(
@@ -265,6 +269,8 @@ class _ModuleDeclarationReading:
         function: ast.FunctionDef | ast.AsyncFunctionDef,
         qualname: str,
         kind: str,
+        *,
+        reads_pin_types: bool,
     ) -> dict[str, Any]:
         inputs = [
             self._function_port(parameter.arg, parameter.annotation, pin_default=default)
@@ -277,10 +283,12 @@ class _ModuleDeclarationReading:
             kind,
             declaration=function,
             inputs=inputs,
-            outputs=self._function_outputs(function.returns),
+            outputs=self._function_outputs(function.returns, reads_pin_types=reads_pin_types),
         )
 
-    def _function_outputs(self, return_annotation: Optional[ast.expr]) -> Optional[list[dict[str, Any]]]:
+    def _function_outputs(
+        self, return_annotation: Optional[ast.expr], *, reads_pin_types: bool
+    ) -> Optional[list[dict[str, Any]]]:
         if return_annotation is None:
             return None
         output_annotation = return_annotation
@@ -292,7 +300,12 @@ class _ModuleDeclarationReading:
             if not stateful_arguments:
                 return None
             output_annotation = stateful_arguments[0]
-        record_of_outputs = self._classes_by_name.get(_annotated_type_name(output_annotation) or "")
+        # Under the family grammar a returned dataclass is one output per field.
+        record_of_outputs = (
+            None
+            if reads_pin_types
+            else self._classes_by_name.get(_annotated_type_name(output_annotation) or "")
+        )
         if record_of_outputs is not None:
             return [
                 self._function_port(field.target.id, field.annotation)

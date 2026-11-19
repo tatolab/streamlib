@@ -326,6 +326,36 @@ def test_a_node_meta_is_read_from_source_above_or_below_the_decorator_of_every_k
     assert node_type["description"] == "Tints a frame."
 
 
+def test_a_function_under_bare_node_is_listed_as_a_function_node_returning_one_output() -> None:
+    module_source = "\n".join(
+        [
+            "from dataclasses import dataclass",
+            "from typing import Annotated",
+            "from tatolab.stream import NumberRange, NumberUnit, node",
+            "",
+            "@dataclass(frozen=True)",
+            "class Reading:",
+            "    level: float = 0.0",
+            "",
+            '@node.meta(description="A tone.")',
+            "@node",
+            "def Tone(frequency: Annotated[float, NumberRange(minimum=20.0), NumberUnit('Hz')] = 440.0) -> Reading:",
+            "    return Reading(frequency)",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.tone", "nodes/tone.py", module_source)]
+    )
+
+    (tone,) = read["node_types"]
+    assert (tone["type"], tone["kind"], tone["description"]) == ("nodes.tone:Tone", "function", "A tone.")
+    assert [port["name"] for port in tone["inputs"]] == ["frequency"]
+    assert tone["inputs"][0]["pin_default"] == 440.0
+    assert [port["name"] for port in tone["outputs"]] == ["result"]
+
+
 def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: Path) -> None:
     dependency = {
         "project": "6f1c2a8e-0000-4000-8000-000000000001",

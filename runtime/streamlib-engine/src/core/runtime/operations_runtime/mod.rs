@@ -663,6 +663,18 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn hold_an_edit_its_document_holds_not_live(
+        &self,
+        graph_operation: &streamlib_project_repository::StreamGraphOperation,
+        refusal: &str,
+    ) {
+        LoadedStreamInThisRuntime::hold_an_edit_its_document_holds_not_live(
+            self,
+            graph_operation,
+            refusal,
+        );
+    }
+
     fn what_a_live_connect_makes_of_the_link(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,
@@ -826,6 +838,10 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
 
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
         Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
+    }
+
+    fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+        Box::pin(async move { LoadedStreamInThisRuntime::the_graph_as_answered(self) })
     }
 
     fn open_a_viewer_of_an_output_port(

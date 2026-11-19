@@ -327,6 +327,40 @@ fn a_picture_ports_descriptor_renders_its_pin_type_and_flow_and_no_retired_type_
     assert_carries_no_type_key(&json);
 }
 
+#[test]
+fn a_typed_ports_descriptor_renders_the_range_unit_and_meaning_its_pin_declares() {
+    let mut declaration = crate::core::descriptors::PinDeclaration::exactly(
+        crate::core::descriptors::PinType::Float { exact_size: None },
+    );
+    declaration.annotations.range = Some(crate::core::descriptors::PinNumberRange {
+        minimum: Some(20.0),
+        maximum: Some(20000.0),
+    });
+    declaration.annotations.unit = Some("Hz".to_owned());
+    declaration.annotations.meaning = Some("frequency".to_owned());
+    let port = crate::core::PortDescriptor::new(
+        "frequency",
+        "",
+        true,
+        crate::core::descriptors::PortFamilyDeclaration::of_family(
+            crate::core::descriptors::PortFamily::Channels,
+        ),
+    )
+    .with_pin_declaration(declaration);
+
+    let json = serde_json::to_value(PortDescriptorOutput::from(&port)).unwrap();
+
+    assert_eq!(json["pin_type"]["pin_type"]["type"], "float");
+    assert_eq!(
+        json["annotations"],
+        serde_json::json!({
+            "range": {"minimum": 20.0, "maximum": 20000.0},
+            "unit": "Hz",
+            "meaning": "frequency",
+        })
+    );
+}
+
 fn declared_window_contract() -> crate::core::descriptors::AudioWindowContract {
     crate::core::descriptors::AudioWindowContract::Declaration(
         crate::core::descriptors::AudioWindowContractDeclaredValues {
