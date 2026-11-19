@@ -69,7 +69,11 @@ class ReportsTheLevelsItReads:
         for port in ("green", "spot"):
             block = ctx.inputs.read(port)
             if block is not None:
-                self.latest[port] = float(numpy.from_dlpack(block).reshape(-1)[0])
+                carried = numpy.from_dlpack(block)
+                # A typed number an island hands a Channels input arrives as its f64's bytes.
+                if carried.dtype == numpy.uint8:
+                    carried = numpy.ascontiguousarray(carried).view(numpy.float64)
+                self.latest[port] = float(carried.reshape(-1)[0])
         if not self.reported and len(self.latest) == 2:
             self.reported = True
             log.info("MARKER:COMBINED_LEVELS_READ " + json.dumps(self.latest))
