@@ -52,10 +52,10 @@ struct ContourDials {
 [[vk::push_constant]] ConstantBuffer<ContourDials> dials;
 
 float3 depth_colour(float depth_fraction) {
-    float3 c = lerp(PEACH, CORAL, smoothstep(0.0, 0.08, depth_fraction));
-    c = lerp(c, HOT_PINK, smoothstep(0.06, 0.25, depth_fraction));
-    c = lerp(c, MAGENTA, smoothstep(0.25, 0.55, depth_fraction));
-    return lerp(c, CYAN, smoothstep(0.55, 0.95, depth_fraction));
+    float3 c = lerp(TATO_CREAM, TATO_YELLOW, smoothstep(0.0, 0.08, depth_fraction));
+    c = lerp(c, TATO_PINK, smoothstep(0.06, 0.25, depth_fraction));
+    c = lerp(c, TATO_VIOLET, smoothstep(0.25, 0.55, depth_fraction));
+    return lerp(c, TATO_BLUE, smoothstep(0.55, 0.95, depth_fraction));
 }
 
 // Square-root depth packs the isobaths on the shelf and spreads them in the deep.
@@ -81,15 +81,15 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     if (here.g > 0.5) {
         // Land: a dark violet with the cities' street grids glowing warm.
-        colour = NIGHT * 0.45;
+        colour = TATO_INK * 0.6;
         float2 street = abs(frac(w * float2(160.0, 200.0)) - 0.5);
         float street_line = saturate(1.0 - min(street.x, street.y) * 9.0);
         float twinkle = 0.6 + 0.4 * sin(dials.seconds * 3.0 + hash21(floor(w * 200.0)) * 40.0);
         float lit = saturate(here.b * 1.6) * street_line * twinkle;
-        float3 street_colour = lerp(PEACH, CORAL, hash21(floor(w * 60.0)));
+        float3 street_colour = lerp(TATO_CREAM, TATO_YELLOW, hash21(floor(w * 60.0)));
         colour += street_colour * lit * 1.2;
         // The Everglades and the inland grid: faint, so the coast carries the light.
-        colour += PEACH * 0.05 * street_line * smoothstep(0.0, 30.0, here.a) * step(0.6, hash21(floor(w * 40.0)));
+        colour += TATO_CREAM * 0.05 * street_line * smoothstep(0.0, 30.0, here.a) * step(0.6, hash21(floor(w * 40.0)));
     } else {
         float v = contour_value(here.r);
         float vx = contour_value(relief_at(p + int2(1, 0)).r) - contour_value(relief_at(p - int2(1, 0)).r);
@@ -104,12 +104,12 @@ void main(uint3 id : SV_DispatchThreadID) {
         // A wave of light rolls out from the coast into the deep on every beat.
         float wave = exp(-pow(frac(v * 0.06 - dials.seconds * 0.5) - 0.5, 2.0) * 80.0);
         float pulse = 1.0 + 2.0 * wave * (0.25 + dials.beat);
-        colour = line_colour * line * major * 1.2 * pulse * dials.glow;
+        colour = line_colour * line * major * 0.7 * pulse * dials.glow;
         // The faintest wash of the depth colour, and the shallow banks lit turquoise.
         float shallow = smoothstep(-0.012, -0.001, here.r);
-        colour += line_colour * 0.03 + NIGHT * 0.2 + CYAN * shallow * 0.08;
+        colour += line_colour * 0.03 + DEEP_BAND * 0.22 + TATO_MINT * shallow * 0.08;
     }
-    colour += HOT_PINK * shoreline * 2.2 * dials.glow;
+    colour += TATO_PINK * shoreline * 2.2 * dials.glow;
     contour_layer[id.xy] = float4(colour, 1.0);
 }
 """

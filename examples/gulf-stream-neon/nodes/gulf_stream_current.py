@@ -110,10 +110,11 @@ float2 flow_at(float2 w, float4 here) {
 }
 
 float3 streak_colour(float speed01, float seed) {
-    float3 c = lerp(MAGENTA, HOT_PINK, smoothstep(0.1, 0.5, speed01));
-    c = lerp(c, CORAL, smoothstep(0.5, 0.72, speed01));
-    c = lerp(c, CYAN, smoothstep(0.78, 1.0, speed01));
-    return lerp(c, PEACH, step(0.985, seed));
+    // The Tato current: violet in the slack water, blue as it gathers, mint at the core.
+    float3 c = lerp(TATO_VIOLET, TATO_BLUE, smoothstep(0.1, 0.45, speed01));
+    c = lerp(c, TATO_MINT, smoothstep(0.5, 0.85, speed01));
+    c = lerp(c, TATO_CREAM, smoothstep(0.93, 1.0, speed01) * 0.6);
+    return lerp(c, TATO_YELLOW, step(0.985, seed));
 }
 
 float2 world_to_texel(float2 w) {
@@ -171,7 +172,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float lit = (0.0002 + 0.0028 * speed01 * speed01 * speed01) * fade * (1.0 + 1.8 * dials.beat * speed01) * dials.brightness;
     float3 colour = streak_colour(speed01, seed) * lit;
     float burst_glow = (bursting ? 1.0 : 0.0) * exp(-dials.eddy_age * 0.45) * step(dials.eddy_age, 6.0) * dials.eddy_strength;
-    colour += lerp(CYAN, float3(1.0, 1.0, 1.0), 0.25) * burst_glow * 0.035 * fade;
+    colour += lerp(TATO_MINT, TATO_CREAM, 0.3) * burst_glow * 0.035 * fade;
 
     // The streak spans this step and the one before, so it reads as motion.
     float2 from_texel = world_to_texel(position - velocity * dials.step_seconds);
@@ -204,12 +205,12 @@ class GulfStreamCurrentConfig:
     """GulfStreamCurrent's settings."""
 
     particle_count: int = 2_097_152
-    trail_decay: Annotated[float, NumberRange(minimum=0.0, maximum=0.99)] = 0.86
+    trail_decay: Annotated[float, NumberRange(minimum=0.0, maximum=0.99)] = 0.9273
     turbulence: Annotated[float, NumberRange(minimum=0.0, maximum=5.0)] = 1.0
     time_lapse: Annotated[float, NumberRange(minimum=0.0, maximum=40000.0)] = 9000.0
     brightness: Annotated[float, NumberRange(minimum=0.0, maximum=4.0)] = 1.0
     active_particles: Annotated[int, NumberRange(minimum=1024, maximum=4_194_304)] = 2_097_152
-    step_seconds: float = 1.0 / 30.0
+    step_seconds: float = 1.0 / 60.0
 
 
 @node.meta(
@@ -326,7 +327,8 @@ class GulfStreamCurrent:
                 self.config.time_lapse / METRES_PER_WORLD_UNIT,
                 wind_east,
                 wind_north,
-                self.config.brightness,
+                # Light per step, so the trails glow the same at any frame rate.
+                self.config.brightness * self.config.step_seconds * 30.0,
                 self.eddy[0],
                 self.eddy[1],
                 self.eddy_age,

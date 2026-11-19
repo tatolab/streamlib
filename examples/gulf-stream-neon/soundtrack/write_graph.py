@@ -7,11 +7,14 @@
     python write_graph.py stage
     python write_graph.py take WIDTH HEIGHT FOV OUTPUT [STEPS] [NODE.PORT]
 
+Every graph runs at FPS frames a second (60): a take steps 1/FPS s at a time, so
+1440 steps is the 24 s take, and the current advances and fades per step to match.
+
 `live` is the take's graph on a real-time clock, the picture into Program.
 `stage` is the one to play with in Tato Studio: the picture into the
 Gulf Stream Neon stage view, whose camera and sliders steer it live. It also
 writes `views/stage/stage_graph.js`, the node ids the view's sliders set. `take` records one frame-exact take: a stepped clock that stops
-after STEPS steps (720 is 24 s at 30 fps), the picture into FrameRecorder too,
+after STEPS steps (1440 is 24 s at 60 fps), the picture into FrameRecorder too,
 or any NODE.PORT of the graph instead, to look at one stage.
 """
 
@@ -23,6 +26,10 @@ import uuid
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
+FPS = 60
+STEP_NS = round(1e9 / FPS)
+# The trails keep the same length in seconds at any frame rate: 0.86 a frame at 30.
+TRAIL_DECAY = round(0.86 ** (30 / FPS), 4)
 GRAPH_ASSET = "9e1f3a5c-7b9d-4e2f-8a4c-6e8f0a2c4e61"
 CORE = "imports/core-nodes/core_nodes"
 NAMESPACE = uuid.UUID("5b0f6c2e-8d7a-4f1e-9c3b-2a6e4d8f1c70")
@@ -86,9 +93,9 @@ def graph(
     # The compute nodes: the real seafloor, the real current, the picture.
     add("etopo_seafloor", "nodes.bathymetry_relief:BathymetryRelief", 1, 2)
     if stage:
-        add("hycom_gulf_stream", "nodes.gulf_stream_current:GulfStreamCurrent", 1, 5, particle_count=4_194_304, active_particles=2_097_152)
+        add("hycom_gulf_stream", "nodes.gulf_stream_current:GulfStreamCurrent", 1, 5, particle_count=4_194_304, active_particles=2_097_152, step_seconds=1.0 / FPS, trail_decay=TRAIL_DECAY)
     else:
-        add("hycom_gulf_stream", "nodes.gulf_stream_current:GulfStreamCurrent", 1, 5, particle_count=2_097_152)
+        add("hycom_gulf_stream", "nodes.gulf_stream_current:GulfStreamCurrent", 1, 5, particle_count=2_097_152, step_seconds=1.0 / FPS, trail_decay=TRAIL_DECAY)
     add(
         "neon_horizon",
         "nodes.neon_horizon_renderer:NeonHorizonRenderer",
@@ -186,10 +193,10 @@ def graph(
 
     document: dict = {"asset": GRAPH_ASSET}
     if output is not None:
-        add("frame_recorder", "nodes.frame_recorder:FrameRecorder", 12, 2.5, output_path=output)
+        add("frame_recorder", "nodes.frame_recorder:FrameRecorder", 12, 2.5, output_path=output, frames_per_second=FPS)
         tap_node, tap_port = (tap.split(".") if tap else ("vignette", "result"))
         wire(tap_node, tap_port, "frame_recorder", "program")
-        document["clock"] = {"mode": "stepped", "step_ns": 33_333_333, "pace": None, "stop_after_steps": steps}
+        document["clock"] = {"mode": "stepped", "step_ns": STEP_NS, "pace": None, "stop_after_steps": steps}
     document["links"] = links
     document["nodes"] = nodes
     return document
@@ -225,7 +232,7 @@ def main(arguments: list[str]) -> None:
         document = graph(width, height, fov, None, None)
     else:
         width, height, fov, output = int(arguments[1]), int(arguments[2]), float(arguments[3]), arguments[4]
-        steps = int(arguments[5]) if len(arguments) > 5 else 720
+        steps = int(arguments[5]) if len(arguments) > 5 else 24 * FPS
         tap = arguments[6] if len(arguments) > 6 else None
         document = graph(width, height, fov, output, steps, tap)
     path = PROJECT / "streams" / "main.graph.json"

@@ -33,7 +33,7 @@ class SoundtrackPulseConfig:
     category="Gulf Stream Neon",
     description="The soundtrack heard: its kick envelope and loudness at stream time, as records every compute node pulses on.",
 )
-@node.process(execution="continuous", interval_ms=33)
+@node.process(execution="continuous", interval_ms=16)
 class SoundtrackPulse:
     """Publishes the soundtrack's kick envelope and loudness, step by step."""
 

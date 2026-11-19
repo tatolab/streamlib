@@ -112,7 +112,7 @@ class NoaaStationFeedConfig:
     category="Gulf Stream Neon",
     description="Real readings from NOAA tide station 8723214 Virginia Key, Miami: water level, wind, temperatures. Live from the CO-OPS API, or replayed from a logged snapshot.",
 )
-@node.process(execution="continuous", interval_ms=33)
+@node.process(execution="continuous", interval_ms=16)
 class NoaaStationFeed:
     """NOAA CO-OPS station 8723214 as records, live or replayed."""
 

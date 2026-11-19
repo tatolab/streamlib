@@ -53,12 +53,15 @@ WORLD_SLANG = """
 static const float WORLD_HALF_EXTENT = 2.5;
 static const float PI = 3.14159265;
 
-static const float3 CORAL = float3(1.0, 0.435, 0.380);
-static const float3 PEACH = float3(1.0, 0.702, 0.420);
-static const float3 HOT_PINK = float3(1.0, 0.180, 0.533);
-static const float3 MAGENTA = float3(0.784, 0.125, 1.0);
-static const float3 CYAN = float3(0.0, 0.898, 0.831);
-static const float3 NIGHT = float3(0.071, 0.039, 0.180);
+// The Tato inks, from tatolab.com's tokens, and the home page's deep band.
+static const float3 TATO_BLUE = float3(0.165, 0.357, 1.0);
+static const float3 TATO_PINK = float3(1.0, 0.239, 0.545);
+static const float3 TATO_YELLOW = float3(1.0, 0.839, 0.039);
+static const float3 TATO_CREAM = float3(1.0, 0.957, 0.878);
+static const float3 TATO_INK = float3(0.078, 0.063, 0.122);
+static const float3 TATO_MINT = float3(0.184, 0.839, 0.627);
+static const float3 TATO_VIOLET = float3(0.357, 0.180, 0.902);
+static const float3 DEEP_BAND = float3(0.051, 0.102, 0.290);
 
 float hash21(float2 p) {
     float3 q = frac(float3(p.xyx) * 0.1031);

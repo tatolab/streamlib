@@ -20,6 +20,8 @@ const CLICK_SLOP_PX = 4;
 
 // The real map's square, as the renderer maps it onto world units from -2.5 to 2.5.
 const MAP = { south: 24.3, north: 27.3, west: -81.0, east: -77.67, half: 2.5 };
+// The Tato inks, from tatolab.com.
+const INK = { blue: "#2a5bff", pink: "#ff3d8b", yellow: "#ffd60a", cream: "#fff4e0", ink: "#14101f", mint: "#2fd6a0", violet: "#5b2ee6", band: "#0d1a4a" };
 const PLACES = [
   ["MIAMI", -80.19, 25.775, "city"],
   ["MIAMI BEACH", -80.13, 25.82, "city"],
@@ -27,7 +29,7 @@ const PLACES = [
   ["KEY BISCAYNE", -80.16, 25.69, "place"],
   ["BIMINI", -79.28, 25.73, "place"],
   ["FLORIDA STRAITS", -79.75, 25.05, "water"],
-  ["GULF STREAM  ↑ 1.5 m/s", -79.84, 26.3, "stream"],
+  ["GULF STREAM ↑ 1.5 M/S", -79.84, 26.3, "stream"],
   ["NOAA 8723214", -80.1618, 25.7314, "station"],
   ["UPPER KEYS", -80.45, 25.1, "place"],
 ];
@@ -379,19 +381,21 @@ function drawTheLabels() {
       if (at === null || at[0] < 0.02 || at[0] > 0.98 || at[1] < 0.02 || at[1] > 0.98) continue;
       const px = ox + at[0] * rect.width;
       const py = oy + at[1] * rect.height;
-      const size = Math.max(10, Math.min(18, rect.height / 48));
-      labels2d.font = kind === "water" || kind === "stream" ? `italic 600 ${size}px system-ui, sans-serif` : `600 ${size}px system-ui, sans-serif`;
+      const size = Math.max(11, Math.min(20, rect.height / 44));
+      // The Tato look: Tektur sign lettering for places, JetBrains Mono for the station's code.
+      labels2d.font = kind === "station" ? `700 ${size * 0.9}px "JetBrains Mono", monospace` : `${kind === "water" || kind === "stream" ? 900 : 800} ${size}px Tektur, sans-serif`;
       if (kind === "city" || kind === "place" || kind === "station") {
-        labels2d.fillStyle = kind === "station" ? "#00e5d4" : "#ffffff";
+        labels2d.fillStyle = kind === "station" ? INK.mint : INK.cream;
         labels2d.beginPath();
         labels2d.arc(px, py, kind === "station" ? 4 : 3, 0, Math.PI * 2);
         labels2d.fill();
       }
-      labels2d.fillStyle = kind === "stream" ? "#ffb36b" : kind === "water" ? "#9fe8ff" : kind === "station" ? "#00e5d4" : "#ffffff";
-      labels2d.shadowColor = "rgba(0,0,0,0.85)";
-      labels2d.shadowBlur = 4;
-      labels2d.fillText(name, px + (kind === "water" || kind === "stream" ? -labels2d.measureText(name).width / 2 : 8), py);
-      labels2d.shadowBlur = 0;
+      const labelX = px + (kind === "water" || kind === "stream" ? -labels2d.measureText(name).width / 2 : 9);
+      // An offset ink shadow, like the site's sign lettering.
+      labels2d.fillStyle = INK.ink;
+      labels2d.fillText(name, labelX + size * 0.07, py + size * 0.08);
+      labels2d.fillStyle = kind === "stream" ? INK.yellow : kind === "water" ? INK.cream : kind === "station" ? INK.mint : INK.cream;
+      labels2d.fillText(name, labelX, py);
     }
     labels2d.globalAlpha = 1;
   }
@@ -399,7 +403,7 @@ function drawTheLabels() {
   for (let i = ripples.length - 1; i >= 0; i -= 1) {
     const age = (now - ripples[i].born) / 900;
     if (age > 1) { ripples.splice(i, 1); continue; }
-    labels2d.strokeStyle = `rgba(0, 229, 212, ${1 - age})`;
+    labels2d.strokeStyle = `rgba(47, 214, 160, ${1 - age})`;
     labels2d.lineWidth = 2;
     labels2d.beginPath();
     labels2d.arc(ox + ripples[i].u * rect.width, oy + ripples[i].v * rect.height, 6 + age * 40, 0, Math.PI * 2);
@@ -412,7 +416,7 @@ function tick(now) {
   flyWithTheKeys(Math.min(0.1, (now - lastTick) / 1000));
   lastTick = now;
   drawTheLabels();
-  fpsText.textContent = `${frameTimes.length} fps · ${canvas.width}×${canvas.height} · live on the GPU`;
+  fpsText.textContent = `${frameTimes.length} FPS · ${canvas.width}×${canvas.height} · LIVE ON THE GPU`;
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -427,7 +431,7 @@ function showTheStation(record) {
   document.querySelector(".d-wind").textContent = `${Number(record.wind_speed_mps).toFixed(1)} m/s ${from} · gust ${Number(record.wind_gust_mps).toFixed(1)}`;
   document.querySelector(".d-water").textContent = `${Number(record.water_temperature_c).toFixed(1)} °C`;
   document.querySelector(".d-air").textContent = `${Number(record.air_temperature_c).toFixed(1)} °C · ${Number(record.air_pressure_hpa).toFixed(1)} hPa`;
-  document.querySelector(".stage-data-mode").textContent = Number(record.live) > 0.5 ? "● Live from the NOAA CO-OPS API" : "Logged snapshot, replayed: last 24 h";
+  document.querySelector(".stage-data-mode").textContent = Number(record.live) > 0.5 ? "■ Live · NOAA CO-OPS API" : "Logged snapshot · replaying the last 24 h";
 }
 
 function onVideoReading(reading) {
@@ -489,6 +493,8 @@ function talkOver(handedPort) {
 }
 
 buildThePanel();
+// The canvas labels draw in the bundled fonts once they have loaded.
+for (const face of ["800 16px Tektur", "900 16px Tektur", "700 16px \"JetBrains Mono\""]) void document.fonts.load(face);
 window.addEventListener("message", function onHandover(event) {
   const handedPort = event.ports[0];
   if (event.source !== window.parent || event.data?.kind !== VIEW_PORT_HANDOVER || handedPort === undefined) return;

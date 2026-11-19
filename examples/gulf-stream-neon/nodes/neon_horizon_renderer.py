@@ -96,12 +96,12 @@ static const float2 GOLDEN_TAPS[12] = {
 float3 sky_colour(float3 direction, bool with_sun) {
     float elevation = direction.z;
     float tod = dials.time_of_day;
-    float3 zenith = lerp(lerp(float3(0.20, 0.12, 0.42), float3(0.13, 0.04, 0.27), smoothstep(0.0, 0.5, tod)),
-                         NIGHT * 0.3, smoothstep(0.5, 1.0, tod));
-    float3 middle = lerp(lerp(CORAL, MAGENTA * 0.9, smoothstep(0.0, 0.55, tod)),
-                         float3(0.08, 0.02, 0.15), smoothstep(0.55, 1.0, tod));
-    float3 horizon = lerp(lerp(PEACH * 1.35, HOT_PINK * 1.2, smoothstep(0.0, 0.5, tod)),
-                          MAGENTA * 0.2, smoothstep(0.5, 1.0, tod));
+    float3 zenith = lerp(lerp(TATO_VIOLET * 0.45, DEEP_BAND * 1.1, smoothstep(0.0, 0.5, tod)),
+                         TATO_INK * 0.5, smoothstep(0.5, 1.0, tod));
+    float3 middle = lerp(lerp(TATO_PINK * 0.95, TATO_VIOLET * 0.8, smoothstep(0.0, 0.55, tod)),
+                         DEEP_BAND * 0.45, smoothstep(0.55, 1.0, tod));
+    float3 horizon = lerp(lerp(TATO_YELLOW * 1.15, TATO_PINK * 1.1, smoothstep(0.0, 0.5, tod)),
+                          TATO_VIOLET * 0.22, smoothstep(0.5, 1.0, tod));
     float3 colour = lerp(horizon, middle, smoothstep(0.0, 0.12, elevation));
     colour = lerp(colour, zenith, smoothstep(0.1, 0.5, elevation));
 
@@ -112,14 +112,14 @@ float3 sky_colour(float3 direction, bool with_sun) {
     float2 cloud_uv = direction.xy / max(elevation + 0.08, 0.03);
     float bands = fbm(float2(cloud_uv.x * 0.9 + dials.seconds * 0.02, cloud_uv.y * 3.5), 5);
     float cloud = smoothstep(0.52, 0.78, bands) * smoothstep(0.0, 0.04, elevation) * (1.0 - smoothstep(0.12, 0.3, elevation));
-    float3 cloud_lit = lerp(MAGENTA * 0.35, PEACH * 1.6, pow(saturate(sun_cos * 0.5 + 0.5), 6.0)) * (1.0 - 0.6 * tod);
-    colour = lerp(colour, cloud_lit + HOT_PINK * 0.15 * (1.0 - 0.7 * tod), cloud * 0.85);
+    float3 cloud_lit = lerp(TATO_VIOLET * 0.35, TATO_CREAM * 1.5, pow(saturate(sun_cos * 0.5 + 0.5), 6.0)) * (1.0 - 0.6 * tod);
+    colour = lerp(colour, cloud_lit + TATO_PINK * 0.15 * (1.0 - 0.7 * tod), cloud * 0.85);
 
     // Stars come out after the sun goes.
     float2 star_cell = floor(float2(atan2(direction.x, direction.y) * 300.0, elevation * 480.0));
     float star = step(0.9965, hash21(star_cell)) * smoothstep(0.55, 1.0, tod) * smoothstep(0.03, 0.2, elevation);
     star *= 0.6 + 0.4 * sin(dials.seconds * 4.0 + hash21(star_cell + 5.0) * 30.0);
-    colour += float3(1.0, 0.85, 0.95) * star * 2.0 * (1.0 - cloud);
+    colour += TATO_CREAM * star * 2.0 * (1.0 - cloud);
 
     // The sun: a striped disc sinking into the haze, too bright to look at.
     float3 flattened = normalize(float3(direction.x, direction.y, 0.0) + 1e-5);
@@ -128,11 +128,11 @@ float3 sky_colour(float3 direction, bool with_sun) {
     float2 on_disc = float2(azimuth_offset, elevation - sun.z) / 0.12;
     float disc = 1.0 - smoothstep(0.95, 1.0, length(on_disc));
     float stripes = (on_disc.y < 0.2) ? step(0.36 + 0.28 * (0.2 - on_disc.y), frac(on_disc.y * 5.5 + dials.seconds * 0.12)) : 1.0;
-    float3 sun_colour = lerp(HOT_PINK * 4.0, PEACH * 5.5, saturate(on_disc.y * 0.6 + 0.5));
+    float3 sun_colour = lerp(TATO_PINK * 4.0, TATO_YELLOW * 5.5, saturate(on_disc.y * 0.6 + 0.5));
     float halo = exp(-length(on_disc) * 1.3);
-    if (!with_sun) { return colour + HOT_PINK * halo * 0.4; }
+    if (!with_sun) { return colour + TATO_PINK * halo * 0.4; }
     colour = lerp(colour, sun_colour, disc * stripes * step(0.0, elevation) * (1.0 - cloud * 0.7));
-    colour += lerp(HOT_PINK, PEACH, 0.3) * halo * 0.7 * (1.0 - 0.5 * smoothstep(0.6, 1.0, tod));
+    colour += lerp(TATO_PINK, TATO_YELLOW, 0.3) * halo * 0.7 * (1.0 - 0.5 * smoothstep(0.6, 1.0, tod));
     return colour;
 }
 
@@ -245,9 +245,9 @@ float3 shade_tower(SkylineHit hit, float3 direction) {
     float night = smoothstep(0.3, 0.9, dials.time_of_day);
 
     // The facade: deep violet stone lit by the sky above and the sun's rim.
-    float3 colour = NIGHT * (0.5 + 0.5 * normal.z) + MAGENTA * 0.05;
+    float3 colour = TATO_INK * (0.6 + 0.6 * normal.z) + TATO_VIOLET * 0.05;
     float rim = pow(saturate(dot(normal, dials.sun_direction) * 0.5 + 0.5), 4.0) * (1.0 - night);
-    colour += lerp(CORAL, PEACH, 0.4) * rim * 0.9;
+    colour += lerp(TATO_YELLOW, TATO_CREAM, 0.4) * rim * 0.9;
 
     // Windows: a grid of warm rooms, some dark, a few flickering.
     float2 face = abs(normal.x) > 0.5 ? local.yz : local.xz;
@@ -257,11 +257,11 @@ float3 shade_tower(SkylineHit hit, float3 direction) {
     float window = step(0.18, in_room.x) * step(in_room.x, 0.82) * step(0.25, in_room.y) * step(in_room.y, 0.8);
     float lit_room = step(0.42, hash21(room_cell + tower.seed * 91.0));
     float flicker = 0.75 + 0.25 * sin(dials.seconds * 6.0 + hash21(room_cell) * 40.0);
-    float3 room_colour = lerp(PEACH, CORAL, hash21(room_cell + 2.0));
+    float3 room_colour = lerp(TATO_CREAM, TATO_YELLOW, hash21(room_cell + 2.0));
     colour += room_colour * window * lit_room * flicker * (1.2 + 2.2 * night) * step(abs(normal.z), 0.5);
 
     // Neon on every edge and setback: the Deco outline that blooms.
-    float3 neon = tower.seed < 0.33 ? HOT_PINK : (tower.seed < 0.66 ? CYAN : MAGENTA);
+    float3 neon = tower.seed < 0.4 ? TATO_PINK : (tower.seed < 0.7 ? TATO_YELLOW : TATO_MINT);
     float3 edge_local = abs(local);
     float edge = 0.0;
     float tiers[3] = { 1.0, 0.78, 0.52 };
@@ -279,7 +279,7 @@ float3 shade_tower(SkylineHit hit, float3 direction) {
     colour += neon * edge * (6.0 + 8.0 * night) * pulse * dials.glow;
     // A beacon at the spire's tip.
     float beacon = exp(-length(local - float3(0.0, 0.0, h * 1.08)) / (s * 0.15));
-    colour += HOT_PINK * beacon * 12.0 * (0.5 + 0.5 * sin(dials.seconds * 3.0 + tower.seed * 20.0));
+    colour += TATO_PINK * beacon * 12.0 * (0.5 + 0.5 * sin(dials.seconds * 3.0 + tower.seed * 20.0));
     return colour;
 }
 
@@ -343,12 +343,12 @@ float3 chart_colour(float2 w, float4 relief, float footprint) {
     float depth_m = -relief.r * 1000.0;
     float3 colour;
     if (relief.g > 0.5) {
-        colour = float3(0.11, 0.115, 0.15) + float3(0.10, 0.08, 0.06) * saturate(relief.b * 2.0);
+        colour = TATO_INK * 1.4 + TATO_CREAM * 0.08 * saturate(relief.b * 2.0);
     } else {
-        float3 shoal = float3(0.36, 0.86, 0.84);
-        float3 shelf = float3(0.10, 0.48, 0.62);
-        float3 slope = float3(0.05, 0.20, 0.42);
-        float3 deep = float3(0.03, 0.07, 0.20);
+        float3 shoal = lerp(TATO_MINT, TATO_CREAM, 0.25);
+        float3 shelf = TATO_BLUE * 0.85;
+        float3 slope = lerp(TATO_BLUE, DEEP_BAND, 0.6);
+        float3 deep = DEEP_BAND * 0.8;
         colour = lerp(shoal, shelf, smoothstep(2.0, 40.0, depth_m));
         colour = lerp(colour, slope, smoothstep(40.0, 400.0, depth_m));
         colour = lerp(colour, deep, smoothstep(400.0, 2200.0, depth_m));
@@ -363,14 +363,14 @@ float3 chart_colour(float2 w, float4 relief, float footprint) {
     // The coastline, crisp and white.
     float coast_km = relief.a;
     float coast_width_km = max(0.08, footprint * 333.0 * 1.2);
-    colour = lerp(colour, float3(1.0, 1.0, 1.0), 1.0 - smoothstep(coast_width_km * 0.5, coast_width_km, coast_km));
+    colour = lerp(colour, TATO_CREAM, 1.0 - smoothstep(coast_width_km * 0.5, coast_width_km, coast_km));
     // The half-degree graticule.
     float2 degrees = latitude_longitude_of(w) * 2.0;
     float2 to_line = abs(frac(degrees + 0.5) - 0.5) / 2.0;
     float per_world_degree = (LATITUDE_NORTH - LATITUDE_SOUTH) / (2.0 * WORLD_HALF_EXTENT);
     float line_width = max(footprint * 2.0 * WORLD_HALF_EXTENT * per_world_degree * 1.3, 0.0004);
     float grid = 1.0 - smoothstep(line_width * 0.5, line_width, min(to_line.x, to_line.y));
-    colour = lerp(colour, float3(0.9, 0.95, 1.0), grid * 0.3);
+    colour = lerp(colour, TATO_CREAM, grid * 0.3);
     return colour * 0.9;
 }
 
@@ -426,7 +426,7 @@ void main(uint3 id : SV_DispatchThreadID) {
             // The sun's glint: a hot specular path that breaks on every wave.
             float glint = pow(saturate(dot(reflected, dials.sun_direction)), 900.0) * 60.0
                         + pow(saturate(dot(reflected, dials.sun_direction)), 60.0) * 1.2;
-            float3 sun_tint = lerp(HOT_PINK, PEACH, 0.55);
+            float3 sun_tint = lerp(TATO_PINK, TATO_YELLOW, 0.55);
             mirrored += sun_tint * glint * smoothstep(-0.06, 0.05, dials.sun_direction.z);
             neon = emitted * (1.0 - 0.6 * saturate(fresnel)) + mirrored * saturate(fresnel * 0.75 + 0.04);
         }
@@ -439,10 +439,10 @@ void main(uint3 id : SV_DispatchThreadID) {
         float charted = smoothstep(sweep + 0.12, sweep - 0.12, hit.y) * step(0.001, dials.reveal);
         float3 chart = chart_colour(hit, relief, footprint) * inside;
         float3 trails = current_layer.SampleLevel(uv, 0.0).rgb;
-        chart += float3(0.9, 1.0, 1.0) * dot(trails, float3(0.3, 0.4, 0.3)) * 2.2;
+        chart += TATO_CREAM * dot(trails, float3(0.3, 0.4, 0.3)) * 2.2;
         colour = lerp(neon, chart, charted);
         float front = exp(-pow((hit.y - sweep) / 0.03, 2.0)) * step(0.001, dials.reveal) * step(dials.reveal, 0.999);
-        colour += CYAN * front * 6.0 * inside;
+        colour += TATO_YELLOW * front * 6.0 * inside;
     } else {
         distance = SKY_DISTANCE;
         colour = sky_colour(direction, true);

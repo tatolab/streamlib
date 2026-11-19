@@ -102,7 +102,7 @@ float4 LensComposite(ImageInput scene, ImageInput bloom, ImageInput streak, Imag
         float3 g = float3(bloom.sample(at + toward_centre * 0.012).r,
                           bloom.sample(at).g,
                           bloom.sample(at - toward_centre * 0.012).b);
-        float3 tint = ghost == 0 ? float3(1.0, 0.4, 0.7) : (ghost == 1 ? float3(0.3, 0.9, 0.9) : (ghost == 2 ? float3(0.8, 0.4, 1.0) : float3(1.0, 0.7, 0.4)));
+        float3 tint = ghost == 0 ? float3(1.0, 0.24, 0.55) : (ghost == 1 ? float3(0.18, 0.84, 0.63) : (ghost == 2 ? float3(0.36, 0.18, 0.9) : float3(1.0, 0.84, 0.04)));
         colour += g * tint * fade * ghost_strength;
     }
     // A halo ring around the sun's position on the glass.
@@ -240,7 +240,7 @@ def ChromaticAberration(image: ImageFrame, amount: float = 0.02, aspect: float =
 
 @node.meta(
     category="Gulf Stream Neon · Lens",
-    description="The Miami-neon grade: magenta in the shadows, peach in the highlights, a filmic S-curve and saturation.",
+    description="The Tato grade: violet in the shadows, cream in the highlights, a filmic S-curve and saturation.",
 )
 @node.shader(
     """
@@ -248,8 +248,8 @@ float4 NeonGrade(ImageInput image, float shadow_magenta, float highlight_peach, 
 {
     float3 c = image.pixel.rgb;
     float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
-    float3 shadows = float3(0.784, 0.125, 1.0);
-    float3 highlights = float3(1.0, 0.702, 0.420);
+    float3 shadows = float3(0.357, 0.180, 0.902);
+    float3 highlights = float3(1.0, 0.957, 0.878);
     c += shadows * shadow_magenta * (1.0 - smoothstep(0.0, 0.45, luma)) * 0.25;
     c = lerp(c, c * highlights * 1.25, highlight_peach * smoothstep(0.55, 1.0, luma));
     c = saturate(lerp(float3(0.5, 0.5, 0.5), c, contrast));

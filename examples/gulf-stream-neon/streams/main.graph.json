@@ -476,21 +476,19 @@
     {
       "id": "48a546bf-eb3d-55df-98f1-b4ad1287fbd8",
       "name": "take_clock",
+      "type": "imports/core-nodes/core_nodes.animation:Timer",
       "studio": {
         "contract": 1,
         "position": [
           0,
           -690
         ]
-      },
-      "type": "imports/core-nodes/core_nodes.animation:Timer"
+      }
     },
     {
       "id": "adbc5ed2-0ee0-5e74-af6c-dd8179639ee4",
-      "input_values": {
-        "soundtrack_path": "media/soundtrack.wav"
-      },
       "name": "soundtrack_pulse",
+      "type": "nodes.soundtrack_pulse:SoundtrackPulse",
       "studio": {
         "contract": 1,
         "position": [
@@ -498,15 +496,14 @@
           230
         ]
       },
-      "type": "nodes.soundtrack_pulse:SoundtrackPulse"
+      "input_values": {
+        "soundtrack_path": "media/soundtrack.wav"
+      }
     },
     {
       "id": "10ddb26d-1ff7-5eee-9f92-332feff0e2fa",
-      "input_values": {
-        "mode": "replay",
-        "take_seconds": 90.0
-      },
       "name": "noaa_virginia_key",
+      "type": "nodes.noaa_station:NoaaStationFeed",
       "studio": {
         "contract": 1,
         "position": [
@@ -514,28 +511,27 @@
           920
         ]
       },
-      "type": "nodes.noaa_station:NoaaStationFeed"
+      "input_values": {
+        "mode": "replay",
+        "take_seconds": 90.0
+      }
     },
     {
       "id": "61c24bbb-6452-5b31-bc93-669e1dcda6d7",
       "name": "soundtrack_beat",
+      "type": "nodes.take_functions:SoundtrackBeat",
       "studio": {
         "contract": 1,
         "position": [
           430,
           -1150
         ]
-      },
-      "type": "nodes.take_functions:SoundtrackBeat"
+      }
     },
     {
       "id": "8e7f3d8f-a4c7-5b15-b1a7-7d644a6ceea8",
-      "input_values": {
-        "aspect": 1.7777777777777777,
-        "time_of_day": 0.3,
-        "vertical_fov_degrees": 50.0
-      },
       "name": "stage_sun",
+      "type": "nodes.take_functions:StageSunOnScreen",
       "studio": {
         "contract": 1,
         "position": [
@@ -543,14 +539,16 @@
           -230
         ]
       },
-      "type": "nodes.take_functions:StageSunOnScreen"
+      "input_values": {
+        "aspect": 1.7777777777777777,
+        "vertical_fov_degrees": 50.0,
+        "time_of_day": 0.3
+      }
     },
     {
       "id": "6a17694b-3418-5c66-a52b-fde48dffc763",
-      "input_values": {
-        "seconds": 0.08
-      },
       "name": "kick_lag",
+      "type": "imports/core-nodes/core_nodes.animation:Lag",
       "studio": {
         "contract": 1,
         "position": [
@@ -558,17 +556,14 @@
           -1380
         ]
       },
-      "type": "imports/core-nodes/core_nodes.animation:Lag"
+      "input_values": {
+        "seconds": 0.08
+      }
     },
     {
       "id": "27c0b05a-0be1-587c-8bfb-747eeb33f3b2",
-      "input_values": {
-        "from_high": 1.0,
-        "from_low": 0.0,
-        "to_high": 0.4,
-        "to_low": 0.12
-      },
       "name": "bloom_from_kick",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -576,17 +571,17 @@
           -1610
         ]
       },
-      "type": "imports/core-nodes/core_nodes.math_nodes:Remap"
+      "input_values": {
+        "from_low": 0.0,
+        "from_high": 1.0,
+        "to_low": 0.12,
+        "to_high": 0.4
+      }
     },
     {
       "id": "e5319ce5-3c08-5cca-8a23-b2b4e4eb6a68",
-      "input_values": {
-        "from_high": 1.0,
-        "from_low": 0.0,
-        "to_high": 0.45,
-        "to_low": 0.12
-      },
       "name": "streak_from_kick",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -594,16 +589,17 @@
           -1380
         ]
       },
-      "type": "imports/core-nodes/core_nodes.math_nodes:Remap"
+      "input_values": {
+        "from_low": 0.0,
+        "from_high": 1.0,
+        "to_low": 0.12,
+        "to_high": 0.45
+      }
     },
     {
       "id": "5474b15f-70e5-5d54-a979-f25de96ea40a",
-      "input_values": {
-        "a": 0.85,
-        "b": 1.15,
-        "t": 0.0
-      },
       "name": "exposure_through_drop",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Lerp",
       "studio": {
         "contract": 1,
         "position": [
@@ -611,14 +607,16 @@
           -1150
         ]
       },
-      "type": "imports/core-nodes/core_nodes.math_nodes:Lerp"
+      "input_values": {
+        "a": 0.85,
+        "b": 1.15,
+        "t": 0.0
+      }
     },
     {
       "id": "f882471b-ba10-5c1e-93b4-3bbca2b5dced",
-      "input_values": {
-        "a": 0.35
-      },
       "name": "drop_energy",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Multiply",
       "studio": {
         "contract": 1,
         "position": [
@@ -626,17 +624,14 @@
           -920
         ]
       },
-      "type": "imports/core-nodes/core_nodes.math_nodes:Multiply"
+      "input_values": {
+        "a": 0.35
+      }
     },
     {
       "id": "c6d86a66-48d0-5d51-8263-3065bb3d77f9",
-      "input_values": {
-        "from_high": 1.0,
-        "from_low": 0.0,
-        "to_high": 0.09,
-        "to_low": 0.015
-      },
       "name": "aberration_from_energy",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -644,14 +639,17 @@
           -920
         ]
       },
-      "type": "imports/core-nodes/core_nodes.math_nodes:Remap"
+      "input_values": {
+        "from_low": 0.0,
+        "from_high": 1.0,
+        "to_low": 0.015,
+        "to_high": 0.09
+      }
     },
     {
       "id": "1ebbb135-0aae-5feb-aedf-b3486702c007",
-      "input_values": {
-        "rate_hz": 0.35
-      },
       "name": "haze_shimmer",
+      "type": "imports/core-nodes/core_nodes.animation:Lfo",
       "studio": {
         "contract": 1,
         "position": [
@@ -659,17 +657,14 @@
           -1380
         ]
       },
-      "type": "imports/core-nodes/core_nodes.animation:Lfo"
+      "input_values": {
+        "rate_hz": 0.35
+      }
     },
     {
       "id": "8ee805e7-4840-5f5c-bae8-b26f17288ca4",
-      "input_values": {
-        "from_high": 1.0,
-        "from_low": -1.0,
-        "to_high": 0.005,
-        "to_low": 0.0015
-      },
       "name": "haze_amount",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -677,18 +672,17 @@
           -1380
         ]
       },
-      "type": "imports/core-nodes/core_nodes.math_nodes:Remap"
+      "input_values": {
+        "from_low": -1.0,
+        "from_high": 1.0,
+        "to_low": 0.0015,
+        "to_high": 0.005
+      }
     },
     {
       "id": "13468854-5f12-529b-af16-2a7858b56f47",
-      "input_values": {
-        "from_high": 1.0,
-        "from_low": 0.0,
-        "to_high": 0.02,
-        "to_low": 0.05,
-        "x": 0.0
-      },
       "name": "ghosts_through_sunset",
+      "type": "imports/core-nodes/core_nodes.math_nodes:Remap",
       "studio": {
         "contract": 1,
         "position": [
@@ -696,27 +690,30 @@
           -690
         ]
       },
-      "type": "imports/core-nodes/core_nodes.math_nodes:Remap"
+      "input_values": {
+        "from_low": 0.0,
+        "from_high": 1.0,
+        "to_low": 0.05,
+        "to_high": 0.02,
+        "x": 0.0
+      }
     },
     {
       "id": "a48b501f-1a70-5446-9d2b-1655bb9fb6bb",
       "name": "etopo_seafloor",
+      "type": "nodes.bathymetry_relief:BathymetryRelief",
       "studio": {
         "contract": 1,
         "position": [
           430,
           460
         ]
-      },
-      "type": "nodes.bathymetry_relief:BathymetryRelief"
+      }
     },
     {
       "id": "b59ffd8c-ebcc-5699-99d3-bb8166b2c4fa",
-      "input_values": {
-        "active_particles": 2097152,
-        "particle_count": 4194304
-      },
       "name": "hycom_gulf_stream",
+      "type": "nodes.gulf_stream_current:GulfStreamCurrent",
       "studio": {
         "contract": 1,
         "position": [
@@ -724,21 +721,17 @@
           1150
         ]
       },
-      "type": "nodes.gulf_stream_current:GulfStreamCurrent"
+      "input_values": {
+        "particle_count": 4194304,
+        "active_particles": 2097152,
+        "step_seconds": 0.016666666666666666,
+        "trail_decay": 0.9274
+      }
     },
     {
       "id": "c51b146e-0f83-539c-ac69-cdf3e971bc7f",
-      "input_values": {
-        "glow": 1,
-        "height": 720,
-        "mode": "stage",
-        "morph": 1,
-        "skyline_height": 0.055,
-        "time_of_day": 1,
-        "vertical_field_of_view_degrees": 50,
-        "width": 1280
-      },
       "name": "neon_horizon",
+      "type": "nodes.neon_horizon_renderer:NeonHorizonRenderer",
       "studio": {
         "contract": 1,
         "position": [
@@ -746,38 +739,43 @@
           460
         ]
       },
-      "type": "nodes.neon_horizon_renderer:NeonHorizonRenderer"
+      "input_values": {
+        "width": 1280,
+        "height": 720,
+        "vertical_field_of_view_degrees": 50.0,
+        "mode": "stage",
+        "morph": 0.0,
+        "time_of_day": 0.3
+      }
     },
     {
       "id": "438b4e73-7c1c-5655-ab89-4db96c2022e8",
       "name": "hdr_bloom",
+      "type": "nodes.hdr_bloom:HdrBloomPyramid",
       "studio": {
         "contract": 1,
         "position": [
           1548,
           805
         ]
-      },
-      "type": "nodes.hdr_bloom:HdrBloomPyramid"
+      }
     },
     {
       "id": "d70ee5d1-44b9-57f9-8bbf-255a9c91c8ed",
       "name": "god_rays",
+      "type": "nodes.lens_shaders:GodRays",
       "studio": {
         "contract": 1,
         "position": [
           1548,
           115
         ]
-      },
-      "type": "nodes.lens_shaders:GodRays"
+      }
     },
     {
       "id": "85981a3b-a504-5342-9b99-3c35c4dac41c",
-      "input_values": {
-        "rays_strength": 0.45
-      },
       "name": "lens_composite",
+      "type": "nodes.lens_shaders:LensComposite",
       "studio": {
         "contract": 1,
         "position": [
@@ -785,16 +783,14 @@
           345
         ]
       },
-      "type": "nodes.lens_shaders:LensComposite"
+      "input_values": {
+        "rays_strength": 0.45
+      }
     },
     {
       "id": "6324e71e-0d87-5e0e-a57f-ea1467e0d65a",
-      "input_values": {
-        "aperture": 0.0012,
-        "aspect": 0.5625,
-        "focus_distance": 0.32
-      },
       "name": "depth_of_field",
+      "type": "nodes.lens_shaders:DepthOfField",
       "studio": {
         "contract": 1,
         "position": [
@@ -802,14 +798,16 @@
           345
         ]
       },
-      "type": "nodes.lens_shaders:DepthOfField"
+      "input_values": {
+        "aperture": 0.0012,
+        "aspect": 0.5625,
+        "focus_distance": 0.32
+      }
     },
     {
       "id": "be3774e1-7d9b-531f-a5a3-648bf4e38568",
-      "input_values": {
-        "band": 0.07
-      },
       "name": "heat_haze",
+      "type": "nodes.lens_shaders:HeatHaze",
       "studio": {
         "contract": 1,
         "position": [
@@ -817,14 +815,14 @@
           345
         ]
       },
-      "type": "nodes.lens_shaders:HeatHaze"
+      "input_values": {
+        "band": 0.07
+      }
     },
     {
       "id": "a9446055-83d7-5f7e-afd0-496d6f83e8e5",
-      "input_values": {
-        "aspect": 1.7777777777777777
-      },
       "name": "chromatic_aberration",
+      "type": "nodes.lens_shaders:ChromaticAberration",
       "studio": {
         "contract": 1,
         "position": [
@@ -832,15 +830,14 @@
           345
         ]
       },
-      "type": "nodes.lens_shaders:ChromaticAberration"
+      "input_values": {
+        "aspect": 1.7777777777777777
+      }
     },
     {
       "id": "dd28435b-95a7-5421-8406-cbd757d67850",
-      "input_values": {
-        "contrast": 1.18,
-        "saturation": 1.15
-      },
       "name": "neon_grade",
+      "type": "nodes.lens_shaders:NeonGrade",
       "studio": {
         "contract": 1,
         "position": [
@@ -848,14 +845,15 @@
           345
         ]
       },
-      "type": "nodes.lens_shaders:NeonGrade"
+      "input_values": {
+        "contrast": 1.18,
+        "saturation": 1.15
+      }
     },
     {
       "id": "9780eeab-6413-5185-a1e1-459bc38f0122",
-      "input_values": {
-        "lines_across": 720.0
-      },
       "name": "film_finish",
+      "type": "nodes.lens_shaders:FilmFinish",
       "studio": {
         "contract": 1,
         "position": [
@@ -863,16 +861,14 @@
           345
         ]
       },
-      "type": "nodes.lens_shaders:FilmFinish"
+      "input_values": {
+        "lines_across": 720.0
+      }
     },
     {
       "id": "2b6b780b-b287-5045-9e6e-4c248f68bce9",
-      "input_values": {
-        "amount": 0.42,
-        "size": 0.62,
-        "softness": 0.55
-      },
       "name": "vignette",
+      "type": "imports/core-nodes/core_nodes.filters:Vignette",
       "studio": {
         "contract": 1,
         "position": [
@@ -880,19 +876,23 @@
           345
         ]
       },
-      "type": "imports/core-nodes/core_nodes.filters:Vignette"
+      "input_values": {
+        "amount": 0.42,
+        "size": 0.62,
+        "softness": 0.55
+      }
     },
     {
       "id": "271e5c66-0178-5594-89c7-2c6dc0710f7a",
       "name": "stage",
+      "type": "Gulf Stream Neon:stage",
       "studio": {
         "contract": 1,
         "position": [
           5160,
           115
         ]
-      },
-      "type": "Gulf Stream Neon:stage"
+      }
     }
   ]
 }
