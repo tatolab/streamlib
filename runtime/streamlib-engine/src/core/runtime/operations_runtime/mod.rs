@@ -51,7 +51,7 @@ pub(super) use link_connected_between_two_ports::{
     ALinkConnectedOrSetAside, ALinkEndTheGraphHolds, ANodeTypesPortToJudge,
     WhenTheEngineCannotWireALink, connect_impl, refuse_a_held_link_the_engine_cannot_wire,
     the_verdict_connect_takes_on_a_link, the_verdicts_connect_takes_on_links_with_node_types_ports,
-    what_a_connect_makes_of_a_link_at_a_placed_level,
+    what_a_connect_makes_of_each_link_at_a_placed_level,
 };
 #[cfg(test)]
 use reactive_reader_rule_of_an_edit::refuse_a_removal_that_strands_a_reactive_reader;
@@ -663,15 +663,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         })
     }
 
-    fn what_a_connect_makes_of_a_link_at_a_placed_level(
+    fn what_a_connect_makes_of_each_link_at_a_placed_level(
         &self,
         level: &streamlib_project_repository::StreamGraphDocument,
-        link: &streamlib_project_repository::StreamGraphDocumentLink,
-    ) -> Result<WhatALiveConnectMakesOfALink> {
-        what_a_connect_makes_of_a_link_at_a_placed_level(
+        links: &[streamlib_project_repository::StreamGraphDocumentLink],
+    ) -> Vec<Result<WhatALiveConnectMakesOfALink>> {
+        what_a_connect_makes_of_each_link_at_a_placed_level(
             self.node_types_this_stream_resolves(),
             level,
-            link,
+            links,
         )
     }
 

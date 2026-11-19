@@ -40,8 +40,8 @@ use crate::core::graph::{
 };
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::pubsub::RuntimeEvent;
-use crate::core::runtime::WhatALiveConnectMakesOfALink;
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_graph_operation_applied_live::runs_as_no_node_of_its_own;
+use crate::core::runtime::{ANodeNotBuilt, WhatALiveConnectMakesOfALink};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use crate::iceoryx2::ChannelName;
 
@@ -214,7 +214,7 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
 
 /// The verdict a connect made now takes on a link from `from` to `to` in `graph`, as
 /// [`the_verdict_connect_takes_on_a_link`] takes it in the graph a compiler holds and
-/// [`what_a_connect_makes_of_a_link_at_a_placed_level`] among the nodes of a placed stream's
+/// [`what_a_connect_makes_of_each_link_at_a_placed_level`] among the nodes of a placed stream's
 /// level; the link is left out of `graph`.
 fn the_verdict_connect_takes_in(
     graph: &mut Graph,
@@ -635,41 +635,48 @@ impl Drop for NodeHeldForOneJudgement<'_> {
     }
 }
 
-/// What a connect made now would make of `link` at `level`, a level of a placed stream as its
-/// graph document holds it, each node by its UUID there, made nowhere: the verdict
-/// [`the_verdict_connect_takes_in`] takes among the level's nodes, built from the node types
-/// `node_types` resolves, as a load builds them, with the links it holds. Only the level is
-/// built, so a check reaching across the placed stream's ports does not judge the link. A link
-/// reaching a node that runs as no node of its own, or one that is not built, such as one whose
-/// type is not described, is judged only as it is made.
-pub(in crate::core::runtime) fn what_a_connect_makes_of_a_link_at_a_placed_level(
+/// What a connect made now would make of each of `links`, in their order, at `level`, a level of
+/// a placed stream as its graph document holds it, each node by its UUID there, made nowhere:
+/// the verdict [`the_verdict_connect_takes_in`] takes among the level's nodes, built from the
+/// node types `node_types` resolves, as a load builds them, with the links it holds and each of
+/// `links` before it that the connect would make. Only the level is built, so a check reaching
+/// across the placed stream's ports does not judge the link. A link reaching a node that runs
+/// as no node of its own, or one that is not built, such as one whose type is not described, is
+/// judged only as it is made; one reaching a node the level does not hold is refused.
+pub(in crate::core::runtime) fn what_a_connect_makes_of_each_link_at_a_placed_level(
     node_types: &Arc<NodeTypesOneStreamResolves>,
     level: &StreamGraphDocument,
-    link: &StreamGraphDocumentLink,
-) -> Result<WhatALiveConnectMakesOfALink> {
+    links: &[StreamGraphDocumentLink],
+) -> Vec<Result<WhatALiveConnectMakesOfALink>> {
     let (mut graph, node_of_each_node) = the_graph_a_placed_level_runs_as(node_types, level);
     let end = |node: uuid::Uuid| match node_of_each_node.get(&node) {
-        Some(NodeOfAPlacedLevel::Built(node_run_id)) => Ok(node_run_id.clone()),
-        Some(NodeOfAPlacedLevel::NotBuilt { node_name, why }) => {
-            Err(WhatALiveConnectMakesOfALink::ReachesANodeNotBuilt {
-                node_name: node_name.clone(),
-                why: why.clone(),
-            })
+        Some(NodeOfAPlacedLevel::Built(node_run_id)) => Ok(Ok(node_run_id.clone())),
+        Some(NodeOfAPlacedLevel::NotBuilt(not_built)) => Ok(Err(
+            WhatALiveConnectMakesOfALink::ReachesANodeNotBuilt(not_built.clone()),
+        )),
+        Some(NodeOfAPlacedLevel::RunsAsNoNodeOfItsOwn) => {
+            Ok(Err(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade))
         }
-        Some(NodeOfAPlacedLevel::RunsAsNoNodeOfItsOwn) | None => {
-            Err(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade)
-        }
+        None => Err(Error::InvalidLink(format!(
+            "the link reaches node {node}, which is not at this level"
+        ))),
     };
-    let (source, target) = match (end(link.source.node), end(link.target.node)) {
-        (Ok(source), Ok(target)) => (source, target),
-        (Err(unjudged), _) | (_, Err(unjudged)) => return Ok(unjudged),
-    };
-    the_verdict_connect_takes_in(
-        &mut graph,
-        OutputLinkPortRef::new(source, &link.source.port),
-        InputLinkPortRef::new(target, &link.target.port),
-    )
-    .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
+    links
+        .iter()
+        .map(|link| {
+            let (source, target) = match (end(link.source.node)?, end(link.target.node)?) {
+                (Ok(source), Ok(target)) => (source, target),
+                (Err(unjudged), _) | (_, Err(unjudged)) => return Ok(unjudged),
+            };
+            let from = OutputLinkPortRef::new(source, &link.source.port);
+            let to = InputLinkPortRef::new(target, &link.target.port);
+            let verdict = the_verdict_connect_takes_in(&mut graph, from.clone(), to.clone())?;
+            if let Ok((from, to)) = the_ends_connect_links(&graph, from, to) {
+                graph.traversal_mut().add_e(from, to);
+            }
+            Ok(WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
+        })
+        .collect()
 }
 
 /// What one node of a placed stream's level is in the graph that level runs as.
@@ -678,8 +685,18 @@ enum NodeOfAPlacedLevel {
     Built(NodeRunId),
     /// It runs as no node of its own, such as a fragment.
     RunsAsNoNodeOfItsOwn,
-    /// It is not built, for `why`.
-    NotBuilt { node_name: String, why: String },
+    /// It is not built.
+    NotBuilt(ANodeNotBuilt),
+}
+
+impl NodeOfAPlacedLevel {
+    /// The id it is built under, if it is built.
+    fn built(&self) -> Option<&NodeRunId> {
+        match self {
+            Self::Built(node_run_id) => Some(node_run_id),
+            Self::RunsAsNoNodeOfItsOwn | Self::NotBuilt(_) => None,
+        }
+    }
 }
 
 /// The graph `level`, a level of a placed stream as its graph document holds it, runs as, made
@@ -693,22 +710,18 @@ fn the_graph_a_placed_level_runs_as(
     let mut graph = Graph::new_resolving_node_types_through(Arc::clone(node_types));
     let mut node_of_each_node = HashMap::new();
     for node in level.nodes() {
-        let node_uuid = node.id;
         let built = if runs_as_no_node_of_its_own(&node) {
             NodeOfAPlacedLevel::RunsAsNoNodeOfItsOwn
         } else {
-            match the_node_a_placed_level_builds(&mut graph, node_types, node) {
+            match the_node_a_placed_level_builds(&mut graph, node_types, &node) {
                 Ok(node_run_id) => NodeOfAPlacedLevel::Built(node_run_id),
-                Err((node_name, why)) => NodeOfAPlacedLevel::NotBuilt { node_name, why },
+                Err(not_built) => NodeOfAPlacedLevel::NotBuilt(not_built),
             }
         };
-        node_of_each_node.insert(node_uuid, built);
+        node_of_each_node.insert(node.id, built);
     }
     for held in level.links() {
-        let built = |node: uuid::Uuid| match node_of_each_node.get(&node) {
-            Some(NodeOfAPlacedLevel::Built(node_run_id)) => Some(node_run_id.clone()),
-            _ => None,
-        };
+        let built = |node: uuid::Uuid| node_of_each_node.get(&node)?.built().cloned();
         let (Some(source), Some(target)) = (built(held.source.node), built(held.target.node))
         else {
             continue;
@@ -724,14 +737,17 @@ fn the_graph_a_placed_level_runs_as(
     (graph, node_of_each_node)
 }
 
-/// The id `node`, a node of a placed stream's level, is built under in `graph`; refused, with
-/// its name and why, when its type is not described or a load would not add it.
+/// The id `node`, a node of a placed stream's level, is built under in `graph`; refused when its
+/// type is not described or a load would not add it.
 fn the_node_a_placed_level_builds(
     graph: &mut Graph,
     node_types: &NodeTypesOneStreamResolves,
-    node: StreamGraphDocumentNode,
-) -> std::result::Result<NodeRunId, (String, String)> {
-    let not_built = |why: String| (node.name.clone(), why);
+    node: &StreamGraphDocumentNode,
+) -> std::result::Result<NodeRunId, ANodeNotBuilt> {
+    let not_built = |why: String| ANodeNotBuilt {
+        node_name: node.name.clone(),
+        why,
+    };
     let node_type = NodeClassImportPath::new(&node.node_type)
         .map_err(|refusal| not_built(format!("its type `{}`: {refusal}", node.node_type)))?;
     if node_types.port_info(&node_type).is_none() {
@@ -740,7 +756,6 @@ fn the_node_a_placed_level_builds(
             node.node_type
         )));
     }
-    let node_name = node.name.clone();
     graph
         .traversal_mut()
         .add_v(node_spec_of_a_document_node(node_types, node_type, node))
@@ -750,7 +765,7 @@ fn the_node_a_placed_level_builds(
                 .map(|built| built.id.clone())
                 .ok_or_else(|| Error::GraphError("the node was not created".into()))
         })
-        .map_err(|refusal| (node_name, refusal.to_string()))
+        .map_err(|refusal| not_built(refusal.to_string()))
 }
 
 /// Add the link from `from` to `to` to the graph and queue it for wiring, or, when the engine

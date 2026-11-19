@@ -117,6 +117,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
         let mut why_each_link_was_made_unjudged = BTreeMap::new();
+        let mut links_made_unjudged_as_kept = Vec::new();
         let mut project_operations: Vec<ProjectOperation> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
             Vec::new();
@@ -152,6 +153,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         .into_iter()
                         .map(|(link, why)| ((stream_id.clone(), link), why)),
                 );
+                links_made_unjudged_as_kept.extend(applied.links_made_unjudged_as_kept);
                 operations_answered.push((stream_id.clone(), applied.operation_answered));
                 project_operations.extend(applied.project_operations);
                 made_live_once_the_documents_hold_them
@@ -188,6 +190,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         nodes_inserted_on_links: the_nodes_inserted_on_links(
                             &what_the_answer_names_of_each_added_node,
                         ),
+                        links_made_unjudged: links_made_unjudged_as_kept,
                     },
                     project_operations,
                     ProjectTransactionLineage::NewEdit,
@@ -575,6 +578,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 made_live_once_the_documents_hold_them: Vec::new(),
                 overridden_by_a_link,
                 links_made_unjudged: Vec::new(),
+                links_made_unjudged_as_kept: Vec::new(),
             });
         }
 
@@ -610,11 +614,21 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let operation_answered =
             reached.the_operation_as_drawn(&edit, &placed_document_after_the_edit)?;
-        let links_made_unjudged = the_links_an_operation_makes(&operation_answered)
+        let mut links_made_unjudged = Vec::new();
+        let mut links_made_unjudged_as_kept = Vec::new();
+        for ((drawn, kept), why) in the_links_an_operation_makes(&operation_answered)
             .iter()
+            .zip(the_links_an_operation_makes(&edit))
             .zip(why_each_link_goes_unjudged)
-            .filter_map(|(link, why)| Some((link.clone(), why?)))
-            .collect();
+        {
+            let Some(why) = why else { continue };
+            links_made_unjudged.push((drawn.clone(), why.clone()));
+            links_made_unjudged_as_kept.push(ProjectTransactionLinkMadeUnjudged {
+                stream: reached.stream,
+                link: kept.clone(),
+                why,
+            });
+        }
         record_what_the_answer_names_of_the_node_the_operation_adds(
             label,
             node_inserted_because,
@@ -680,6 +694,7 @@ impl StreamGraphTransactionExecutor<'_> {
             made_live_once_the_documents_hold_them,
             overridden_by_a_link,
             links_made_unjudged,
+            links_made_unjudged_as_kept,
         })
     }
 

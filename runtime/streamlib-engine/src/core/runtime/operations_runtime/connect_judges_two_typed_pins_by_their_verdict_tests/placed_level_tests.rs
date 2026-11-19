@@ -13,7 +13,7 @@ use streamlib_project_repository::{
 };
 use uuid::Uuid;
 
-use super::super::what_a_connect_makes_of_a_link_at_a_placed_level;
+use super::super::what_a_connect_makes_of_each_link_at_a_placed_level;
 use super::{
     CELSIUS_SOURCE, FAHRENHEIT_SINK, FLOAT_SOURCE, NAMED_RECORDS_SOURCE, NUMBER_SINK,
     RECORDS_NEEDING_X, RECORDS_NEEDING_Z, RECORDS_PASSTHROUGH, UNTYPED_RGBA_PICTURE_SINK,
@@ -74,11 +74,13 @@ fn what_a_connect_makes_of(
     level: &StreamGraphDocument,
     link: StreamGraphDocumentLink,
 ) -> crate::core::Result<WhatALiveConnectMakesOfALink> {
-    what_a_connect_makes_of_a_link_at_a_placed_level(
+    let mut made = what_a_connect_makes_of_each_link_at_a_placed_level(
         &Arc::new(NodeTypesOneStreamResolves::new()),
         level,
-        &link,
-    )
+        std::slice::from_ref(&link),
+    );
+    assert_eq!(made.len(), 1, "one judgement for the one link");
+    made.remove(0)
 }
 
 fn the_verdicts_refusal(refused: Error) -> PinLinkRefusal {
@@ -369,12 +371,36 @@ fn a_link_reaching_a_node_of_a_type_not_described_is_judged_only_as_it_is_made()
         a_link((FLOAT_SOURCE_NODE, "value"), (undescribed, "anything")),
     )
     .expect("a link to a node not built is left to be judged as it is made");
-    let WhatALiveConnectMakesOfALink::ReachesANodeNotBuilt { node_name, why } = made else {
+    let WhatALiveConnectMakesOfALink::ReachesANodeNotBuilt(not_built) = made else {
         panic!("the link is made unjudged: {made:?}");
     };
-    assert_eq!(node_name, "mystery");
+    assert_eq!(not_built.node_name, "mystery");
     assert!(
-        why.contains("`placed_level_test:NotDescribed` is not described"),
-        "{why}"
+        not_built
+            .why
+            .contains("`placed_level_test:NotDescribed` is not described"),
+        "{not_built}"
+    );
+}
+
+/// A link reaching a node the level does not hold is refused, naming the node as not at this
+/// level, not left to be judged as it is made.
+#[test]
+fn a_link_reaching_a_node_the_level_does_not_hold_is_refused() {
+    register_the_verdict_fixture_node_types();
+    let level = a_placed_level(json!([]));
+    let elsewhere = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0022);
+
+    let refused = what_a_connect_makes_of(
+        &level,
+        a_link((FLOAT_SOURCE_NODE, "value"), (elsewhere, "value")),
+    )
+    .expect_err("a link to a node the level does not hold is refused");
+
+    assert!(
+        refused
+            .to_string()
+            .contains(&format!("{elsewhere}, which is not at this level")),
+        "{refused}"
     );
 }

@@ -8,7 +8,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperation
 
 use super::convert_node_inserted_on_a_link_tests::{
     ConvertNodeTestEnd, MODEL_NODE_UUID, connected_by_alice,
-    register_the_convert_node_test_node_types_once, the_links_in,
+    register_the_convert_node_test_node_types_once,
 };
 use super::*;
 
@@ -104,7 +104,7 @@ async fn a_convert_node_inside_a_placed_stream_is_judged_by_the_format_it_holds(
         .await
         .unwrap_or_else(|refusal| panic!("a writer holding bgra8_unorm connects: {refusal:?}"));
     assert_eq!(
-        the_links_in(&project.the_graph_document_of("sub")).len(),
+        links_by_node_name_in(&project.the_graph_document_of("sub")).len(),
         1,
         "{}",
         project.the_graph_document_of("sub")

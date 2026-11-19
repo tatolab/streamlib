@@ -302,9 +302,12 @@ fn a_function_node_type(
     descriptor
 }
 
-/// The `PreviousValue` node type a loop of function nodes closes through: taking a value of any
-/// type into `value`, of the Records or the Channels family, and giving it back on `result` as
-/// the type and family of the link into `value`.
+/// A pass-through stand-in for the `PreviousValue` node type a loop of function nodes closes
+/// through, not the node interpreter's own, which takes and gives a Float: it takes a value of
+/// any type into `value`, of the Records or the Channels family, and gives it back on `result`
+/// as the type and family of the link into `value`. A link closing a loop inside a placed
+/// stream has the links through the node judged among the level's nodes, and these tests close
+/// loops carrying Records as well as Floats, so the stand-in passes each through as it came.
 fn a_previous_value_node_type() -> NodeDescriptor {
     let any_flow = PinDeclaration::exactly(PinType::Float { exact_size: None });
     let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
@@ -397,8 +400,8 @@ fn a_node_type_with_a_port_meaning(
     }
 }
 
-/// Register each node type the link check tests below place, `PreviousValue` among them as the
-/// function node a stream's node interpreter describes it as, once per test binary.
+/// Register each node type the link check tests below place, a pass-through stand-in for
+/// `PreviousValue` among them, once per test binary.
 pub(super) fn register_the_link_check_node_types_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {

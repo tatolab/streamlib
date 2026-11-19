@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::Value;
-use streamlib::sdk::descriptors::PinLinkVerdict;
 use streamlib::sdk::error::PortDirection;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::runtime::{ANodeTypesPort, RuntimeOperations, WhatALiveConnectMakesOfALink};
@@ -45,15 +44,8 @@ pub(crate) enum LinkNotCheckedYet {
     /// It closes a loop of function nodes, which `connect` closes through a `PreviousValue`
     /// node it adds.
     ClosesALoopOfFunctionNodes,
-    /// It reaches a node that runs as no node of its own, which the live graph judges only as
-    /// it is reconciled to a document holding the link.
-    ReachesAFragmentNode,
-    /// It reaches a port of a node type the stream has not described yet, which only an
-    /// `add_node` of the type describes.
-    ItsNodeTypeIsNotDescribedYet,
-    /// It is inside a placed stream and reaches the node `node_name` there, which is not built
-    /// to judge it, for `why`.
-    ReachesANodeNotBuilt { node_name: String, why: String },
+    /// A connect would make it without judging it, for the reason held, in the runtime's words.
+    ItsConnectMakesItUnjudged(String),
 }
 
 impl std::fmt::Display for LinkNotCheckedYet {
@@ -66,19 +58,7 @@ impl std::fmt::Display for LinkNotCheckedYet {
                 "the link closes a loop of function nodes no `PreviousValue` node is in, which \
                  `connect` closes through a `PreviousValue` node it adds"
             }
-            Self::ReachesAFragmentNode => {
-                "the link reaches a node that runs as no node of its own, such as a fragment"
-            }
-            Self::ItsNodeTypeIsNotDescribedYet => {
-                "the node type is not described yet; place a node of it first, with `add_node`, \
-                 and check the link to that node"
-            }
-            Self::ReachesANodeNotBuilt { node_name, why } => {
-                return write!(
-                    formatter,
-                    "the link reaches node `{node_name}`, which is not built to judge it: {why}"
-                );
-            }
+            Self::ItsConnectMakesItUnjudged(why) => why.as_str(),
         })
     }
 }
@@ -426,8 +406,7 @@ impl TheRunningGraphLinksAreCheckedOn {
             level_holds_both_link_ends,
         };
         Ok(match made {
-            Ok(Some(made)) => the_verdict_a_link_made_is_judged_by(made)
-                .map(|verdict| LinkCheckResult::of_a_link_connect_makes(verdict.as_deref())),
+            Ok(Some(made)) => the_check_of_a_link_made(made),
             Ok(None) => Err(LinkNotCheckedYet::ClosesALoopOfFunctionNodes),
             Err(refusal) => Ok(refused_as_connect_refuses(
                 Some(inside_the_placed_stream),
@@ -498,28 +477,17 @@ fn the_check_of_what_a_live_connect_makes(
     refused_as_connect_refuses: impl FnOnce(GraphRequestRefusal) -> LinkCheckResult,
 ) -> Result<LinkCheckResult, LinkNotCheckedYet> {
     match what_it_makes {
-        Ok(made) => the_verdict_a_link_made_is_judged_by(made)
-            .map(|verdict| LinkCheckResult::of_a_link_connect_makes(verdict.as_deref())),
+        Ok(made) => the_check_of_a_link_made(made),
         Err(refusal) => Ok(refused_as_connect_refuses(refusal.into())),
     }
 }
 
-/// The verdict a connect that makes a link as `made` says judges it by: that of two typed ends,
-/// `None` for ends their families judge; why it is not checked yet when the link is made without
-/// being judged.
-pub(crate) fn the_verdict_a_link_made_is_judged_by(
+/// The check of a link a connect would make as `made`: the verdict it judges the link by; why
+/// it is not checked yet when the link is made without being judged.
+fn the_check_of_a_link_made(
     made: WhatALiveConnectMakesOfALink,
-) -> Result<Option<Box<PinLinkVerdict>>, LinkNotCheckedYet> {
-    match made {
-        WhatALiveConnectMakesOfALink::Makes(verdict) => Ok(verdict),
-        WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade => {
-            Err(LinkNotCheckedYet::ReachesAFragmentNode)
-        }
-        WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed => {
-            Err(LinkNotCheckedYet::ItsNodeTypeIsNotDescribedYet)
-        }
-        WhatALiveConnectMakesOfALink::ReachesANodeNotBuilt { node_name, why } => {
-            Err(LinkNotCheckedYet::ReachesANodeNotBuilt { node_name, why })
-        }
-    }
+) -> Result<LinkCheckResult, LinkNotCheckedYet> {
+    made.the_verdict_it_judges_by()
+        .map(|verdict| LinkCheckResult::of_a_link_connect_makes(verdict.as_deref()))
+        .map_err(LinkNotCheckedYet::ItsConnectMakesItUnjudged)
 }

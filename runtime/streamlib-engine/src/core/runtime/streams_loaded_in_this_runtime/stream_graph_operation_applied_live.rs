@@ -94,7 +94,7 @@ impl LoadedStreamInThisRuntime {
                 let spec = node_spec_of_a_document_node(
                     self.node_types_this_stream_resolves(),
                     node_type,
-                    node.clone(),
+                    &node,
                 );
                 let a_node_held_the_uuid_before_the_add =
                     self.the_node_of_the_node(node.id).is_ok();

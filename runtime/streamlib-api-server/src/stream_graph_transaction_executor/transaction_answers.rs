@@ -31,8 +31,8 @@ pub(super) fn the_links_an_operation_makes(
 impl StreamGraphTransactionExecutor<'_> {
     /// The answer of `applied_before`, the transaction of the project `project` an action sent
     /// again under its key first applied: each edit of a loaded stream under its stream id, each
-    /// input value set that a link overrode, and each node a `connect` inserted on its link, as
-    /// its first answer named them.
+    /// input value set that a link overrode, each node a `connect` inserted on its link, and why
+    /// each link made without being judged was, as its first answer named them.
     pub(super) fn the_answer_of_a_graph_transaction_applied_before(
         &self,
         project: Uuid,
@@ -40,6 +40,12 @@ impl StreamGraphTransactionExecutor<'_> {
     ) -> GraphTransactionToolResult {
         let stream_id_of_each_stream_asset =
             self.the_stream_id_of_each_loaded_stream_asset(project);
+        let stream_id_of = |stream: Uuid| {
+            stream_id_of_each_stream_asset
+                .get(&stream)
+                .cloned()
+                .unwrap_or_else(|| stream.to_string())
+        };
         let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
         for operation in applied_before.transaction.operations {
             let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
@@ -49,11 +55,7 @@ impl StreamGraphTransactionExecutor<'_> {
             else {
                 continue;
             };
-            let stream_id = stream_id_of_each_stream_asset
-                .get(&stream)
-                .cloned()
-                .unwrap_or_else(|| stream.to_string());
-            applied_live.push((stream_id, graph_operation));
+            applied_live.push((stream_id_of(stream), graph_operation));
         }
         let what_the_answer_names_of_each_added_node = applied_before
             .transaction
@@ -83,7 +85,12 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
-                why_each_link_was_made_unjudged: BTreeMap::new(),
+                why_each_link_was_made_unjudged: applied_before
+                    .transaction
+                    .links_made_unjudged
+                    .into_iter()
+                    .map(|unjudged| ((stream_id_of(unjudged.stream), unjudged.link), unjudged.why))
+                    .collect(),
             },
         )
     }

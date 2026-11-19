@@ -104,63 +104,6 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
     assert!(refusal.runtime_words.contains("`volume`"), "{refusal:?}");
 }
 
-/// The type of the `GraphInput` placed inside a stream to hold a setting there.
-const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
-
-/// The mixer of a project's `main`, collapsed into the placed stream `sub`, beside a
-/// `GraphInput` `volume` added inside `sub`: the placing node's UUID, and the mixer's and
-/// `volume`'s UUIDs as `main` draws them inside it.
-pub(super) struct TheMixerInsideAPlacedStream {
-    pub(super) subgraph: String,
-    pub(super) mixer: String,
-    pub(super) volume: String,
-}
-
-impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
-    /// The mixer of `project`'s loaded `main` collapsed by `alice` into the placed stream
-    /// `sub`, with a `GraphInput` `volume` added beside it inside `sub`.
-    pub(super) async fn the_mixer_collapsed_into_a_placed_stream(
-        &self,
-        project: &ProjectWithGraphDocuments,
-    ) -> TheMixerInsideAPlacedStream {
-        let stream_asset = project.stream_asset_of("main");
-        let collapsed = self
-            .the_answer_or_the_refusal_of(
-                "collapse_selection_into_subgraph",
-                json!({ "stream": stream_asset, "nodes": [MIXER_NODE_UUID], "name": "sub",
-                        "author": an_agent_named("alice") }),
-            )
-            .await
-            .expect("the mixer collapses into `sub`");
-        let subgraph = collapsed["added_nodes"][0]["node"]
-            .as_str()
-            .expect("the placing node")
-            .to_owned();
-        self.the_answer_or_the_refusal_of(
-            "add_node",
-            json!({ "stream": stream_asset, "level": [subgraph], "type": GRAPH_INPUT_NODE_TYPE,
-                    "name": "volume", "config": { "port": "volume", "family": "channels" },
-                    "author": an_agent_named("alice") }),
-        )
-        .await
-        .expect("a `GraphInput` is added inside `sub`");
-        let sub = project.the_graph_document_of("sub");
-        let drawn = |name: &str| {
-            the_uuid_a_held_node_takes_under(
-                &subgraph,
-                the_node_named(&sub, name)["id"]
-                    .as_str()
-                    .expect("the node's UUID"),
-            )
-        };
-        TheMixerInsideAPlacedStream {
-            mixer: drawn("mixer"),
-            volume: drawn("volume"),
-            subgraph,
-        }
-    }
-}
-
 /// A link inside a placed stream is judged by its pin types as the same link at the stream's
 /// own level is: a Float into a Texture is refused with `link_pin_types_do_not_connect`, and a
 /// link into a setting with `input_takes_no_wire`, each leaving the placed stream's document as
@@ -233,10 +176,11 @@ async fn a_link_inside_a_placed_stream_is_judged_by_its_pin_types() {
 
 /// A link inside a placed stream reaching a `GraphOutput` that names no family, which runs as
 /// no node of its own, is saved without being judged, and its entry under `connected_links`
-/// says why.
+/// says why; the same `connect` sent again under its key says why again.
 ///
 /// Mental-revert: discarding what the judgement of a link at a placed level answers leaves the
-/// entry with no `not_judged_because`.
+/// entry with no `not_judged_because`; answering the retry without the reasons the transaction
+/// keeps leaves the retry's entry with none.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -260,16 +204,14 @@ async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
         .expect("the output's UUID")
         .to_owned();
 
+    let connect = json!({
+        "stream": stream_asset, "level": [inside.subgraph],
+        "author": an_agent_named("alice"), "idempotency_key": "level-out",
+        "source": { "node": inside.mixer, "port": "level" },
+        "target": { "node": output, "port": "value" },
+    });
     let connected = engine
-        .the_answer_or_the_refusal_of(
-            "connect",
-            json!({
-                "stream": stream_asset, "level": [inside.subgraph],
-                "author": an_agent_named("alice"),
-                "source": { "node": inside.mixer, "port": "level" },
-                "target": { "node": output, "port": "value" },
-            }),
-        )
+        .the_answer_or_the_refusal_of("connect", connect.clone())
         .await
         .expect("a link into a `GraphOutput` naming no family is saved");
 
@@ -280,5 +222,19 @@ async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
     assert_eq!(
         links_by_node_name_in(&project.the_graph_document_of("sub")),
         ["mixer/level -> level-out/value"]
+    );
+
+    let sent_again = engine
+        .the_answer_or_the_refusal_of("connect", connect)
+        .await
+        .unwrap_or_else(|refusal| panic!("the connect sent again answers: {refusal:?}"));
+    assert_eq!(
+        sent_again["transaction"], connected["transaction"],
+        "{sent_again}"
+    );
+    assert_eq!(
+        sent_again["connected_links"][0]["not_judged_because"].as_str(),
+        Some(why),
+        "{sent_again}"
     );
 }

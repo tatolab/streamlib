@@ -22,9 +22,10 @@ use streamlib_project_repository::{
     ProjectAction, ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation,
     ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
     ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered,
-    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionNodeInsertedOnALink,
-    ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
-    StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
+    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionLinkMadeUnjudged,
+    ProjectTransactionNodeInsertedOnALink, ProjectTransactionReversal,
+    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphAction,
+    StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
     StreamGraphDocumentNote, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
@@ -265,7 +266,7 @@ fn refuse_a_link_judged_by_the_node_types_of_its_level(
 /// it; what it made on that running stream; the project operations it records, in order; each
 /// operation a loaded stream takes once the project's documents hold it; the link that
 /// overrides the input value it sets, when one feeds that input; and each link it made without
-/// judging it, as the stream draws it, with why.
+/// judging it, with why, as the stream draws it and as the transaction keeps it.
 struct OneGraphRequestApplied {
     operation_answered: StreamGraphOperation,
     applied_live: Option<OneOperationAppliedLive>,
@@ -273,6 +274,7 @@ struct OneGraphRequestApplied {
     made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)>,
     overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
     links_made_unjudged: Vec<(StreamGraphDocumentLink, String)>,
+    links_made_unjudged_as_kept: Vec<ProjectTransactionLinkMadeUnjudged>,
 }
 
 /// One operation made on a running stream, and the value set live on the input it set that it

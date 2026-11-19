@@ -113,7 +113,7 @@ fn the_inserted_node_in(graph_document: &Value) -> Value {
 }
 
 /// Each link of `graph_document` as `(source node, source port, target node, target port)`.
-pub(super) fn the_links_in(graph_document: &Value) -> Vec<(String, String, String, String)> {
+fn the_links_in(graph_document: &Value) -> Vec<(String, String, String, String)> {
     let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
     graph_document["links"]
         .as_array()

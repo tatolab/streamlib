@@ -175,7 +175,7 @@ pub(crate) fn node_spec_holding_the_input_values(
 pub(crate) fn node_spec_of_a_document_node(
     node_types: &NodeTypesOneStreamResolves,
     node_type: NodeClassImportPath,
-    node: streamlib_project_repository::StreamGraphDocumentNode,
+    node: &streamlib_project_repository::StreamGraphDocumentNode,
 ) -> NodeSpec {
     let spec = node_spec_holding_the_input_values(
         node_types,
@@ -183,12 +183,12 @@ pub(crate) fn node_spec_of_a_document_node(
         &node.input_values,
         node.studio.to_map(),
     )
-    .with_exposed_config_fields(node.exposed_config_fields)
+    .with_exposed_config_fields(node.exposed_config_fields.clone())
     .with_node_uuid(node.id);
     if node.name.is_empty() {
         spec
     } else {
-        spec.with_display_name(node.name)
+        spec.with_display_name(node.name.clone())
     }
 }
 
