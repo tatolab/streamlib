@@ -129,6 +129,15 @@ pub struct ListProjectViewsRequest {
     pub project_directory: PathBuf,
 }
 
+/// `list_project_node_ui_elements`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListProjectNodeUiElementsRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+}
+
 /// `write_studio_view_output`'s params.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

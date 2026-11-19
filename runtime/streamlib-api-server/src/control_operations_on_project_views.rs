@@ -8,13 +8,15 @@ use std::path::Path;
 
 use streamlib::sdk::runtime::TopLevelGraphInputDeclaringAStreamInput;
 use streamlib_project_repository::{
-    GRAPH_INTERFACE_VALUE_PORT_NAME, GraphEditStream, ProjectViewFolderRead, StreamGraphAction,
-    TatolabViewDeclaredPort, every_view_a_project_and_its_imports_bring,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GraphEditStream, ProjectNodeUiElementsListed,
+    ProjectViewFolderRead, StreamGraphAction, TatolabViewDeclaredPort,
+    every_node_ui_element_a_project_and_its_imports_bring,
+    every_view_a_project_and_its_imports_bring,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ListProjectViewsToolResult, ProjectActionRefusalOnTheWire,
-    ProjectViewDeclaredPort, ProjectViewListed, WriteGraphInputToolResult,
-    WriteStudioViewOutputToolResult,
+    ControlOperationRefusalCode, ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult,
+    ProjectActionRefusalOnTheWire, ProjectViewDeclaredPort, ProjectViewListed,
+    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 
 use uuid::Uuid;
@@ -82,8 +84,9 @@ fn the_view_on_the_wire(
 }
 
 use streamlib_control_contract::{
-    ControlOperation, GraphEditMode, ListProjectViewsRequest, WriteGraphInput,
-    WriteGraphInputRequest, WriteStudioViewOutput, WriteStudioViewOutputRequest,
+    ControlOperation, GraphEditMode, ListProjectNodeUiElements, ListProjectNodeUiElementsRequest,
+    ListProjectViewsRequest, WriteGraphInput, WriteGraphInputRequest, WriteStudioViewOutput,
+    WriteStudioViewOutputRequest,
 };
 impl ControlOperationDispatcher {
     pub(crate) async fn list_project_views(
@@ -109,6 +112,33 @@ impl ControlOperationDispatcher {
             )
             .await?;
         Ok(listed)
+    }
+
+    pub(crate) async fn list_project_node_ui_elements(
+        &self,
+        ListProjectNodeUiElementsRequest { project_directory }: ListProjectNodeUiElementsRequest,
+    ) -> Result<ListProjectNodeUiElementsToolResult, ControlOperationRefusal> {
+        self.a_project_repository_call_off_the_async_runtime(
+            ListProjectNodeUiElements::METHOD_NAME,
+            project_directory,
+            |project_repository| {
+                let project_directory = project_repository.project_directory().to_path_buf();
+                let ProjectNodeUiElementsListed {
+                    elements,
+                    manifests,
+                    unreadable_manifests,
+                } = every_node_ui_element_a_project_and_its_imports_bring(&project_directory)?;
+                Ok(ListProjectNodeUiElementsToolResult {
+                    project_directory,
+                    project: project_repository.project_file().project.to_string(),
+                    project_name: project_repository.project_file().name.clone(),
+                    elements,
+                    manifests,
+                    unreadable_manifests,
+                })
+            },
+        )
+        .await
     }
 
     /// `write_studio_view_output`, replaced by `set_node_input_value`: the one live set of the

@@ -312,6 +312,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   list_project_views(params: ControlOperations["list_project_views"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_views"]["result"]>;
   /**
+   * List the controls and node bodies a project and its imports register.
+   */
+  list_project_node_ui_elements(params: ControlOperations["list_project_node_ui_elements"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_ui_elements"]["result"]>;
+  /**
    * Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.
    */
   write_studio_view_output(params: ControlOperations["write_studio_view_output"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_studio_view_output"]["result"]>;

@@ -9,7 +9,6 @@ use serde_json::{Map, Value, json};
 use streamlib_node_schema::pin_type::{
     NodeInputMode, PinDeclaration, PinType, PinTypeDescription, built_in_pin_types,
 };
-use streamlib_project_repository::NodeUiManifest;
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
@@ -89,7 +88,6 @@ pub fn control_contract_document() -> Value {
         .map(|row| the_pin_type_entry_of(row, &mut schema_generator))
         .collect();
     the_pin_type_components_added_to(&mut schema_generator);
-    the_node_ui_manifest_component_added_to(&mut schema_generator);
     let component_schemas: Map<String, Value> = schema_generator.take_definitions(true);
     json!({
         "openrpc": OPENRPC_DOCUMENT_VERSION,
@@ -190,12 +188,6 @@ fn the_pin_type_components_added_to(schema_generator: &mut schemars::SchemaGener
     schema_generator.subschema_for::<PinType>();
     schema_generator.subschema_for::<PinDeclaration>();
     schema_generator.subschema_for::<NodeInputMode>();
-}
-
-/// Adds the node UI manifest's shape, which no operation names, so the runtime client generates
-/// its type and the JSON Schema an author's editor reads from the file.
-fn the_node_ui_manifest_component_added_to(schema_generator: &mut schemars::SchemaGenerator) {
-    schema_generator.subschema_for::<NodeUiManifest>();
 }
 
 fn the_errors_of(

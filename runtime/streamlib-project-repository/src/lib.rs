@@ -7,6 +7,8 @@ mod canonical_project_json;
 mod core_project_import;
 mod manifest_fields;
 mod node_ui_manifest;
+#[cfg(feature = "history")]
+mod node_ui_manifest_check;
 mod project_asset;
 #[cfg(feature = "history")]
 mod project_asset_file_bytes;
@@ -19,6 +21,7 @@ mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_import_copy;
 mod project_import_folders;
+mod project_node_ui_elements;
 mod project_pyproject_import_sources;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
@@ -51,8 +54,13 @@ pub use core_project_import::{
 };
 pub use manifest_fields::is_a_path_inside_its_own_folder;
 pub use node_ui_manifest::{
-    NODE_UI_CONTRACT_READ_MINOR, NODE_UI_DIRECTORY, NODE_UI_MANIFEST_FILE_NAME, NodeUiManifest,
-    NodeUiManifestControl, NodeUiManifestNodeBody, read_node_ui_manifest,
+    NODE_UI_CONTRACT_READ_MINOR, NODE_UI_DIRECTORY, NODE_UI_MANIFEST_FILE_NAME,
+    read_node_ui_manifest,
+};
+#[cfg(feature = "history")]
+pub use node_ui_manifest_check::{
+    NodeUiManifestToCheck, is_a_projects_own_node_ui_manifest, the_findings_of_a_node_ui_manifest,
+    the_node_ui_manifest_a_check_reads, the_path_of_a_projects_own_node_ui_manifest,
 };
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,
@@ -75,6 +83,10 @@ pub use project_history_repository::{
     ProjectHistoryCommit, ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
+pub use project_node_ui_elements::{
+    ProjectNodeUiElementsListed, ProjectNodeUiManifestRead,
+    every_node_ui_element_a_project_and_its_imports_bring,
+};
 pub use project_pyproject_import_sources::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
     PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, PYPROJECT_FILE_NAME, distribution_names_are_one,
