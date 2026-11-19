@@ -66,14 +66,10 @@ class ReportsTheLevelsItReads:
         self.reported = False
 
     def process(self, ctx) -> None:
-        for port in ("green", "spot"):
+        for name, port in (("green", self.green), ("spot", self.spot)):
             block = ctx.inputs.read(port)
             if block is not None:
-                carried = numpy.from_dlpack(block)
-                # A typed number an island hands a Channels input arrives as its f64's bytes.
-                if carried.dtype == numpy.uint8:
-                    carried = numpy.ascontiguousarray(carried).view(numpy.float64)
-                self.latest[port] = float(carried.reshape(-1)[0])
+                self.latest[name] = float(numpy.from_dlpack(block)[0][0])
         if not self.reported and len(self.latest) == 2:
             self.reported = True
             log.info("MARKER:COMBINED_LEVELS_READ " + json.dumps(self.latest))
