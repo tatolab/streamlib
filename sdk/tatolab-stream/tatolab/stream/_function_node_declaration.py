@@ -45,6 +45,7 @@ from ._pin_declaration import (
     family_a_pin_travels_on,
     family_declaration_of_a_typed_output,
     read_pin_declaration,
+    refuse_former_names_that_find_no_one_pin,
 )
 from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
@@ -221,6 +222,7 @@ class _FunctionNodeSignatureReading:
         self.config_class: Optional[type] = None
         self._port_spelling_by_cast_name: "dict[str, str]" = {}
         self._unread_message_input_ports: "list[str]" = []
+        self._typed_pins: "list[tuple[str, str, PinDeclarationOnTheWire]]" = []
 
         for parameter in inspect.signature(function).parameters.values():
             self._read_parameter(parameter, annotations)
@@ -232,6 +234,7 @@ class _FunctionNodeSignatureReading:
                 f"several outputs."
             )
         self.output_ports, self._signature_outputs = self._read_return(annotations["return"])
+        refuse_former_names_that_find_no_one_pin(self._function_name, self._typed_pins)
 
     @property
     def function_signature(self) -> "dict[str, Any]":
@@ -447,6 +450,7 @@ class _FunctionNodeSignatureReading:
             ),
             direction="input",
         )
+        self._typed_pins.append((parameter.name, port_name, declared.declaration))
         self._signature_inputs.append(
             {
                 "parameter": parameter.name,
@@ -631,6 +635,7 @@ class _FunctionNodeSignatureReading:
         declared = read_pin_declaration(
             self._function_name, _SINGLE_OUTPUT_NAME, output_annotation, direction="output"
         )
+        self._typed_pins.append((_SINGLE_OUTPUT_NAME, port_name, declared.declaration))
         output_port = {
             "name": port_name,
             "description": port_description or "",

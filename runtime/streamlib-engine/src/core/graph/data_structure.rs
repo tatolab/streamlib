@@ -149,25 +149,33 @@ impl Graph {
         })
     }
 
-    /// `from` and `to`, the ends of a link, each under its port's current name; an end whose
-    /// node or port the graph does not hold is left as given, for its refusal to name.
-    pub fn link_ends_under_their_current_port_names(
+    /// `from`, a link's output end, under its port's current name; an end whose node or port
+    /// the graph does not hold is left as given, for its refusal to name.
+    pub fn output_under_its_current_name(
         &self,
         from: super::OutputLinkPortRef,
-        to: super::InputLinkPortRef,
-    ) -> (super::OutputLinkPortRef, super::InputLinkPortRef) {
-        let node_of = |node_run_id: &NodeRunId| {
-            self.digraph
-                .node_weights()
-                .find(|node| &node.id == node_run_id)
-        };
-        let from = node_of(from.node_run_id())
+    ) -> super::OutputLinkPortRef {
+        self.node_of_the_run_id(from.node_run_id())
             .and_then(|node| node.try_output(from.port_name()))
-            .unwrap_or(from);
-        let to = node_of(to.node_run_id())
+            .unwrap_or(from)
+    }
+
+    /// `to`, a link's input end, under its port's current name; an end whose node or port the
+    /// graph does not hold is left as given, for its refusal to name.
+    pub fn input_under_its_current_name(
+        &self,
+        to: super::InputLinkPortRef,
+    ) -> super::InputLinkPortRef {
+        self.node_of_the_run_id(to.node_run_id())
             .and_then(|node| node.try_input(to.port_name()))
-            .unwrap_or(to);
-        (from, to)
+            .unwrap_or(to)
+    }
+
+    /// The node `node_run_id` names, if the graph holds it.
+    fn node_of_the_run_id(&self, node_run_id: &NodeRunId) -> Option<&GraphNode> {
+        self.digraph
+            .node_weights()
+            .find(|node| &node.id == node_run_id)
     }
 
     /// Drop the node `node_run_id` and the links into and out of it, then forget the values set

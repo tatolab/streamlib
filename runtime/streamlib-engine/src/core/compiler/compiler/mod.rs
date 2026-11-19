@@ -145,7 +145,7 @@ impl Compiler {
 
     /// The operations logged and not yet committed, in the order they were
     /// logged.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn logged_pending_operations(&self) -> Vec<PendingOperation> {
         self.transaction.lock().clone()
     }

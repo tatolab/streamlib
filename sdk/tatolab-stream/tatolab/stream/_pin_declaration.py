@@ -5,9 +5,10 @@
 
 A pin is a name, an annotation and an optional default. `read_pin_declaration` reads the
 annotation's type through the one table in `_pin_types`, its annotations through the classes
-of `_pin_annotations`, and checks the default against both. Each mistake is refused at
-decoration as a `NodeDeclarationRefusal`, a `TypeError` that carries a finding code, the node
-and the pin, so the declaration check can answer it as data.
+of `_pin_annotations`, the names it had through `FormerlyNamed`, and checks the default against
+both; `refuse_former_names_that_find_no_one_pin` checks those names across a node's pins. Each
+mistake is refused at decoration as a `NodeDeclarationRefusal`, a `TypeError` that carries a
+finding code, the node and the pin, so the declaration check can answer it as data.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import dataclasses
 import math
 import types
 import typing
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, Optional, final
 
@@ -30,6 +32,7 @@ from ._contract_pin_types import (
     PinTypeDescription,
 )
 from ._description import Description
+from ._formerly_named import FormerlyNamed
 from ._input_declaration_annotations import (
     INPUT_DECLARATION_ANNOTATION_CLASSES,
     StreamDelivery,
@@ -58,6 +61,7 @@ __all__ = [
     "family_a_pin_travels_on",
     "family_declaration_of_a_typed_output",
     "read_pin_declaration",
+    "refuse_former_names_that_find_no_one_pin",
 ]
 
 type PinDirection = Literal["input", "output"]
@@ -78,6 +82,7 @@ type NodeDeclarationFindingCode = Literal[
     "list_element_not_taken",
     "pin_annotation_not_taken",
     "pin_annotation_repeated",
+    "former_name_finds_no_one_pin",
     "value_input_has_no_default",
     "unset_input_with_a_default",
     "pin_default_not_of_its_type",
@@ -194,6 +199,48 @@ def read_pin_declaration(
     return reading.read(annotation, default)
 
 
+def refuse_former_names_that_find_no_one_pin(
+    node: str, pins: "Sequence[tuple[str, str, PinDeclarationOnTheWire]]"
+) -> None:
+    """Refuse a name a pin of `node` had that would not find that pin alone.
+
+    `pins` is each pin of the node, inputs and outputs, as its name as written, its port name
+    and its declaration. A former name is refused when it is a pin's name now, its own pin's
+    included, or when two pins list it, as the runtime refuses it at registration.
+    """
+    written_name_of_each_port = {port_name: written_name for written_name, port_name, _ in pins}
+    written_name_listing_each_former_name: dict[str, str] = {}
+    for written_name, _, declaration in pins:
+        for former_name in declaration.get("former_names", []):
+            holder = written_name_of_each_port.get(former_name)
+            if holder == written_name:
+                words = (
+                    f"`{node}`'s pin `{written_name}` lists `{former_name}` as a name it had, "
+                    f"and it is named that now. To fix: drop `{former_name}` from its "
+                    f"`FormerlyNamed`."
+                )
+            elif holder is not None:
+                words = (
+                    f"`{node}`'s pin `{written_name}` lists `{former_name}` as a name it had, "
+                    f"and pin `{holder}` is named that now, so a project saved under "
+                    f"`{former_name}` would not find one pin. To fix: drop `{former_name}` "
+                    f"from its `FormerlyNamed`, or rename `{holder}`."
+                )
+            elif former_name in written_name_listing_each_former_name:
+                other = written_name_listing_each_former_name[former_name]
+                words = (
+                    f"`{node}`'s pins `{other}` and `{written_name}` both list `{former_name}` "
+                    f"as a name they had, so a project saved under it would not find one pin. "
+                    f"To fix: keep `{former_name}` on the pin that had it."
+                )
+            else:
+                written_name_listing_each_former_name[former_name] = written_name
+                continue
+            raise NodeDeclarationRefusal(
+                words, finding_code="former_name_finds_no_one_pin", node=node, pin=written_name
+            )
+
+
 class _PinReading:
     """One pin's annotation and default, read once."""
 
@@ -224,6 +271,9 @@ class _PinReading:
         }
         if annotations:
             declaration["annotations"] = annotations
+        formerly_named = self._formerly_named_among(metadata)
+        if formerly_named is not None:
+            declaration["former_names"] = list(formerly_named.port_names)
         if self._direction == "output":
             return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
         if optional:
@@ -282,6 +332,17 @@ class _PinReading:
                 "pin_annotation_repeated",
             )
         return sizes[0] if sizes else None
+
+    def _formerly_named_among(self, metadata: "list[object]") -> Optional[FormerlyNamed]:
+        written = [entry for entry in metadata if isinstance(entry, FormerlyNamed)]
+        if len(written) > 1:
+            raise self._refusal(
+                f"{self._pin_named} carries {len(written)} `FormerlyNamed`s; it takes one. To "
+                f"fix: list every name it had in one, `FormerlyNamed(\"last_name\", "
+                f"\"the_one_before\")`.",
+                "pin_annotation_repeated",
+            )
+        return written[0] if written else None
 
     def _pin_type_of(
         self,
@@ -478,7 +539,7 @@ class _PinReading:
     ) -> PinAnnotations:
         annotations: PinAnnotations = {}
         for entry in metadata:
-            if isinstance(entry, (ExactNumberSize, Description)):
+            if isinstance(entry, (ExactNumberSize, Description, FormerlyNamed)):
                 continue
             if isinstance(entry, INPUT_DECLARATION_ANNOTATION_CLASSES):
                 raise self._refusal_of_an_input_declaration_annotation(entry)
@@ -487,7 +548,7 @@ class _PinReading:
                 raise self._refusal(
                     f"{self._pin_named} carries {entry!r}, which no pin reads. To fix: drop "
                     f"it; a pin reads `NumberRange`, `NumberStep`, `NumberUnit`, `PinMeaning`, "
-                    f"`PinControl` and `Description`.",
+                    f"`PinControl`, `FormerlyNamed` and `Description`.",
                     "pin_annotation_not_taken",
                 )
             if annotation_name in annotations:

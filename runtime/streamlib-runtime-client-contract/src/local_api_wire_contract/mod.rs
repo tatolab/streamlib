@@ -43,7 +43,8 @@ pub use graph_wire_types::{
     GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
 };
 pub use link_check_wire_types::{
-    ConvertNodeToInsertOnTheWire, LinkCheckResult, PinLinkMarksOnTheWire, PinLinkOutcomeOnTheWire,
+    ConvertNodeToInsertOnTheWire, LinkCandidateChecked, LinkCandidateEnd, LinkCandidateNotChecked,
+    LinkCandidatesCheckResult, LinkCheckResult, PinLinkMarksOnTheWire, PinLinkOutcomeOnTheWire,
     PinLinkWarningOnTheWire,
 };
 pub use log_wire_types::LogsToolResult;

@@ -21,6 +21,7 @@ mod control_plane_stub_support;
 mod control_subscriptions_of_one_connection;
 mod first_party_package_moves_recorded_in_the_open_projects;
 mod handlers;
+mod link_candidates_checked_before_one_is_made;
 mod link_checked_before_it_is_made;
 mod local_api_served_for_an_engine;
 mod local_api_socket;

@@ -335,9 +335,11 @@ class NodeDeclarationDecorator:
         NumberRange(minimum=0.0, maximum=1.0), NumberUnit("Hz"), PinMeaning("frequency")] =
         440.0`: its type is the pin type, the objects beside it are what the pin states
         besides, and its default is the value the input holds until one is set or linked.
-        `T | None = None` is an input that may be unset and reads `None`. The return
-        annotation is the output `result`. `Time`, `State[...]` and `Stateful[...]` are read
-        as under `@node.function`. A function takes `@node` bare.
+        `T | None = None` is an input that may be unset and reads `None`. A renamed pin writes
+        the names it had beside it, `FormerlyNamed("frequency_hz")`, and a project saved under
+        one of them opens with its value and links on the pin. The return annotation is the
+        output `result`. `Time`, `State[...]` and `Stateful[...]` are read as under
+        `@node.function`. A function takes `@node` bare.
 
         On a class, each value input is an annotated field with its default, `radius: float =
         4.0`, each Stream or Trigger input `video: InputPin[Texture]`, and each output
