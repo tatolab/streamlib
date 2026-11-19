@@ -14,14 +14,14 @@ fn a_second_staging_source_in_one_scope_is_refused_rather_than_replacing_the_fir
     let pending = PendingStagedWriteBackToSurface::new_unarmed();
 
     pending
-        .arm(StagedWriteBackSource::DeviceExportStaging)
+        .arm(StagedWriteBackSource::DeviceExportStaging, || Ok(None))
         .expect("the first source arms");
     pending
-        .arm(StagedWriteBackSource::DeviceExportStaging)
+        .arm(StagedWriteBackSource::DeviceExportStaging, || Ok(None))
         .expect("re-arming the same source is one pending edit, not two");
 
     let refusal = pending
-        .arm(StagedWriteBackSource::CpuReadbackStaging)
+        .arm(StagedWriteBackSource::CpuReadbackStaging, || Ok(None))
         .expect_err("a second, different source must be refused")
         .to_string();
     assert!(
@@ -32,7 +32,7 @@ fn a_second_staging_source_in_one_scope_is_refused_rather_than_replacing_the_fir
     // The refusal must not have disturbed what was already armed: the
     // first door's edit is still the one that publishes.
     pending
-        .arm(StagedWriteBackSource::DeviceExportStaging)
+        .arm(StagedWriteBackSource::DeviceExportStaging, || Ok(None))
         .expect("the first source is still the armed one");
 }
 
@@ -54,12 +54,12 @@ fn a_device_scope_meets_the_cpu_doors_arm_because_the_cell_is_the_surfaces() {
 
     // What the handle's CPU door does under a write lock.
     surfaces_pending_edit
-        .arm(StagedWriteBackSource::CpuReadbackStaging)
+        .arm(StagedWriteBackSource::CpuReadbackStaging, || Ok(None))
         .expect("the CPU door stages first");
 
     // What a device-tensor scope minted off that same handle then does.
     let refusal = surfaces_pending_edit
-        .arm(StagedWriteBackSource::DeviceExportStaging)
+        .arm(StagedWriteBackSource::DeviceExportStaging, || Ok(None))
         .expect_err("a device scope over a surface holding a CPU staged edit must be refused")
         .to_string();
     assert!(
@@ -76,10 +76,10 @@ fn discarding_releases_the_scope_to_stage_through_the_other_door() {
     let pending = PendingStagedWriteBackToSurface::new_unarmed();
 
     pending
-        .arm(StagedWriteBackSource::CpuReadbackStaging)
+        .arm(StagedWriteBackSource::CpuReadbackStaging, || Ok(None))
         .expect("the first source arms");
     pending.discard();
     pending
-        .arm(StagedWriteBackSource::DeviceExportStaging)
+        .arm(StagedWriteBackSource::DeviceExportStaging, || Ok(None))
         .expect("with nothing pending, the other door is free to stage");
 }

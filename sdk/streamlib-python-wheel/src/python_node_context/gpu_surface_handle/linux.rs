@@ -54,9 +54,7 @@ impl PythonGpuSurfaceHandle {
             // and finding that out is not worth a round trip and a frame
             // copy first. Nothing is discarded on this path — the arm that
             // refused belongs to the other door.
-            owned_memory
-                .pending_staged_write_back()
-                .arm(StagedWriteBackSource::CpuReadbackStaging)?;
+            owned_memory.arm_staged_write_back(StagedWriteBackSource::CpuReadbackStaging)?;
             // Past the arm it is this scope's to settle, so every way out
             // from here drops it: a publish over a staging this scope never
             // filled would copy some earlier frame over the surface.
@@ -196,9 +194,7 @@ impl PythonGpuSurfaceHandle {
         // staged an edit through the CPU door is refused here rather
         // than handed a second writable view over other memory.
         if writable_export {
-            owned_memory
-                .pending_staged_write_back()
-                .arm(StagedWriteBackSource::DeviceExportStaging)?;
+            owned_memory.arm_staged_write_back(StagedWriteBackSource::DeviceExportStaging)?;
         }
         let capsule =
             device_dlpack_capsule(python, owned_memory, prepared, exchange_shape, read_only)?;

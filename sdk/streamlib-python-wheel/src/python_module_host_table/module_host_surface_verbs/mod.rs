@@ -488,6 +488,9 @@ impl SurfacesLentToNativeCode {
                 .to_string()
         })?;
         let _only_write_through_this_nodes_stagings = self.host_memory_copy_in_progress.lock();
+        surface_share_client
+            .pool_slots_holding_a_staged_edit()
+            .before_native_code_writes_over_the_surface(&destination_surface_id)?;
         let staging = surface_share_client.open_cpu_readback_export_from_native_code(
             native_escalate_channel,
             &destination_surface_id,
@@ -615,6 +618,9 @@ impl SurfacesLentToNativeCode {
                 .to_string()
         })?;
         let _only_read_through_this_nodes_stagings = self.host_memory_copy_in_progress.lock();
+        surface_share_client
+            .pool_slots_holding_a_staged_edit()
+            .before_native_code_reads_the_frame_in(&source_surface_id)?;
         let staging = surface_share_client.open_cpu_readback_export_from_native_code(
             native_escalate_channel,
             &source_surface_id,
