@@ -364,7 +364,7 @@ fn a_link_into_a_setting_is_refused_whatever_the_types() {
     let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
         panic!("a setting takes no wire: {verdict:?}");
     };
-    assert_eq!(refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
+    assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
     assert!(
         refusal
             .to_string()

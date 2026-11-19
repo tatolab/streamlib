@@ -74,6 +74,13 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {
             None
         }
+        fn the_verdict_of_a_link_between_two_node_types(
+            &self,
+            _from: ::streamlib::sdk::runtime::PortOfANodeOfAType<'_>,
+            _to: ::streamlib::sdk::runtime::PortOfANodeOfAType<'_>,
+        ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {
+            None
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             node_type: &str,

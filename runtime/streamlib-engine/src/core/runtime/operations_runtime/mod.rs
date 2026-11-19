@@ -677,6 +677,22 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.the_verdict_of_a_held_link(link)
     }
 
+    fn the_verdict_of_a_link_between_two_node_types(
+        &self,
+        from: crate::core::runtime::PortOfANodeOfAType<'_>,
+        to: crate::core::runtime::PortOfANodeOfAType<'_>,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict> {
+        let node_types = self.node_types_this_stream_resolves();
+        let ports_of =
+            |node_type: &str| node_types.port_info(&NodeClassImportPath::new(node_type).ok()?);
+        let (output_ports, input_ports) = (ports_of(from.node_type)?, ports_of(to.node_type)?);
+        crate::core::graph::the_verdict_of_a_link_between_declared_ports(
+            (from.node_name, output_ports.output_named(from.port)?),
+            (to.node_name, input_ports.input_named(to.port)?),
+            &node_types.pin_conversions(),
+        )
+    }
+
     fn the_name_a_node_added_with_none_takes(
         &self,
         node_type: &str,

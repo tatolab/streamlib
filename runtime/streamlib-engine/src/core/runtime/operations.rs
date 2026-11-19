@@ -26,6 +26,17 @@ pub struct NodeInTheGraph {
     pub name: String,
 }
 
+/// One end of a link named before its node runs: the node's name and type, and the port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortOfANodeOfAType<'end> {
+    /// The node's name, which a refusal names it by.
+    pub node_name: &'end str,
+    /// The node's type.
+    pub node_type: &'end str,
+    /// The port's name.
+    pub port: &'end str,
+}
+
 /// What a live connect would make of one link, judged as it judges the link and made nowhere.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhatALiveConnectMakesOfALink {
@@ -86,6 +97,15 @@ pub trait RuntimeOperations: Send + Sync {
     fn the_verdict_of_a_link_it_holds(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict>;
+
+    /// The verdict of a link from the output `from` names to the input `to` names, judged by the
+    /// ports this stream resolves each node type to declare, among the conversions it resolves,
+    /// before either node runs; `None` when either port is untyped or not declared.
+    fn the_verdict_of_a_link_between_two_node_types(
+        &self,
+        from: PortOfANodeOfAType<'_>,
+        to: PortOfANodeOfAType<'_>,
     ) -> Option<crate::core::descriptors::PinLinkVerdict>;
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are

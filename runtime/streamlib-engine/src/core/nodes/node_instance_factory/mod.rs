@@ -238,6 +238,17 @@ impl Default for NodeInstanceFactory {
     }
 }
 
+/// Log, rather than return, `registered` when the registration of `P` failed.
+fn warn_of_a_failed_registration_of<P>(registered: Result<NodeClassImportPath>) {
+    if let Err(e) = registered {
+        tracing::warn!(
+            "Node type registration for {} failed: {}",
+            std::any::type_name::<P>(),
+            e
+        );
+    }
+}
+
 impl NodeInstanceFactory {
     pub fn new() -> Self {
         Self {
@@ -256,13 +267,7 @@ impl NodeInstanceFactory {
         P: GeneratedNode + 'static,
         P::Config: Config,
     {
-        if let Err(e) = self.register_host_compiled_node_type::<P>() {
-            tracing::warn!(
-                "Node type registration for {} failed: {}",
-                std::any::type_name::<P>(),
-                e
-            );
-        }
+        warn_of_a_failed_registration_of::<P>(self.register_host_compiled_node_type::<P>());
     }
 
     /// Register `P`, a node type stating a conversion whose output follows a setting, with
@@ -275,13 +280,9 @@ impl NodeInstanceFactory {
         P: GeneratedNode + 'static,
         P::Config: Config,
     {
-        if let Err(e) = self.register_host_compiled_node_type_picking::<P>(Some(pick)) {
-            tracing::warn!(
-                "Node type registration for {} failed: {}",
-                std::any::type_name::<P>(),
-                e
-            );
-        }
+        warn_of_a_failed_registration_of::<P>(
+            self.register_host_compiled_node_type_picking::<P>(Some(pick)),
+        );
     }
 
     /// Register host-compiled Rust type `P` under its descriptor's import

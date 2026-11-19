@@ -8487,21 +8487,11 @@
             "description": "The `as` its `add_node` gave it, which later operations of the transaction named it by."
           },
           "node_type": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Its node type; present on a node the runtime inserted, whose `inserted_because` says why."
           },
           "inserted_because": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GraphTransactionNodeInsertedBecause"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "$ref": "#/components/schemas/GraphTransactionNodeInsertedBecause",
             "description": "Why the runtime inserted it on a link a `connect` asked for; absent on a node an\noperation added."
           }
         },

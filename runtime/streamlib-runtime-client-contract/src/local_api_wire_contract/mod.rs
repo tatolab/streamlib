@@ -23,7 +23,8 @@ pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
     GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
-    GraphTransactionRebuiltNode, GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
+    GraphTransactionRebuiltNode, GraphTransactionToolResult, InsertedNodeOnTheWire,
+    RefusedGraphLinkOnTheWire,
 };
 pub use link_check_wire_types::{
     ConvertNodeToInsertOnTheWire, FreePinConversionOnTheWire, LinkCheckResult,

@@ -43,11 +43,37 @@ pub(super) fn the_link_named(
     })
 }
 
-/// The operation a connect from `source` to `target` asks of the graph `staged_graph` holds:
-/// the link between them; when it closes a loop of function nodes no `PreviousValue` node is
-/// in, a `PreviousValue` node added on it; and when its two ends' pin types connect only through
-/// a built-in conversion, as `convert_node_a_link_needs` judges it, that convert node added on
-/// it.
+/// What a `connect` asks of a graph: the link it names, made as it is, or a node of its own
+/// added on that link and carrying it, and why the node is added.
+pub(crate) enum WhatAConnectAsks {
+    /// The link, made as it is.
+    Link(StreamGraphDocumentLink),
+    /// A node added on the link, carrying it through the node's input and output.
+    ThroughANode {
+        /// The addition of the node, with both links through it.
+        operation: Box<StreamGraphOperation>,
+        /// The link the `connect` named, from its output to its input.
+        original_link: StreamGraphDocumentLink,
+        /// Why the node is added.
+        because: GraphTransactionNodeInsertedBecause,
+    },
+}
+
+impl WhatAConnectAsks {
+    /// The operation the graph is asked to make.
+    pub(super) fn into_the_operation(self) -> StreamGraphOperation {
+        match self {
+            Self::Link(link) => StreamGraphOperation::Connect { link },
+            Self::ThroughANode { operation, .. } => *operation,
+        }
+    }
+}
+
+/// What a connect from `source` to `target` asks of the graph `staged_graph` holds: the link
+/// between them, as it is when `staged_graph` already holds it; when it closes a loop of
+/// function nodes no `PreviousValue` node is in, a `PreviousValue` node added on it; and when its
+/// two ends' pin types connect only through a built-in conversion, as `convert_node_a_link_needs`
+/// judges it, that convert node added on it.
 pub(super) fn the_operation_a_connect_asks(
     source: &StreamGraphActionLinkEnd,
     target: &StreamGraphActionLinkEnd,
@@ -55,8 +81,11 @@ pub(super) fn the_operation_a_connect_asks(
     node_by_label: &HashMap<String, Uuid>,
     function_nodes_of_the_running_stream: &FunctionNodesOfTheRunningStream<'_>,
     convert_node_a_link_needs: &ConvertNodeALinkOfTheRunningStreamNeeds<'_>,
-) -> Result<StreamGraphOperation, GraphRequestRefusal> {
+) -> Result<WhatAConnectAsks, GraphRequestRefusal> {
     let link = the_link_named(source, target, node_by_label)?;
+    if staged_graph.links().contains(&link) {
+        return Ok(WhatAConnectAsks::Link(link));
+    }
     if the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
         staged_graph,
         &link,
@@ -67,14 +96,10 @@ pub(super) fn the_operation_a_connect_asks(
             link,
         ));
     }
-    match convert_node_a_link_needs(&link) {
-        Some(convert_node) => Ok(the_convert_node_added_on_the_link(
-            staged_graph,
-            link,
-            &convert_node,
-        )),
-        None => Ok(StreamGraphOperation::Connect { link }),
-    }
+    Ok(match convert_node_a_link_needs(&link)? {
+        Some(convert_node) => the_convert_node_added_on_the_link(staged_graph, link, &convert_node),
+        None => WhatAConnectAsks::Link(link),
+    })
 }
 
 /// Refuse a connect of `link` when `graph` already holds it.
@@ -93,13 +118,15 @@ pub(super) fn refuse_a_link_the_graph_already_holds(
 }
 
 /// The operation `request` asks of the graph `staged_graph` holds, with everything its inverse
-/// needs read from it; an added node takes a new UUID, recorded under its `as` when it has one.
+/// needs read from it; an added node takes a new UUID, recorded under its `as` when it has one,
+/// and a node a `connect` adds on its link is recorded in `node_inserted_because` with why.
 pub(super) fn graph_operation_for_the_request(
     request: StreamGraphAction,
     staged_graph: &StreamGraphDocument,
     node_by_label: &mut HashMap<String, Uuid>,
     what_the_request_reads: &WhatAGraphRequestReadsOfItsStreamAndProject<'_>,
     placed_stream_a_collapse_saves: &mut Option<PlacedStreamACollapseSaves>,
+    node_inserted_because: &mut Option<GraphTransactionNodeInsertedBecause>,
 ) -> Result<StreamGraphOperation, GraphRequestRefusal> {
     let WhatAGraphRequestReadsOfItsStreamAndProject {
         run_the_graph_generator,
@@ -238,14 +265,20 @@ pub(super) fn graph_operation_for_the_request(
                 links: staged_graph.links_touching(node),
             })
         }
-        StreamGraphAction::Connect { source, target, .. } => the_operation_a_connect_asks(
-            &source,
-            &target,
-            staged_graph,
-            node_by_label,
-            function_nodes_of_the_running_stream,
-            convert_node_a_link_needs,
-        ),
+        StreamGraphAction::Connect { source, target, .. } => {
+            let asked = the_operation_a_connect_asks(
+                &source,
+                &target,
+                staged_graph,
+                node_by_label,
+                function_nodes_of_the_running_stream,
+                convert_node_a_link_needs,
+            )?;
+            if let WhatAConnectAsks::ThroughANode { because, .. } = &asked {
+                *node_inserted_because = Some(*because);
+            }
+            Ok(asked.into_the_operation())
+        }
         StreamGraphAction::Disconnect { source, target, .. } => {
             Ok(StreamGraphOperation::Disconnect {
                 link: the_link_named(&source, &target, node_by_label)?,
@@ -570,50 +603,63 @@ pub(super) fn the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is
 pub(super) fn the_previous_value_node_added_on_the_link(
     staged_graph: &StreamGraphDocument,
     link: StreamGraphDocumentLink,
-) -> StreamGraphOperation {
-    a_node_added_on_the_link(
-        staged_graph,
-        link,
-        NodeCarryingTheLink {
-            node_type: PREVIOUS_VALUE_NODE_TYPE,
-            input_port: PREVIOUS_VALUE_NODE_INPUT_PORT,
-            output_port: PREVIOUS_VALUE_NODE_OUTPUT_PORT,
-            input_values: Map::new(),
-            collapsed: None,
-        },
-    )
+) -> WhatAConnectAsks {
+    a_node_added_on_the_link(staged_graph, link, NodeCarryingTheLink::closing_a_loop())
 }
 
 /// The addition of `convert_node` to `staged_graph` with `link` carried through it: holding the
 /// settings its conversion picked, drawn collapsed, halfway between the two nodes `link` joins
 /// when the canvas places both.
-pub(super) fn the_convert_node_added_on_the_link(
+fn the_convert_node_added_on_the_link(
     staged_graph: &StreamGraphDocument,
     link: StreamGraphDocumentLink,
     convert_node: &ConvertNodeToInsert,
-) -> StreamGraphOperation {
-    let conversion = &convert_node.conversion;
+) -> WhatAConnectAsks {
     a_node_added_on_the_link(
         staged_graph,
         link,
-        NodeCarryingTheLink {
-            node_type: conversion.node_type.as_str(),
-            input_port: &conversion.input_port_name,
-            output_port: &conversion.output_port_name,
-            input_values: convert_node.input_values.clone(),
-            collapsed: Some(true),
-        },
+        NodeCarryingTheLink::converting_pin_types(convert_node),
     )
 }
 
 /// A node a connect adds on the link it asks for: its type, the input and output the link is
-/// carried through, the input values it holds, and whether the canvas draws it collapsed.
+/// carried through, the input values it holds, whether the canvas draws it collapsed, and why it
+/// is added.
 struct NodeCarryingTheLink<'node> {
     node_type: &'node str,
     input_port: &'node str,
     output_port: &'node str,
     input_values: Map<String, Value>,
     collapsed: Option<bool>,
+    because: GraphTransactionNodeInsertedBecause,
+}
+
+impl<'node> NodeCarryingTheLink<'node> {
+    /// A `PreviousValue` node, added because the link closes a loop of function nodes.
+    fn closing_a_loop() -> Self {
+        Self {
+            node_type: PREVIOUS_VALUE_NODE_TYPE,
+            input_port: PREVIOUS_VALUE_NODE_INPUT_PORT,
+            output_port: PREVIOUS_VALUE_NODE_OUTPUT_PORT,
+            input_values: Map::new(),
+            collapsed: None,
+            because: GraphTransactionNodeInsertedBecause::ClosesALoop,
+        }
+    }
+
+    /// `convert_node`, holding the settings its conversion picked and drawn collapsed, added
+    /// because the link's two pin types connect only through it.
+    fn converting_pin_types(convert_node: &'node ConvertNodeToInsert) -> Self {
+        let conversion = &convert_node.conversion;
+        Self {
+            node_type: conversion.node_type.as_str(),
+            input_port: &conversion.input_port_name,
+            output_port: &conversion.output_port_name,
+            input_values: convert_node.input_values.clone(),
+            collapsed: Some(true),
+            because: GraphTransactionNodeInsertedBecause::ConvertsPinTypes,
+        }
+    }
 }
 
 /// The addition of `carrying` to `staged_graph`, with no name of its own, `link` carried through
@@ -622,7 +668,7 @@ fn a_node_added_on_the_link(
     staged_graph: &StreamGraphDocument,
     link: StreamGraphDocumentLink,
     carrying: NodeCarryingTheLink<'_>,
-) -> StreamGraphOperation {
+) -> WhatAConnectAsks {
     let canvas_position_of = |node: Uuid| {
         let [x, y] = staged_graph.node(node).ok()?.studio.position?;
         Some((x.as_f64()?, y.as_f64()?))
@@ -636,7 +682,7 @@ fn a_node_added_on_the_link(
             ])
         });
     let added_node = Uuid::new_v4();
-    StreamGraphOperation::AddNode {
+    let operation = StreamGraphOperation::AddNode {
         node: StreamGraphDocumentNode {
             id: added_node,
             name: String::new(),
@@ -652,7 +698,7 @@ fn a_node_added_on_the_link(
         },
         links: vec![
             StreamGraphDocumentLink {
-                source: link.source,
+                source: link.source.clone(),
                 target: StreamGraphDocumentLinkEnd {
                     node: added_node,
                     port: carrying.input_port.to_owned(),
@@ -663,9 +709,14 @@ fn a_node_added_on_the_link(
                     node: added_node,
                     port: carrying.output_port.to_owned(),
                 },
-                target: link.target,
+                target: link.target.clone(),
             },
         ],
+    };
+    WhatAConnectAsks::ThroughANode {
+        operation: Box::new(operation),
+        original_link: link,
+        because: carrying.because,
     }
 }
 

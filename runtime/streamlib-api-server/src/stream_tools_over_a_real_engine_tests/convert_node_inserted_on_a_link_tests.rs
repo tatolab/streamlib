@@ -238,7 +238,8 @@ async fn a_link_a_built_in_conversion_bridges_gets_its_convert_node_in_one_edit(
 ///
 /// Mental-revert: a conversion judged by its output as it states itself, a Texture of no format,
 /// is placed into the `nv12` input with a warning, and the node into `bgra8_unorm` holds no
-/// `format`.
+/// `format`; a link out of the node judged by that same declared output warns that it states no
+/// format.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_placed_without_one() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -260,13 +261,21 @@ async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_pla
     );
     assert_eq!(the_links_in(&project.the_graph_document_of("main")), []);
 
-    engine
+    let applied = engine
         .the_answer_or_the_refusal_of(
             "connect",
             connected_by_alice(&camera_into_model(stream_asset, "tensor_out", "bgra_video")),
         )
         .await
         .unwrap_or_else(|refusal| panic!("the link connects through a node: {refusal:?}"));
+    let connected_links = applied["connected_links"]
+        .as_array()
+        .expect("connected_links");
+    assert_eq!(connected_links.len(), 2, "{applied}");
+    assert!(
+        connected_links[1].get("warnings").is_none(),
+        "the node's output is judged by the format it holds: {applied}"
+    );
     let inserted = the_inserted_node_in(&project.the_graph_document_of("main"));
     assert_eq!(
         inserted["type"], "tatolab.stream:TensorToTexture",
@@ -348,6 +357,8 @@ async fn a_connected_link_says_when_it_converts_for_free() {
 /// naming that node type, and its `suggested_call` is the `transact` that places it between the
 /// two ends: made, it adds the node and both links.
 ///
+/// `check_link` answers that same refusal and call.
+///
 /// Mental-revert: coding the refusal as any link whose pin types do not connect answers
 /// `link_pin_types_do_not_connect` and suggests nothing.
 #[tokio::test(flavor = "multi_thread")]
@@ -398,6 +409,24 @@ async fn a_link_only_a_module_conversion_bridges_is_refused_with_the_call_that_p
         ]})
     );
 
+    let checked = engine
+        .the_answer_or_the_refusal_of(
+            "check_link",
+            camera_into_model(project.stream_asset_of("main"), "gate", "audio"),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("check_link answers: {refusal:?}"));
+    assert_eq!(checked["outcome"], "refused", "{checked}");
+    assert_eq!(
+        checked["refusal"]["refusal_code"], "link_needs_a_module_conversion",
+        "{checked}"
+    );
+    assert_eq!(
+        checked["refusal"]["suggested_call"],
+        serde_json::to_value(&refusal.suggested_call).unwrap(),
+        "check_link suggests the call connect suggests"
+    );
+
     let mut suggested = Value::Object(params);
     suggested["author"] = an_agent_named("alice");
     let placed = engine
@@ -406,4 +435,181 @@ async fn a_link_only_a_module_conversion_bridges_is_refused_with_the_call_that_p
         .unwrap_or_else(|refusal| panic!("the suggested call places it: {refusal:?}"));
     assert_eq!(placed["added_nodes"].as_array().map(Vec::len), Some(1));
     assert_eq!(placed["connected_links"].as_array().map(Vec::len), Some(2));
+}
+
+/// A refused link one end of which is a node the same `transact` adds, named by its `as`, gets no
+/// `suggested_call`: the stream holds no such node for a later call to name.
+///
+/// Mental-revert: suggesting the call whatever the ends name offers a `transact` naming
+/// `conversion`, a node no stream holds, beside the label it gives the conversion it places.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_from_a_node_the_same_transact_adds_is_refused_suggesting_no_call() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": stream_id,
+                  "type": ConvertNodeTestEnd::node_class_import_path().as_str(),
+                  "as": "conversion" },
+                { "operation": "connect", "stream": stream_id,
+                  "source": { "node": "conversion", "port": "gate" },
+                  "target": { "node": MODEL_NODE_UUID, "port": "audio" } },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("connect never places a module's conversion");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkNeedsAModuleConversion,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.suggested_call, None, "{refusal:?}");
+}
+
+const SPARE_NODE_UUID: &str = "e6e6e6e6-e6e6-4e6e-8e6e-e6e6e6e6e6e6";
+
+/// A link needing a convert node on a stream an earlier operation of the same transaction has
+/// take its edits once the documents hold them, here a collapse placing a stream, is refused
+/// before anything is written, naming the node and the transaction of its own that places it.
+///
+/// Mental-revert: connecting it as it is writes the link to the document, and the running
+/// stream only warns of it as it takes the edit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+    let mut graph = project.the_graph_document_of("main");
+    graph["nodes"].as_array_mut().expect("nodes").push(json!({
+        "id": SPARE_NODE_UUID, "name": "spare",
+        "type": ConvertNodeTestEnd::node_class_import_path().as_str(), "config": {},
+    }));
+    project.write_the_graph_document(graph);
+    let stream_asset = project.stream_asset_of("main");
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let saved_before = project.the_graph_document_of("main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "operations": [
+                { "operation": "collapse_selection_into_subgraph", "stream": stream_asset,
+                  "nodes": [SPARE_NODE_UUID], "name": "sub" },
+                { "operation": "connect", "stream": stream_asset,
+                  "source": { "node": CAMERA_NODE_UUID, "port": "tensor_out" },
+                  "target": { "node": MODEL_NODE_UUID, "port": "bgra_video" } },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("no convert node is placed on a stream taking its edits later");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
+    assert!(
+        refusal
+            .runtime_words
+            .contains("`tatolab.stream:TensorToTexture`")
+            && refusal
+                .runtime_words
+                .contains("in a transaction of its own"),
+        "{refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+}
+
+const TENSOR_ISLAND_TYPE: &str = "convert_node_test:TensorIsland";
+const TENSOR_ISLAND_UUID: &str = "f7f7f7f7-f7f7-4f7f-8f7f-f7f7f7f7f7f7";
+
+/// Register a function node type giving a Tensor on `array`, once per test binary.
+fn register_a_function_node_giving_a_tensor_once() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        use streamlib::sdk::descriptors::{
+            FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeKind,
+            PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+        };
+        let tensor = PinType::Tensor {};
+        let mut descriptor = NodeDescriptor::new(
+            NodeClassShortName::new("TensorIsland").expect("a short name"),
+            NodeClassImportPath::new(TENSOR_ISLAND_TYPE).expect("a node type"),
+            "a function node giving a Tensor",
+        )
+        .with_output(
+            PortDescriptor::new(
+                "array",
+                "",
+                true,
+                PortFamilyDeclaration::of_family(
+                    PortFamily::carrying(&tensor).unwrap_or(PortFamily::Records),
+                ),
+            )
+            .with_pin_declaration(PinDeclaration::exactly(tensor)),
+        );
+        descriptor.node_kind = NodeKind::Function {
+            language: FunctionNodeLanguage::Python,
+        };
+        NODE_REGISTRY
+            .register_descriptor_only(descriptor)
+            .expect("the function node type is registered here alone");
+    });
+}
+
+/// A function node's Tensor linked into a Texture input would run through a `TensorToTexture`
+/// node, which runs in the app process that runs no node code, so the island would feed it:
+/// `connect` refuses the link, and `check_link` answers `refused` with that same refusal rather
+/// than the convert node.
+///
+/// Mental-revert: a check answering the convert node without the island checks of the two links
+/// through it answers `connects_through_convert_node` for a link `connect` refuses.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_convert_node_an_island_would_feed_is_refused_by_check_link_as_connect_refuses_it() {
+    register_a_function_node_giving_a_tensor_once();
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+    let mut graph = project.the_graph_document_of("main");
+    graph["nodes"].as_array_mut().expect("nodes").push(json!({
+        "id": TENSOR_ISLAND_UUID, "name": "island", "type": TENSOR_ISLAND_TYPE, "config": {},
+    }));
+    project.write_the_graph_document(graph);
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let saved_before = project.the_graph_document_of("main");
+    let island_into_model = json!({
+        "stream": project.stream_asset_of("main"),
+        "source": { "node": TENSOR_ISLAND_UUID, "port": "array" },
+        "target": { "node": MODEL_NODE_UUID, "port": "bgra_video" },
+    });
+
+    let checked = engine
+        .the_answer_or_the_refusal_of("check_link", island_into_model.clone())
+        .await
+        .unwrap_or_else(|refusal| panic!("check_link answers: {refusal:?}"));
+    let refused = engine
+        .the_answer_or_the_refusal_of("connect", connected_by_alice(&island_into_model))
+        .await
+        .expect_err("the app process runs no function node");
+
+    assert_eq!(checked["outcome"], "refused", "{checked}");
+    assert_eq!(
+        checked["refusal"]["refusal_code"],
+        serde_json::to_value(refused.refusal_code).unwrap(),
+        "{checked}"
+    );
+    assert!(
+        refused
+            .runtime_words
+            .contains("feeds a function node island")
+            && checked["refusal"]["runtime_words"]
+                .as_str()
+                .is_some_and(|words| words.contains("feeds a function node island")),
+        "{checked} {refused:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
 }

@@ -3,13 +3,16 @@
 
 use super::*;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    FreePinConversionOnTheWire, PinLinkWarningOnTheWire,
+    FreePinConversionOnTheWire, InsertedNodeOnTheWire, PinLinkWarningOnTheWire,
 };
 
 /// What the answer of a graph transaction names beside the operations it applied: the `as` of
-/// each node added, and each input value set that a link overrides.
-pub(super) struct WhatAnAnswerNamesBesideItsOperations<'labels> {
-    pub(super) labels_of_added_nodes: &'labels HashMap<Uuid, String>,
+/// each node added, why a `connect` inserted each node it added on its link, and each input
+/// value set that a link overrides.
+pub(super) struct WhatAnAnswerNamesBesideItsOperations<'named> {
+    pub(super) labels_of_added_nodes: &'named HashMap<Uuid, String>,
+    pub(super) why_each_node_was_inserted:
+        &'named HashMap<Uuid, GraphTransactionNodeInsertedBecause>,
     pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
 }
 
@@ -51,6 +54,7 @@ impl StreamGraphTransactionExecutor<'_> {
             applied_live,
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &HashMap::new(),
+                why_each_node_was_inserted: &HashMap::new(),
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
             },
         )
@@ -65,6 +69,7 @@ impl StreamGraphTransactionExecutor<'_> {
         applied_live: Vec<(String, StreamGraphOperation)>,
         WhatAnAnswerNamesBesideItsOperations {
             labels_of_added_nodes,
+            why_each_node_was_inserted,
             overridden_by_links,
         }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
@@ -76,15 +81,18 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut operations = Vec::with_capacity(applied_live.len());
         for (stream_id, applied) in applied_live {
             match &applied {
-                StreamGraphOperation::AddNode { node, links } => {
-                    let inserted_because = why_a_connect_inserted_the_node(node, links);
+                StreamGraphOperation::AddNode { node, .. } => {
                     added_nodes.push(GraphTransactionAddedNode {
                         stream: stream_id.clone(),
                         node: node.id.to_string(),
                         name: node.name.clone(),
                         label: labels_of_added_nodes.get(&node.id).cloned(),
-                        node_type: inserted_because.map(|_| node.node_type.clone()),
-                        inserted_because,
+                        inserted: why_each_node_was_inserted.get(&node.id).map(
+                            |&inserted_because| InsertedNodeOnTheWire {
+                                node_type: node.node_type.clone(),
+                                inserted_because,
+                            },
+                        ),
                     });
                 }
                 StreamGraphOperation::FoldIntoFragment { fold } => {
@@ -94,8 +102,7 @@ impl StreamGraphTransactionExecutor<'_> {
                             node: fragment.to_string(),
                             name: fold.fragment_name().to_owned(),
                             label: labels_of_added_nodes.get(&fragment).cloned(),
-                            node_type: None,
-                            inserted_because: None,
+                            inserted: None,
                         });
                     }
                 }
@@ -187,22 +194,6 @@ impl StreamGraphTransactionExecutor<'_> {
             overridden_by_links,
         }
     }
-}
-
-/// Why a `connect` inserted `node`, added with `links` carried through it; `None` for a node an
-/// operation added, which carries no link.
-fn why_a_connect_inserted_the_node(
-    node: &StreamGraphDocumentNode,
-    links: &[StreamGraphDocumentLink],
-) -> Option<GraphTransactionNodeInsertedBecause> {
-    if links.is_empty() {
-        return None;
-    }
-    Some(if node.node_type == PREVIOUS_VALUE_NODE_TYPE {
-        GraphTransactionNodeInsertedBecause::ClosesALoop
-    } else {
-        GraphTransactionNodeInsertedBecause::ConvertsPinTypes
-    })
 }
 
 fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWire {

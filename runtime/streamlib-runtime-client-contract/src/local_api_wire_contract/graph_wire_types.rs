@@ -38,13 +38,21 @@ pub struct GraphTransactionAddedNode {
     /// The `as` its `add_node` gave it, which later operations of the transaction named it by.
     #[serde(rename = "as", default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Its node type and why the runtime inserted it on a link a `connect` asked for; absent on
+    /// a node an operation added.
+    #[serde(flatten)]
+    pub inserted: Option<InsertedNodeOnTheWire>,
+}
+
+/// A node the runtime inserted on a link a `connect` asked for: its node type and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct InsertedNodeOnTheWire {
     /// Its node type; present on a node the runtime inserted, whose `inserted_because` says why.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node_type: Option<String>,
+    pub node_type: String,
     /// Why the runtime inserted it on a link a `connect` asked for; absent on a node an
     /// operation added.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inserted_because: Option<GraphTransactionNodeInsertedBecause>,
+    pub inserted_because: GraphTransactionNodeInsertedBecause,
 }
 
 /// Why a `connect` placed a node of its own on the link it asked for, the link carried through

@@ -240,6 +240,7 @@ impl StreamGraphTransactionExecutor<'_> {
             operations_answered,
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &HashMap::new(),
+                why_each_node_was_inserted: &HashMap::new(),
                 overridden_by_links,
             },
         )))

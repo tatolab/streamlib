@@ -45,19 +45,15 @@ pub struct PinLinkVerdict {
 
 /// Whether and how a link between two typed pins connects.
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "one outcome per link judged, read once and dropped; boxing buys nothing measurable"
-)]
 pub enum PinLinkOutcome {
     /// The input takes what the output carries as it is.
     Connects,
     /// The input takes what the output carries as its own type, at no cost.
     ConnectsWithFreeConversion(FreePinConversion),
     /// The two ends connect through a node of one built-in conversion placed between them.
-    ConnectsThroughConvertNode(ConvertNodeToInsert),
+    ConnectsThroughConvertNode(Box<ConvertNodeToInsert>),
     /// The two ends do not connect.
-    Refused(PinLinkRefusal),
+    Refused(Box<PinLinkRefusal>),
 }
 
 /// Two differing types the verdict lets connect, each variant stating what the input reads.
@@ -333,10 +329,10 @@ pub fn pin_link_verdict(
         .is_some_and(|input_mode| !input_mode.takes_a_wire())
     {
         return PinLinkVerdict {
-            outcome: PinLinkOutcome::Refused(PinLinkRefusal::input_takes_no_wire(
+            outcome: PinLinkOutcome::Refused(Box::new(PinLinkRefusal::input_takes_no_wire(
                 input.end.node_name,
                 input.end.port_name,
-            )),
+            ))),
             warnings: Vec::new(),
         };
     }
@@ -390,17 +386,19 @@ pub fn pin_link_verdict(
             warnings.extend(only_one.out_of_it.warnings);
             warnings.extend(meanings_differ);
             PinLinkVerdict {
-                outcome: PinLinkOutcome::ConnectsThroughConvertNode(ConvertNodeToInsert {
-                    conversion: only_one.conversion.clone(),
-                    input_values: only_one.picked.input_values,
-                    output_pin_type: only_one.picked.output_pin_type,
-                    refusal_without_it: refusal,
-                }),
+                outcome: PinLinkOutcome::ConnectsThroughConvertNode(Box::new(
+                    ConvertNodeToInsert {
+                        conversion: only_one.conversion.clone(),
+                        input_values: only_one.picked.input_values,
+                        output_pin_type: only_one.picked.output_pin_type,
+                        refusal_without_it: refusal,
+                    },
+                )),
                 warnings,
             }
         }
         _ => PinLinkVerdict {
-            outcome: PinLinkOutcome::Refused(refusal),
+            outcome: PinLinkOutcome::Refused(Box::new(refusal)),
             warnings: Vec::new(),
         },
     }

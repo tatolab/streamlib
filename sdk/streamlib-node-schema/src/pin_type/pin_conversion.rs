@@ -54,6 +54,7 @@ impl std::fmt::Debug for PinConversionOutputPick {
     }
 }
 
+// `fn_addr_eq` compares addresses, so one function may compare unequal across codegen units.
 impl PartialEq for PinConversionOutputPick {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::fn_addr_eq(self.0, other.0)

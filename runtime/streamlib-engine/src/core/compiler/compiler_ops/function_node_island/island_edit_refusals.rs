@@ -12,8 +12,8 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link, LinkUniqueId,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef,
+    Graph, GraphNodePorts, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link,
+    LinkUniqueId, OutOfProcessLinkWiringComponent, OutputLinkPortRef,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
@@ -95,6 +95,43 @@ pub(crate) fn refuse_a_link_an_island_cannot_take(
     refuse_a_link_closing_a_cycle_of_function_nodes(graph, from, to, held_as)
 }
 
+/// Refuse the two links a node of `node_type`, not yet in `graph`, would carry: from `from` into
+/// its input `input_port`, and from its output `output_port` into `to`, as
+/// [`refuse_a_link_feeding_an_island_into_the_app_process`] and
+/// [`refuse_a_link_an_island_cannot_take`] refuse each once the node and both links are made.
+/// The node runs inside no island, as every convert node a transaction places does: a built-in,
+/// natively compiled.
+pub(crate) fn refuse_the_links_through_a_node_not_yet_added(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    (node_type, input_port, output_port): (&NodeClassImportPath, &str, &str),
+) -> Result<()> {
+    let node_not_yet_added = NodeRunId::new();
+    let into_it = InputLinkPortRef::new(node_not_yet_added.clone(), input_port);
+    let out_of_it = OutputLinkPortRef::new(node_not_yet_added, output_port);
+    let node_types = graph.node_types_this_stream_resolves();
+    if runs_inside_the_read_of_each_node_it_feeds(graph, from.node_run_id()) {
+        if runs_each_of_its_nodes_in_the_app_process(node_types, node_type) {
+            return Err(the_refusal_of_an_island_fed_into_the_app_process(
+                &format!(
+                    "the link from `{from}` into the `{node_type}` node placed between it and \
+                     `{to}`"
+                ),
+                node_type,
+            ));
+        }
+        refuse_an_island_into_an_input_declaring_an_audio_window(
+            node_types.port_info(node_type).as_ref(),
+            node_type,
+            input_port,
+        )?;
+    }
+    refuse_a_link_an_island_cannot_take(graph, from, &into_it, None)?;
+    refuse_a_link_feeding_an_island_into_the_app_process(graph, &out_of_it, to)?;
+    refuse_a_link_an_island_cannot_take(graph, &out_of_it, to, None)
+}
+
 /// Whether `link` is a link other than the one `held_as` names.
 fn is_another_link(link: &Link, held_as: Option<&LinkUniqueId>) -> bool {
     held_as.is_none_or(|held_as| held_as.as_str() != link.id())
@@ -145,14 +182,14 @@ fn runs_each_of_its_nodes_in_the_app_process(
             || node_types.is_a_view_type_of_this_streams_project(node_type))
 }
 
-/// The refusal of `link_named`, a link feeding a function node island into `reader_id`, which
+/// The refusal of `link_named`, a link feeding a function node island into `reader`, which
 /// runs in the app process.
 pub(super) fn the_refusal_of_an_island_fed_into_the_app_process(
     link_named: &str,
-    reader_id: &NodeRunId,
+    reader: &dyn std::fmt::Display,
 ) -> Error {
     Error::InvalidLink(format!(
-        "{link_named} feeds a function node island into `{reader_id}`, which runs in the app \
+        "{link_named} feeds a function node island into `{reader}`, which runs in the app \
          process; a function node runs inside the read of a node in a helper process, and the \
          app process runs no node code"
     ))
@@ -264,21 +301,33 @@ fn refuse_an_island_into_a_port_declaring_an_audio_window(
         return Ok(());
     }
     let reader_id = to.node_run_id();
-    let port_name = to.port_name();
-    let declares_an_audio_window = graph
-        .traversal()
-        .v(reader_id)
-        .first()
-        .is_some_and(|reader| {
-            reader
-                .ports
-                .inputs
-                .iter()
-                .any(|input| input.name == port_name && input.audio_window.is_some())
-        });
+    refuse_an_island_into_an_input_declaring_an_audio_window(
+        graph
+            .traversal()
+            .v(reader_id)
+            .first()
+            .map(|reader| &reader.ports),
+        reader_id,
+        to.port_name(),
+    )
+}
+
+/// Refuse a link from a function node into the input `port_name` of `reader`, whose ports are
+/// `reader_ports`, when that input declares an `audio_window`.
+fn refuse_an_island_into_an_input_declaring_an_audio_window(
+    reader_ports: Option<&GraphNodePorts>,
+    reader: &dyn std::fmt::Display,
+    port_name: &str,
+) -> Result<()> {
+    let declares_an_audio_window = reader_ports.is_some_and(|ports| {
+        ports
+            .inputs
+            .iter()
+            .any(|input| input.name == port_name && input.audio_window.is_some())
+    });
     if declares_an_audio_window {
         return Err(Error::InvalidLink(format!(
-            "`{reader_id}`'s input `{port_name}` declares an `audio_window`, and a function \
+            "`{reader}`'s input `{port_name}` declares an `audio_window`, and a function \
              node island answers one control value per read, never a window of samples. To \
              fix: link the island into a port with no `audio_window`"
         )));

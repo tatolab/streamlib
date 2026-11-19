@@ -65,7 +65,7 @@ fn a_link_closing_a_loop_of_function_nodes_is_carried_through_a_previous_value_n
     );
 
     let StreamGraphOperation::AddNode { node, links } =
-        the_previous_value_node_added_on_the_link(&document, closing_link)
+        the_previous_value_node_added_on_the_link(&document, closing_link).into_the_operation()
     else {
         panic!("the loop closes by adding a node");
     };

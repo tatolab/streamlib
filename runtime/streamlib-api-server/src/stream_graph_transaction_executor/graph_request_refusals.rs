@@ -4,16 +4,17 @@
 //! Why a graph action or one of its operations was refused, and what the refused operation
 //! names, as the wire carries the refusal.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::PinConversion;
-use streamlib_project_repository::{ProjectRepositoryRefusal, StreamGraphActionLinkEnd};
+use streamlib_project_repository::{
+    ProjectRepositoryRefusal, StreamGraphAction, StreamGraphActionLinkEnd,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire,
-    RefusedGraphLinkOnTheWire, SuggestedOperationCall,
+    ControlOperationRefusalCode, GraphLinkEndOnTheWire, NodeNotRunningBecauseOnTheWire,
+    ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire, SuggestedOperationCall,
 };
 use uuid::Uuid;
 
-use super::what_a_link_action_names;
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
 /// The node, link and field one operation of a graph action names, as its caller named them.
@@ -22,67 +23,141 @@ use crate::refusal_code_and_place::RefusalCodeAndPlace;
 /// `node_unless_the_refusal_names_one`, since a refusal naming one of the many is the more exact.
 ///
 /// It also names the stream and the level the operation edits, by the stream id and the path of
-/// placed streams, when its caller knows them, so a refusal can suggest a call into them.
+/// placed streams, when its caller knows them, and whether that level holds, by UUID, the node
+/// at each end of the link it names, so a refusal can suggest a call into them.
 #[derive(Default)]
 pub(crate) struct WhatAGraphOperationNames {
-    pub(super) node: Option<String>,
-    pub(super) node_unless_the_refusal_names_one: Option<String>,
-    pub(super) link: Option<RefusedGraphLinkOnTheWire>,
-    pub(super) field: Option<String>,
-    pub(super) stream: Option<String>,
-    pub(super) level: Vec<Uuid>,
+    node: Option<String>,
+    node_unless_the_refusal_names_one: Option<String>,
+    link: Option<RefusedGraphLinkOnTheWire>,
+    field: Option<String>,
+    stream: Option<String>,
+    level: Vec<Uuid>,
+    level_holds_both_link_ends: bool,
+}
+
+/// The stream and level an operation edits, and whether that level holds, by UUID, the node at
+/// each end of the link the operation names.
+pub(crate) struct WhereAnOperationEdits<'stream> {
+    pub(crate) stream_id: &'stream str,
+    pub(crate) level: &'stream [Uuid],
+    pub(crate) level_holds_both_link_ends: bool,
 }
 
 impl WhatAGraphOperationNames {
-    /// What the operation names, made in the stream `stream_id`, at `level`.
-    pub(super) fn in_the_stream(self, stream_id: &str, level: &[Uuid]) -> Self {
+    /// What the operation names, made where `edits` says.
+    pub(super) fn made_in(self, edits: WhereAnOperationEdits<'_>) -> Self {
         Self {
-            stream: Some(stream_id.to_owned()),
-            level: level.to_vec(),
+            stream: Some(edits.stream_id.to_owned()),
+            level: edits.level.to_vec(),
+            level_holds_both_link_ends: edits.level_holds_both_link_ends,
             ..self
         }
     }
 
     /// The `transact` that places a node of `conversion` between the two ends of the link this
-    /// operation names, in its stream and level, as the caller named them; `None` when it names
-    /// no link or no stream.
-    pub(super) fn the_transact_placing_the_conversion_on_its_link(
+    /// operation names, in its stream and level, each end by its node's UUID; `None` when it
+    /// names no link or no stream, or the level does not hold the node at each end by UUID.
+    fn the_transact_placing_the_conversion_on_its_link(
         &self,
         conversion: &PinConversion,
     ) -> Option<SuggestedOperationCall> {
         const CONVERSION_LABEL: &str = "conversion";
         let (stream, link) = (self.stream.as_ref()?, self.link.as_ref()?);
+        if !self.level_holds_both_link_ends {
+            return None;
+        }
         let at_the_level = |mut operation: Value| {
             if !self.level.is_empty() {
                 operation["level"] = json!(self.level);
             }
             operation
         };
-        let params = json!({
-            "operations": [
-                at_the_level(json!({
-                    "operation": "add_node", "stream": stream,
-                    "type": conversion.node_type.as_str(), "as": CONVERSION_LABEL,
-                })),
-                at_the_level(json!({
-                    "operation": "connect", "stream": stream,
-                    "source": { "node": link.source.node, "port": link.source.port },
-                    "target": { "node": CONVERSION_LABEL, "port": conversion.input_port_name },
-                })),
-                at_the_level(json!({
-                    "operation": "connect", "stream": stream,
-                    "source": { "node": CONVERSION_LABEL, "port": conversion.output_port_name },
-                    "target": { "node": link.target.node, "port": link.target.port },
-                })),
-            ],
-        });
-        let Value::Object(params) = params else {
-            return None;
-        };
+        let operations = vec![
+            at_the_level(json!({
+                "operation": "add_node", "stream": stream,
+                "type": conversion.node_type.as_str(), "as": CONVERSION_LABEL,
+            })),
+            at_the_level(json!({
+                "operation": "connect", "stream": stream,
+                "source": { "node": link.source.node, "port": link.source.port },
+                "target": { "node": CONVERSION_LABEL, "port": conversion.input_port_name },
+            })),
+            at_the_level(json!({
+                "operation": "connect", "stream": stream,
+                "source": { "node": CONVERSION_LABEL, "port": conversion.output_port_name },
+                "target": { "node": link.target.node, "port": link.target.port },
+            })),
+        ];
         streamlib_control_contract::the_suggested_call(
             <streamlib_control_contract::Transact as streamlib_control_contract::ControlOperation>::METHOD_NAME,
-            params,
+            Map::from_iter([("operations".to_owned(), Value::Array(operations))]),
         )
+    }
+}
+
+/// The link from `source` to `target` an action on a link names, as its caller named it.
+fn what_a_link_action_names(
+    source: &StreamGraphActionLinkEnd,
+    target: &StreamGraphActionLinkEnd,
+) -> WhatAGraphOperationNames {
+    WhatAGraphOperationNames {
+        link: Some(RefusedGraphLinkOnTheWire {
+            source: GraphLinkEndOnTheWire {
+                node: source.node.clone(),
+                port: source.port.clone(),
+            },
+            target: GraphLinkEndOnTheWire {
+                node: target.node.clone(),
+                port: target.port.clone(),
+            },
+        }),
+        ..WhatAGraphOperationNames::default()
+    }
+}
+
+/// The node, link and field `action` names, as its caller named them.
+pub(super) fn what_a_graph_action_names<Stream>(
+    action: &StreamGraphAction<Stream>,
+) -> WhatAGraphOperationNames {
+    let names_a_node = |node: &str| WhatAGraphOperationNames {
+        node: Some(node.to_owned()),
+        ..WhatAGraphOperationNames::default()
+    };
+    match action {
+        StreamGraphAction::RemoveNode { node, .. }
+        | StreamGraphAction::SetNodeConfig { node, .. }
+        | StreamGraphAction::RenameNode { node, .. }
+        | StreamGraphAction::SetStudioFields { node, .. }
+        | StreamGraphAction::SetExposedConfigFields { node, .. } => names_a_node(node),
+        StreamGraphAction::SetPinValue { node, input, .. }
+        | StreamGraphAction::SetNodeInputValue { node, input, .. } => WhatAGraphOperationNames {
+            field: Some(input.clone()),
+            ..names_a_node(node)
+        },
+        StreamGraphAction::Connect { source, target, .. }
+        | StreamGraphAction::Disconnect { source, target, .. } => {
+            what_a_link_action_names(source, target)
+        }
+        StreamGraphAction::AddNode { label, name, .. }
+        | StreamGraphAction::ImportGraphGenerator { label, name, .. }
+        | StreamGraphAction::UseDependencyStream { label, name, .. } => WhatAGraphOperationNames {
+            node: label.clone().or_else(|| name.clone()),
+            ..WhatAGraphOperationNames::default()
+        },
+        StreamGraphAction::CollapseSelectionIntoSubgraph { label, name, .. } => {
+            WhatAGraphOperationNames {
+                node_unless_the_refusal_names_one: label.clone().or_else(|| Some(name.clone())),
+                ..WhatAGraphOperationNames::default()
+            }
+        }
+        StreamGraphAction::UnlockSubgraph { fragment, .. } => names_a_node(fragment),
+        StreamGraphAction::AddGroup { .. }
+        | StreamGraphAction::SetGroupFields { .. }
+        | StreamGraphAction::RemoveGroup { .. }
+        | StreamGraphAction::AddNote { .. }
+        | StreamGraphAction::SetNoteFields { .. }
+        | StreamGraphAction::RemoveNote { .. } => WhatAGraphOperationNames::default(),
     }
 }
 
@@ -90,9 +165,9 @@ impl WhatAGraphOperationNames {
 /// and the JSON pointer, into the action's own params, of the value refused.
 #[derive(Debug)]
 pub(crate) struct GraphRequestRefusal {
-    pub(super) code_and_place: Box<RefusalCodeAndPlace>,
-    pub(super) runtime_words: String,
-    pub(super) refused_params_pointer: Option<String>,
+    code_and_place: Box<RefusalCodeAndPlace>,
+    runtime_words: String,
+    refused_params_pointer: Option<String>,
 }
 
 impl GraphRequestRefusal {
@@ -224,9 +299,9 @@ impl From<ProjectRepositoryRefusal> for GraphRequestRefusal {
 /// Why a graph action was refused, in the runtime's own words, and which of its operations
 /// was refused when one was.
 pub(crate) struct GraphTransactionRefusal {
-    pub(super) refused_operation_index: Option<usize>,
-    pub(super) what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
-    pub(super) refusal: GraphRequestRefusal,
+    refused_operation_index: Option<usize>,
+    what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
+    refusal: GraphRequestRefusal,
 }
 
 impl GraphTransactionRefusal {
@@ -243,16 +318,16 @@ impl GraphTransactionRefusal {
     }
 
     /// The refusal of a `connect` from `source` to `target`, its one operation, as its caller
-    /// named the link, at the own level of the stream `stream_id` when it is known.
+    /// named the link, made where `edits` says when it is known.
     pub(crate) fn of_a_connect(
-        stream_id: Option<&str>,
+        edits: Option<WhereAnOperationEdits<'_>>,
         source: &StreamGraphActionLinkEnd,
         target: &StreamGraphActionLinkEnd,
         refusal: GraphRequestRefusal,
     ) -> Self {
         let what_the_connect_names = what_a_link_action_names(source, target);
-        let what_the_connect_names = match stream_id {
-            Some(stream_id) => what_the_connect_names.in_the_stream(stream_id, &[]),
+        let what_the_connect_names = match edits {
+            Some(edits) => what_the_connect_names.made_in(edits),
             None => what_the_connect_names,
         };
         Self::of_the_operation(0, what_the_connect_names, refusal)

@@ -12,6 +12,7 @@ use super::link_ends_this_graph_cannot_take::{
 use super::{LiveGraphChangeOnOneStream, commit_live_graph_change};
 use crate::core::compiler::compiler_ops::function_node_island::{
     refuse_a_link_an_island_cannot_take, refuse_a_link_feeding_an_island_into_the_app_process,
+    refuse_the_links_through_a_node_not_yet_added,
 };
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::{PinLinkOutcome, PinLinkVerdict};
@@ -112,8 +113,8 @@ fn refuse_a_link_connect_refuses(
 /// [`ALinkConnected::MadeNow`], the verdict of two typed ends that connect, `None` for ends their
 /// families judge, refused as connect refuses the link; but a link whose two typed ends connect
 /// through a built-in conversion answers that verdict, naming the convert node a transaction's
-/// `connect` places between them. Connect itself never places it, so a graph written in code
-/// stays what its code says.
+/// `connect` places between them, once each of the two links through it is one an island takes.
+/// Connect itself never places it, so a graph written in code stays what its code says.
 pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
@@ -124,15 +125,25 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
         match refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow) {
             Ok((verdict, _)) => Ok(verdict),
             Err(refusal @ Error::PinLinkRefused(_)) => {
-                the_verdict_of_two_typed_ends(graph, &from, &to)
-                    .filter(|verdict| {
-                        matches!(
-                            verdict.outcome,
-                            PinLinkOutcome::ConnectsThroughConvertNode(_)
-                        )
-                    })
-                    .map(Some)
-                    .ok_or(refusal)
+                let Some(verdict) = the_verdict_of_two_typed_ends(graph, &from, &to) else {
+                    return Err(refusal);
+                };
+                let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome
+                else {
+                    return Err(refusal);
+                };
+                let conversion = &convert_node.conversion;
+                refuse_the_links_through_a_node_not_yet_added(
+                    graph,
+                    &from,
+                    &to,
+                    (
+                        &conversion.node_type,
+                        &conversion.input_port_name,
+                        &conversion.output_port_name,
+                    ),
+                )?;
+                Ok(Some(verdict))
             }
             Err(refusal) => Err(refusal),
         }

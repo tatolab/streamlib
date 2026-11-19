@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use streamlib::sdk::descriptors::{ConvertNodeToInsert, PinLinkOutcome};
-use streamlib::sdk::runtime::WhatALiveConnectMakesOfALink;
+use streamlib::sdk::descriptors::{ConvertNodeToInsert, PinLinkOutcome, PinLinkVerdict};
 use streamlib::sdk::runtime::{
-    OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamLocation,
+    OperationsOnTheStreamsLoadedInThisRuntime, PortOfANodeOfAType, RuntimeOperations,
+    StreamLocation, WhatALiveConnectMakesOfALink,
 };
 use streamlib_control_contract::GraphEditMode;
 use streamlib_project_repository::{
@@ -40,7 +40,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
-    GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
+    GraphTransactionToolResult,
 };
 use uuid::Uuid;
 
@@ -53,8 +53,9 @@ use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
 mod former_port_names;
 mod graph_request_refusals;
+use graph_request_refusals::what_a_graph_action_names;
 pub(crate) use graph_request_refusals::{
-    GraphRequestRefusal, GraphTransactionRefusal, WhatAGraphOperationNames,
+    GraphRequestRefusal, GraphTransactionRefusal, WhereAnOperationEdits,
 };
 mod input_value_sets;
 mod input_values_set_live;
@@ -71,6 +72,7 @@ use former_port_names::{
     the_placed_streams_with_each_former_port_name_moved, the_request_under_the_current_port_names,
 };
 use input_value_sets::*;
+pub(crate) use request_to_graph_operation::WhatAConnectAsks;
 use request_to_graph_operation::{
     graph_operation_for_the_request, refuse_a_link_the_graph_already_holds,
     the_operation_a_connect_asks,
@@ -78,39 +80,19 @@ use request_to_graph_operation::{
 use streams_each_operation_names::the_stream_each_operation_names;
 use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
 
-/// The link from `source` to `target` an action on a link names, as its caller named it.
-fn what_a_link_action_names(
-    source: &StreamGraphActionLinkEnd,
-    target: &StreamGraphActionLinkEnd,
-) -> WhatAGraphOperationNames {
-    WhatAGraphOperationNames {
-        link: Some(RefusedGraphLinkOnTheWire {
-            source: GraphLinkEndOnTheWire {
-                node: source.node.clone(),
-                port: source.port.clone(),
-            },
-            target: GraphLinkEndOnTheWire {
-                node: target.node.clone(),
-                port: target.port.clone(),
-            },
-        }),
-        ..WhatAGraphOperationNames::default()
-    }
-}
-
-/// The operation a `connect` from `source` to `target` at the own level of the running stream
+/// What a `connect` from `source` to `target` at the own level of the running stream
 /// `stream_operations` runs asks of it, made as a transaction's `connect` makes it on the
 /// stream's graph as `rendered_graph` renders it: each port under its current name, each node
 /// by its UUID, a loop of function nodes closed by a `PreviousValue` node added on it, a link
 /// whose pin types connect through a built-in conversion carried through its convert node added
 /// on it, and a link the graph already holds refused, in the order
 /// [`StreamGraphTransactionExecutor::apply_one_request`] takes those steps.
-pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
+pub(crate) fn what_a_connect_asks_of_the_running_stream(
     source: StreamGraphActionLinkEnd,
     target: StreamGraphActionLinkEnd,
     rendered_graph: &Value,
     stream_operations: &dyn RuntimeOperations,
-) -> Result<StreamGraphOperation, GraphRequestRefusal> {
+) -> Result<WhatAConnectAsks, GraphRequestRefusal> {
     let level_as_drawn = StreamGraphDocument::from_value(rendered_graph.clone())?;
     let no_node_by_label = HashMap::new();
     let (source, target) = the_link_ends_under_their_current_port_names(
@@ -120,7 +102,7 @@ pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
         &no_node_by_label,
         stream_operations,
     );
-    let operation = the_operation_a_connect_asks(
+    let asked = the_operation_a_connect_asks(
         &source,
         &target,
         &level_as_drawn,
@@ -128,77 +110,89 @@ pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
         &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
         &|link| the_convert_node_a_live_connect_places(stream_operations, link),
     )?;
-    if let StreamGraphOperation::Connect { link } = &operation {
+    if let WhatAConnectAsks::Link(link) = &asked {
         refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
     }
-    Ok(operation)
+    Ok(asked)
 }
 
 /// The convert node a transaction's `connect` places on `link`, a link of the running stream
 /// `stream_operations` runs whose nodes it runs, when its two typed ends connect only through a
-/// built-in conversion; `None` for any other link, a refused one among them, which `connect`
-/// then refuses as it judges it.
-pub(crate) fn the_convert_node_a_live_connect_places(
+/// built-in conversion; the refusal of such a link that the island checks of the two links
+/// through that node refuse; `None` for any other link, a refused one among them, which
+/// `connect` then refuses as it judges it.
+fn the_convert_node_a_live_connect_places(
     stream_operations: &dyn RuntimeOperations,
     link: &StreamGraphDocumentLink,
-) -> Option<ConvertNodeToInsert> {
-    let Ok(WhatALiveConnectMakesOfALink::Makes(Some(verdict))) =
-        stream_operations.what_a_live_connect_makes_of_the_link(link)
-    else {
-        return None;
+) -> Result<Option<ConvertNodeToInsert>, GraphRequestRefusal> {
+    let connects_through_a_convert_node = |verdict: &PinLinkVerdict| {
+        matches!(
+            verdict.outcome,
+            PinLinkOutcome::ConnectsThroughConvertNode(_)
+        )
     };
-    match verdict.outcome {
-        PinLinkOutcome::ConnectsThroughConvertNode(convert_node) => Some(convert_node),
-        PinLinkOutcome::Connects
-        | PinLinkOutcome::ConnectsWithFreeConversion(_)
-        | PinLinkOutcome::Refused(_) => None,
+    match stream_operations.what_a_live_connect_makes_of_the_link(link) {
+        Ok(WhatALiveConnectMakesOfALink::Makes(Some(verdict))) => match verdict.outcome {
+            PinLinkOutcome::ConnectsThroughConvertNode(convert_node) => Ok(Some(*convert_node)),
+            PinLinkOutcome::Connects
+            | PinLinkOutcome::ConnectsWithFreeConversion(_)
+            | PinLinkOutcome::Refused(_) => Ok(None),
+        },
+        Ok(_) => Ok(None),
+        Err(refusal)
+            if stream_operations
+                .the_verdict_of_a_link_it_holds(link)
+                .is_some_and(|verdict| connects_through_a_convert_node(&verdict)) =>
+        {
+            Err(refusal.into())
+        }
+        Err(_) => Ok(None),
     }
 }
 
-/// The node, link and field `action` names, as its caller named them.
-fn what_a_graph_action_names<Stream>(
-    action: &StreamGraphAction<Stream>,
-) -> WhatAGraphOperationNames {
-    let names_a_node = |node: &str| WhatAGraphOperationNames {
-        node: Some(node.to_owned()),
-        ..WhatAGraphOperationNames::default()
+/// The convert node a transaction's `connect` would place on `link`, judged by the node types of
+/// `level_as_drawn`, the own level of a running stream that takes this transaction's edits once
+/// the documents hold them, refused before anything is written: the stream does not hold the
+/// level as drawn, so no convert node is placed on it in this transaction.
+fn refuse_a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later(
+    stream_operations: &dyn RuntimeOperations,
+    level_as_drawn: &StreamGraphDocument,
+    link: &StreamGraphDocumentLink,
+) -> Result<Option<ConvertNodeToInsert>, GraphRequestRefusal> {
+    let (Ok(source), Ok(target)) = (
+        level_as_drawn.node(link.source.node),
+        level_as_drawn.node(link.target.node),
+    ) else {
+        return Ok(None);
     };
-    match action {
-        StreamGraphAction::RemoveNode { node, .. }
-        | StreamGraphAction::SetNodeConfig { node, .. }
-        | StreamGraphAction::RenameNode { node, .. }
-        | StreamGraphAction::SetStudioFields { node, .. }
-        | StreamGraphAction::SetExposedConfigFields { node, .. } => names_a_node(node),
-        StreamGraphAction::SetPinValue { node, input, .. }
-        | StreamGraphAction::SetNodeInputValue { node, input, .. } => WhatAGraphOperationNames {
-            field: Some(input.clone()),
-            ..names_a_node(node)
+    let verdict = stream_operations.the_verdict_of_a_link_between_two_node_types(
+        PortOfANodeOfAType {
+            node_name: &source.name,
+            node_type: &source.node_type,
+            port: &link.source.port,
         },
-        StreamGraphAction::Connect { source, target, .. }
-        | StreamGraphAction::Disconnect { source, target, .. } => {
-            what_a_link_action_names(source, target)
-        }
-        StreamGraphAction::AddNode { label, name, .. }
-        | StreamGraphAction::ImportGraphGenerator { label, name, .. }
-        | StreamGraphAction::UseDependencyStream { label, name, .. } => WhatAGraphOperationNames {
-            node: label.clone().or_else(|| name.clone()),
-            ..WhatAGraphOperationNames::default()
+        PortOfANodeOfAType {
+            node_name: &target.name,
+            node_type: &target.node_type,
+            port: &link.target.port,
         },
-        StreamGraphAction::CollapseSelectionIntoSubgraph { label, name, .. } => {
-            WhatAGraphOperationNames {
-                node_unless_the_refusal_names_one: label.clone().or_else(|| Some(name.clone())),
-                ..WhatAGraphOperationNames::default()
-            }
-        }
-        StreamGraphAction::UnlockSubgraph { fragment, .. } => names_a_node(fragment),
-        StreamGraphAction::AddGroup { .. }
-        | StreamGraphAction::SetGroupFields { .. }
-        | StreamGraphAction::RemoveGroup { .. }
-        | StreamGraphAction::AddNote { .. }
-        | StreamGraphAction::SetNoteFields { .. }
-        | StreamGraphAction::RemoveNote { .. } => WhatAGraphOperationNames::default(),
-    }
+    );
+    let Some(PinLinkOutcome::ConnectsThroughConvertNode(convert_node)) =
+        verdict.map(|verdict| verdict.outcome)
+    else {
+        return Ok(None);
+    };
+    Err(GraphRequestRefusal::coded(
+        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::LinkPinTypesDoNotConnect),
+        format!(
+            "{}, or connect the link in a transaction of its own: `connect` places that node \
+             itself only on a stream that takes the edit live, and an earlier operation of this \
+             transaction has the stream take its edits once the documents hold them",
+            convert_node.refusal_without_it
+        ),
+    ))
 }
+
 /// One loaded stream a transaction edits: its operations, where it lives, and its graph as the
 /// transaction has staged it.
 struct StreamATransactionEdits {
@@ -340,20 +334,36 @@ fn the_graph_node_an_edit_adds_or_configures(
     names_a_node.then_some((node_type, node_name, input_values))
 }
 
-/// Record `label` against the node `operation` adds, under the UUID `drawn_uuid_of` gives it.
-fn label_what_the_operation_adds(
+/// What an answer names of a node an operation adds beside its UUID: the `as` its caller gave
+/// it, and why a `connect` inserted it, when one did.
+struct WhatTheAnswerNamesOfAnAddedNode {
     label: Option<String>,
+    inserted_because: Option<GraphTransactionNodeInsertedBecause>,
+}
+
+/// Record what the answer names of the node `operation` adds, under the UUID `drawn_uuid_of`
+/// gives it: its `as` in `labels_of_added_nodes`, and why a `connect` inserted it in
+/// `why_each_node_was_inserted`.
+fn record_what_the_answer_names_of_the_node_the_operation_adds(
+    named: WhatTheAnswerNamesOfAnAddedNode,
     operation: &StreamGraphOperation,
     drawn_uuid_of: &dyn Fn(Uuid) -> Uuid,
     labels_of_added_nodes: &mut HashMap<Uuid, String>,
+    why_each_node_was_inserted: &mut HashMap<Uuid, GraphTransactionNodeInsertedBecause>,
 ) {
     let added_node = match operation {
         StreamGraphOperation::AddNode { node, .. } => Some(node.id),
         StreamGraphOperation::FoldIntoFragment { fold } => fold.fragment_node(),
         _ => None,
     };
-    if let (Some(label), Some(added_node)) = (label, added_node) {
-        labels_of_added_nodes.insert(drawn_uuid_of(added_node), label);
+    let Some(added_node) = added_node.map(drawn_uuid_of) else {
+        return;
+    };
+    if let Some(label) = named.label {
+        labels_of_added_nodes.insert(added_node, label);
+    }
+    if let Some(inserted_because) = named.inserted_because {
+        why_each_node_was_inserted.insert(added_node, inserted_because);
     }
 }
 
@@ -600,10 +610,11 @@ type FunctionNodesOfTheRunningStream<'stream> =
     dyn Fn() -> Result<HashSet<Uuid>, GraphRequestRefusal> + 'stream;
 
 /// The built-in convert node a transaction's `connect` places on a link of the running stream,
-/// when its two ends' pin types connect only through one; `None` for a link the running stream
-/// does not judge so, which is connected, or refused, as it is.
-type ConvertNodeALinkOfTheRunningStreamNeeds<'stream> =
-    dyn Fn(&StreamGraphDocumentLink) -> Option<ConvertNodeToInsert> + 'stream;
+/// when its two ends' pin types connect only through one, or the refusal of such a link that
+/// `connect` cannot carry through it; `None` for a link the running stream does not judge so,
+/// which is connected, or refused, as it is.
+type ConvertNodeALinkOfTheRunningStreamNeeds<'stream> = dyn Fn(&StreamGraphDocumentLink) -> Result<Option<ConvertNodeToInsert>, GraphRequestRefusal>
+    + 'stream;
 
 /// The config a node of a type holding some input values takes whole, as the running stream
 /// resolves the type.

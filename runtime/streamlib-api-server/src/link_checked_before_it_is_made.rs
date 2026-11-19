@@ -6,18 +6,17 @@
 
 use streamlib::sdk::runtime::WhatALiveConnectMakesOfALink;
 use streamlib_control_contract::{CheckLink, CheckLinkRequest, Connect, ControlOperation};
-use streamlib_project_repository::{
-    PREVIOUS_VALUE_NODE_TYPE, StreamGraphDocumentLink, StreamGraphOperation,
-};
+use streamlib_project_repository::{StreamGraphActionLinkEnd, StreamGraphDocument};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, LinkCheckResult,
+    ControlOperationRefusalCode, GraphTransactionNodeInsertedBecause, LinkCheckResult,
 };
+use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 use crate::stream_graph_transaction_executor::{
-    GraphRequestRefusal, GraphTransactionRefusal, StreamsTheRuntimeHolds,
-    the_operation_a_connect_asks_of_the_running_stream,
+    GraphRequestRefusal, GraphTransactionRefusal, StreamsTheRuntimeHolds, WhatAConnectAsks,
+    WhereAnOperationEdits, what_a_connect_asks_of_the_running_stream,
 };
 
 impl ControlOperationDispatcher {
@@ -50,12 +49,13 @@ impl ControlOperationDispatcher {
         let of_an_engine_error = |refusal: streamlib::sdk::error::Error| {
             ControlOperationRefusal::of_an_engine_error(CheckLink::METHOD_NAME, &refusal)
         };
-        let refused_as_connect_refuses = |stream_id: Option<&str>, refusal: GraphRequestRefusal| {
-            LinkCheckResult::of_a_link_connect_refuses(
-                GraphTransactionRefusal::of_a_connect(stream_id, &source, &target, refusal)
-                    .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
-            )
-        };
+        let refused_as_connect_refuses =
+            |edits: Option<WhereAnOperationEdits<'_>>, refusal: GraphRequestRefusal| {
+                LinkCheckResult::of_a_link_connect_refuses(
+                    GraphTransactionRefusal::of_a_connect(edits, &source, &target, refusal)
+                        .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
+                )
+            };
         if level.is_some_and(|level| !level.is_empty()) {
             return Err(not_checked_yet(
                 "the link is inside a placed stream; check one at the stream's own level, with \
@@ -85,24 +85,35 @@ impl ControlOperationDispatcher {
             .to_json_async()
             .await
             .map_err(of_an_engine_error)?;
-        let operation = match the_operation_a_connect_asks_of_the_running_stream(
+        let at_its_own_level = WhereAnOperationEdits {
+            stream_id: &stream_id,
+            level: &[],
+            level_holds_both_link_ends: the_graph_holds_both_ends_by_uuid(
+                &rendered_graph,
+                &source,
+                &target,
+            ),
+        };
+        let asked = match what_a_connect_asks_of_the_running_stream(
             source.clone(),
             target.clone(),
             &rendered_graph,
             stream_operations.as_ref(),
         ) {
-            Ok(operation) => operation,
-            Err(refusal) => return Ok(refused_as_connect_refuses(Some(&stream_id), refusal)),
+            Ok(asked) => asked,
+            Err(refusal) => return Ok(refused_as_connect_refuses(Some(at_its_own_level), refusal)),
         };
-        let link = match operation {
-            StreamGraphOperation::Connect { link } => link,
-            StreamGraphOperation::AddNode { node, links }
-                if node.node_type != PREVIOUS_VALUE_NODE_TYPE =>
-            {
-                the_link_carried_through_the_added_node(links)
-                    .ok_or_else(|| not_checked_yet("the convert node carries no link"))?
-            }
-            _ => {
+        let link = match asked {
+            WhatAConnectAsks::Link(link)
+            | WhatAConnectAsks::ThroughANode {
+                original_link: link,
+                because: GraphTransactionNodeInsertedBecause::ConvertsPinTypes,
+                ..
+            } => link,
+            WhatAConnectAsks::ThroughANode {
+                because: GraphTransactionNodeInsertedBecause::ClosesALoop,
+                ..
+            } => {
                 return Err(not_checked_yet(
                     "the link closes a loop of function nodes no `PreviousValue` node is in, \
                      which `connect` closes through a `PreviousValue` node it adds",
@@ -116,19 +127,25 @@ impl ControlOperationDispatcher {
             Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade) => Err(not_checked_yet(
                 "the link reaches a node that runs as no node of its own, such as a fragment",
             )),
-            Err(refusal) => Ok(refused_as_connect_refuses(Some(&stream_id), refusal.into())),
+            Err(refusal) => Ok(refused_as_connect_refuses(
+                Some(at_its_own_level),
+                refusal.into(),
+            )),
         }
     }
 }
 
-/// The link a node added on it carries, from its first link's output to its second link's
-/// input, as `connect` asked for it.
-fn the_link_carried_through_the_added_node(
-    links: Vec<StreamGraphDocumentLink>,
-) -> Option<StreamGraphDocumentLink> {
-    let [into_the_node, out_of_the_node] = <[StreamGraphDocumentLink; 2]>::try_from(links).ok()?;
-    Some(StreamGraphDocumentLink {
-        source: into_the_node.source,
-        target: out_of_the_node.target,
-    })
+/// Whether the graph `rendered_graph` renders holds the node at each end, `source` and `target`,
+/// each named by its UUID.
+fn the_graph_holds_both_ends_by_uuid(
+    rendered_graph: &serde_json::Value,
+    source: &StreamGraphActionLinkEnd,
+    target: &StreamGraphActionLinkEnd,
+) -> bool {
+    let Ok(graph) = StreamGraphDocument::from_value(rendered_graph.clone()) else {
+        return false;
+    };
+    [source, target]
+        .into_iter()
+        .all(|end| Uuid::parse_str(&end.node).is_ok_and(|node| graph.node(node).is_ok()))
 }

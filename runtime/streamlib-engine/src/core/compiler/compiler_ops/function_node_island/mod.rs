@@ -16,7 +16,7 @@ mod island_placement;
 use island_edit_refusals::the_refusal_of_an_island_fed_into_the_app_process;
 pub(crate) use island_edit_refusals::{
     refuse_a_link_an_island_cannot_take, refuse_a_link_feeding_an_island_into_the_app_process,
-    refuse_an_edit_an_island_cannot_take,
+    refuse_an_edit_an_island_cannot_take, refuse_the_links_through_a_node_not_yet_added,
 };
 pub(crate) use island_placement::{the_island_feeding_a_link, the_state_fields_of_a_function_node};
 

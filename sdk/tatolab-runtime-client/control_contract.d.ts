@@ -1368,12 +1368,12 @@ export interface GraphTransactionAddedNode {
   /**
    * Its node type; present on a node the runtime inserted, whose `inserted_because` says why.
    */
-  node_type?: string | null;
+  node_type?: string;
   /**
    * Why the runtime inserted it on a link a `connect` asked for; absent on a node an
    * operation added.
    */
-  inserted_because?: GraphTransactionNodeInsertedBecause | null;
+  inserted_because?: GraphTransactionNodeInsertedBecause;
 }
 
 /**
