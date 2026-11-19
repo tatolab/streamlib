@@ -14,6 +14,7 @@
 
 mod common;
 
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use common::{
     TemporaryRuntimeUnit, a_native_only_stream_graph, a_stream_graph_crashing_while,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
     expect_the_runtime_to_crash_on_segv, the_local_apis_answer_to_get, the_location_of_the_stream,
-    the_stream_action_once_ended,
+    the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
 
 /// One engine on the GPU at a time, so the tests' runs never contend for it.
@@ -57,6 +58,20 @@ fn start_tatolabd_re_loading_the_recorded_native_only_stream(
     (runtime, main.stream_id)
 }
 
+/// `list_streams` once the re-loads `runtime` queued at its start have ended: a
+/// recorded stream starts inside the action that re-loads it, so its `started`
+/// line can come before the listing stops showing it `preparing`.
+fn the_listed_streams_once_the_reloads_ended(
+    runtime: &SpawnedTatolabd,
+    local_api_socket_path: &Path,
+) -> serde_json::Value {
+    for reload in the_reloads_queued_at_the_start(&runtime.standard_error()) {
+        the_stream_action_once_ended(local_api_socket_path, &reload);
+    }
+    call_a_tool_over_the_local_api(local_api_socket_path, "list_streams", serde_json::json!({}))
+        .json()
+}
+
 #[test]
 fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an_interrupt() {
     let _one_at_a_time = ONE_STREAM_ON_THE_GPU_AT_A_TIME
@@ -68,12 +83,8 @@ fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_b
         start_tatolabd_re_loading_the_recorded_native_only_stream(&runtime_unit, &machine_root);
 
     let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
-    let listed = call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "list_streams",
-        serde_json::json!({}),
-    )
-    .json();
+    let listed =
+        the_listed_streams_once_the_reloads_ended(&runtime, &machine_root.local_api_socket_path());
     runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(
@@ -182,12 +193,8 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_a_ru
         &the_stream_started_log_line(&main.stream_id),
         THE_RECORDED_STREAM_STARTS_WITHIN,
     );
-    let listed_after_two_crashes = call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "list_streams",
-        serde_json::json!({}),
-    )
-    .json();
+    let listed_after_two_crashes =
+        the_listed_streams_once_the_reloads_ended(&runtime, &machine_root.local_api_socket_path());
     std::fs::remove_file(&crash_trigger).unwrap();
     let venv_bin = machine_root.project_directory().join(".venv/bin");
     std::fs::create_dir_all(&venv_bin).unwrap();

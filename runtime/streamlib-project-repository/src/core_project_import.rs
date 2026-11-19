@@ -11,6 +11,7 @@ use crate::project_asset::PROJECT_IMPORTS_DIRECTORY;
 use crate::project_file::{ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile};
 use crate::project_import_folders::is_one_folder_name;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// The folder under `imports/` every project holds the core project in. No import a person
 /// adds takes it.
@@ -83,7 +84,7 @@ pub fn link_the_core_project_into(
         std::fs::remove_file(&link)?;
     }
     if let Some(imports_directory) = link.parent() {
-        std::fs::create_dir_all(imports_directory)?;
+        create_directory_and_its_missing_parents_at_the_process_umask(imports_directory)?;
     }
     std::os::unix::fs::symlink(core_project_directory, &link)?;
     Ok(true)

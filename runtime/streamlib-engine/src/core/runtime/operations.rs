@@ -61,6 +61,56 @@ pub struct ANodeTypesPort<'a> {
     pub port: &'a str,
 }
 
+/// One writer's batch of graph edits on one stream, from
+/// [`RuntimeOperations::open_a_graph_edit_batch`]. It is used on the thread that opened it: a
+/// start, a stop or a resume of the stream on that thread is refused while it is open, since
+/// each waits for it to close.
+#[must_use = "a batch of graph edits is closed, or taken back when it is dropped"]
+pub trait GraphEditBatch: Send {
+    /// Apply `graph_operation` to the stream's live graph inside the batch, as
+    /// [`RuntimeOperations::apply_a_stream_graph_operation_live`] applies it on its own, the rule
+    /// a reactive reader sets left to the close.
+    fn apply_a_stream_graph_operation_live(
+        &self,
+        graph_operation: streamlib_project_repository::StreamGraphOperation,
+    ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
+
+    /// Close the batch: refused, and taken back, when the graph it leaves holds a reader that
+    /// runs reactively fed only by function node islands, or when its one commit is refused;
+    /// otherwise compiled in one commit, and each event of what stands announced. A refusal
+    /// says how far the batch was taken back.
+    ///
+    /// # Panics
+    ///
+    /// When called from inside an asynchronous task: it waits for its commit on the engine's
+    /// runtime, as every synchronous method of [`RuntimeOperations`] that waits does.
+    fn close(self: Box<Self>) -> std::result::Result<(), GraphEditBatchRefused>;
+}
+
+/// How far a batch of graph edits whose close was refused was taken back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HowFarARefusedBatchWasTakenBack {
+    /// Every edit: the stream is as it was before the batch opened.
+    Whole,
+    /// Its one commit failed after it took something out of the running stream or built into
+    /// it, so only what nothing built or wired holds was taken back: the caller reverses each
+    /// edit it applied, as it would edits each committed on its own.
+    AsFarAsNothingBuiltOrWiredHoldsIt,
+}
+
+/// A batch of graph edits whose close was refused: why, and how far it was taken back.
+#[derive(Debug)]
+pub struct GraphEditBatchRefused {
+    pub refusal: crate::core::error::Error,
+    pub taken_back: HowFarARefusedBatchWasTakenBack,
+}
+
+impl std::fmt::Display for GraphEditBatchRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.refusal.fmt(f)
+    }
+}
+
 pub trait RuntimeOperations: Send + Sync {
     // =========================================================================
     // Async Methods (primary implementation - safe from any context)
@@ -301,6 +351,18 @@ pub trait RuntimeOperations: Send + Sync {
     /// This is a blocking wrapper around [`disconnect_async`]. Do not call
     /// from within a tokio task - use the async variant instead.
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
+
+    /// Open a batch of graph edits on this stream for one writer, once no other writer's are
+    /// open on it: each operation applied through it is logged into one compiler transaction,
+    /// and closing it judges the graph the batch leaves and compiles it in one commit. Dropped
+    /// open, the batch is taken back as far as nothing built or wired holds it. A start, a stop
+    /// or a resume of the stream waits for the batch to close.
+    ///
+    /// # Panics
+    ///
+    /// When it waits for another writer from inside an asynchronous task, as every synchronous
+    /// method of this trait that waits does.
+    fn open_a_graph_edit_batch(self: std::sync::Arc<Self>) -> Result<Box<dyn GraphEditBatch>>;
 
     // =========================================================================
     // Lifecycle

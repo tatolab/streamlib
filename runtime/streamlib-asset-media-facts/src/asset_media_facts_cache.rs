@@ -17,6 +17,7 @@ use crate::{
     AssetMediaFactsReadersOfThisRuntime, AssetMediaFactsUnreadable,
     read_the_media_facts_of_an_asset_file, the_lowercase_extension_of,
 };
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// The folder of a project, relative to its directory, the facts read from each asset's bytes
 /// are kept in, one folder per SHA-256 and one inside it per file extension.
@@ -210,7 +211,7 @@ impl AssetMediaFactsCacheOfAProject {
                 format!("`{content_sha256}` is no SHA-256 in lowercase hex"),
             ));
         };
-        std::fs::create_dir_all(&folder)?;
+        create_directory_and_its_missing_parents_at_the_process_umask(&folder)?;
         if let Some(preview_png_bytes) = preview_png_bytes {
             write_by_rename(&folder.join(PREVIEW_PICTURE_FILE_NAME), preview_png_bytes)?;
         }

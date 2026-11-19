@@ -5,13 +5,13 @@
 //! type declares: the type itself, one of several, any type, the type linked into another of its
 //! inputs, or the type one of its settings chooses.
 
-use super::{Graph, GraphEdgeWithComponents, GraphNode, PendingDeletionComponent, PortInfo};
+use std::collections::HashSet;
+
+use super::{
+    Graph, GraphEdgeWithComponents, GraphNode, NodeRunId, PendingDeletionComponent, PortInfo,
+};
 use crate::core::PortDirection;
 use crate::core::descriptors::{DeclaredPinType, PinType, ResolvedPin};
-
-/// How far a port whose type follows an input is followed upstream before it counts as untyped;
-/// a chain longer than this is a loop.
-const MOST_INPUTS_FOLLOWED_UPSTREAM: usize = 64;
 
 /// What a port of a placed node carries, resolved against its graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,13 +29,17 @@ pub(crate) enum PinTypeInItsGraph {
 }
 
 /// The pin `port`, a port of `node` at `direction`, resolves to in `graph`, as `graph` serves
-/// it: its one type and its flow; `None` while it is one of several, any or untyped.
+/// it: the pin it declares exactly, else its one type and its flow; `None` while it is one of
+/// several, any or untyped.
 pub(crate) fn the_pin_a_port_resolves_to(
     graph: &Graph,
     node: &GraphNode,
     port: &PortInfo,
     direction: PortDirection,
 ) -> Option<ResolvedPin> {
+    if declares_its_type_exactly(port) {
+        return port.pin.clone();
+    }
     let PinTypeInItsGraph::Is(pin_type) =
         the_pin_type_of_a_port_in_its_graph(graph, node, port, direction)
     else {
@@ -57,15 +61,35 @@ pub(crate) fn the_pin_type_of_a_port_in_its_graph(
     port: &PortInfo,
     direction: PortDirection,
 ) -> PinTypeInItsGraph {
-    the_pin_type_followed_upstream(graph, node, port, direction, 0)
+    the_pin_type_followed_upstream(graph, node, port, direction, &mut HashSet::new())
 }
 
-fn the_pin_type_followed_upstream(
-    graph: &Graph,
-    node: &GraphNode,
+/// Whether `port` declares its type exactly, or declares none: what it carries is its own pin,
+/// whatever it is linked to.
+pub(crate) fn declares_its_type_exactly(port: &PortInfo) -> bool {
+    matches!(
+        port.declared_pin_type
+            .as_ref()
+            .map(|declared| &declared.pin_type),
+        Some(DeclaredPinType::Is { .. }) | None
+    )
+}
+
+/// Whether `port` carries exactly the one type it declares: it declares its type exactly, and
+/// neither a config key nor another input sets its family.
+pub(crate) fn states_one_type_exactly(port: &PortInfo) -> bool {
+    declares_its_type_exactly(port)
+        && matches!(the_pin_type_it_states(port), PinTypeInItsGraph::Is(_))
+}
+
+/// What `port` carries, each input of a node a port following one is followed through kept in
+/// `inputs_followed`: an input followed twice closes a loop, and a port on it is untyped.
+fn the_pin_type_followed_upstream<'graph>(
+    graph: &'graph Graph,
+    node: &'graph GraphNode,
     port: &PortInfo,
     direction: PortDirection,
-    inputs_followed: usize,
+    inputs_followed: &mut HashSet<(&'graph NodeRunId, &'graph str)>,
 ) -> PinTypeInItsGraph {
     match port
         .declared_pin_type
@@ -78,10 +102,7 @@ fn the_pin_type_followed_upstream(
             PortDirection::Output => PinTypeInItsGraph::Untyped,
         },
         Some(DeclaredPinType::SameAsInput { input_port_name }) => {
-            if inputs_followed >= MOST_INPUTS_FOLLOWED_UPSTREAM {
-                return PinTypeInItsGraph::Untyped;
-            }
-            the_pin_type_linked_into(graph, node, input_port_name, inputs_followed + 1)
+            the_pin_type_linked_into(graph, node, input_port_name, inputs_followed)
         }
         Some(DeclaredPinType::SetByInput { input_name }) => {
             the_pin_type_a_setting_chooses(node, input_name)
@@ -106,15 +127,18 @@ pub(crate) fn the_pin_type_it_states(port: &PortInfo) -> PinTypeInItsGraph {
 
 /// What a port following input `input_port_name` of `node` carries: what the output linked
 /// into that input carries, else the input's own type while nothing is linked into it.
-fn the_pin_type_linked_into(
-    graph: &Graph,
-    node: &GraphNode,
+fn the_pin_type_linked_into<'graph>(
+    graph: &'graph Graph,
+    node: &'graph GraphNode,
     input_port_name: &str,
-    inputs_followed: usize,
+    inputs_followed: &mut HashSet<(&'graph NodeRunId, &'graph str)>,
 ) -> PinTypeInItsGraph {
     let Some(followed_input) = node.input_port(input_port_name) else {
         return PinTypeInItsGraph::Untyped;
     };
+    if !inputs_followed.insert((&node.id, followed_input.name.as_str())) {
+        return PinTypeInItsGraph::Untyped;
+    }
     let link_into_it = graph.traversal().e(()).iter().find(|link| {
         link.to_port().node_run_id() == &node.id
             && link.to_port().port_name() == followed_input.name
@@ -153,12 +177,16 @@ fn the_pin_type_linked_into(
     )
 }
 
-/// The pin type `node`'s setting `input_name` holds, as its saved value; `None` while it holds
-/// none, or holds no pin type.
+/// The pin type `node`'s setting `input_name` holds: its saved value, else the default it
+/// declares; `None` while it holds neither, or holds no pin type.
 pub(crate) fn the_pin_type_a_setting_chooses(
     node: &GraphNode,
     input_name: &str,
 ) -> Option<PinType> {
     let setting = node.input_port(input_name)?;
-    serde_json::from_value(node.pins.get(&setting.name)?.clone()).ok()
+    let held = node
+        .pins
+        .get(&setting.name)
+        .or(setting.pin_default.as_ref())?;
+    serde_json::from_value(held.clone()).ok()
 }

@@ -156,10 +156,12 @@ jobs:
         run: python3 scripts/test_tatolab_module_projects.py -v
 
       # A user's `uv sync` resolves `tatolab-stream` from PyPI, where every
-      # earlier release is a candidate. This run's `tatolab-stream` is not on
-      # PyPI, so it joins PyPI as find-links, and the scaffold must lock the one
-      # just built — a scaffold that capped its version would lock something else.
-      - name: A scaffolded stream locks the tatolab-stream this run built
+      # release is a candidate. This run's `tatolab-stream` is not on PyPI, so
+      # it joins PyPI as find-links. `main` carries the version of an earlier
+      # release, which a release tag raises, so PyPI can hold a newer one and the
+      # scaffold locks that. A scaffold that capped its version would lock one
+      # older than the one just built.
+      - name: A scaffolded stream locks the tatolab-stream this run built or a newer one
         run: |
           set -euo pipefail
           cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
@@ -174,8 +176,13 @@ jobs:
           print(next(package['version'] for package in lock['package'] if package['name'] == 'tatolab-stream'))
           EOF
           )"
-          if [ "$locked_version" != "$built_version" ]; then
-            echo "::error::a scaffolded stream locks tatolab-stream $locked_version, not the $built_version this run built"
+          if ! python3 - "$locked_version" "$built_version" <<'EOF'
+          import sys
+          locked, built = (tuple(int(part) for part in version.split('.')) for version in sys.argv[1:])
+          sys.exit(0 if locked >= built else 1)
+          EOF
+          then
+            echo "::error::a scaffolded stream locks tatolab-stream $locked_version, older than the $built_version this run built"
             exit 1
           fi
 

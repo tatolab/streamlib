@@ -72,32 +72,6 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .collect()
 }
 
-/// Refuse a stream about to start whose function nodes have an input with no
-/// value, naming each such input on its node.
-pub(crate) fn refuse_a_function_node_input_with_no_value_as_the_stream_starts(
-    graph: &Graph,
-) -> Result<()> {
-    let inputs_with_no_value: Vec<String> = graph
-        .traversal()
-        .v(())
-        .iter()
-        .flat_map(|node| {
-            the_inputs_a_function_node_has_no_value_for(graph, node)
-                .into_iter()
-                .map(|input| format!("`{}`'s input `{input}`", node.display_name))
-        })
-        .collect();
-    if inputs_with_no_value.is_empty() {
-        return Ok(());
-    }
-    Err(Error::InvalidGraph(format!(
-        "the stream does not start: no value reaches {}, each linked to nothing, with no pin \
-         value and declaring no default. To fix: link each, set its pin, or give its \
-         parameter a default",
-        inputs_with_no_value.join(", ")
-    )))
-}
-
 /// Refuse a pin value set on an input of `node` that the input does not take, as
 /// [`refuse_a_value_the_input_port_does_not_take`] decides.
 pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
@@ -327,9 +301,11 @@ pub(crate) mod tests {
         (graph, remap, mix)
     }
 
+    /// A function node input with no link, pin or default is named as one its node waits on,
+    /// which the graph shows on the node; a stream holding it plays, the node holding until the
+    /// input has a value.
     #[test]
-    fn a_function_node_input_with_no_link_pin_or_default_is_named_and_refused_as_the_stream_starts()
-    {
+    fn a_function_node_input_with_no_link_pin_or_default_is_named_as_one_its_node_waits_on() {
         let (mut graph, remap, mix) = a_graph_of_two_function_nodes_with_inputs_left_unlinked();
         let waiting = |graph: &Graph, node_id: &NodeRunId| {
             the_inputs_a_function_node_has_no_value_for(
@@ -343,26 +319,17 @@ pub(crate) mod tests {
             vec!["a".to_string()],
             "an input declaring a default has a value"
         );
-        let refusal = refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            refusal.contains("`gain`") && refusal.contains("`a`"),
-            "the refusal names each input with no value, got {refusal}"
-        );
 
         set_a_pin(&mut graph, &remap, "gain", serde_json::json!(2.0));
         set_a_pin(&mut graph, &mix, "a", serde_json::json!(0.25));
         assert!(waiting(&graph, &remap).is_empty() && waiting(&graph, &mix).is_empty());
-        refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph).unwrap();
     }
 
     /// A function node input that may be unset has a value with no link, pin or default: it
-    /// reads as nothing, so the node waits on none of it and the stream starts; an input that
-    /// declares the same pin but may not be unset still waits.
+    /// reads as nothing, so the node waits on none of it; an input that declares the same pin
+    /// but may not be unset still waits.
     ///
-    /// Mental-revert: dropping the `may_be_unset` filter names `trim` as waiting and refuses the
-    /// stream as it starts.
+    /// Mental-revert: dropping the `may_be_unset` filter names `trim` as waiting.
     #[test]
     fn a_function_node_input_that_may_be_unset_never_waits_for_a_value() {
         use crate::core::compiler::compiler_ops::function_node_island::tests::{
@@ -398,7 +365,13 @@ pub(crate) mod tests {
             vec!["gain".to_string()]
         );
         set_a_pin(&mut graph, &trim, "gain", serde_json::json!(1.0));
-        refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph).unwrap();
+        assert!(
+            the_inputs_a_function_node_has_no_value_for(
+                &graph,
+                graph.traversal().v(&trim).first().unwrap()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -412,7 +385,6 @@ pub(crate) mod tests {
             )
             .is_empty()
         );
-        refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph).unwrap();
     }
 
     #[test]

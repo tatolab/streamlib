@@ -16,19 +16,21 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
+    ALinkConnected, LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
     the_default_name_a_new_node_takes, the_verdict_on_a_link_between_typed_ends,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
-use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
+use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
+    LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
+};
 use crate::core::compiler::compiler_ops::node_interpreter_describe::a_node_interpreter_describes;
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::runtime::operations::{
     ANodeTypesPort, RuntimeOperations, WhatALiveConnectMakesOfALink,
 };
 use crate::core::runtime::operations_runtime::{
-    ALinkEndTheGraphHolds, ANodeTypesPortToJudge, ConfigReferencesOfTheAddedNode,
+    ALinkEndTheGraphHolds, ANodeTypesPortToJudge, ConfigReferencesOfTheAddedNode, connect_impl,
     describe_the_type_an_add_names_when_it_must, the_verdict_connect_takes_on_a_link,
     the_verdicts_connect_takes_on_links_with_node_types_ports,
 };
@@ -43,7 +45,21 @@ impl LoadedStreamInThisRuntime {
     /// connected again, and a disconnect naming a port by a name it had leaves the graph as it
     /// is when it holds no such link. A request to connect a link its document already holds is
     /// refused before it reaches here, so only an undo or a redo of an edit meets a link held.
+    /// A disconnect of a link held set aside, made nowhere, takes it off the graph as drawn.
+    ///
+    /// The operation is applied as graph edits held for one commit, joined to those the running
+    /// task holds, so it is judged by the graph it leaves and taken back whole when refused.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
+        &self,
+        graph_operation: StreamGraphOperation,
+    ) -> Result<StreamGraphOperation> {
+        self.in_one_commit(
+            self.apply_a_stream_graph_operation_within_the_graph_edits_held(graph_operation),
+        )
+        .await
+    }
+
+    async fn apply_a_stream_graph_operation_within_the_graph_edits_held(
         &self,
         graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
@@ -99,12 +115,10 @@ impl LoadedStreamInThisRuntime {
                     }
                 };
                 node.name = added.name;
-                for link in &links {
-                    if let Err(refusal) = self.connect_the_link(link).await {
-                        self.take_out_the_node_a_refused_add_left(node.id, &refusal)
-                            .await;
-                        return Err(refusal);
-                    }
+                if let Err(refusal) = self.connect_each_link_of_an_added_node(&links).await {
+                    self.take_out_the_node_a_refused_add_left(node.id, &refusal)
+                        .await;
+                    return Err(refusal);
                 }
                 Ok(StreamGraphOperation::AddNode { node, links })
             }
@@ -122,6 +136,8 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::Disconnect { link } => {
                 match self.the_link_held_between(&link)? {
                     Some(link_id) => self.disconnect_async(link_id).await?,
+                    None if Self::the_link_by_node_uuid(&link)
+                        .is_some_and(|link| self.forget_the_link_set_aside(&link)) => {}
                     None if disconnects_a_port_by_a_name_it_had => {}
                     None => {
                         return Err(Error::GraphError(format!(
@@ -460,28 +476,46 @@ impl LoadedStreamInThisRuntime {
     }
 
     fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {
-        self.compiler.scope(|graph, _tx| {
-            let nodes: Vec<_> = graph.traversal().v(()).iter().collect();
-            nodes
-                .iter()
-                .find(|held| held.node_uuid == node)
-                .map(|held| held.id.clone())
-                .ok_or_else(|| {
-                    let held: Vec<String> = nodes
-                        .iter()
-                        .map(|held| format!("{} `{}`", held.node_uuid, held.display_name))
-                        .collect();
-                    Error::GraphError(format!(
-                        "stream `{}` holds no node {node}. It holds: {}",
-                        self.stream_id(),
-                        if held.is_empty() {
-                            "no node".to_string()
-                        } else {
-                            held.join(", ")
-                        }
-                    ))
-                })
+        self.compiler.scope_reading(|graph| {
+            let standing = || graph.traversal().v(()).iter().filter(|held| held.stands());
+            if let Some(held) = standing().find(|held| held.node_uuid == node) {
+                return Ok(held.id.clone());
+            }
+            let held: Vec<String> = standing()
+                .map(|held| format!("{} `{}`", held.node_uuid, held.display_name))
+                .collect();
+            Err(Error::GraphError(format!(
+                "stream `{}` holds no node {node}. It holds: {}",
+                self.stream_id(),
+                if held.is_empty() {
+                    "no node".to_string()
+                } else {
+                    held.join(", ")
+                }
+            )))
         })
+    }
+
+    /// Connect each of `links`, those of a node an add made, the rule a reader that runs
+    /// reactively sets left to the close of the graph edits held for one commit, so the order
+    /// they are listed in never matters.
+    async fn connect_each_link_of_an_added_node(
+        &self,
+        links: &[StreamGraphDocumentLink],
+    ) -> Result<()> {
+        for link in links {
+            let (from, to) = self.the_ends_of_the_link(link)?;
+            connect_impl(
+                self.live_graph_change(),
+                from,
+                to,
+                ALinkConnected::MadeNow,
+                self.the_connect_an_edit_makes(),
+            )
+            .await?
+            .connected()?;
+        }
+        Ok(())
     }
 
     async fn connect_the_link(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {
@@ -663,6 +697,20 @@ impl LoadedStreamInThisRuntime {
         ))
     }
 
+    /// `link` with each end its node's UUID and each port name cast; `None` when a name does
+    /// not cast.
+    fn the_link_by_node_uuid(
+        link: &StreamGraphDocumentLink,
+    ) -> Option<RunningLinkBetweenTwoNodesByUuid> {
+        RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
+            link.source.node,
+            &link.source.port,
+            link.target.node,
+            &link.target.port,
+        )
+        .ok()
+    }
+
     /// The live link `link` names by its ends; `None` when the live graph holds none, and
     /// refused when either end names a node it does not hold or a name that does not cast.
     fn the_link_held_between(
@@ -680,7 +728,8 @@ impl LoadedStreamInThisRuntime {
                 .out_e()
                 .iter()
                 .find(|held| {
-                    held.source.port_name() == source_port
+                    graph.stands(held)
+                        && held.source.port_name() == source_port
                         && *held.target.node_run_id() == target
                         && held.target.port_name() == target_port
                 })

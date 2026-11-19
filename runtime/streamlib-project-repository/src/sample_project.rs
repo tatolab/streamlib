@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::project_file::{PROJECT_FILE_NAME, THIS_RUNTIME_VERSION, TatolabProjectFile};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::STREAM_DOCUMENT_ASSET_KEY;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// Where a sample's one stream asset that a new project runs first sits in it.
 pub const SAMPLE_PROJECT_MAIN_STREAM_DOCUMENT_PATH: &str = "streams/main.graph.json";
@@ -160,7 +161,7 @@ impl SampleProjectTheRuntimeUnitCarries {
         for relative in &files_the_copy_writes {
             let copied_to = project_directory.join(relative);
             if let Some(parent) = copied_to.parent() {
-                std::fs::create_dir_all(parent)?;
+                create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
             }
             std::fs::copy(self.directory.join(relative), &copied_to)?;
         }

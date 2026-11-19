@@ -59,6 +59,10 @@ use crate::core::nodes::{NodeState, NodeTypesOneStreamResolves};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
+mod commit_of_the_logged_operations;
+mod transaction_held_for_one_commit;
+pub(crate) use commit_of_the_logged_operations::{ACommitFailed, WhatTheHeldCommitFound};
+
 pub(crate) struct Compiler {
     // Graph ownership (moved from Runtime)
     graph: Arc<RwLock<Graph>>,
@@ -70,6 +74,10 @@ pub(crate) struct Compiler {
     /// interleave their spawn and wire phases against one graph.
     one_commit_at_a_time: Mutex<()>,
     abandoned_node_threads: Mutex<Vec<AbandonedNodeThreadStillRunning>>,
+    /// While held, how many operations the transaction logged before the hold: a commit asked
+    /// for meanwhile compiles nothing, so the operations logged under the hold are compiled
+    /// together, as one commit, once it is released.
+    transaction_held_for_one_commit: Mutex<Option<usize>>,
 }
 
 impl Default for Compiler {
@@ -102,6 +110,7 @@ impl Compiler {
             configs_a_commit_is_applying: Arc::new(Mutex::new(HashMap::new())),
             one_commit_at_a_time: Mutex::new(()),
             abandoned_node_threads: Mutex::new(Vec::new()),
+            transaction_held_for_one_commit: Mutex::new(None),
         }
     }
 
@@ -150,35 +159,6 @@ impl Compiler {
         self.transaction.lock().clone()
     }
 
-    /// Flush transaction. Callable from any thread - compile() is dispatched to main thread.
-    #[tracing::instrument(name = "compiler.commit", skip_all)]
-    pub(crate) fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
-        #[cfg(any(test, feature = "test-support"))]
-        crate::core::runtime::graph_renders_and_commits_counted_for_a_test::count_a_commit_begun_of(
-            runtime_ctx.loaded_stream_identity(),
-        );
-        let _one_commit_at_a_time = self.one_commit_at_a_time.lock();
-        let operations = self.take_the_logged_operations_to_compile();
-        if operations.is_empty() {
-            tracing::info!("[commit] No pending operations");
-            return Ok(());
-        }
-
-        tracing::debug!(
-            "[commit] Processing {} pending operations (batched)",
-            operations.len()
-        );
-
-        let compiled = Self::compile(
-            Arc::clone(&self.graph),
-            operations,
-            runtime_ctx,
-            &self.abandoned_node_threads,
-        );
-        self.configs_a_commit_is_applying.lock().clear();
-        compiled
-    }
-
     /// Take every operation logged, for a commit to compile, recording in the same step the
     /// config each config update taken hands its node, which a config built before the commit
     /// applies it builds on.
@@ -202,7 +182,7 @@ impl Compiler {
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
         abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), ACommitFailed> {
         let readers_awaiting_a_promotion: Vec<NodeRunId> = operations
             .iter()
             .filter_map(|operation| match operation {
@@ -237,7 +217,10 @@ impl Compiler {
                 }
             }
         }
-        compiled
+        compiled.map_err(|refusal| ACommitFailed {
+            refusal,
+            after_changing_what_runs: result.began_changing_what_runs,
+        })
     }
 
     /// Compile `operations` against `graph_arc`, counting what it did into
@@ -318,6 +301,7 @@ impl Compiler {
         // Publish compile start event
         the_stream_the_compile_belongs_to
             .publish_on_this_streams_topic(RuntimeEvent::CompilerWillCompile);
+        result.began_changing_what_runs = true;
 
         let abandoned_in_this_compile: Vec<NodeDisplayNameAndId> = if !plan
             .links_to_remove
@@ -371,8 +355,13 @@ impl Compiler {
         let mut barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)> = vec![];
         let function_nodes_run_inside_their_readers =
             the_function_nodes_among(&graph_arc.read(), &plan.nodes_to_add);
-        let shader_nodes_fused_into_another =
+        let shader_nodes_placed =
             place_each_shader_node_island_on_its_host(&mut graph_arc.write(), &plan.nodes_to_add)?;
+        plan.leave_unbuilt_each_node_and_unwired_each_of_its_links(
+            &graph_arc.read(),
+            &shader_nodes_placed.in_a_cycle_no_node_evaluates,
+        );
+        let shader_nodes_fused_into_another = &shader_nodes_placed.fused_into_another;
         let nodes_to_build: Vec<NodeRunId> = plan
             .nodes_to_add
             .iter()
@@ -468,7 +457,7 @@ impl Compiler {
             let graph = graph_arc.read();
             for function_node_id in function_nodes_run_inside_their_readers
                 .iter()
-                .chain(&shader_nodes_fused_into_another)
+                .chain(shader_nodes_fused_into_another)
             {
                 if let Some(state) = graph
                     .traversal()
@@ -568,7 +557,7 @@ fn stop_each_shader_node_restarted(
         .map(|node| node.node_run_id.clone())
         .collect();
     let mut graph = graph_arc.write();
-    plan.leave_unbuilt_each_node_whose_thread_was_abandoned(&graph, &abandoned_node_ids);
+    plan.leave_unbuilt_each_node_and_unwired_each_of_its_links(&graph, &abandoned_node_ids);
     let rebuilt_node_ids: Vec<NodeRunId> = shader_nodes_restarted
         .nodes
         .iter()
@@ -966,3 +955,6 @@ mod already_wired_tests;
 
 #[cfg(test)]
 mod abandoned_shader_node_restart_tests;
+
+#[cfg(test)]
+mod transaction_held_for_one_commit_tests;

@@ -311,6 +311,10 @@ impl Iceoryx2Node {
             if !a_reopen_can_get_past(&failure) {
                 return Err(channel_data_service_open_failure(
                     &service_name,
+                    ChannelDataServiceAskedFor {
+                        max_subscribers,
+                        channel_service_creation_depth,
+                    },
                     &failure,
                     ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange,
                 ));
@@ -318,6 +322,10 @@ impl Iceoryx2Node {
             if reopens == DEAD_HOLDER_RECLAIM_ATTEMPTS {
                 return Err(channel_data_service_open_failure(
                     &service_name,
+                    ChannelDataServiceAskedFor {
+                        max_subscribers,
+                        channel_service_creation_depth,
+                    },
                     &failure,
                     ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen,
                 ));
@@ -607,10 +615,19 @@ enum ChannelDataServiceOpenRefusedFor {
     DepthOnEveryReopen,
 }
 
-/// The refusal for a failed open-or-create of a channel data service, saying
-/// whether the dead-holder reopen budget was spent.
+/// What an open-or-create of a channel data service asked iceoryx2 for.
+#[derive(Debug, Clone, Copy)]
+struct ChannelDataServiceAskedFor {
+    max_subscribers: usize,
+    channel_service_creation_depth: usize,
+}
+
+/// The refusal for a failed open-or-create of a channel data service, naming
+/// the service and what the open asked for, and saying whether the dead-holder
+/// reopen budget was spent.
 fn channel_data_service_open_failure(
     service_name: &ServiceName,
+    asked_for: ChannelDataServiceAskedFor,
     failure: &PublishSubscribeOpenOrCreateError,
     refused_for: ChannelDataServiceOpenRefusedFor,
 ) -> Error {
@@ -623,14 +640,22 @@ fn channel_data_service_open_failure(
             failure,
         );
     }
+    let ChannelDataServiceAskedFor {
+        max_subscribers,
+        channel_service_creation_depth,
+    } = asked_for;
+    let refused = format!(
+        "the channel data service '{}' could not be opened with a subscriber buffer of \
+         {channel_service_creation_depth} samples and room for {max_subscribers} subscribers: \
+         {failure:?}",
+        service_name.as_str()
+    );
     match refused_for {
-        ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange => {
-            Error::Runtime(format!("Failed to open/create service: {failure:?}"))
-        }
+        ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange => Error::Runtime(refused),
         ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen => Error::Runtime(format!(
-            "Failed to open/create service: {failure:?} (still refused after \
-             {DEAD_HOLDER_RECLAIM_ATTEMPTS} reopens, each of which reclaims the service's dead \
-             holders, so a live holder is genuinely shallower than this open asks for)"
+            "{refused} (still refused after {DEAD_HOLDER_RECLAIM_ATTEMPTS} reopens, each of which \
+             reclaims the service's dead holders, so a live holder is genuinely shallower than \
+             this open asks for)"
         )),
     }
 }

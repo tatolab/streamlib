@@ -245,6 +245,49 @@ async fn a_link_a_built_in_conversion_bridges_gets_its_convert_node_in_one_edit(
     );
 }
 
+/// A convert node a `transact`'s `connect` inserts joins the transaction's one held commit with
+/// both its links: a later operation of the same transaction refused takes all three back, so
+/// neither the document nor the running graph holds the node or either link.
+///
+/// Mental-revert: leaving the inserted node out of what a refused transaction takes back leaves
+/// it and its two links running after the refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_convert_node_a_refused_transaction_inserted_is_taken_back_with_its_links() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let saved_before = project.the_graph_document_of("main");
+    let live_before = engine.the_live_graph_of(&stream_id);
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "operations": [
+                { "operation": "connect", "stream": stream_id,
+                  "source": { "node": CAMERA_NODE_UUID, "port": "video" },
+                  "target": { "node": MODEL_NODE_UUID, "port": "tensor" } },
+                { "operation": "connect", "stream": stream_id,
+                  "source": { "node": CAMERA_NODE_UUID, "port": "video" },
+                  "target": { "node": MODEL_NODE_UUID, "port": "nv12_video" } },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("no conversion writes nv12");
+
+    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+    let live_after = engine.the_live_graph_of(&stream_id);
+    assert_eq!(
+        sorted_node_names_in(&live_after),
+        sorted_node_names_in(&live_before)
+    );
+    assert_eq!(
+        links_by_node_name_in(&live_after),
+        Vec::<String>::new(),
+        "{live_after}"
+    );
+}
+
 /// A Tensor linked into a Texture input that takes `bgra8_unorm` gets a `TensorToTexture`
 /// holding `format` `bgra8_unorm`, the format it picks for that input; into an input that takes
 /// only `nv12`, which it never writes, the link is refused and nothing is added.

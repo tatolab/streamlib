@@ -50,7 +50,6 @@ pub use channel_name::{
     CHANNEL_CHUNK_SEPARATOR, ChannelName, InboundLinkName, MAX_CHANNEL_NAME_BYTES,
     source_channel_name, validate_channel_name,
 };
-pub(crate) use child_process_start_outside_listener_binds::bind_an_iceoryx2_listener_outside_every_child_process_start;
 pub use child_process_start_outside_listener_binds::spawn_outside_every_iceoryx2_listener_bind;
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
@@ -90,6 +89,7 @@ pub use message_group_loss_recovery_gate::{
 };
 pub use payload::MessageGroupBoundary;
 pub use streamlib_ipc_types::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE;
+pub(crate) use streamlib_ipc_types::bind_an_iceoryx2_listener_outside_every_child_process_start;
 
 pub(crate) use node::ChannelSizing;
 pub use node::{

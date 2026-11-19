@@ -85,7 +85,8 @@ impl CompilationPlan {
         }
     }
 
-    pub(super) fn leave_unbuilt_each_node_whose_thread_was_abandoned(
+    /// Leave each of `node_ids` unbuilt, and each link into or out of one unwired.
+    pub(super) fn leave_unbuilt_each_node_and_unwired_each_of_its_links(
         &mut self,
         graph: &Graph,
         node_ids: &[NodeRunId],

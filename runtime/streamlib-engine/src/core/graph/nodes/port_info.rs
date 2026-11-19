@@ -190,3 +190,19 @@ impl PortInfo {
         ))
     }
 }
+
+impl PortInfo {
+    /// Whether `other` is the input of the same name that takes the values this one takes: its
+    /// family, its pin type and how its graph finds it, its range, its input mode, its lifetime
+    /// and whether it may be unset, whatever its description.
+    pub(crate) fn takes_the_values_it_takes(&self, other: &PortInfo) -> bool {
+        self.name == other.name
+            && self.family == other.family
+            && self.pin == other.pin
+            && self.declared_pin_type == other.declared_pin_type
+            && self.range == other.range
+            && self.input_mode == other.input_mode
+            && self.lifetime == other.lifetime
+            && self.may_be_unset == other.may_be_unset
+    }
+}

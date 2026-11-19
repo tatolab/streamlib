@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -11,7 +10,7 @@ use super::LoadedStreamInThisRuntime;
 use super::RuntimeStatus;
 use super::node_interpreters::node_interpreter_launch_record::NodeInterpreterLaunchRecordOfOneStream;
 use super::operations::{
-    BoxFuture, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
+    BoxFuture, GraphEditBatch, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
 };
 use super::runtime::TokioRuntimeVariant;
 use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
@@ -24,8 +23,7 @@ use crate::core::graph::input_values::{
 };
 use crate::core::graph::{
     ALinkConnected, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
-    NodeInstanceComponent, NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves,
-    node_named_or_refused,
+    NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
@@ -34,12 +32,29 @@ use crate::core::nodes::{NodeSpec, NodeState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
+mod graph_edits_in_one_commit;
+mod live_graph_change_committed;
+#[cfg(test)]
+mod live_graph_change_committed_tests;
+use live_graph_change_committed::{
+    commit_live_graph_change, commit_the_graph_edits_held_for_one_commit,
+};
+mod link_disconnected;
+pub(in crate::core::runtime) use link_disconnected::disconnect_impl;
+mod input_value_changes_a_connect_waits_for;
+pub(super) use input_value_changes_a_connect_waits_for::InputValueChangesAConnectWaitsFor;
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
+mod reactive_reader_rule_of_an_edit;
+pub(super) use graph_edits_in_one_commit::{ALifecycleChange, GraphEditsHeldForOneCommit};
 pub(super) use link_connected_between_two_ports::{
-    ALinkEndTheGraphHolds, ANodeTypesPortToJudge, connect_impl,
+    ALinkConnectedOrSetAside, ALinkEndTheGraphHolds, ANodeTypesPortToJudge,
+    WhenTheEngineCannotWireALink, connect_impl, refuse_a_held_link_the_engine_cannot_wire,
     the_verdict_connect_takes_on_a_link, the_verdicts_connect_takes_on_links_with_node_types_ports,
 };
+#[cfg(test)]
+use reactive_reader_rule_of_an_edit::refuse_a_removal_that_strands_a_reactive_reader;
+use reactive_reader_rule_of_an_edit::{ARemoval, the_reader_rule_is_left_to_the_close};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -48,12 +63,31 @@ pub(super) use link_connected_between_two_ports::{
 type LiveCommitContext = Option<Arc<RuntimeContext>>;
 
 /// What every graph change on one stream works through: the stream's
-/// compiler, the context it compiles against right away, if any, and the
-/// stream whose topic it publishes on.
+/// compiler, the context it compiles against right away, if any, the
+/// stream whose topic it publishes on, and the input value changes a
+/// connect waits for while it makes its link.
 pub(super) struct LiveGraphChangeOnOneStream {
     compiler: Arc<Compiler>,
     live: LiveCommitContext,
     stream: LoadedStreamIdentity,
+    /// The graph edits held for one commit this change joins, which keep its events until
+    /// they close.
+    held_for_one_commit: Option<Arc<GraphEditsHeldForOneCommit>>,
+    one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor,
+}
+
+/// Announce `event`, which names `of_the_link` when it is about one, on `stream`'s topic, or
+/// keep it with `held_for_one_commit` until those edits close.
+fn announce_or_hold(
+    stream: &LoadedStreamIdentity,
+    held_for_one_commit: Option<&GraphEditsHeldForOneCommit>,
+    of_the_link: Option<&LinkUniqueId>,
+    event: RuntimeEvent,
+) {
+    match held_for_one_commit {
+        Some(held) => held.hold_the_event(of_the_link, event),
+        None => stream.publish_on_this_streams_topic(event),
+    }
 }
 
 thread_local! {
@@ -66,82 +100,6 @@ pub(crate) fn mark_this_thread_as_a_node_execution_thread() {
 
 fn this_thread_may_commit_inline() -> bool {
     !IS_A_NODE_EXECUTION_THREAD.with(|marker| marker.get())
-}
-
-async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitContext) -> Result<()> {
-    let Some(runtime_ctx) = live else {
-        take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler);
-        hand_each_config_update_to_its_node_now_no_commit_builds(compiler);
-        return Ok(());
-    };
-    let compiler = Arc::clone(compiler);
-    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
-        compiler.commit(&runtime_ctx)
-    }))
-    .await
-    .map_err(|join_failure| {
-        Error::Runtime(format!(
-            "the graph change's compile task did not finish: {join_failure}"
-        ))
-    })?
-}
-
-/// On a stream no commit builds, a stopped one or one not started, take each node and link
-/// pending deletion out of the graph now, with every operation logged for it: the graph it holds
-/// to read and edit then shows the removal, and the UUID and name it held are free again.
-fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &Compiler) {
-    compiler.scope(|this_streams_graph, tx| {
-        let links_pending_deletion: HashSet<LinkUniqueId> = this_streams_graph
-            .traversal()
-            .e(())
-            .iter()
-            .filter(|link| link.has::<PendingDeletionComponent>())
-            .map(|link| link.id.clone())
-            .collect();
-        let nodes_pending_deletion: HashSet<NodeRunId> = this_streams_graph
-            .traversal()
-            .v(())
-            .iter()
-            .filter(|node| {
-                node.has::<PendingDeletionComponent>() && !node.has::<NodeInstanceComponent>()
-            })
-            .map(|node| node.id.clone())
-            .collect();
-        tx.retract_every_operation_naming(&nodes_pending_deletion, &links_pending_deletion);
-        for link_id in &links_pending_deletion {
-            this_streams_graph.traversal_mut().e(link_id).drop();
-        }
-        for node_run_id in &nodes_pending_deletion {
-            if !this_streams_graph.drop_the_node(node_run_id, WhyTheNodeLeaves::Removed) {
-                tracing::warn!("`{node_run_id}`, pending deletion, was not dropped from the graph");
-            }
-        }
-    });
-}
-
-/// On a stream no commit builds, a stopped one or one not started, hand each config update
-/// logged for a node no instance runs to that node now: the graph it holds to read and edit then
-/// shows the config, and the node is built from it at the next start.
-fn hand_each_config_update_to_its_node_now_no_commit_builds(compiler: &Compiler) {
-    compiler.scope(|this_streams_graph, tx| {
-        let nodes_no_instance_runs: HashSet<NodeRunId> = this_streams_graph
-            .traversal()
-            .v(())
-            .iter()
-            .filter(|node| !node.has::<NodeInstanceComponent>())
-            .map(|node| node.id.clone())
-            .collect();
-        for (node_run_id, config_to_apply) in tx.take_each_config_update_of(&nodes_no_instance_runs)
-        {
-            if let Some(node) = this_streams_graph
-                .traversal_mut()
-                .v(&node_run_id)
-                .first_mut()
-            {
-                node.set_config(config_to_apply);
-            }
-        }
-    });
 }
 
 /// Whether an added node's config references are checked against the graph it joins.
@@ -211,17 +169,29 @@ pub(super) async fn add_node_impl(
         compiler,
         live,
         stream,
+        held_for_one_commit,
+        ..
     } = live_graph_change;
     let emit_will_add = |id: &NodeRunId| {
-        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillAddNode {
-            node_run_id: id.clone(),
-        });
+        announce_or_hold(
+            &stream,
+            held_for_one_commit.as_deref(),
+            None,
+            RuntimeEvent::RuntimeWillAddNode {
+                node_run_id: id.clone(),
+            },
+        );
     };
 
     let emit_did_add = |id: &NodeRunId| {
-        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidAddNode {
-            node_run_id: id.clone(),
-        });
+        announce_or_hold(
+            &stream,
+            held_for_one_commit.as_deref(),
+            None,
+            RuntimeEvent::RuntimeDidAddNode {
+                node_run_id: id.clone(),
+            },
+        );
     };
 
     let a_load_holds_its_type_as_a_placeholder = a_load_holds_the_type_as_a_placeholder(
@@ -323,7 +293,12 @@ pub(super) async fn add_node_impl(
 
     commit_live_graph_change(&compiler, live).await?;
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+    announce_or_hold(
+        &stream,
+        held_for_one_commit.as_deref(),
+        None,
+        RuntimeEvent::GraphDidChange,
+    );
 
     Ok(added)
 }
@@ -374,6 +349,8 @@ pub(super) async fn remove_node_impl(
         compiler,
         live,
         stream,
+        held_for_one_commit,
+        ..
     } = live_graph_change;
     compiler.scope(|graph, tx| {
         mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)
@@ -386,13 +363,17 @@ pub(super) async fn remove_node_impl(
         return removal_outcome;
     }
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillRemoveNode {
-        node_run_id: node_run_id.clone(),
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveNode {
-        node_run_id: node_run_id.clone(),
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+    for event in [
+        RuntimeEvent::RuntimeWillRemoveNode {
+            node_run_id: node_run_id.clone(),
+        },
+        RuntimeEvent::RuntimeDidRemoveNode {
+            node_run_id: node_run_id.clone(),
+        },
+        RuntimeEvent::GraphDidChange,
+    ] {
+        announce_or_hold(&stream, held_for_one_commit.as_deref(), None, event);
+    }
 
     removal_outcome
 }
@@ -415,52 +396,6 @@ fn the_node_this_stream_names(
     })
 }
 
-/// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
-pub(super) async fn disconnect_impl(
-    live_graph_change: LiveGraphChangeOnOneStream,
-    link_id: LinkUniqueId,
-) -> Result<()> {
-    let LiveGraphChangeOnOneStream {
-        compiler,
-        live,
-        stream,
-    } = live_graph_change;
-    let link_info = compiler.scope(|graph, tx| {
-        let (from_value, to_value) = graph
-            .traversal()
-            .e(&link_id)
-            .first()
-            .map(|l| (l.source(), l.to_port()))
-            .ok_or_else(|| Error::NotFound(format!("Link '{}' not found", link_id)))?;
-
-        let info = (from_value.clone(), to_value.clone());
-
-        if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
-            link.insert(PendingDeletionComponent);
-        }
-
-        tx.log(PendingOperation::RemoveLink(link_id.clone()));
-
-        Ok::<_, Error>(info)
-    })?;
-
-    commit_live_graph_change(&compiler, live).await?;
-
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillDisconnect {
-        link_id: link_id.to_string(),
-        from_port: link_info.0.to_string(),
-        to_port: link_info.1.to_string(),
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidDisconnect {
-        link_id: link_id.to_string(),
-        from_port: link_info.0.to_string(),
-        to_port: link_info.1.to_string(),
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-
-    Ok(())
-}
-
 impl LoadedStreamInThisRuntime {
     fn live_commit_context(&self) -> LiveCommitContext {
         if !this_thread_may_commit_inline() {
@@ -472,12 +407,17 @@ impl LoadedStreamInThisRuntime {
         self.runtime_context.lock().clone()
     }
 
-    /// A graph change on this stream, compiled right away when it may be.
+    /// A graph change on this stream, compiled right away when it may be, or joined to the
+    /// graph edits the running task holds for one commit.
     pub(super) fn live_graph_change(&self) -> LiveGraphChangeOnOneStream {
         LiveGraphChangeOnOneStream {
             compiler: Arc::clone(&self.compiler),
             live: self.live_commit_context(),
             stream: self.loaded_stream_identity().clone(),
+            held_for_one_commit: GraphEditsHeldForOneCommit::the_ones_this_task_holds(),
+            one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor::TheStreamsOne(
+                Arc::clone(&self.one_input_value_change_at_a_time),
+            ),
         }
     }
 
@@ -534,7 +474,7 @@ impl LoadedStreamInThisRuntime {
 
     /// Run `operation` to completion from synchronous code, whichever tokio
     /// runtime the engine runs on, with this stream's log route entered.
-    fn block_on_the_engines_tokio_runtime<T: Send + 'static>(
+    pub(super) fn block_on_the_engines_tokio_runtime<T: Send + 'static>(
         &self,
         operation: impl std::future::Future<Output = Result<T>> + Send + 'static,
     ) -> Result<T> {
@@ -553,13 +493,17 @@ impl LoadedStreamInThisRuntime {
     }
 
     pub fn add_node_reporting_its_name(&self, spec: NodeSpec) -> Result<NodeInTheGraph> {
-        self.block_on_the_engines_tokio_runtime(add_node_impl(
-            self.live_graph_change(),
-            Arc::clone(&self.node_interpreter_launch_record),
-            self.lend_directory(),
-            spec,
-            ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
-        ))
+        let node_interpreter_launch_record = Arc::clone(&self.node_interpreter_launch_record);
+        let lend_directory = self.lend_directory();
+        self.in_one_commit_from_synchronous_code(move |change| {
+            add_node_impl(
+                change,
+                node_interpreter_launch_record,
+                lend_directory,
+                spec,
+                ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+            )
+        })
     }
 
     /// Add one node of a graph load whose references were validated with the
@@ -574,23 +518,6 @@ impl LoadedStreamInThisRuntime {
             self.lend_directory(),
             spec,
             ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
-        ))
-    }
-
-    /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
-    /// or Image formats alone refuse it is kept when its ports' families take it, and one an
-    /// island cannot take, or one feeding an island into the app process, is left to the commit
-    /// that builds the stream to refuse.
-    pub(crate) fn connect_a_link_of_a_saved_graph(
-        &self,
-        from: OutputLinkPortRef,
-        to: InputLinkPortRef,
-    ) -> Result<LinkUniqueId> {
-        self.block_on_the_engines_tokio_runtime(connect_impl(
-            self.live_graph_change(),
-            from,
-            to,
-            ALinkConnected::OfASavedGraph,
         ))
     }
 
@@ -616,13 +543,16 @@ impl LoadedStreamInThisRuntime {
 
 impl RuntimeOperations for LoadedStreamInThisRuntime {
     fn add_node_async(&self, spec: NodeSpec) -> BoxFuture<'_, Result<NodeInTheGraph>> {
-        self.in_this_streams_log_route(add_node_impl(
-            self.live_graph_change(),
-            Arc::clone(&self.node_interpreter_launch_record),
-            self.lend_directory(),
-            spec,
-            ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
-        ))
+        self.in_this_streams_log_route(self.in_one_commit(async move {
+            add_node_impl(
+                self.live_graph_change(),
+                Arc::clone(&self.node_interpreter_launch_record),
+                self.lend_directory(),
+                spec,
+                ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+            )
+            .await
+        }))
     }
 
     fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph> {
@@ -630,13 +560,19 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_node_async(&self, node_run_id: NodeRunId) -> BoxFuture<'_, Result<()>> {
-        if let Err(refusal) = self.refuse_a_node_change_a_drawn_link_names(
-            &node_run_id,
-            NodeChangeADrawnLinkBlocks::Removal,
-        ) {
-            return Box::pin(std::future::ready(Err(refusal)));
-        }
-        self.in_this_streams_log_route(remove_node_impl(self.live_graph_change(), node_run_id))
+        // Judged holding the stream's one writer, so the graph and the links drawn it judges
+        // are the ones the removal is made on.
+        let joined = the_reader_rule_is_left_to_the_close();
+        self.in_this_streams_log_route(self.in_one_commit(async move {
+            self.refuse_a_node_change_a_drawn_link_names(
+                &node_run_id,
+                NodeChangeADrawnLinkBlocks::Removal,
+            )?;
+            if !joined {
+                self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(&node_run_id))?;
+            }
+            remove_node_impl(self.live_graph_change(), node_run_id).await
+        }))
     }
 
     fn connect_async(
@@ -644,16 +580,28 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        self.in_this_streams_log_route(connect_impl(
-            self.live_graph_change(),
-            from,
-            to,
-            ALinkConnected::MadeNow,
-        ))
+        let when_the_engine_cannot_wire_it = self.the_connect_an_edit_makes();
+        self.in_this_streams_log_route(self.in_one_commit(async move {
+            connect_impl(
+                self.live_graph_change(),
+                from,
+                to,
+                ALinkConnected::MadeNow,
+                when_the_engine_cannot_wire_it,
+            )
+            .await?
+            .connected()
+        }))
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-        self.in_this_streams_log_route(disconnect_impl(self.live_graph_change(), link_id))
+        let joined = the_reader_rule_is_left_to_the_close();
+        self.in_this_streams_log_route(self.in_one_commit(async move {
+            if !joined {
+                self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(&link_id))?;
+            }
+            disconnect_impl(self.live_graph_change(), link_id).await
+        }))
     }
 
     fn apply_a_stream_graph_operation_live(
@@ -916,30 +864,51 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_node(&self, node_run_id: &NodeRunId) -> Result<()> {
-        self.refuse_a_node_change_a_drawn_link_names(
-            node_run_id,
-            NodeChangeADrawnLinkBlocks::Removal,
-        )?;
-        self.block_on_the_engines_tokio_runtime(remove_node_impl(
-            self.live_graph_change(),
-            node_run_id.clone(),
-        ))
+        let stream = self.this_stream_held_for_a_task()?;
+        let node_run_id = node_run_id.clone();
+        let joined = the_reader_rule_is_left_to_the_close();
+        // Judged holding the stream's one writer, as `remove_node_async` judges it.
+        self.in_one_commit_from_synchronous_code(move |change| async move {
+            stream.refuse_a_node_change_a_drawn_link_names(
+                &node_run_id,
+                NodeChangeADrawnLinkBlocks::Removal,
+            )?;
+            if !joined {
+                stream.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(&node_run_id))?;
+            }
+            remove_node_impl(change, node_run_id).await
+        })
     }
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        self.block_on_the_engines_tokio_runtime(connect_impl(
-            self.live_graph_change(),
-            from,
-            to,
-            ALinkConnected::MadeNow,
-        ))
+        let when_the_engine_cannot_wire_it = self.the_connect_an_edit_makes();
+        self.in_one_commit_from_synchronous_code(move |change| async move {
+            connect_impl(
+                change,
+                from,
+                to,
+                ALinkConnected::MadeNow,
+                when_the_engine_cannot_wire_it,
+            )
+            .await?
+            .connected()
+        })
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
-        self.block_on_the_engines_tokio_runtime(disconnect_impl(
-            self.live_graph_change(),
-            link_id.clone(),
-        ))
+        let stream = self.this_stream_held_for_a_task()?;
+        let link_id = link_id.clone();
+        let joined = the_reader_rule_is_left_to_the_close();
+        self.in_one_commit_from_synchronous_code(move |change| async move {
+            if !joined {
+                stream.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(&link_id))?;
+            }
+            disconnect_impl(change, link_id).await
+        })
+    }
+
+    fn open_a_graph_edit_batch(self: Arc<Self>) -> Result<Box<dyn GraphEditBatch>> {
+        Ok(Box::new(self.open_a_graph_edit_batch_of_this_stream()?))
     }
 
     fn request_this_streams_shutdown(&self, reason: &str) -> Result<()> {

@@ -284,7 +284,7 @@ fn a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_bot
     // The first link is fine on its own.
     let second_link: LinkUniqueId = wired[1].as_str().into();
     let refusal = refuse_a_second_inbound_link_into_a_windowed_port(
-        &mut graph,
+        &graph,
         &dest_unique_id,
         "audio",
         &second_link,
@@ -316,7 +316,7 @@ fn the_one_inbound_link_a_windowed_port_takes_is_not_refused() {
         .to_string();
 
     refuse_a_second_inbound_link_into_a_windowed_port(
-        &mut graph,
+        &graph,
         &dest_id.as_str().into(),
         "audio",
         &link.as_str().into(),
@@ -362,7 +362,7 @@ fn a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link(
         .to_string();
 
     refuse_a_second_inbound_link_into_a_windowed_port(
-        &mut graph,
+        &graph,
         &dest_id.as_str().into(),
         "audio",
         &reconnecting.as_str().into(),
