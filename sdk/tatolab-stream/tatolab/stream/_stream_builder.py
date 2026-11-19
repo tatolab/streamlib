@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`StreamBuilder`, the node and port references it hands out, and the config it compiles to JSON.
+"""`StreamBuilder`, the node and port references it hands out, and the input values it compiles to JSON.
 
 Pure Python, like the rest of the graph generator: a generator's module imports
 and runs with no engine in the process.
@@ -13,7 +13,7 @@ import copy
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, overload
+from typing import Any, Literal, Protocol, overload
 
 from ._built_in_node import BuiltInNode, ConfigTypeOfTheBuiltInNode
 from ._stream_clock_spec import (
@@ -29,6 +29,7 @@ from ._exposed_name_cast import (
 from ._function_node_declaration import FunctionNode
 from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
 from ._port_family_declaration import PortFamily
+from ._typed_node_pins import TypedNodePins
 
 from ._graph_generator_detection import (
     _FUNCTION_LOCAL_MARKER,
@@ -61,8 +62,11 @@ _LARGEST_INTEGER_A_GRAPH_CARRIES = 2**64 - 1
 # which parses at most 127 nested containers, and `tatolab` reads the graph inside
 # the compile document, one container deeper than its root.
 _MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT = 127 - 1
-# The graph dict, its `nodes` list and the node dict enclose every config.
+# The graph dict, its `nodes` list and the node dict enclose every node's input values.
 _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF = _MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT - 3
+
+# The key a graph document holds a node's value of each input under, by input name.
+_NODE_INPUT_VALUES_KEY = "input_values"
 
 
 class _NodeClassConstructedWithoutConfig(Protocol):
@@ -106,16 +110,22 @@ class NodeReference:
     """A node `StreamBuilder.add` recorded, under the cast name links name it by."""
 
     name: str
+    typed_pins: TypedNodePins | None = field(default=None, compare=False, repr=False)
+    """The pins the node declares when it is a typed node, which its port names are checked against."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _cast_name(self.name, "node name"))
 
     def output(self, port_name: str) -> NodeOutputPortReference:
-        """Name one of this node's output ports, cast as `@node.process` declared it."""
+        """Name one of this node's output ports, cast as `@node.process` declared it; on a typed node, one it declares."""
+        if self.typed_pins is not None:
+            port_name = self.typed_pins.port_named(_cast_name(port_name, "port name"), "output")
         return NodeOutputPortReference(self.name, port_name)
 
     def input(self, port_name: str) -> NodeInputPortReference:
-        """Name one of this node's input ports, cast as `@node.process` declared it."""
+        """Name one of this node's input ports, cast as `@node.process` declared it; on a typed node, one it declares."""
+        if self.typed_pins is not None:
+            port_name = self.typed_pins.port_named(_cast_name(port_name, "port name"), "input")
         return NodeInputPortReference(self.name, port_name)
 
 
@@ -123,8 +133,8 @@ class NodeReference:
 class GraphFragmentReference(NodeReference):
     """A fragment `StreamBuilder.add` placed: its ports are the Inputs and Outputs its generator's interface nodes declare."""
 
-    input_port_names: tuple[str, ...]
-    output_port_names: tuple[str, ...]
+    input_port_names: tuple[str, ...] = ()
+    output_port_names: tuple[str, ...] = ()
 
     def output(self, port_name: str) -> NodeOutputPortReference:
         """Name one of the Outputs the fragment's `GraphOutput` nodes declare."""
@@ -162,7 +172,7 @@ type SoleReferrerNodeReferenceToNodeType[NodeClassTheReferenceNames] = NodeRefer
 class _RecordedNode:
     name: str
     node_type: str
-    config: dict[str, Any]
+    input_values: dict[str, Any]
     typed_name: str | None
     class_short_name: str
     fragment: dict[str, Any] | None = field(default=None)
@@ -171,7 +181,7 @@ class _RecordedNode:
         node: dict[str, Any] = {
             "name": self.name,
             "type": self.node_type,
-            "config": copy.deepcopy(self.config),
+            _NODE_INPUT_VALUES_KEY: copy.deepcopy(self.input_values),
         }
         if self.fragment is not None:
             node["fragment"] = copy.deepcopy(self.fragment)
@@ -205,6 +215,7 @@ class StreamBuilder:
         node_class: _GraphGeneratorPlaced,
         *,
         name: str | None = None,
+        input_values: None = None,
         config: None = None,
         **promoted_settings: Any,
     ) -> GraphFragmentReference: ...
@@ -215,6 +226,7 @@ class StreamBuilder:
         node_class: FunctionNode[..., Any],
         *,
         name: str | None = None,
+        input_values: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> NodeReference: ...
 
@@ -225,6 +237,7 @@ class StreamBuilder:
         | _NodeClassConstructedWithConfig,
         *,
         name: str | None = None,
+        input_values: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> NodeReference: ...
 
@@ -234,6 +247,7 @@ class StreamBuilder:
         node_class: type[BuiltInNode[ConfigTypeOfTheBuiltInNode]],
         *,
         name: str | None = None,
+        input_values: ConfigTypeOfTheBuiltInNode | None = None,
         config: ConfigTypeOfTheBuiltInNode | None = None,
     ) -> NodeReference: ...
 
@@ -242,29 +256,51 @@ class StreamBuilder:
         node_class: object,
         *,
         name: str | None = None,
+        input_values: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
         **promoted_settings: Any,
     ) -> NodeReference:
-        """Record a node of `node_class` — a node class, a `@node.function`, or a `@graph_generator` run as a fragment over `promoted_settings` — under `name` (cast) or its short name, cast."""
+        """Record a node of `node_class` — a node class, a `@node.function`, or a `@graph_generator` run as a fragment over `promoted_settings` — under `name` (cast) or its short name, cast, holding `input_values`, its value of each input by input name.
+
+        `config` is the older spelling of `input_values`, refused on a typed node. On a typed
+        node each value is checked against the type of the input it names.
+        """
         if is_graph_generator(node_class):
             return self._place_the_graph_generator(
-                node_class, name=name, config=config, promoted_settings=promoted_settings
+                node_class,
+                name=name,
+                values_given_as=_how_values_were_given(input_values, config),
+                promoted_settings=promoted_settings,
             )
         if promoted_settings:
             raise TypeError(
-                f"keyword arguments besides `name` and `config` are a graph generator's "
+                f"keyword arguments besides `name` and `input_values` are a graph generator's "
                 f"promoted settings, and {node_class!r} is a node, not a "
-                f"`@graph_generator`: pass its settings as `config={{...}}`. Got "
+                f"`@graph_generator`: pass its values as `input_values={{...}}`. Got "
                 f"{', '.join(f'`{key}`' for key in promoted_settings)}."
             )
         if not isinstance(node_class, (type, FunctionNode)):
             raise TypeError(_not_a_node_refusal(node_class))
         node_type = _node_type_of(node_class)
-        node_names_the_config_references: list[str] = []
-        config_as_json_object = _config_as_json_object(
-            config, node_names_the_config_references
+        values_given_as = _how_values_were_given(input_values, config)
+        values = input_values if values_given_as == "input_values" else config
+        typed_pins = TypedNodePins.of(node_class, node_class.__name__)
+        if typed_pins is not None:
+            if values_given_as == "config":
+                raise TypeError(
+                    f"`{node_class.__name__}` is a typed node, which takes its values as "
+                    f"`input_values={{...}}`; `config=` is the spelling of nodes that declare "
+                    f"no pin types"
+                )
+            if values is not None:
+                values = typed_pins.stored_input_values(
+                    _input_values_as_a_mapping(values, "input_values")
+                )
+        node_names_the_values_reference: list[str] = []
+        input_values_as_json_object = _input_values_as_json_object(
+            values, values_given_as or "input_values", node_names_the_values_reference
         )
-        for referenced_node_name in node_names_the_config_references:
+        for referenced_node_name in node_names_the_values_reference:
             self._refuse_a_node_this_stream_does_not_hold(referenced_node_name)
         node_name = (
             self._name_a_defaulted_node_takes(node_class)
@@ -274,32 +310,32 @@ class StreamBuilder:
         recorded_node = _RecordedNode(
             name=node_name,
             node_type=node_type,
-            config=config_as_json_object,
+            input_values=input_values_as_json_object,
             typed_name=name,
             class_short_name=node_class.__name__,
         )
         self._recorded_nodes_by_name[node_name] = recorded_node
-        return NodeReference(node_name)
+        return NodeReference(node_name, typed_pins=typed_pins)
 
     def _place_the_graph_generator(
         self,
         generator_function: Callable[..., Any],
         *,
         name: str | None,
-        config: Mapping[str, Any] | None,
+        values_given_as: _ValuesArgument | None,
         promoted_settings: dict[str, Any],
     ) -> GraphFragmentReference:
         identity: str = getattr(generator_function, _GRAPH_GENERATOR_IDENTITY_ATTRIBUTE)
-        if config is not None:
+        if values_given_as is not None:
             raise TypeError(
                 f"graph generator `{identity}` takes its promoted settings as keyword "
-                f"arguments of `add`, not `config`: "
+                f"arguments of `add`, not `{values_given_as}`: "
                 f"`stream_builder.add({generator_function.__name__}, radius=8)`"
             )
         _refuse_settings_the_generator_does_not_promote(generator_function, promoted_settings)
         node_names_the_settings_reference: list[str] = []
-        promoted_config = _config_as_json_object(
-            promoted_settings, node_names_the_settings_reference
+        promoted_config = _input_values_as_json_object(
+            promoted_settings, "input_values", node_names_the_settings_reference
         )
         if node_names_the_settings_reference:
             raise TypeError(
@@ -319,7 +355,7 @@ class StreamBuilder:
         self._recorded_nodes_by_name[node_name] = _RecordedNode(
             name=node_name,
             node_type=identity,
-            config=promoted_config,
+            input_values=promoted_config,
             typed_name=name,
             class_short_name=generator_function.__name__,
             fragment=fragment,
@@ -470,10 +506,10 @@ class StreamBuilder:
 
     def _interface_port_names(self, interface_node_type: str) -> tuple[str, ...]:
         return tuple(
-            _cast_name(str(recorded_node.config[_GRAPH_INTERFACE_PORT_CONFIG_KEY]), "port name")
+            _cast_name(str(recorded_node.input_values[_GRAPH_INTERFACE_PORT_CONFIG_KEY]), "port name")
             for recorded_node in self._recorded_nodes_by_name.values()
             if recorded_node.node_type == interface_node_type
-            and isinstance(recorded_node.config.get(_GRAPH_INTERFACE_PORT_CONFIG_KEY), str)
+            and isinstance(recorded_node.input_values.get(_GRAPH_INTERFACE_PORT_CONFIG_KEY), str)
         )
 
     def _compiled_fragment(self) -> dict[str, Any]:
@@ -598,19 +634,50 @@ def _suggested_module_name(qualname: str) -> str:
     return "".join(snake_characters) or "nodes"
 
 
-def _config_as_json_object(
-    config: Mapping[str, Any] | None, node_names_the_config_references: list[str]
-) -> dict[str, Any]:
-    if config is None:
-        return {}
-    if not isinstance(config, Mapping):
+type _ValuesArgument = Literal["input_values", "config"]
+"""The argument of `add` a node's values were given as."""
+
+
+def _how_values_were_given(
+    input_values: Mapping[str, Any] | None, config: Mapping[str, Any] | None
+) -> _ValuesArgument | None:
+    if input_values is not None and config is not None:
         raise TypeError(
-            f"config must be a mapping of str keys to JSON values — the object a node's "
-            f"config is; got {config!r}, of type `{_type_name_as_written(config)}`"
+            "`config` is the older spelling of `input_values`, and a node is given its values "
+            "once: pass them as `input_values={...}` alone"
         )
+    if input_values is not None:
+        return "input_values"
+    if config is not None:
+        return "config"
+    return None
+
+
+def _input_values_as_a_mapping(values: object, argument: _ValuesArgument) -> Mapping[Any, Any]:
+    if not isinstance(values, Mapping):
+        raise TypeError(
+            f"{argument} must be a mapping of input names to JSON values — the object a "
+            f"node's values are; got {values!r}, of type `{_type_name_as_written(values)}`"
+        )
+    return values  # pyright: ignore[reportUnknownVariableType]
+
+
+def _input_values_as_json_object(
+    values: Mapping[str, Any] | None,
+    argument: _ValuesArgument,
+    node_names_the_values_reference: list[str],
+) -> dict[str, Any]:
+    if values is None:
+        return {}
+    as_a_mapping = _input_values_as_a_mapping(values, argument)
     return _json_object(
-        config, "config", {id(config): "config"}, node_names_the_config_references
+        as_a_mapping, argument, {id(as_a_mapping): argument}, node_names_the_values_reference
     )
+
+
+def _argument_named_by(key_path: str) -> str:
+    """The argument of `add` a key path is inside: its first segment, `config` in `config['size']`."""
+    return key_path.partition("[")[0]
 
 
 def _json_object(
@@ -623,14 +690,14 @@ def _json_object(
     for key, value in mapping.items():
         if not isinstance(key, str):
             raise TypeError(
-                f"config must be JSON: `{key_path}` has the key {key!r}, of type "
+                f"{_argument_named_by(key_path)} must be JSON: `{key_path}` has the key {key!r}, of type "
                 f"`{_type_name_as_written(key)}`, and a JSON object's keys are strings — "
                 f"convert it with `str(...)`"
             )
         plain_key = str.__str__(key)
         if plain_key in json_object:
             raise ValueError(
-                f"config must be JSON: `{key_path}` has two keys that are both "
+                f"{_argument_named_by(key_path)} must be JSON: `{key_path}` has two keys that are both "
                 f"{plain_key!r} as plain strings, and a JSON object holds a key once — "
                 f"keep one of them, or rename the other"
             )
@@ -665,7 +732,7 @@ def _json_value(
         return _json_float(value, key_path)
     if not isinstance(value, (Mapping, list, tuple)):
         raise TypeError(
-            f"config must be JSON: `{key_path}` is of type `{_type_name_as_written(value)}`, "
+            f"{_argument_named_by(key_path)} must be JSON: `{key_path}` is of type `{_type_name_as_written(value)}`, "
             f"and a graph carries only dict, list, tuple, str, int, float, bool, None, a "
             f"port family and the `NodeReference` `add` returned — "
             f"convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`, or a "
@@ -674,7 +741,7 @@ def _json_value(
     enclosing_key_path = key_paths_of_enclosing_containers_by_id.get(id(value))
     if enclosing_key_path is not None:
         raise ValueError(
-            f"config must be JSON: `{key_path}` is `{enclosing_key_path}`, which holds "
+            f"{_argument_named_by(key_path)} must be JSON: `{key_path}` is `{enclosing_key_path}`, which holds "
             f"it — a value holding itself has no JSON form. Break the cycle: put the "
             f"data `{key_path}` should carry there, not the container holding it"
         )
@@ -711,13 +778,14 @@ def _refuse_a_container_nested_too_deep(
         containers_enclosing_this_one_counting_config
         >= _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF
     ):
+        argument = _argument_named_by(key_path)
         raise ValueError(
-            f"config nests too deep for a graph: `{key_path}` is a container "
-            f"{containers_enclosing_this_one_counting_config + 1} deep counting `config` "
-            f"itself, and a config nests at most "
+            f"{argument} nests too deep for a graph: `{key_path}` is a container "
+            f"{containers_enclosing_this_one_counting_config + 1} deep counting `{argument}` "
+            f"itself, and `{argument}` nests at most "
             f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} — a graph nests at most "
             f"{_MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT} containers from its root, and "
-            f"the graph, its `nodes` list and the node enclose every config. Nest the data at most "
+            f"the graph, its `nodes` list and the node enclose every node's values. Nest the data at most "
             f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} containers deep, or carry "
             f"the deeper part as a `str`"
         )
@@ -733,7 +801,7 @@ def _json_integer(value: int, key_path: str) -> int:
         # The value is left out: CPython refuses to render an int of more than
         # 4300 digits as text.
         raise ValueError(
-            f"config integers must fit the graph's 64-bit range: `{key_path}` is outside "
+            f"{_argument_named_by(key_path)} integers must fit the graph's 64-bit range: `{key_path}` is outside "
             f"-2**63 to 2**64 - 1; carry a value that large as a `str`"
         )
     return plain_integer
@@ -743,7 +811,7 @@ def _json_float(value: float, key_path: str) -> float:
     plain_float = float.__float__(value)
     if not math.isfinite(plain_float):
         raise ValueError(
-            f"config must be JSON: `{key_path}` is {plain_float!r}, which JSON cannot "
+            f"{_argument_named_by(key_path)} must be JSON: `{key_path}` is {plain_float!r}, which JSON cannot "
             f"carry — pass `None` where there is no value, or carry it as a `str`"
         )
     return plain_float

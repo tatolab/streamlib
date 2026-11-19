@@ -25,6 +25,7 @@ from tatolab.runtime._engine import (
     note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
     note_stop_request_from_parent_on_runtime_context,
+    queue_a_fire_of_each_trigger_input,
     read_each_unlinked_input_port_as_its_pin_value,
     run_the_scheduling_loop_of_this_helper,
     take_each_function_node_raise_newly_noted,
@@ -800,6 +801,20 @@ class HelperProcessLifecycle:
             log.error(
                 "this node could not read the input values the engine handed it",
                 error=str(input_values_refused),
+            )
+        fired = command.get("fired") or []
+        if not fired:
+            return
+        try:
+            queue_a_fire_of_each_trigger_input(
+                link_data_access=self._link_data_access,
+                fired=fired,
+            )
+        except Exception as fire_refused:
+            log.error(
+                "this node could not queue the fires the engine handed it",
+                fired=fired,
+                error=str(fire_refused),
             )
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:

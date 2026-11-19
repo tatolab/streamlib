@@ -25,6 +25,12 @@ fn the_node_named(
         })
 }
 
+/// The UUID of the node a `connect`'s end names, read as a transaction's `connect` reads one
+/// with no earlier `add_node` to name: refused, as `connect` refuses it, when it is no UUID.
+pub(crate) fn the_node_a_connects_end_names(node: &str) -> Result<Uuid, GraphRequestRefusal> {
+    the_node_named(node, &HashMap::new())
+}
+
 /// The link from `source` to `target`, each node as [`the_node_named`] reads it.
 pub(super) fn the_link_named(
     source: &StreamGraphActionLinkEnd,

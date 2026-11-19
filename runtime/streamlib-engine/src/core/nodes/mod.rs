@@ -28,7 +28,8 @@ pub use __generated_private::{
 };
 
 pub(crate) use __generated_private::{
-    FunctionNodeCallUnderWayInTheFarSide, FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
+    FiresNotHandedToTheFarSide, FunctionNodeCallUnderWayInTheFarSide,
+    FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
     FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use empty_config::EmptyConfig;

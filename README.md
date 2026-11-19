@@ -236,8 +236,9 @@ version. `tatolab new --sample test-pattern-halftone-lens` creates a project fro
 local API's `list_samples` lists each by name, title and summary.
 
 Every first-party module the runtime does not carry is published as a **module project**: a
-`.zip` at `https://get.tatolab.com/modules/<module>-<version>.zip`, listed with its SHA-256 and
-the nodes and streams it brings in `https://get.tatolab.com/catalog/v1.json`. Tato Studio's
+`.zip` at `https://get.tatolab.com/modules/<module>-<version>.zip`, listed with its SHA-256,
+the nodes and streams it brings and the lowest runtime it runs on in
+`https://get.tatolab.com/catalog/v1.json`. Tato Studio's
 Marketplace imports one; elsewhere, download the `.zip` and import it with the local API's
 `add_dependency`, which copies it whole into `imports/<folder>/`. The project then syncs with no
 index serving the module and no Rust toolchain, since the module's own wheels ride inside it.

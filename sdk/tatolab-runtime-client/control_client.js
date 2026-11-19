@@ -58,6 +58,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("check_link", params, callOptions);
   }
 
+  check_link_candidates(params, callOptions) {
+    return this.call("check_link_candidates", params, callOptions);
+  }
+
   import_graph_generator(params, callOptions) {
     return this.call("import_graph_generator", params, callOptions);
   }
@@ -270,6 +274,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("write_project_file", params, callOptions);
   }
 
+  check_project_code(params, callOptions) {
+    return this.call("check_project_code", params, callOptions);
+  }
+
   list_project_node_types(params, callOptions) {
     return this.call("list_project_node_types", params, callOptions);
   }
@@ -284,6 +292,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
 
   describe_node_types(params, callOptions) {
     return this.call("describe_node_types", params, callOptions);
+  }
+
+  set_node_type_group(params, callOptions) {
+    return this.call("set_node_type_group", params, callOptions);
   }
 
   list_project_views(params, callOptions) {

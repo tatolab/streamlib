@@ -126,6 +126,14 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+            &'a self,
+            _held: &'a ::streamlib_project_repository::StreamGraphDocumentLinkEnd,
+            _held_direction: ::streamlib::sdk::error::PortDirection,
+            _node_types_ports: &'a [::streamlib::sdk::runtime::ANodeTypesPort<'a>],
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'a, ::streamlib::sdk::error::Result<::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>>>> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             _node_type: &str,

@@ -18,6 +18,7 @@ PROJECT_DIRECTORY = Path(__file__).resolve().parent.parent
 NODE_MODULES = (
     "animation",
     "color",
+    "combine_and_separate",
     "composite",
     "filters",
     "generators",
@@ -62,7 +63,7 @@ DECLARED_NODES = every_declared_node()
 
 
 def test_the_project_declares_every_node_it_is_meant_to():
-    assert len(DECLARED_NODES) == 74
+    assert len(DECLARED_NODES) == 78
 
 
 @pytest.mark.parametrize("node_type", sorted(DECLARED_NODES))

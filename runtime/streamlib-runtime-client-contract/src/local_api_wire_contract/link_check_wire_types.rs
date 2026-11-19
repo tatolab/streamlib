@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The answer `check_link` gives: what `connect` would answer for one link, made nowhere.
+//! The answers `check_link` and `check_link_candidates` give: what `connect` would answer for
+//! one link, or for each of many, made nowhere.
 
 use serde::{Deserialize, Serialize};
 use streamlib_node_schema::NodeClassImportPath;
@@ -71,6 +72,62 @@ impl LinkCheckResult {
             warnings: Vec::new(),
         }
     }
+}
+
+/// One end `check_link_candidates` judges its placed end against, of the other direction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LinkCandidateEnd {
+    /// A port of a node the stream's graph holds.
+    PlacedPort {
+        /// The node, by the UUID `graph` lists as its `id`.
+        node: String,
+        /// The port's name, as `graph` lists it under the node's `ports`.
+        port: String,
+    },
+    /// A port of a node type no node of the graph has yet, judged as a node of the type an
+    /// `add_node` with no input values would place.
+    NodeTypePort {
+        /// The node type, by the import path `add_node` takes as its `type`.
+        node_type: String,
+        /// The port's name, as the node type declares it.
+        port: String,
+    },
+}
+
+/// One candidate end and what `check_link` would answer for the link between it and the placed
+/// end.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct LinkCandidateChecked {
+    /// The candidate end.
+    pub end: LinkCandidateEnd,
+    /// What `check_link` would answer for the link.
+    pub check: LinkCheckResult,
+}
+
+/// One candidate end whose link `check_link` would not check yet, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct LinkCandidateNotChecked {
+    /// The candidate end.
+    pub end: LinkCandidateEnd,
+    /// Why the link is not checked yet, in the runtime's words.
+    pub why: String,
+}
+
+/// `check_link_candidates`'s answer: for each candidate end, in the order judged, what
+/// `check_link` would answer for its link with the placed end.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct LinkCandidatesCheckResult {
+    /// Each candidate checked; one `connect` would refuse is listed only when the request set
+    /// `include_refused`.
+    pub candidates: Vec<LinkCandidateChecked>,
+    /// Each candidate whose link is not checked yet, as `check_link` would not check it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_checked: Vec<LinkCandidateNotChecked>,
 }
 
 /// What a link made between two typed ends converts and warns of, as the judgement of those
@@ -199,6 +256,10 @@ pub enum PinLinkWarningOnTheWire {
     },
     /// The output states no pixel format, so it may send one the input cannot take.
     TextureOutputStatesNoFormat,
+    /// The candidate, a node type's port, finds its type from a link into its node or from a
+    /// setting, so it is judged as taking the other end's type; a node of the type, once placed
+    /// and given them, may still refuse the link.
+    TypeFoundOnlyOncePlaced,
 }
 
 impl PinLinkWarningOnTheWire {
@@ -228,6 +289,7 @@ impl PinLinkWarningOnTheWire {
                 }
             }
             PinLinkWarning::TextureOutputStatesNoFormat => Self::TextureOutputStatesNoFormat,
+            PinLinkWarning::TypeFoundOnlyOncePlaced => Self::TypeFoundOnlyOncePlaced,
         }
     }
 }

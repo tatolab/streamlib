@@ -506,6 +506,13 @@ impl LoadedStreamInThisRuntime {
         *self.status.lock()
     }
 
+    /// How many operations are logged on this stream's graph for its next commit to compile,
+    /// for a test that proves an operation logs none.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pending_operations_logged_for_a_test(&self) -> usize {
+        self.compiler.logged_pending_operations().len()
+    }
+
     /// How many nodes this stream's live graph holds.
     pub fn node_count(&self) -> usize {
         self.compiler

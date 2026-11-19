@@ -13,11 +13,14 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::connect_on_a_test_thread::{
+    connect_a_link_of_a_saved_graph_on_this_thread, connect_on_this_thread, the_links_in,
+};
 use super::{
-    ALinkConnectedOrSetAside, ARemoval, LiveGraphChangeOnOneStream, WhenTheEngineCannotWireALink,
-    connect_impl, refuse_a_removal_that_strands_a_reactive_reader,
+    ALinkConnectedOrSetAside, ARemoval, refuse_a_removal_that_strands_a_reactive_reader,
     the_verdict_connect_takes_on_a_link,
 };
+use crate::core::Error;
 use crate::core::compiler::Compiler;
 use crate::core::compiler::compiler_ops::function_node_island::the_island_links_into_a_reactive_reader_only_islands_feed;
 use crate::core::descriptors::{
@@ -26,13 +29,9 @@ use crate::core::descriptors::{
 };
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
-use crate::core::graph::{
-    ALinkConnected, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
-};
+use crate::core::graph::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
-use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::test_support::{MockInputOnlyNode, ensure_test_mocks_registered};
-use crate::core::{Error, Result};
 
 const FUNCTION_NODE: &str = "app_process_check:switch";
 const HELPER_PROCESS_READER: &str = "app_process_check:meter";
@@ -160,59 +159,6 @@ fn a_node_of(compiler: &Compiler, node_type: &str) -> NodeRunId {
     })
 }
 
-fn a_change_on_a_stopped_stream(compiler: &Arc<Compiler>) -> LiveGraphChangeOnOneStream {
-    LiveGraphChangeOnOneStream {
-        compiler: Arc::clone(compiler),
-        live: None,
-        stream: LoadedStreamIdentity {
-            runtime_id: "Rappprocesscheck".to_string(),
-            stream_id: "main".to_string(),
-            stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
-        },
-        held_for_one_commit: None,
-    }
-}
-
-fn connect_on_this_thread(
-    compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("current-thread runtime")
-        .block_on(connect_impl(
-            a_change_on_a_stopped_stream(compiler),
-            from,
-            to,
-            ALinkConnected::MadeNow,
-            WhenTheEngineCannotWireALink::Refuse,
-        ))
-        .and_then(ALinkConnectedOrSetAside::connected)
-}
-
-/// Connect a link of a saved graph as a load or a reconcile makes it.
-fn connect_a_link_of_a_saved_graph_on_this_thread(
-    compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<ALinkConnectedOrSetAside> {
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("current-thread runtime")
-        .block_on(connect_impl(
-            a_change_on_a_stopped_stream(compiler),
-            from,
-            to,
-            ALinkConnected::OfASavedGraph,
-            WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,
-        ))
-}
-
-fn the_links_in(compiler: &Compiler) -> usize {
-    compiler.scope(|graph, _tx| graph.traversal().e(()).iter().count())
-}
-
 #[test]
 fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
     let compiler = a_stopped_stream_resolving_a_function_node_type();
@@ -238,6 +184,34 @@ fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
              read of a node in a helper process, and the app process runs no node code"
         ))
         .to_string()
+    );
+    assert_eq!(the_links_in(&compiler), 0);
+}
+
+/// A saved graph holding a link from a function node into a node in the app process opens,
+/// that link set aside with why the engine cannot wire it, so the person can see and remove it
+/// while the stream plays without it.
+///
+/// Mental-revert: refusing the link on a saved graph's load too fails the whole graph's open.
+#[test]
+fn a_saved_graphs_function_node_into_a_natively_compiled_node_is_set_aside_as_it_opens() {
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let switch = a_node_of(&compiler, FUNCTION_NODE);
+    let program = a_node_of(
+        &compiler,
+        MockInputOnlyNode::node_class_import_path().as_str(),
+    );
+
+    let made = connect_a_link_of_a_saved_graph_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(switch, "result"),
+        InputLinkPortRef::new(program, "in1"),
+    )
+    .expect("a saved graph opens with the link it holds");
+
+    assert!(
+        matches!(made, ALinkConnectedOrSetAside::SetAside(_)),
+        "the link is set aside: {made:?}"
     );
     assert_eq!(the_links_in(&compiler), 0);
 }

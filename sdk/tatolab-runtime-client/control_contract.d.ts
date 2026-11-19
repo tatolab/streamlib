@@ -133,7 +133,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -1348,6 +1348,8 @@ export type PinLinkWarningOnTheWire = {
   warning: "menu_options_the_input_does_not_list";
 } | {
   warning: "texture_output_states_no_format";
+} | {
+  warning: "type_found_only_once_placed";
 };
 
 /**
@@ -2255,6 +2257,120 @@ export interface ConvertNodeToInsertOnTheWire {
    * The type that output gives.
    */
   output_pin_type: PinType;
+}
+
+/**
+ * `check_link_candidates`'s params: one placed end and the ends of the other direction it is
+ * judged against.
+ */
+export interface CheckLinkCandidatesRequest {
+  /**
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
+   */
+  stream: string;
+  /**
+   * The subgraph the links would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused.
+   */
+  level?: Array<string> | null;
+  /**
+   * The placed end each candidate is judged against.
+   */
+  from: LinkCandidatesFrom;
+  /**
+   * The candidate ends.
+   */
+  among: LinkCandidatesAmong;
+  /**
+   * Whether a candidate `connect` would refuse is listed too, with the refusal it would answer; false or omitted lists only the candidates that connect.
+   */
+  include_refused?: boolean;
+}
+
+/**
+ * The placed end `check_link_candidates` judges each candidate against, by its direction.
+ */
+export type LinkCandidatesFrom = {
+  output: StreamGraphActionLinkEnd;
+} | {
+  input: StreamGraphActionLinkEnd;
+};
+
+/**
+ * The candidate ends `check_link_candidates` judges, each of the direction other than its
+ * placed end's.
+ */
+export type LinkCandidatesAmong = "placed_ports" | "node_type_ports" | {
+  ends: Array<LinkCandidateEnd>;
+};
+
+/**
+ * One end `check_link_candidates` judges its placed end against, of the other direction.
+ */
+export type LinkCandidateEnd = {
+  /**
+   * The node, by the UUID `graph` lists as its `id`.
+   */
+  node: string;
+  /**
+   * The port's name, as `graph` lists it under the node's `ports`.
+   */
+  port: string;
+  kind: "placed_port";
+} | {
+  /**
+   * The node type, by the import path `add_node` takes as its `type`.
+   */
+  node_type: string;
+  /**
+   * The port's name, as the node type declares it.
+   */
+  port: string;
+  kind: "node_type_port";
+};
+
+/**
+ * `check_link_candidates`'s answer: for each candidate end, in the order judged, what
+ * `check_link` would answer for its link with the placed end.
+ */
+export interface LinkCandidatesCheckResult {
+  /**
+   * Each candidate checked; one `connect` would refuse is listed only when the request set
+   * `include_refused`.
+   */
+  candidates: Array<LinkCandidateChecked>;
+  /**
+   * Each candidate whose link is not checked yet, as `check_link` would not check it.
+   */
+  not_checked?: Array<LinkCandidateNotChecked>;
+}
+
+/**
+ * One candidate end and what `check_link` would answer for the link between it and the placed
+ * end.
+ */
+export interface LinkCandidateChecked {
+  /**
+   * The candidate end.
+   */
+  end: LinkCandidateEnd;
+  /**
+   * What `check_link` would answer for the link.
+   */
+  check: LinkCheckResult;
+}
+
+/**
+ * One candidate end whose link `check_link` would not check yet, and why.
+ */
+export interface LinkCandidateNotChecked {
+  /**
+   * The candidate end.
+   */
+  end: LinkCandidateEnd;
+  /**
+   * Why the link is not checked yet, in the runtime's words.
+   */
+  why: string;
 }
 
 /**
@@ -4326,6 +4442,148 @@ export interface ProjectFileTransactionToolResult {
 }
 
 /**
+ * `check_project_code`'s params.
+ */
+export interface CheckProjectCodeRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The files to check, each `/`-separated and relative to the project directory, such as `nodes/blur.py`; every module the project's node type listing names when omitted. Refused for a path that is not a file of the project.
+   */
+  paths?: Array<string> | null;
+}
+
+/**
+ * `check_project_code`'s answer, for the bytes on disk when the checks ran.
+ */
+export interface ProjectCodeCheckResult {
+  /**
+   * `failed` when any finding is an `error`; else `not_fully_checked` when any check did not
+   * run to its end; else `passed`. Warnings alone pass.
+   */
+  verdict: ProjectCodeCheckVerdict;
+  /**
+   * Each check run, and how it ended.
+   */
+  checks: Array<ProjectCodeCheckRun>;
+  /**
+   * Every finding of every check, in the order each check found them.
+   */
+  findings: Array<ProjectCodeCheckFinding>;
+  /**
+   * Each file a check finished, with the hash of the bytes it checked. A file a check did
+   * not finish is not listed.
+   */
+  files_checked: Array<ProjectFileChecked>;
+}
+
+/**
+ * What `check_project_code` decided of the code it was asked about.
+ */
+export type ProjectCodeCheckVerdict = "passed" | "failed" | "not_fully_checked";
+
+/**
+ * One check run and how it ended.
+ */
+export interface ProjectCodeCheckRun {
+  /**
+   * The check.
+   */
+  check: ProjectCodeCheckKind;
+  /**
+   * How it ended.
+   */
+  state: ProjectCodeCheckState;
+  /**
+   * Why it did not run to its end, with its code, such as `check_ran_out_of_time` with the
+   * file it was checking as `refused_file`; present only when `state` is `not_checked`.
+   */
+  not_checked_because?: ProjectActionRefusalOnTheWire | null;
+  /**
+   * Each program or package the check ran with, and its version.
+   */
+  checked_with?: Array<string>;
+}
+
+/**
+ * One check of a project's code. The set grows: a check a client does not know is still
+ * answered with its state and its findings.
+ */
+export type ProjectCodeCheckKind = "python_node_declarations";
+
+/**
+ * How one check ended. The set grows: a state a client does not know reads as `not_checked`.
+ */
+export type ProjectCodeCheckState = "passed" | "failed" | "not_checked";
+
+/**
+ * One thing a check found, at its place in a file of the project.
+ */
+export interface ProjectCodeCheckFinding {
+  /**
+   * The check that found it.
+   */
+  check: ProjectCodeCheckKind;
+  /**
+   * What was found, for a caller to branch on: the code the declaration reader refused with,
+   * such as `value_input_has_no_default`, `module_does_not_import` for a module that does not
+   * import, or `declaration_retired` for a node declared in a retired form.
+   */
+  finding_code: string;
+  /**
+   * How much it matters.
+   */
+  severity: ProjectCodeCheckSeverity;
+  /**
+   * What was found, and how to fix it when there is a fix.
+   */
+  words: string;
+  /**
+   * The file, by its path in the project, `/`-separated.
+   */
+  path: string;
+  /**
+   * The line, from 1, when the finding is narrower than the file.
+   */
+  line?: number | null;
+  /**
+   * The column, from 1, when the finding is narrower than the line.
+   */
+  column?: number | null;
+  /**
+   * The node type the finding is about, `<module>:<name>`, when it is about one.
+   */
+  node_type?: string | null;
+  /**
+   * The node type's port the finding is about, as its declaration names it, when it is about
+   * one.
+   */
+  port?: string | null;
+}
+
+/**
+ * How much a finding matters.
+ */
+export type ProjectCodeCheckSeverity = "error" | "warning";
+
+/**
+ * A file a check finished, and the hash of the bytes it checked.
+ */
+export interface ProjectFileChecked {
+  /**
+   * The file, by its path in the project, `/`-separated.
+   */
+  path: string;
+  /**
+   * The SHA-256 of its bytes as the check read them, lowercase hex, as `read_project_file`
+   * answers it.
+   */
+  content_sha256: string;
+}
+
+/**
  * `list_project_node_types`'s params.
  */
 export interface ListProjectNodeTypesRequest {
@@ -4424,9 +4682,13 @@ export interface NodeTypeReadFromSource {
    */
   description: string;
   /**
-   * The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
+   * The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * The input ports, `None` where only the node's native half states them.
    */
@@ -4444,6 +4706,11 @@ export interface NodeTypeReadFromSource {
    */
   line?: number | null;
 }
+
+/**
+ * Who filed a node type under the group it is listed in.
+ */
+export type NodeTypeCategoryFrom = "project" | "import" | "declaration";
 
 /**
  * One port as its declaration states it in source.
@@ -4735,10 +5002,14 @@ export interface NodeTypeListed {
   documentation: string;
   /**
    * The group it is filed under, a path where the group is inside another, as
-   * `Effects/Stylize`; null when it declares none, or where its declaration source does not
-   * show it.
+   * `Effects/Stylize`: the project's own, else an import's, else the one its author declared;
+   * null when none files it, or where its declaration source does not show it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * How its code runs; null for an entry point whose declaration source does not show it.
    */
@@ -4831,9 +5102,14 @@ export type NodeTypeDescription = {
    */
   documentation: string;
   /**
-   * The group it is filed under; null when it declares none.
+   * The group it is filed under: the project's own, else an import's, else the one its author
+   * declared; null when none files it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * How its code runs; null where its declaration source does not show it.
    */
@@ -5050,6 +5326,60 @@ export type NodeTypeNotDescribed = {
 } | {
   source: "built_in";
 });
+
+/**
+ * `set_node_type_group`'s params.
+ */
+export interface SetNodeTypeGroupRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+  /**
+   * The node type to move, as `list_node_types` names it under `node_type`: the project's own, an import's, an installed distribution's or a built-in.
+   */
+  node_type: string;
+  /**
+   * The group to file it under, a path where the group is inside another, as `Effects/Stylize`; a group no node type is filed under yet is made by filing one there. `null` puts it back where an import or its author files it.
+   */
+  group?: string | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_node_type_group`'s answer: the group the project now files the node type under, and the
+ * transaction that filed it.
+ */
+export interface SetNodeTypeGroupToolResult {
+  /**
+   * The project's UUID.
+   */
+  project: string;
+  /**
+   * The node type, as `list_node_types` names it.
+   */
+  node_type: string;
+  /**
+   * The group the project now files it under; null when the project files it nowhere of its
+   * own, so an import's group or its author's stands.
+   */
+  group?: string | null;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
 
 /**
  * `list_project_views`'s params.
@@ -5635,9 +5965,13 @@ export type NodeTypeOfOneProjectSource = {
    */
   description: string;
   /**
-   * The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
+   * The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * The input ports, `None` where only the node's native half states them.
    */
@@ -6104,6 +6438,13 @@ export interface ControlContractComponents {
   LinkCheckResult: LinkCheckResult;
   PinLinkOutcomeOnTheWire: PinLinkOutcomeOnTheWire;
   ConvertNodeToInsertOnTheWire: ConvertNodeToInsertOnTheWire;
+  CheckLinkCandidatesRequest: CheckLinkCandidatesRequest;
+  LinkCandidatesFrom: LinkCandidatesFrom;
+  LinkCandidatesAmong: LinkCandidatesAmong;
+  LinkCandidateEnd: LinkCandidateEnd;
+  LinkCandidatesCheckResult: LinkCandidatesCheckResult;
+  LinkCandidateChecked: LinkCandidateChecked;
+  LinkCandidateNotChecked: LinkCandidateNotChecked;
   ImportGraphGeneratorRequest: ImportGraphGeneratorRequest;
   OneNodeGraphEditRequest: OneNodeGraphEditRequest;
   SetNodeConfigRequest: SetNodeConfigRequest;
@@ -6192,10 +6533,20 @@ export interface ControlContractComponents {
   CreateNodeFileToolResult: CreateNodeFileToolResult;
   WriteProjectFileRequest: WriteProjectFileRequest;
   ProjectFileTransactionToolResult: ProjectFileTransactionToolResult;
+  CheckProjectCodeRequest: CheckProjectCodeRequest;
+  ProjectCodeCheckResult: ProjectCodeCheckResult;
+  ProjectCodeCheckVerdict: ProjectCodeCheckVerdict;
+  ProjectCodeCheckRun: ProjectCodeCheckRun;
+  ProjectCodeCheckKind: ProjectCodeCheckKind;
+  ProjectCodeCheckState: ProjectCodeCheckState;
+  ProjectCodeCheckFinding: ProjectCodeCheckFinding;
+  ProjectCodeCheckSeverity: ProjectCodeCheckSeverity;
+  ProjectFileChecked: ProjectFileChecked;
   ListProjectNodeTypesRequest: ListProjectNodeTypesRequest;
   ListProjectNodeTypesToolResult: ListProjectNodeTypesToolResult;
   NodeTypeSourceReadWithoutRunningIt: NodeTypeSourceReadWithoutRunningIt;
   NodeTypeReadFromSource: NodeTypeReadFromSource;
+  NodeTypeCategoryFrom: NodeTypeCategoryFrom;
   NodeTypePortReadFromSource: NodeTypePortReadFromSource;
   GraphGeneratorReadFromSource: GraphGeneratorReadFromSource;
   GraphGeneratorPromotedSettingReadFromSource: GraphGeneratorPromotedSettingReadFromSource;
@@ -6232,6 +6583,8 @@ export interface ControlContractComponents {
   NodeValueLifetime: NodeValueLifetime;
   NodeTypePortDescribed: NodeTypePortDescribed;
   NodeTypeNotDescribed: NodeTypeNotDescribed;
+  SetNodeTypeGroupRequest: SetNodeTypeGroupRequest;
+  SetNodeTypeGroupToolResult: SetNodeTypeGroupToolResult;
   ListProjectViewsRequest: ListProjectViewsRequest;
   ListProjectViewsToolResult: ListProjectViewsToolResult;
   ProjectViewListed: ProjectViewListed;
@@ -6445,6 +6798,17 @@ export interface ControlOperations {
   check_link: {
     params: CheckLinkRequest;
     result: LinkCheckResult;
+  };
+  /**
+   * Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.
+   *
+   * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, as `check_link` refuses it, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
+   *
+   * Since contract version 3, experimental.
+   */
+  check_link_candidates: {
+    params: CheckLinkCandidatesRequest;
+    result: LinkCandidatesCheckResult;
   };
   /**
    * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
@@ -7028,6 +7392,17 @@ export interface ControlOperations {
     result: ProjectFileTransactionToolResult;
   };
   /**
+   * Check a project's code on disk without running a stream, answering each finding as data.
+   *
+   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. The one check today is `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
+   *
+   * Since contract version 3, experimental.
+   */
+  check_project_code: {
+    params: CheckProjectCodeRequest;
+    result: ProjectCodeCheckResult;
+  };
+  /**
    * List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.
    *
    * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.
@@ -7070,6 +7445,17 @@ export interface ControlOperations {
   describe_node_types: {
     params: DescribeNodeTypesRequest;
     result: DescribeNodeTypesToolResult;
+  };
+  /**
+   * File a node type under a group of the project's own, or put it back where its author files it, as one transaction on its history.
+   *
+   * File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types`, `describe_node_types` and `list_project_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.
+   *
+   * Since contract version 3, experimental.
+   */
+  set_node_type_group: {
+    params: SetNodeTypeGroupRequest;
+    result: SetNodeTypeGroupToolResult;
   };
   /**
    * List the Tato Studio views a project brings.
@@ -7260,7 +7646,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 11;
+export declare const CONTROL_CONTRACT_REVISION: 14;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

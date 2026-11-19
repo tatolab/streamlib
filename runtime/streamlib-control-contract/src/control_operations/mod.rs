@@ -11,20 +11,21 @@ use crate::control_operation::{
 };
 use crate::control_operation_refusals::{ParamsThatDoNotMatchTheirSchema, the_params_read_as};
 use crate::control_operation_requests::{
-    AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkRequest,
-    CloseViewerRequest, CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest,
-    CreateProjectRequest, CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest,
-    DescribeAssetRequest, DescribeNodeTypesRequest, DescribeRuntimeRequest, DiscoverRequest,
-    DuplicateProjectRequest, GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest,
-    ImportProjectRequest, ListAssetsRequest, ListDependenciesRequest, ListNodeTypesRequest,
-    ListPinTypesRequest, ListProjectFilesRequest, ListProjectNodeTypesRequest,
-    ListProjectViewsRequest, ListSamplesRequest, ListStreamsRequest, LogsRequest,
-    OneLinkGraphEditRequest, OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest,
-    OneStreamActionRequest, OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest,
-    RefreshFragmentsRequest, RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest,
-    RemoveNoteRequest, RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest,
-    SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
-    SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
+    AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest,
+    CheckLinkCandidatesRequest, CheckLinkRequest, CheckProjectCodeRequest, CloseViewerRequest,
+    CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest, CreateProjectRequest,
+    CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest, DescribeAssetRequest,
+    DescribeNodeTypesRequest, DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest,
+    GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest,
+    ListAssetsRequest, ListDependenciesRequest, ListNodeTypesRequest, ListPinTypesRequest,
+    ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectViewsRequest,
+    ListSamplesRequest, ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest,
+    OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
+    OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest,
+    RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest,
+    RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
+    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
+    SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest, SetPinValueRequest,
     SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
     SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
     SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
@@ -56,19 +57,19 @@ pub use discovery_and_subscriptions::{
     SubscribeStreamActionChanges, SubscribeStreamGraphChanges,
 };
 pub use graph_edits::{
-    AddGroup, AddNode, AddNote, CheckLink, CollapseSelectionIntoSubgraph, Connect, Disconnect,
-    ImportGraphGenerator, Redo, RemoveGroup, RemoveNode, RemoveNote, RenameNode,
-    SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue, SetNoteFields,
-    SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
+    AddGroup, AddNode, AddNote, CheckLink, CheckLinkCandidates, CollapseSelectionIntoSubgraph,
+    Connect, Disconnect, ImportGraphGenerator, Redo, RemoveGroup, RemoveNode, RemoveNote,
+    RenameNode, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue,
+    SetNoteFields, SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
 };
-pub use node_types::{DescribeNodeTypes, ListNodeTypes, ListPinTypes};
+pub use node_types::{DescribeNodeTypes, ListNodeTypes, ListPinTypes, SetNodeTypeGroup};
 pub use playback_and_stream_actions::{
     CancelStreamAction, DescribeStreamAction, PausePlayback, ResumePlayback, SetStreamClockScale,
     StartPlayback, StopPlayback,
 };
 pub use project_files_and_views::{
-    CloseViewer, CreateNodeFile, ListProjectFiles, ListProjectNodeTypes, ListProjectViews,
-    OpenViewer, ReadProjectFile, WriteProjectFile, WriteStudioViewOutput,
+    CheckProjectCode, CloseViewer, CreateNodeFile, ListProjectFiles, ListProjectNodeTypes,
+    ListProjectViews, OpenViewer, ReadProjectFile, WriteProjectFile, WriteStudioViewOutput,
 };
 pub use project_lifecycle::{
     CloseProject, CreateProject, DeleteProject, DuplicateProject, ImportProject, ListSamples,
@@ -80,7 +81,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 11;
+pub const CONTROL_CONTRACT_REVISION: u32 = 14;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -108,6 +109,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<AddNode>(),
     ControlOperationDeclaration::of::<Connect>(),
     ControlOperationDeclaration::of::<CheckLink>(),
+    ControlOperationDeclaration::of::<CheckLinkCandidates>(),
     ControlOperationDeclaration::of::<ImportGraphGenerator>(),
     ControlOperationDeclaration::of::<RemoveNode>(),
     ControlOperationDeclaration::of::<Disconnect>(),
@@ -161,10 +163,12 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<ReadProjectFile>(),
     ControlOperationDeclaration::of::<CreateNodeFile>(),
     ControlOperationDeclaration::of::<WriteProjectFile>(),
+    ControlOperationDeclaration::of::<CheckProjectCode>(),
     ControlOperationDeclaration::of::<ListProjectNodeTypes>(),
     ControlOperationDeclaration::of::<ListPinTypes>(),
     ControlOperationDeclaration::of::<ListNodeTypes>(),
     ControlOperationDeclaration::of::<DescribeNodeTypes>(),
+    ControlOperationDeclaration::of::<SetNodeTypeGroup>(),
     ControlOperationDeclaration::of::<ListProjectViews>(),
     ControlOperationDeclaration::of::<WriteStudioViewOutput>(),
     ControlOperationDeclaration::of::<WriteGraphInput>(),
@@ -210,6 +214,8 @@ pub enum ControlOperationCall {
     Connect(OneLinkGraphEditRequest),
     /// A `check_link` call.
     CheckLink(CheckLinkRequest),
+    /// A `check_link_candidates` call.
+    CheckLinkCandidates(CheckLinkCandidatesRequest),
     /// A `import_graph_generator` call.
     ImportGraphGenerator(ImportGraphGeneratorRequest),
     /// A `remove_node` call.
@@ -316,6 +322,8 @@ pub enum ControlOperationCall {
     CreateNodeFile(CreateNodeFileRequest),
     /// A `write_project_file` call.
     WriteProjectFile(WriteProjectFileRequest),
+    /// A `check_project_code` call.
+    CheckProjectCode(CheckProjectCodeRequest),
     /// A `list_project_node_types` call.
     ListProjectNodeTypes(ListProjectNodeTypesRequest),
     /// A `list_pin_types` call.
@@ -324,6 +332,8 @@ pub enum ControlOperationCall {
     ListNodeTypes(ListNodeTypesRequest),
     /// A `describe_node_types` call.
     DescribeNodeTypes(DescribeNodeTypesRequest),
+    /// A `set_node_type_group` call.
+    SetNodeTypeGroup(SetNodeTypeGroupRequest),
     /// A `list_project_views` call.
     ListProjectViews(ListProjectViewsRequest),
     /// A `write_studio_view_output` call.
@@ -432,6 +442,9 @@ impl ControlOperationCall {
             AddNode::METHOD_NAME => the_request_of::<AddNode>(params).map(Self::AddNode),
             Connect::METHOD_NAME => the_request_of::<Connect>(params).map(Self::Connect),
             CheckLink::METHOD_NAME => the_request_of::<CheckLink>(params).map(Self::CheckLink),
+            CheckLinkCandidates::METHOD_NAME => {
+                the_request_of::<CheckLinkCandidates>(params).map(Self::CheckLinkCandidates)
+            }
             ImportGraphGenerator::METHOD_NAME => {
                 the_request_of::<ImportGraphGenerator>(params).map(Self::ImportGraphGenerator)
             }
@@ -578,6 +591,9 @@ impl ControlOperationCall {
             WriteProjectFile::METHOD_NAME => {
                 the_request_of::<WriteProjectFile>(params).map(Self::WriteProjectFile)
             }
+            CheckProjectCode::METHOD_NAME => {
+                the_request_of::<CheckProjectCode>(params).map(Self::CheckProjectCode)
+            }
             ListProjectNodeTypes::METHOD_NAME => {
                 the_request_of::<ListProjectNodeTypes>(params).map(Self::ListProjectNodeTypes)
             }
@@ -589,6 +605,9 @@ impl ControlOperationCall {
             }
             DescribeNodeTypes::METHOD_NAME => {
                 the_request_of::<DescribeNodeTypes>(params).map(Self::DescribeNodeTypes)
+            }
+            SetNodeTypeGroup::METHOD_NAME => {
+                the_request_of::<SetNodeTypeGroup>(params).map(Self::SetNodeTypeGroup)
             }
             ListProjectViews::METHOD_NAME => {
                 the_request_of::<ListProjectViews>(params).map(Self::ListProjectViews)
@@ -643,6 +662,7 @@ impl ControlOperationCall {
             Self::AddNode(_) => AddNode::METHOD_NAME,
             Self::Connect(_) => Connect::METHOD_NAME,
             Self::CheckLink(_) => CheckLink::METHOD_NAME,
+            Self::CheckLinkCandidates(_) => CheckLinkCandidates::METHOD_NAME,
             Self::ImportGraphGenerator(_) => ImportGraphGenerator::METHOD_NAME,
             Self::RemoveNode(_) => RemoveNode::METHOD_NAME,
             Self::Disconnect(_) => Disconnect::METHOD_NAME,
@@ -696,10 +716,12 @@ impl ControlOperationCall {
             Self::ReadProjectFile(_) => ReadProjectFile::METHOD_NAME,
             Self::CreateNodeFile(_) => CreateNodeFile::METHOD_NAME,
             Self::WriteProjectFile(_) => WriteProjectFile::METHOD_NAME,
+            Self::CheckProjectCode(_) => CheckProjectCode::METHOD_NAME,
             Self::ListProjectNodeTypes(_) => ListProjectNodeTypes::METHOD_NAME,
             Self::ListPinTypes(_) => ListPinTypes::METHOD_NAME,
             Self::ListNodeTypes(_) => ListNodeTypes::METHOD_NAME,
             Self::DescribeNodeTypes(_) => DescribeNodeTypes::METHOD_NAME,
+            Self::SetNodeTypeGroup(_) => SetNodeTypeGroup::METHOD_NAME,
             Self::ListProjectViews(_) => ListProjectViews::METHOD_NAME,
             Self::WriteStudioViewOutput(_) => WriteStudioViewOutput::METHOD_NAME,
             Self::WriteGraphInput(_) => WriteGraphInput::METHOD_NAME,

@@ -1,0 +1,262 @@
+{
+  "script": "author_a_python_node",
+  "task": {
+    "statement": "In the project of the one stream the runtime holds, create the node file nodes/tremolo.py from the template and read it; write into it a function node Tremolo whose `level` input has no default, check the project's code for that file and read the refusal's code and place; write it again with `level` defaulting to 1.0, check it once more and read that it passes; then place the node on the stream.",
+    "givens": {
+      "node_file_path": "nodes/tremolo.py",
+      "node_source_with_a_mistake": "from tatolab.stream import node\n\n\n@node\ndef Tremolo(level: float, depth: float = 0.5) -> float:\n    \"\"\"`level` dipped by `depth`.\"\"\"\n    return level * (1.0 - depth)\n",
+      "node_source_fixed": "from tatolab.stream import node\n\n\n@node\ndef Tremolo(level: float = 1.0, depth: float = 0.5) -> float:\n    \"\"\"`level` dipped by `depth`.\"\"\"\n    return level * (1.0 - depth)\n",
+      "node_type": "nodes.tremolo:Tremolo",
+      "node_label": "tremolo",
+      "refused_port": "level"
+    }
+  },
+  "steps": [
+    {
+      "name": "streams",
+      "tool": "list_streams",
+      "arguments": {},
+      "expect": [
+        {
+          "at": "/streams",
+          "has_length": 1
+        }
+      ]
+    },
+    {
+      "name": "created",
+      "tool": "create_node_file",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "path": {
+          "$given": "node_file_path"
+        }
+      },
+      "expect": [
+        {
+          "at": "/path",
+          "equals": {
+            "$given": "node_file_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "read",
+      "tool": "read_project_file",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "path": {
+          "$given": "node_file_path"
+        }
+      },
+      "expect": [
+        {
+          "at": "/path",
+          "equals": {
+            "$given": "node_file_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "written_with_a_mistake",
+      "tool": "write_project_file",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "path": {
+          "$given": "node_file_path"
+        },
+        "content": {
+          "$given": "node_source_with_a_mistake"
+        },
+        "expected_sha256": {
+          "$read": {
+            "step": "read",
+            "pointer": "/content_sha256"
+          }
+        }
+      },
+      "expect": [
+        {
+          "at": "/path",
+          "equals": {
+            "$given": "node_file_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "checked_with_a_mistake",
+      "tool": "check_project_code",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "paths": [
+          {
+            "$given": "node_file_path"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "at": "/verdict",
+          "equals": "failed"
+        },
+        {
+          "at": "/checks/0/check",
+          "equals": "python_node_declarations"
+        },
+        {
+          "at": "/checks/0/state",
+          "equals": "failed"
+        },
+        {
+          "at": "/findings",
+          "holds_an_item_where": {
+            "/finding_code": "value_input_has_no_default",
+            "/severity": "error",
+            "/path": {
+              "$given": "node_file_path"
+            },
+            "/line": 4,
+            "/node_type": {
+              "$given": "node_type"
+            },
+            "/port": {
+              "$given": "refused_port"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "written_fixed",
+      "tool": "write_project_file",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "path": {
+          "$given": "node_file_path"
+        },
+        "content": {
+          "$given": "node_source_fixed"
+        },
+        "expected_sha256": {
+          "$read": {
+            "step": "written_with_a_mistake",
+            "pointer": "/content_sha256"
+          }
+        }
+      },
+      "expect": [
+        {
+          "at": "/path",
+          "equals": {
+            "$given": "node_file_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "checked_fixed",
+      "tool": "check_project_code",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "paths": [
+          {
+            "$given": "node_file_path"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "at": "/verdict",
+          "equals": "passed"
+        },
+        {
+          "at": "/findings",
+          "has_length": 0
+        },
+        {
+          "at": "/files_checked/0/path",
+          "equals": {
+            "$given": "node_file_path"
+          }
+        },
+        {
+          "at": "/files_checked/0/content_sha256",
+          "equals": {
+            "$read": {
+              "step": "written_fixed",
+              "pointer": "/content_sha256"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "placed",
+      "tool": "transact",
+      "arguments": {
+        "operations": [
+          {
+            "operation": "add_node",
+            "stream": {
+              "$read": {
+                "step": "streams",
+                "pointer": "/streams/0/stream"
+              }
+            },
+            "type": {
+              "$given": "node_type"
+            },
+            "as": {
+              "$given": "node_label"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "at": "/added_nodes",
+          "has_length": 1
+        },
+        {
+          "at": "/added_nodes/0/as",
+          "equals": {
+            "$given": "node_label"
+          }
+        }
+      ]
+    }
+  ]
+}

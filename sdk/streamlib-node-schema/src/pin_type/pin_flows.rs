@@ -110,6 +110,23 @@ impl PinDeclaration {
         }
     }
 
+    /// Why input `port_name` may not read by `delivery_profile`, which its author states: a
+    /// Trigger reads each event, so it reads `ordered` and nothing else. `None` for every
+    /// other flow, and for a Trigger stating `ordered`.
+    pub fn refusal_of_its_stated_delivery_profile(
+        &self,
+        port_name: &str,
+        delivery_profile: &str,
+    ) -> Option<String> {
+        (self.flow == PinFlow::Trigger && delivery_profile != ORDERED_DELIVERY_PROFILE).then(|| {
+            format!(
+                "input port `{port_name}` is a Trigger and states the delivery profile \
+                 `{delivery_profile}`; a Trigger reads every event, so it reads \
+                 `{ORDERED_DELIVERY_PROFILE}` — drop `delivery_profile`"
+            )
+        })
+    }
+
     /// Why port `port_name` may not be declared so: it states a flow a type it may carry does
     /// not allow. `None` when every type it may carry allows its flow.
     pub fn refusal_of_its_flow(&self, port_name: &str) -> Option<String> {

@@ -3,7 +3,8 @@
 
 //! A registered node type's inputs and outputs as `describe_node_types` answers them: each port
 //! with its pin type, flow, mode, default, lifetime and the JSON Schema of a value it takes, and
-//! each setting of a node type not yet typed as an input that takes no wire.
+//! each setting of a node type not yet typed as an input that takes no wire, with the schema of
+//! its value.
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     NodeTypeInputDescribed, NodeTypeInputMode, NodeTypePortDescribed, NodeTypePortPin,
@@ -135,7 +136,8 @@ fn the_mode_of_an_input_declaring_none(
 }
 
 /// A config field of a node type not yet typed, as an input that takes no wire, read when the
-/// node is set up.
+/// node is set up: the schema of a value it takes is its pin type's where its schema states one
+/// exactly, else the field's own.
 fn a_setting_described(setting: ConfigFieldDescribedAsASetting) -> NodeTypeInputDescribed {
     let declared = setting.pin_type.map(|pin_type| PinDeclaration {
         annotations: setting.annotations.clone(),
@@ -162,6 +164,7 @@ fn a_setting_described(setting: ConfigFieldDescribedAsASetting) -> NodeTypeInput
         lifetime: Some(NodeValueLifetime::Kept),
         value_json_schema: declared
             .as_ref()
-            .and_then(PinDeclaration::value_json_schema),
+            .and_then(PinDeclaration::value_json_schema)
+            .or(Some(setting.field_value_json_schema)),
     }
 }

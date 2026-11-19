@@ -102,8 +102,8 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     the probed backend's playback stream, fed over a real link by the capture
     module, with no interpreter anywhere in the sample path.
 
-    `stream_builder.add` with no `config` records `{}`, so this is also the
-    added-without-config proof.
+    `stream_builder.add` with no `input_values` records `{}`, so this is also the
+    added-without-values proof.
 
     On the ALSA arm the default source captures mono, and the speaker's port
     declares stereo, so the engine converts rather than refusing, and that

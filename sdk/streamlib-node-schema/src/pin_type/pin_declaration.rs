@@ -77,7 +77,7 @@ pub struct ResolvedPin {
 }
 
 /// The pin type a port declares, or how it is found.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "contract-json-schema",
     derive(schemars_1::JsonSchema),

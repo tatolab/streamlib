@@ -44,8 +44,9 @@ mod link_ends_this_graph_cannot_take;
 mod reactive_reader_rule_of_an_edit;
 pub(super) use graph_edits_in_one_commit::{ALifecycleChange, GraphEditsHeldForOneCommit};
 pub(super) use link_connected_between_two_ports::{
-    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
-    refuse_a_held_link_the_engine_cannot_wire, the_verdict_connect_takes_on_a_link,
+    ALinkConnectedOrSetAside, ALinkEndTheGraphHolds, ANodeTypesPortToJudge,
+    WhenTheEngineCannotWireALink, connect_impl, refuse_a_held_link_the_engine_cannot_wire,
+    the_verdict_connect_takes_on_a_link, the_verdicts_connect_takes_on_links_with_node_types_ports,
 };
 use reactive_reader_rule_of_an_edit::ARemoval;
 #[cfg(test)]
@@ -624,6 +625,21 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.what_a_connect_makes_of_the_link(link)
     }
 
+    fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+        &'a self,
+        held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,
+        held_direction: crate::core::PortDirection,
+        node_types_ports: &'a [crate::core::runtime::ANodeTypesPort<'a>],
+    ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>> {
+        self.in_this_streams_log_route(async move {
+            self.what_a_connect_makes_of_links_with_node_types_ports(
+                held,
+                held_direction,
+                node_types_ports,
+            )
+        })
+    }
+
     fn the_name_a_node_added_with_none_takes(
         &self,
         node_type: &str,
@@ -904,7 +920,13 @@ mod connect_wires_a_matching_link_in_silence_tests;
 mod connect_refuses_ports_whose_families_do_not_match_tests;
 
 #[cfg(test)]
+mod connect_on_a_test_thread;
+
+#[cfg(test)]
 mod connect_judges_two_typed_pins_by_their_verdict_tests;
 
 #[cfg(test)]
 mod connect_refuses_an_island_into_the_app_process_tests;
+
+#[cfg(test)]
+mod connect_resolves_a_pin_type_found_another_way_tests;

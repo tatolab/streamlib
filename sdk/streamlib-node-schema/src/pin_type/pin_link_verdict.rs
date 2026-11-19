@@ -263,6 +263,9 @@ pub enum PinLinkWarning {
     },
     /// The output states no pixel format, and the input takes only some.
     TextureOutputStatesNoFormat,
+    /// A node type's port finds its type from a link into its node or from a setting, so it is
+    /// judged as taking the other end's type before a node of the type is placed.
+    TypeFoundOnlyOncePlaced,
 }
 
 impl fmt::Display for PinLinkWarning {
@@ -294,6 +297,11 @@ impl fmt::Display for PinLinkWarning {
             ),
             Self::TextureOutputStatesNoFormat => formatter.write_str(
                 "the output states no pixel format, so it may send one the input cannot take",
+            ),
+            Self::TypeFoundOnlyOncePlaced => formatter.write_str(
+                "the node type's port finds its type from a link into its node or from a setting, \
+                 so it is judged as taking the other end's type until a node of the type is \
+                 placed",
             ),
         }
     }
