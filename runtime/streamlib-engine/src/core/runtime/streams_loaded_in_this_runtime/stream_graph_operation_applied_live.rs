@@ -540,7 +540,7 @@ impl LoadedStreamInThisRuntime {
             match how_a_node_types_port_is_judged(node_types, port, held_direction.opposite()) {
                 HowANodeTypesPortIsJudged::Answered(answer) => answers.push(Some(answer)),
                 HowANodeTypesPortIsJudged::OnAPlacedNode(port) => {
-                    to_judge.push(port);
+                    to_judge.push(*port);
                     answers.push(None);
                 }
             }
@@ -616,7 +616,7 @@ enum HowANodeTypesPortIsJudged {
     /// described yet, and one no node interpreter describes and the stream does not resolve.
     Answered(Result<WhatALiveConnectMakesOfALink>),
     /// Judged on a node of the type placed for it.
-    OnAPlacedNode(ANodeTypesPortToJudge),
+    OnAPlacedNode(Box<ANodeTypesPortToJudge>),
 }
 
 /// How a link with `port`, of `direction`, is judged in a stream resolving `node_types`.
@@ -648,9 +648,9 @@ fn how_a_node_types_port_is_judged(
             Err(Error::UnknownNodeType { ident: node_type })
         });
     };
-    HowANodeTypesPortIsJudged::OnAPlacedNode(ANodeTypesPortToJudge::of(
+    HowANodeTypesPortIsJudged::OnAPlacedNode(Box::new(ANodeTypesPortToJudge::of(
         node_types, descriptor, port.port, direction,
-    ))
+    )))
 }
 
 /// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config

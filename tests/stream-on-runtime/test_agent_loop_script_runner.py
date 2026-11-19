@@ -312,9 +312,8 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
                        "undo"]
     }
     assert called[2:] == [
-        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, "transact",
-        CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME, "transact", "graph",
-        "undo", "undo", "undo", "graph",
+        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
+        CALL_OPERATION_TOOL_NAME, "transact", "graph", "undo", "undo", "graph",
     ]
     checked = [arguments["operation"] for name, arguments in session.tool_calls
                if name == CALL_OPERATION_TOOL_NAME]
