@@ -1348,6 +1348,8 @@ export type PinLinkWarningOnTheWire = {
   warning: "menu_options_the_input_does_not_list";
 } | {
   warning: "texture_output_states_no_format";
+} | {
+  warning: "type_found_only_once_placed";
 };
 
 /**
@@ -2255,6 +2257,120 @@ export interface ConvertNodeToInsertOnTheWire {
    * The type that output gives.
    */
   output_pin_type: PinType;
+}
+
+/**
+ * `check_link_candidates`'s params: one placed end and the ends of the other direction it is
+ * judged against.
+ */
+export interface CheckLinkCandidatesRequest {
+  /**
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
+   */
+  stream: string;
+  /**
+   * The subgraph the links would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused.
+   */
+  level?: Array<string> | null;
+  /**
+   * The placed end each candidate is judged against.
+   */
+  from: LinkCandidatesFrom;
+  /**
+   * The candidate ends.
+   */
+  among: LinkCandidatesAmong;
+  /**
+   * Whether a candidate `connect` would refuse is listed too, with the refusal it would answer; false or omitted lists only the candidates that connect.
+   */
+  include_refused?: boolean;
+}
+
+/**
+ * The placed end `check_link_candidates` judges each candidate against, by its direction.
+ */
+export type LinkCandidatesFrom = {
+  output: StreamGraphActionLinkEnd;
+} | {
+  input: StreamGraphActionLinkEnd;
+};
+
+/**
+ * The candidate ends `check_link_candidates` judges, each of the direction other than its
+ * placed end's.
+ */
+export type LinkCandidatesAmong = "placed_ports" | "node_type_ports" | {
+  ends: Array<LinkCandidateEnd>;
+};
+
+/**
+ * One end `check_link_candidates` judges its placed end against, of the other direction.
+ */
+export type LinkCandidateEnd = {
+  /**
+   * The node, by the UUID `graph` lists as its `id`.
+   */
+  node: string;
+  /**
+   * The port's name, as `graph` lists it under the node's `ports`.
+   */
+  port: string;
+  kind: "placed_port";
+} | {
+  /**
+   * The node type, by the import path `add_node` takes as its `type`.
+   */
+  node_type: string;
+  /**
+   * The port's name, as the node type declares it.
+   */
+  port: string;
+  kind: "node_type_port";
+};
+
+/**
+ * `check_link_candidates`'s answer: for each candidate end, in the order judged, what
+ * `check_link` would answer for its link with the placed end.
+ */
+export interface LinkCandidatesCheckResult {
+  /**
+   * Each candidate checked; one `connect` would refuse is listed only when the request set
+   * `include_refused`.
+   */
+  candidates: Array<LinkCandidateChecked>;
+  /**
+   * Each candidate whose link is not checked yet, as `check_link` would not check it.
+   */
+  not_checked?: Array<LinkCandidateNotChecked>;
+}
+
+/**
+ * One candidate end and what `check_link` would answer for the link between it and the placed
+ * end.
+ */
+export interface LinkCandidateChecked {
+  /**
+   * The candidate end.
+   */
+  end: LinkCandidateEnd;
+  /**
+   * What `check_link` would answer for the link.
+   */
+  check: LinkCheckResult;
+}
+
+/**
+ * One candidate end whose link `check_link` would not check yet, and why.
+ */
+export interface LinkCandidateNotChecked {
+  /**
+   * The candidate end.
+   */
+  end: LinkCandidateEnd;
+  /**
+   * Why the link is not checked yet, in the runtime's words.
+   */
+  why: string;
 }
 
 /**
@@ -6104,6 +6220,13 @@ export interface ControlContractComponents {
   LinkCheckResult: LinkCheckResult;
   PinLinkOutcomeOnTheWire: PinLinkOutcomeOnTheWire;
   ConvertNodeToInsertOnTheWire: ConvertNodeToInsertOnTheWire;
+  CheckLinkCandidatesRequest: CheckLinkCandidatesRequest;
+  LinkCandidatesFrom: LinkCandidatesFrom;
+  LinkCandidatesAmong: LinkCandidatesAmong;
+  LinkCandidateEnd: LinkCandidateEnd;
+  LinkCandidatesCheckResult: LinkCandidatesCheckResult;
+  LinkCandidateChecked: LinkCandidateChecked;
+  LinkCandidateNotChecked: LinkCandidateNotChecked;
   ImportGraphGeneratorRequest: ImportGraphGeneratorRequest;
   OneNodeGraphEditRequest: OneNodeGraphEditRequest;
   SetNodeConfigRequest: SetNodeConfigRequest;
@@ -6445,6 +6568,17 @@ export interface ControlOperations {
   check_link: {
     params: CheckLinkRequest;
     result: LinkCheckResult;
+  };
+  /**
+   * Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.
+   *
+   * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, as `check_link` refuses it, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
+   *
+   * Since contract version 3, experimental.
+   */
+  check_link_candidates: {
+    params: CheckLinkCandidatesRequest;
+    result: LinkCandidatesCheckResult;
   };
   /**
    * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
@@ -7260,7 +7394,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 11;
+export declare const CONTROL_CONTRACT_REVISION: 12;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

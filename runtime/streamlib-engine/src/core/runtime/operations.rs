@@ -35,6 +35,18 @@ pub enum WhatALiveConnectMakesOfALink {
     /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
     /// graph judges it only as it is reconciled to a document holding it.
     JudgesItOnlyAsItIsMade,
+    /// The link reaches a port of a node type the stream has not described yet, which only an
+    /// add of a node of the type describes, so it is judged only once one is placed.
+    JudgesItOnlyOnceItsNodeTypeIsDescribed,
+}
+
+/// A port of a node type, by the type's import path and the port's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ANodeTypesPort<'a> {
+    /// The node type's import path, as an add takes it.
+    pub node_type: &'a str,
+    /// The port's name, as the node type declares it.
+    pub port: &'a str,
 }
 
 pub trait RuntimeOperations: Send + Sync {
@@ -87,6 +99,21 @@ pub trait RuntimeOperations: Send + Sync {
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink>;
+
+    /// What a live connect would make of each link between `held`, an end of this stream's
+    /// live graph by its node's UUID and of `held_direction`, and one of `node_types_ports`, in
+    /// their order, were a node of the type placed as an add with no input values places it:
+    /// judged as [`Self::what_a_live_connect_makes_of_the_link`] judges a link, the port by what
+    /// it declares, and made nowhere; each refused as its connect would be refused. Nothing is
+    /// described: a node type the stream has not described yet is answered
+    /// [`WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed`]. The judgement
+    /// runs in this stream's log route, so what it logs reaches the stream's log.
+    fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+        &'a self,
+        held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,
+        held_direction: crate::core::PortDirection,
+        node_types_ports: &'a [ANodeTypesPort<'a>],
+    ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>>;
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.
