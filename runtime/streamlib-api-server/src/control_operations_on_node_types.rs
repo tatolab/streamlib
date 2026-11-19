@@ -22,9 +22,9 @@ use streamlib_node_schema::pin_type::built_in_pin_types;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, DescribeNodeTypesToolResult, GraphGeneratorListed,
     GraphGeneratorReadFromSource, ListNodeTypesToolResult, ListPinTypesToolResult,
-    ListProjectNodeTypesToolResult, NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot,
-    NodeTypeDescription, NodeTypeInputDescribed, NodeTypeKind, NodeTypeListed,
-    NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortReadFromSource,
+    ListProjectNodeTypesToolResult, NodeTypeCategoryFrom, NodeTypeDescribedFrom,
+    NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed, NodeTypeKind,
+    NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortReadFromSource,
     NodeTypeReadFromSource, NodeTypeSourceListed, NodeTypeSourceListedOrigin, NodeTypeSourceOrigin,
     PinTypeConversionListed, PinTypeListed, ProjectActionRefusalOnTheWire,
     ProjectFilePlaceOnTheWire,
@@ -388,17 +388,27 @@ pub(crate) fn the_project_node_type_described(
         column: None,
     });
     if let Some(descriptor) = described {
-        return NodeTypeDescribedOrWhyNot::Described(Box::new(NodeTypeDescription {
-            // Filed as the listing filed it.
-            category: read.category.clone(),
-            category_from: read.category_from,
-            ..a_registered_node_type_described(
-                descriptor,
-                origin,
-                NodeTypeDescribedFrom::Interpreter,
-                declared_at,
-            )
-        }));
+        let mut description = a_registered_node_type_described(
+            descriptor,
+            origin,
+            NodeTypeDescribedFrom::Interpreter,
+            declared_at,
+        );
+        // Filed as the listing filed it where the project or an import files it, else under the
+        // group the interpreter reads its author declaring.
+        match read.category_from {
+            Some(NodeTypeCategoryFrom::Project | NodeTypeCategoryFrom::Import) => {
+                description.category = read.category.clone();
+                description.category_from = read.category_from;
+            }
+            Some(NodeTypeCategoryFrom::Declaration) | None => {
+                description.category_from = description
+                    .category
+                    .as_ref()
+                    .map(|_| NodeTypeCategoryFrom::Declaration);
+            }
+        }
+        return NodeTypeDescribedOrWhyNot::Described(Box::new(description));
     }
     let (Some(inputs), Some(outputs)) = (&read.inputs, &read.outputs) else {
         return NodeTypeDescribedOrWhyNot::NotDescribed(Box::new(NodeTypeNotDescribed {

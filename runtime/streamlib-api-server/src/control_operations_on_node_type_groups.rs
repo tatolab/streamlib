@@ -17,6 +17,7 @@ use crate::control_operation_dispatcher::{
 use crate::control_operations_on_node_types::{
     the_built_in_node_type, the_refusal_of_a_node_type_not_offered,
 };
+use crate::control_operations_on_project_assets::the_idempotency_key_a_caller_sent;
 
 impl ControlOperationDispatcher {
     pub(crate) async fn set_node_type_group(
@@ -31,8 +32,13 @@ impl ControlOperationDispatcher {
         request_origin: &ControlRequestOrigin,
     ) -> Result<SetNodeTypeGroupToolResult, ControlOperationRefusal> {
         let author = the_author_of_a_change(author, request_origin);
-        // Clearing is never refused, so a filing outlives no node type it names.
-        if group.is_some() {
+        // Clearing is never refused, so a filing outlives no node type it names; a call sent
+        // again under its key answers what it applied the first time.
+        if group.is_some()
+            && !self
+                .was_applied_under_the_key(&project_directory, idempotency_key.clone())
+                .await?
+        {
             self.refuse_a_node_type_neither_the_project_nor_the_runtime_offers(
                 &project_directory,
                 &node_type,
@@ -61,6 +67,27 @@ impl ControlOperationDispatcher {
                     transaction: transaction.transaction.to_string(),
                     commit,
                 }
+            },
+        )
+        .await
+    }
+
+    async fn was_applied_under_the_key(
+        &self,
+        project_directory: &Path,
+        idempotency_key: Option<String>,
+    ) -> Result<bool, ControlOperationRefusal> {
+        if idempotency_key.is_none() {
+            return Ok(false);
+        }
+        self.a_project_repository_call_off_the_async_runtime(
+            SetNodeTypeGroup::METHOD_NAME,
+            project_directory.to_path_buf(),
+            move |project_repository| {
+                let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
+                Ok(project_repository
+                    .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())?
+                    .is_some())
             },
         )
         .await

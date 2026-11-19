@@ -284,19 +284,20 @@ async fn an_imports_map_files_the_node_types_it_names_and_the_projects_own_map_w
 }
 
 /// A filing outlives the node type it names: once the project offers it no more, a `null` group
-/// still takes the filing away.
+/// still takes the filing away, and a filing sent again under its key answers what it applied.
 ///
 /// Mental-revert: refusing a node type not offered whatever the group leaves `nodes.mix:Mixer`
-/// in the project file for good.
+/// in the project file for good; refusing before the key is read answers the retry
+/// `node_type_not_found`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_filing_of_a_node_type_the_project_offers_no_more_is_still_taken_away() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_listing(json!([the_project_source()]));
-    let file_under = |group: Value| {
+    let file_under = |group: Value, idempotency_key: Value| {
         let engine = &engine;
         let arguments = json!({
             "project_directory": project.path(), "node_type": "nodes.mix:Mixer", "group": group,
-            "author": an_agent_named("alice"),
+            "author": an_agent_named("alice"), "idempotency_key": idempotency_key,
         });
         async move {
             engine
@@ -304,7 +305,7 @@ async fn a_filing_of_a_node_type_the_project_offers_no_more_is_still_taken_away(
                 .await
         }
     };
-    file_under(json!("Show"))
+    let filed = file_under(json!("Show"), json!("file-the-mixer"))
         .await
         .expect("the project's node type is filed");
     std::fs::write(
@@ -313,10 +314,17 @@ async fn a_filing_of_a_node_type_the_project_offers_no_more_is_still_taken_away(
     )
     .expect("the mixer's module is gone from the listing");
 
-    file_under(json!("Show"))
+    let sent_again = file_under(json!("Show"), json!("file-the-mixer"))
+        .await
+        .expect("a filing sent again under its key answers what it applied");
+    assert_eq!(
+        sent_again["transaction"], filed["transaction"],
+        "{sent_again}"
+    );
+    file_under(json!("Show"), Value::Null)
         .await
         .expect_err("a node type offered no more is not filed again");
-    let cleared = file_under(Value::Null)
+    let cleared = file_under(Value::Null, Value::Null)
         .await
         .expect("the filing is taken away");
 
