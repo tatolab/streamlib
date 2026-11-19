@@ -5,8 +5,8 @@ use super::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, FunctionNodeLanguage, NodeClassImportPath,
-    NodeClassShortName, NodeDescriptor, NodeKind, NodeRuntime, NodeScheduling, PortDescriptor,
-    PortFamilyDeclaration, PortFamilyDeclarationDirection,
+    NodeClassShortName, NodeDescriptor, NodeKind, NodeRuntime, NodeScheduling, PinDeclaration,
+    PortDescriptor, PortFamilyDeclaration, PortFamilyDeclarationDirection,
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
@@ -35,6 +35,7 @@ const DESCRIBED_STATE_FIELDS_KEY: &str = "state_fields";
 const DESCRIBED_SHADER_SOURCE_KEY: &str = "shader_source";
 const DESCRIBED_SHADER_SIGNATURE_KEY: &str = "shader_signature";
 const DESCRIBED_CONVERSION_KEY: &str = "conversion";
+const DESCRIBED_PIN_DECLARATION_KEY: &str = "pin_declaration";
 
 /// Everything the engine needs to register one Python node type and run its
 /// nodes.
@@ -375,6 +376,13 @@ fn read_port_descriptors(
             true,
             family,
         );
+        if let Some(pin_declaration) = declaration
+            .get(DESCRIBED_PIN_DECLARATION_KEY)
+            .filter(|declared| !declared.is_null())
+        {
+            let pin_declaration = read_pin_declaration(pin_declaration, &port.name, direction)?;
+            port = port.with_pin_declaration(pin_declaration);
+        }
         if let Some(delivery_profile) = declaration
             .get("delivery_profile")
             .filter(|declared| !declared.is_null())
@@ -452,6 +460,27 @@ fn read_port_descriptors(
         ports.push(port);
     }
     Ok(ports)
+}
+
+/// Read the pin type and flow a described port's author states, and what it states besides,
+/// refusing a declaration the engine's `PinDeclaration` does not read and an output that says
+/// it may be unset, which only an input can be.
+fn read_pin_declaration(
+    pin_declaration: &serde_json::Value,
+    port_name: &str,
+    direction: PortDirection,
+) -> std::result::Result<PinDeclaration, String> {
+    let pin_declaration = serde_json::from_value::<PinDeclaration>(pin_declaration.clone())
+        .map_err(|refusal| {
+            format!("port {port_name:?}: {DESCRIBED_PIN_DECLARATION_KEY} {refusal}")
+        })?;
+    if matches!(direction, PortDirection::Output) && pin_declaration.may_be_unset {
+        return Err(format!(
+            "output port {port_name:?} declares that it may be unset, and only an input holds a \
+             value that may be unset"
+        ));
+    }
+    Ok(pin_declaration)
 }
 
 /// Read the value an input port reads while nothing is linked into it: a

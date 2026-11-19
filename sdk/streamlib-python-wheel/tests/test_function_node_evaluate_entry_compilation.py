@@ -14,7 +14,7 @@ import math
 import struct
 import itertools
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 
@@ -28,7 +28,7 @@ from tatolab.runtime._function_node_compilation import (
     feed_each_input_port_from_its_function_node_island,
     prepare_function_node_to_evaluate,
 )
-from tatolab.stream import State, Stateful, UnreadMessage, node
+from tatolab.stream import NumberRange, NumberUnit, PinMeaning, State, Stateful, UnreadMessage, node
 from tatolab.stream import _function_node_declaration
 
 from function_node_test_nodes import (
@@ -71,6 +71,15 @@ class Halves:
 @node.function
 def halve(x: float) -> Halves:
     return Halves(lower=x / 2.0, upper=x - x / 2.0)
+
+
+@node
+def remap_with_typed_pins(
+    x: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 0.0,
+    low: Annotated[float, NumberUnit("Hz"), PinMeaning("frequency")] = 0.0,
+    high: float = 1.0,
+) -> float:
+    return low + x * (high - low)
 
 
 @node.function
@@ -164,6 +173,13 @@ def test_a_stateless_body_runs_compiled_with_its_pins_in_signature_order():
     assert remap_compiled.input_ports == ("x", "low", "high")
     assert remap_compiled.pin_defaults_by_input_port == {"low": 0.0, "high": 1.0}
     assert call_the_evaluate_entry(remap_compiled, [0.5, 2.0, 4.0], [], [])[0] == [3.0]
+
+
+def test_a_function_under_bare_node_whose_pins_are_numbers_compiles_as_one_under_node_function():
+    typed_compiled = compiled(remap_with_typed_pins)
+    assert typed_compiled.input_ports == ("x", "low", "high")
+    assert typed_compiled.pin_defaults_by_input_port == {"x": 0.0, "low": 0.0, "high": 1.0}
+    assert call_the_evaluate_entry(typed_compiled, [0.5, 2.0, 4.0], [], [])[0] == [3.0]
 
 
 def test_a_stateful_body_reads_time_and_its_state_and_writes_its_next_state():
