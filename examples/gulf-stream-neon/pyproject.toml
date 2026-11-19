@@ -1,0 +1,14 @@
+[project]
+name = "gulf-stream-neon"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tatolab-stream>=0.54.3", "numpy>=2.1", "tatolab-compositor", "tatolab-ops", "tatolab-testpattern"]
+
+[tool.uv]
+find-links = [".tatolab/carried-wheels"]
+
+[tool.uv.sources]
+tatolab-compositor = { path = ".tatolab/first-party-imports/tatolab_compositor-0.68.82-py3-none-any.whl" }
+tatolab-ops = { path = ".tatolab/first-party-imports/tatolab_ops-0.68.82-py3-none-any.whl" }
+tatolab-stream = { path = ".tatolab/first-party-imports/tatolab_stream-0.68.82-py3-none-any.whl" }
+tatolab-testpattern = { path = ".tatolab/first-party-imports/tatolab_testpattern-0.68.82-py3-none-any.whl" }

@@ -1,0 +1,115 @@
+{
+  "asset": "9e1f3a5c-7b9d-4e2f-8a4c-6e8f0a2c4e61",
+  "clock": {
+    "mode": "stepped",
+    "step_ns": 33333333,
+    "pace": null,
+    "stop_after_steps": 720
+  },
+  "links": [
+    {
+      "source": {
+        "node": "1d3c5e7a-0b2f-4c6d-8e9a-1b2c3d4e5f60",
+        "port": "pulse"
+      },
+      "target": {
+        "node": "2e4d6f8b-1c3a-4d7e-9fab-2c3d4e5f6071",
+        "port": "soundtrack"
+      }
+    },
+    {
+      "source": {
+        "node": "1d3c5e7a-0b2f-4c6d-8e9a-1b2c3d4e5f60",
+        "port": "pulse"
+      },
+      "target": {
+        "node": "3f5e7a9c-2d4b-4e8f-a0bc-3d4e5f607182",
+        "port": "soundtrack"
+      }
+    },
+    {
+      "source": {
+        "node": "1d3c5e7a-0b2f-4c6d-8e9a-1b2c3d4e5f60",
+        "port": "pulse"
+      },
+      "target": {
+        "node": "4a6f8bad-3e5c-4f9a-b1cd-4e5f60718293",
+        "port": "soundtrack"
+      }
+    },
+    {
+      "source": {
+        "node": "2e4d6f8b-1c3a-4d7e-9fab-2c3d4e5f6071",
+        "port": "contours_to_downstream"
+      },
+      "target": {
+        "node": "4a6f8bad-3e5c-4f9a-b1cd-4e5f60718293",
+        "port": "contours_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "3f5e7a9c-2d4b-4e8f-a0bc-3d4e5f607182",
+        "port": "current_to_downstream"
+      },
+      "target": {
+        "node": "4a6f8bad-3e5c-4f9a-b1cd-4e5f60718293",
+        "port": "current_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "4a6f8bad-3e5c-4f9a-b1cd-4e5f60718293",
+        "port": "program_to_downstream"
+      },
+      "target": {
+        "node": "5b7a9cbe-4f6d-4a0b-c2de-5f60718293a4",
+        "port": "program_from_upstream"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1d3c5e7a-0b2f-4c6d-8e9a-1b2c3d4e5f60",
+      "name": "soundtrackpulse",
+      "type": "nodes.soundtrack_pulse:SoundtrackPulse",
+      "config": {
+        "soundtrack_path": "media/soundtrack.wav"
+      }
+    },
+    {
+      "id": "2e4d6f8b-1c3a-4d7e-9fab-2c3d4e5f6071",
+      "name": "seafloorrelief",
+      "type": "nodes.seafloor_relief:SeafloorRelief"
+    },
+    {
+      "id": "3f5e7a9c-2d4b-4e8f-a0bc-3d4e5f607182",
+      "name": "gulfstreamcurrent",
+      "type": "nodes.gulf_stream_current:GulfStreamCurrent",
+      "config": {
+        "particle_count": 160000,
+        "trail_decay": 0.9,
+        "turbulence": 1.0
+      }
+    },
+    {
+      "id": "4a6f8bad-3e5c-4f9a-b1cd-4e5f60718293",
+      "name": "neonhorizoncompositor",
+      "type": "nodes.neon_horizon_compositor:NeonHorizonCompositor",
+      "config": {
+        "width": 540,
+        "height": 960,
+        "vertical_field_of_view_degrees": 62.0,
+        "exposure": 1.15
+      }
+    },
+    {
+      "id": "5b7a9cbe-4f6d-4a0b-c2de-5f60718293a4",
+      "name": "framerecorder",
+      "type": "nodes.frame_recorder:FrameRecorder",
+      "config": {
+        "output_path": "capture/preview4.mkv"
+      }
+    }
+  ]
+}
