@@ -196,5 +196,4 @@ fn the_quoted_wire_name_of(name: BuiltInPinTypeName) -> &'static str {
 }
 
 #[cfg(test)]
-#[path = "view_manifest_check_tests.rs"]
-mod view_manifest_check_tests;
+mod tests;
