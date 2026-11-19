@@ -19,9 +19,10 @@ use crate::core::context::{
 use crate::core::rhi::{PixelFormat, SourceLayoutInfo};
 use crate::linux::v4l2_color::v4l2_color_to_h273_color_vui;
 
-use super::V4L2_BUFFER_COUNT;
 use super::v4l2_capture_buffer_queue::V4l2DeviceCaptureBufferQueue;
-use super::v4l2_capture_dequeue_loop::{V4l2CaptureDequeueLoopInputs, run_the_v4l2_dequeue_loop};
+use super::v4l2_capture_dequeue_loop::{
+    V4l2CaptureDequeueLoopInputs, V4l2CaptureInput, run_the_v4l2_dequeue_loop,
+};
 use super::v4l2_capture_gpu_resources::{
     CameraGpuResources, log_the_v4l2_capture_buffer_path_to_the_gpu,
     set_up_the_camera_gpu_resources,
@@ -174,14 +175,12 @@ pub(super) fn capture_thread_loop(
         use_dmabuf,
     );
 
-    // Both paths drive the driver's queue buffer by buffer, so a wait that
-    // ends with no frame never re-queues a buffer the driver holds.
-    let mut capture_buffer_queue = V4l2DeviceCaptureBufferQueue::of_the_device(device_fd);
-    let mapped_buffers_the_mmap_path_copies_from = if use_dmabuf {
+    let mut capture_buffer_queue = V4l2DeviceCaptureBufferQueue::of_the_stream(&stream);
+    let mapped_driver_buffers = if use_dmabuf {
         None
     } else {
-        match V4l2DriverBuffersMappedForReading::map_every_buffer_of(device_fd, V4L2_BUFFER_COUNT) {
-            Ok(mapped_buffers) => Some(mapped_buffers),
+        match V4l2DriverBuffersMappedForReading::map_every_buffer_of(&capture_buffer_queue) {
+            Ok(mapped_driver_buffers) => Some(mapped_driver_buffers),
             Err(mapping_error) => {
                 tracing::error!(camera = camera_name, error = %mapping_error, "mapping the capture buffers failed");
                 record_that_capture_ended_on_its_own(format!(
@@ -191,12 +190,25 @@ pub(super) fn capture_thread_loop(
             }
         }
     };
-    if let Err(streamon_error) =
-        capture_buffer_queue.queue_every_buffer_and_stream_on(V4L2_BUFFER_COUNT, &camera_name)
+    if let Err(stream_on_error) =
+        capture_buffer_queue.queue_every_buffer_and_stream_on(&camera_name)
     {
-        record_that_capture_ended_on_its_own(format!("VIDIOC_STREAMON failed: {streamon_error}"));
+        tracing::error!(camera = camera_name, error = %stream_on_error, "starting the capture stream failed");
+        record_that_capture_ended_on_its_own(format!(
+            "the device's stream could not start: {stream_on_error}"
+        ));
         return;
     }
+    let input = match &mapped_driver_buffers {
+        None => V4l2CaptureInput::DmaBuf {
+            imported_buffers: &dmabuf_imported_buffers,
+        },
+        Some(mapped_driver_buffers) => V4l2CaptureInput::Mmap {
+            mapped_driver_buffers,
+            storage_buffers: &input_storage_buffers,
+            storage_buffer_mappings: input_mapped_ptrs,
+        },
+    };
 
     run_the_v4l2_dequeue_loop(
         &mut capture_buffer_queue,
@@ -209,11 +221,7 @@ pub(super) fn capture_thread_loop(
             fourcc,
             capture_instant_resolver: &capture_instant_resolver,
             conversion_stage: &mut conversion_stage,
-            input_storage_buffers: &input_storage_buffers,
-            input_mapped_ptrs,
-            mapped_buffers_the_mmap_path_copies_from: mapped_buffers_the_mmap_path_copies_from
-                .as_ref(),
-            dmabuf_imported_buffers: &dmabuf_imported_buffers,
+            input,
             input_byte_size,
             src_layout,
             resolved_color: &resolved_color,
@@ -223,9 +231,7 @@ pub(super) fn capture_thread_loop(
     );
 
     capture_buffer_queue.stream_off();
-    // The `v4l` stream releases the driver's buffers when it drops, which
-    // the driver refuses while any of them is still mapped here.
-    drop(mapped_buffers_the_mmap_path_copies_from);
+    drop(mapped_driver_buffers);
 
     // The imported fds are driver-owned (`vkImportMemoryFdInfoKHR` took
     // ownership); dropping the buffers frees them through Vulkan.

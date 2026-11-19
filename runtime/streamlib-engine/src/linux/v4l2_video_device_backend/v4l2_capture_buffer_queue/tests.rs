@@ -7,20 +7,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use v4l::v4l_sys::v4l2_buffer;
-
-use super::{
-    NextFilledV4l2Buffer, V4l2CaptureBufferQueue, memory_mapped_capture_buffer,
-    requeue_a_read_v4l2_buffer, wait_for_the_next_filled_v4l2_buffer,
-};
+use super::{HeldV4l2Buffer, NextFilledV4l2Buffer, V4l2CaptureBufferQueue};
 
 const BUFFER_COUNT: u32 = 4;
+const CAMERA_NAME: &str = "withholding camera";
 
 /// A capture queue that keeps videobuf2's rules: a buffer the driver holds,
 /// queued or filled, cannot be queued again (`EINVAL`), and a dequeue with no
 /// filled buffer would block (`EAGAIN`). Each wait fills the oldest queued
-/// buffer with the next frame, unless that frame is being withheld.
+/// buffer with the next frame, unless that frame is being withheld; a frame
+/// whose sequence is listed comes back marked damaged.
 struct CaptureQueueKeepingVideobuf2sRules {
+    damaged_frame_sequences: Vec<u32>,
     queued: VecDeque<u32>,
     filled: VecDeque<(u32, u32)>,
     next_frame_sequence: u32,
@@ -35,6 +33,7 @@ impl CaptureQueueKeepingVideobuf2sRules {
         empty_waits_before_each_frame: impl IntoIterator<Item = u32>,
     ) -> Self {
         let mut queue = Self {
+            damaged_frame_sequences: Vec::new(),
             queued: VecDeque::new(),
             filled: VecDeque::new(),
             next_frame_sequence: 0,
@@ -44,10 +43,8 @@ impl CaptureQueueKeepingVideobuf2sRules {
             stop_after_this_many_empty_waits: None,
         };
         for index in 0..BUFFER_COUNT {
-            let mut buffer = memory_mapped_capture_buffer();
-            buffer.index = index;
             queue
-                .queue_a_dequeued_buffer(buffer)
+                .queue_a_held_buffer(HeldV4l2Buffer::not_yet_queued(index))
                 .expect("every buffer starts out with the capture");
         }
         queue
@@ -83,23 +80,25 @@ impl V4l2CaptureBufferQueue for CaptureQueueKeepingVideobuf2sRules {
         Ok(true)
     }
 
-    fn dequeue_a_filled_buffer(&mut self) -> io::Result<v4l2_buffer> {
+    fn dequeue_a_filled_buffer(&mut self) -> io::Result<HeldV4l2Buffer> {
         let (index, sequence) = self
             .filled
             .pop_front()
             .ok_or_else(|| io::Error::from_raw_os_error(libc::EAGAIN))?;
-        let mut buffer = memory_mapped_capture_buffer();
-        buffer.index = index;
-        buffer.sequence = sequence;
+        let mut buffer = HeldV4l2Buffer::not_yet_queued(index);
+        buffer.0.sequence = sequence;
+        if self.damaged_frame_sequences.contains(&sequence) {
+            buffer.0.flags |= v4l::buffer::Flags::ERROR.bits();
+        }
         Ok(buffer)
     }
 
-    fn queue_a_dequeued_buffer(&mut self, buffer: v4l2_buffer) -> io::Result<()> {
-        if self.holds(buffer.index) {
+    fn queue_a_held_buffer(&mut self, buffer: HeldV4l2Buffer) -> io::Result<()> {
+        if self.holds(buffer.index()) {
             self.queues_refused_for_a_buffer_the_driver_held += 1;
             return Err(io::Error::from_raw_os_error(libc::EINVAL));
         }
-        self.queued.push_back(buffer.index);
+        self.queued.push_back(buffer.index());
         Ok(())
     }
 }
@@ -113,10 +112,10 @@ fn capture_frames(
 ) -> Vec<u32> {
     let mut sequences = Vec::new();
     while sequences.len() < frame_count {
-        match wait_for_the_next_filled_v4l2_buffer(queue, is_capturing) {
+        match queue.wait_for_the_next_filled_buffer(CAMERA_NAME, is_capturing) {
             NextFilledV4l2Buffer::Filled(buffer) => {
-                sequences.push(buffer.sequence);
-                requeue_a_read_v4l2_buffer(queue, "withholding camera", buffer);
+                sequences.push(buffer.sequence());
+                queue.requeue_a_read_buffer(CAMERA_NAME, buffer);
             }
             other => panic!("capture ended before frame {}: {other:?}", sequences.len()),
         }
@@ -148,7 +147,7 @@ fn a_stop_while_a_frame_is_overdue_ends_the_wait_at_the_next_look() {
     queue.stop_after_this_many_empty_waits = Some((2, Arc::clone(&is_capturing)));
 
     assert_eq!(capture_frames(&mut queue, &is_capturing, 1), vec![0]);
-    let after_the_stop = wait_for_the_next_filled_v4l2_buffer(&mut queue, &is_capturing);
+    let after_the_stop = queue.wait_for_the_next_filled_buffer(CAMERA_NAME, &is_capturing);
 
     assert!(
         matches!(after_the_stop, NextFilledV4l2Buffer::CaptureStopped),
@@ -169,20 +168,20 @@ fn a_ready_device_with_no_filled_buffer_is_waited_on_again() {
         fn wait_for_a_filled_buffer(&mut self, _wait: Duration) -> io::Result<bool> {
             Ok(true)
         }
-        fn dequeue_a_filled_buffer(&mut self) -> io::Result<v4l2_buffer> {
+        fn dequeue_a_filled_buffer(&mut self) -> io::Result<HeldV4l2Buffer> {
             self.dequeues += 1;
             if self.dequeues == 1 {
                 return Err(io::Error::from_raw_os_error(libc::EAGAIN));
             }
-            Ok(memory_mapped_capture_buffer())
+            Ok(HeldV4l2Buffer::not_yet_queued(0))
         }
-        fn queue_a_dequeued_buffer(&mut self, _buffer: v4l2_buffer) -> io::Result<()> {
+        fn queue_a_held_buffer(&mut self, _buffer: HeldV4l2Buffer) -> io::Result<()> {
             Ok(())
         }
     }
     let mut queue = ReadyOnceWithNothingThenAFrame { dequeues: 0 };
 
-    let next = wait_for_the_next_filled_v4l2_buffer(&mut queue, &AtomicBool::new(true));
+    let next = queue.wait_for_the_next_filled_buffer(CAMERA_NAME, &AtomicBool::new(true));
 
     assert!(matches!(next, NextFilledV4l2Buffer::Filled(_)), "{next:?}");
     assert_eq!(queue.dequeues, 2);
@@ -195,18 +194,32 @@ fn a_device_whose_poll_fails_ends_capture_with_the_reason() {
         fn wait_for_a_filled_buffer(&mut self, _wait: Duration) -> io::Result<bool> {
             Err(io::Error::from_raw_os_error(libc::ENODEV))
         }
-        fn dequeue_a_filled_buffer(&mut self) -> io::Result<v4l2_buffer> {
+        fn dequeue_a_filled_buffer(&mut self) -> io::Result<HeldV4l2Buffer> {
             unreachable!("nothing is dequeued from a device whose poll failed")
         }
-        fn queue_a_dequeued_buffer(&mut self, _buffer: v4l2_buffer) -> io::Result<()> {
+        fn queue_a_held_buffer(&mut self, _buffer: HeldV4l2Buffer) -> io::Result<()> {
             Ok(())
         }
     }
 
-    let next = wait_for_the_next_filled_v4l2_buffer(&mut PollFails, &AtomicBool::new(true));
+    let next = PollFails.wait_for_the_next_filled_buffer(CAMERA_NAME, &AtomicBool::new(true));
 
     let NextFilledV4l2Buffer::DeviceFailed(reason) = next else {
         panic!("expected the device to have failed: {next:?}");
     };
     assert!(reason.starts_with("polling the device failed"), "{reason}");
+}
+
+/// The driver hands a damaged frame back through a successful dequeue; it is
+/// given back and never delivered, and capture goes on.
+#[test]
+fn a_frame_the_driver_marked_damaged_is_given_back_and_capture_goes_on() {
+    let mut queue = CaptureQueueKeepingVideobuf2sRules::withholding_frames_for([0; 6]);
+    queue.damaged_frame_sequences = vec![1, 2];
+    let is_capturing = AtomicBool::new(true);
+
+    let sequences = capture_frames(&mut queue, &is_capturing, 4);
+
+    assert_eq!(sequences, vec![0, 3, 4, 5]);
+    assert_eq!(queue.queues_refused_for_a_buffer_the_driver_held, 0);
 }

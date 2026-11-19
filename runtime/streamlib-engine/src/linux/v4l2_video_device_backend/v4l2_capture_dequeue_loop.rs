@@ -18,14 +18,29 @@ use crate::core::context::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
     OneOffAcquisitionCountedForItsNode, VideoCaptureInstantResolver,
 };
+use crate::core::Error;
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{PixelBuffer, PublishedPixelBufferFrameId, SourceLayoutInfo, StorageBuffer};
 
 use super::v4l2_capture_buffer_queue::{
-    NextFilledV4l2Buffer, V4l2DeviceCaptureBufferQueue, requeue_a_read_v4l2_buffer,
-    wait_for_the_next_filled_v4l2_buffer,
+    HeldV4l2Buffer, NextFilledV4l2Buffer, V4l2CaptureBufferQueue, V4l2DeviceCaptureBufferQueue,
 };
 use super::v4l2_driver_buffers_mapped_for_reading::V4l2DriverBuffersMappedForReading;
+
+/// Where each frame's bytes reach the converter from.
+pub(super) enum V4l2CaptureInput<'a> {
+    /// The driver's buffers, imported into the GPU and converted in place.
+    DmaBuf {
+        imported_buffers: &'a [StorageBuffer],
+    },
+    /// Each frame copied out of the driver's buffer into one of two storage
+    /// buffers, in turn.
+    Mmap {
+        mapped_driver_buffers: &'a V4l2DriverBuffersMappedForReading<'a>,
+        storage_buffers: &'a [OneOffAcquisitionCountedForItsNode<StorageBuffer>],
+        storage_buffer_mappings: [*mut u8; 2],
+    },
+}
 
 /// What the dequeue loop reads each frame from, converts it on, and hands it
 /// to.
@@ -38,14 +53,7 @@ pub(super) struct V4l2CaptureDequeueLoopInputs<'a> {
     pub(super) fourcc: FourCC,
     pub(super) capture_instant_resolver: &'a VideoCaptureInstantResolver,
     pub(super) conversion_stage: &'a mut CapturedVideoFrameToPooledRgbaConversionStage,
-    pub(super) input_storage_buffers: &'a [OneOffAcquisitionCountedForItsNode<StorageBuffer>],
-    pub(super) input_mapped_ptrs: [*mut u8; 2],
-    /// The driver's buffers, mapped for the MMAP path to copy each frame
-    /// out of; `None` on the DMA-BUF path, which converts straight out of
-    /// the driver's buffers.
-    pub(super) mapped_buffers_the_mmap_path_copies_from:
-        Option<&'a V4l2DriverBuffersMappedForReading>,
-    pub(super) dmabuf_imported_buffers: &'a [StorageBuffer],
+    pub(super) input: V4l2CaptureInput<'a>,
     pub(super) input_byte_size: usize,
     pub(super) src_layout: SourceLayoutInfo,
     pub(super) resolved_color: &'a ResolvedColorInfo,
@@ -55,7 +63,7 @@ pub(super) struct V4l2CaptureDequeueLoopInputs<'a> {
 /// Dequeue, convert, requeue and deliver frames until the capture stops or
 /// the device fails.
 pub(super) fn run_the_v4l2_dequeue_loop(
-    capture_buffer_queue: &mut V4l2DeviceCaptureBufferQueue,
+    capture_buffer_queue: &mut V4l2DeviceCaptureBufferQueue<'_>,
     dequeue_loop_inputs: V4l2CaptureDequeueLoopInputs<'_>,
     record_that_capture_ended_on_its_own: &dyn Fn(String),
 ) {
@@ -68,23 +76,20 @@ pub(super) fn run_the_v4l2_dequeue_loop(
         fourcc,
         capture_instant_resolver,
         conversion_stage,
-        input_storage_buffers,
-        input_mapped_ptrs,
-        mapped_buffers_the_mmap_path_copies_from,
-        dmabuf_imported_buffers,
+        input,
         input_byte_size,
         src_layout,
         resolved_color,
         cached_color,
     } = dequeue_loop_inputs;
 
-    let use_dmabuf = mapped_buffers_the_mmap_path_copies_from.is_none();
+    let use_dmabuf = matches!(input, V4l2CaptureInput::DmaBuf { .. });
     let mut ping_pong_index: usize = 0;
     let mut delivery_tally = CapturedVideoFrameDeliveryTally::default();
 
     while is_capturing.load(Ordering::Acquire) {
         let filled_buffer =
-            match wait_for_the_next_filled_v4l2_buffer(capture_buffer_queue, is_capturing) {
+            match capture_buffer_queue.wait_for_the_next_filled_buffer(camera_name, is_capturing) {
                 NextFilledV4l2Buffer::Filled(filled_buffer) => filled_buffer,
                 NextFilledV4l2Buffer::CaptureStopped => break,
                 NextFilledV4l2Buffer::DeviceFailed(reason) => {
@@ -97,35 +102,56 @@ pub(super) fn run_the_v4l2_dequeue_loop(
             };
         let capture_timestamp_ns = capture_instant_resolver.resolve_capture_timestamp_ns(
             v4l2_buffer_capture_stamp(
-                filled_buffer.flags,
-                filled_buffer.timestamp.tv_sec,
-                filled_buffer.timestamp.tv_usec,
+                filled_buffer.flags(),
+                filled_buffer.timestamp().tv_sec,
+                filled_buffer.timestamp().tv_usec,
             ),
             MediaClock::now().as_nanos() as i64,
         );
-        let frame_sequence = filled_buffer.sequence;
-        let input_ssbo_index = match mapped_buffers_the_mmap_path_copies_from {
-            None => filled_buffer.index as usize,
-            Some(mapped_buffers) => {
-                let frame_bytes = mapped_buffers.bytes_of_a_dequeued_buffer(filled_buffer.index);
+        let frame_sequence = filled_buffer.sequence();
+        let (input_buffer, buffer_held_through_the_conversion) = match &input {
+            V4l2CaptureInput::DmaBuf { imported_buffers } => {
+                let Some(imported_buffer) = imported_buffers.get(filled_buffer.index() as usize)
+                else {
+                    drop_a_frame_from_a_buffer_never_granted(
+                        capture_buffer_queue,
+                        &mut delivery_tally,
+                        camera_name,
+                        filled_buffer,
+                    );
+                    continue;
+                };
+                (imported_buffer, Some(filled_buffer))
+            }
+            V4l2CaptureInput::Mmap {
+                mapped_driver_buffers,
+                storage_buffers,
+                storage_buffer_mappings,
+            } => {
+                let Some(frame_bytes) = mapped_driver_buffers.bytes_of(&filled_buffer) else {
+                    drop_a_frame_from_a_buffer_never_granted(
+                        capture_buffer_queue,
+                        &mut delivery_tally,
+                        camera_name,
+                        filled_buffer,
+                    );
+                    continue;
+                };
                 let copy_len = frame_bytes.len().min(input_byte_size);
-                // SAFETY: each input storage buffer's mapping is at least
+                // SAFETY: each storage buffer's mapping is at least
                 // `input_byte_size` long, and `copy_len` is no longer.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         frame_bytes.as_ptr(),
-                        input_mapped_ptrs[ping_pong_index],
+                        storage_buffer_mappings[ping_pong_index],
                         copy_len,
                     );
                 }
-                ping_pong_index
+                // The frame is out of the driver's buffer, so the driver can
+                // fill it again during the conversion.
+                capture_buffer_queue.requeue_a_read_buffer(camera_name, filled_buffer);
+                (&*storage_buffers[ping_pong_index], None)
             }
-        };
-
-        let input_buffer = if use_dmabuf {
-            &dmabuf_imported_buffers[input_ssbo_index]
-        } else {
-            &*input_storage_buffers[input_ssbo_index]
         };
         let frame_result = conversion_stage.convert_into_pooled_pixel_buffer(
             CapturedVideoFrameBytesInAStorageBuffer {
@@ -136,10 +162,11 @@ pub(super) fn run_the_v4l2_dequeue_loop(
             resolved_color,
         );
 
-        // The V4L2 buffer goes back to the driver on success and failure
-        // alike — a skipped requeue starves the queue after
-        // V4L2_BUFFER_COUNT drops.
-        requeue_a_read_v4l2_buffer(capture_buffer_queue, camera_name, filled_buffer);
+        // A converted DMA-BUF frame goes back to the driver on success and
+        // failure alike — a skipped requeue starves the queue.
+        if let Some(converted_buffer) = buffer_held_through_the_conversion {
+            capture_buffer_queue.requeue_a_read_buffer(camera_name, converted_buffer);
+        }
 
         let (published_pixel_buffer_frame_id, pooled_buffer) = match frame_result {
             Ok(frame_surfaces) => frame_surfaces,
@@ -171,6 +198,24 @@ pub(super) fn run_the_v4l2_dequeue_loop(
             ping_pong_index = 1 - ping_pong_index;
         }
     }
+}
+
+/// Drop the frame of a buffer the driver named but never granted, and give
+/// the buffer back.
+fn drop_a_frame_from_a_buffer_never_granted(
+    capture_buffer_queue: &mut V4l2DeviceCaptureBufferQueue<'_>,
+    delivery_tally: &mut CapturedVideoFrameDeliveryTally,
+    camera_name: &str,
+    buffer: HeldV4l2Buffer,
+) {
+    delivery_tally.record_a_dropped_frame(
+        camera_name,
+        &Error::Runtime(format!(
+            "the driver filled buffer {}, which it never granted",
+            buffer.index()
+        )),
+    );
+    capture_buffer_queue.requeue_a_read_buffer(camera_name, buffer);
 }
 
 /// Hand one converted frame to the node unless a stop arrived during its GPU

@@ -11,16 +11,73 @@
 mod tests;
 
 use std::io;
+use std::marker::PhantomData;
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use v4l::v4l_sys::v4l2_buffer;
+use v4l::v4l2::vidioc;
+
+/// The most buffers a V4L2 queue holds (`VIDEO_MAX_FRAME`).
+const VIDEO_MAX_FRAME: u32 = 64;
 
 /// How long one wait for a filled buffer lasts before the capture thread
 /// looks again at whether it was asked to stop.
 pub(super) const WAIT_FOR_A_FILLED_BUFFER_BEFORE_LOOKING_FOR_A_STOP: Duration =
     Duration::from_secs(1);
+
+/// A buffer this side holds, out of the driver's queue: dequeued, or not yet
+/// queued at the start. Queuing it gives it up, so nothing can read a buffer
+/// the driver is filling.
+pub(super) struct HeldV4l2Buffer(v4l2_buffer);
+
+impl HeldV4l2Buffer {
+    /// The buffer at `index`, before it was first queued.
+    pub(super) fn not_yet_queued(index: u32) -> Self {
+        Self(memory_mapped_capture_buffer(index))
+    }
+
+    pub(super) fn index(&self) -> u32 {
+        self.0.index
+    }
+
+    pub(super) fn sequence(&self) -> u32 {
+        self.0.sequence
+    }
+
+    pub(super) fn flags(&self) -> u32 {
+        self.0.flags
+    }
+
+    pub(super) fn timestamp(&self) -> v4l::v4l_sys::timeval {
+        self.0.timestamp
+    }
+
+    /// Whether the driver marked the frame in it as damaged, which it still
+    /// hands back through a successful dequeue.
+    fn frame_is_damaged(&self) -> bool {
+        self.0.flags & v4l::buffer::Flags::ERROR.bits() != 0
+    }
+}
+
+impl std::fmt::Debug for HeldV4l2Buffer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HeldV4l2Buffer")
+            .field("index", &self.0.index)
+            .field("sequence", &self.0.sequence)
+            .finish()
+    }
+}
+
+/// The next frame's buffer, or why there is none.
+#[derive(Debug)]
+pub(super) enum NextFilledV4l2Buffer {
+    Filled(HeldV4l2Buffer),
+    CaptureStopped,
+    DeviceFailed(String),
+}
 
 /// What the capture thread asks of a driver's capture queue.
 pub(super) trait V4l2CaptureBufferQueue {
@@ -28,157 +85,142 @@ pub(super) trait V4l2CaptureBufferQueue {
     fn wait_for_a_filled_buffer(&mut self, wait: Duration) -> io::Result<bool>;
 
     /// Take a filled buffer from the driver.
-    fn dequeue_a_filled_buffer(&mut self) -> io::Result<v4l2_buffer>;
+    fn dequeue_a_filled_buffer(&mut self) -> io::Result<HeldV4l2Buffer>;
 
-    /// Give a dequeued buffer back to the driver to fill again.
-    fn queue_a_dequeued_buffer(&mut self, buffer: v4l2_buffer) -> io::Result<()>;
-}
+    /// Give a held buffer to the driver to fill.
+    fn queue_a_held_buffer(&mut self, buffer: HeldV4l2Buffer) -> io::Result<()>;
 
-/// The next frame's buffer, or why there is none.
-pub(super) enum NextFilledV4l2Buffer {
-    Filled(v4l2_buffer),
-    CaptureStopped,
-    DeviceFailed(String),
-}
-
-impl std::fmt::Debug for NextFilledV4l2Buffer {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Filled(buffer) => formatter
-                .debug_struct("Filled")
-                .field("index", &buffer.index)
-                .field("sequence", &buffer.sequence)
-                .finish(),
-            Self::CaptureStopped => formatter.write_str("CaptureStopped"),
-            Self::DeviceFailed(reason) => {
-                formatter.debug_tuple("DeviceFailed").field(reason).finish()
-            }
-        }
-    }
-}
-
-/// Wait for the next filled buffer through every wait that ends empty, until
-/// a frame comes, the capture is asked to stop, or the device fails.
-pub(super) fn wait_for_the_next_filled_v4l2_buffer(
-    queue: &mut impl V4l2CaptureBufferQueue,
-    is_capturing: &AtomicBool,
-) -> NextFilledV4l2Buffer {
-    while is_capturing.load(Ordering::Acquire) {
-        match queue.wait_for_a_filled_buffer(WAIT_FOR_A_FILLED_BUFFER_BEFORE_LOOKING_FOR_A_STOP) {
-            Ok(false) => continue,
-            Ok(true) => {}
-            Err(wait_error) if wait_error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(wait_error) => {
-                return NextFilledV4l2Buffer::DeviceFailed(format!(
-                    "polling the device failed: {wait_error}"
-                ));
-            }
-        }
-        match queue.dequeue_a_filled_buffer() {
-            Ok(filled) => return NextFilledV4l2Buffer::Filled(filled),
-            Err(dequeue_error)
-                if matches!(
-                    dequeue_error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                ) =>
-            {
-                continue;
-            }
-            Err(dequeue_error) => {
-                return NextFilledV4l2Buffer::DeviceFailed(format!(
-                    "the device's stream failed: {dequeue_error}"
-                ));
-            }
-        }
-    }
-    NextFilledV4l2Buffer::CaptureStopped
-}
-
-/// Give a buffer whose frame was read back to the driver. A failure is
-/// logged: it takes that buffer out of the queue for good, and the capture
-/// starves once every buffer is gone.
-pub(super) fn requeue_a_read_v4l2_buffer(
-    queue: &mut impl V4l2CaptureBufferQueue,
-    camera_name: &str,
-    buffer: v4l2_buffer,
-) {
-    let buffer_index = buffer.index;
-    if let Err(queue_error) = queue.queue_a_dequeued_buffer(buffer) {
-        tracing::error!(
-            camera = camera_name,
-            buffer_index,
-            error = %queue_error,
-            "VIDIOC_QBUF requeue failed — one capture buffer lost"
-        );
-    }
-}
-
-/// The capture queue of an open V4L2 device whose buffers are memory-mapped.
-pub(super) struct V4l2DeviceCaptureBufferQueue {
-    device_fd: RawFd,
-}
-
-impl V4l2DeviceCaptureBufferQueue {
-    pub(super) fn of_the_device(device_fd: RawFd) -> Self {
-        Self { device_fd }
-    }
-
-    /// Queue every one of the driver's `buffer_count` buffers and turn
-    /// streaming on. A failed STREAMON is returned; a failed initial QBUF is
-    /// logged and streaming starts with the buffers that queued.
-    pub(super) fn queue_every_buffer_and_stream_on(
+    /// Wait for the next filled buffer through every wait that ends empty and
+    /// every damaged frame, until a frame comes, the capture is asked to stop,
+    /// or the device fails.
+    fn wait_for_the_next_filled_buffer(
         &mut self,
-        buffer_count: u32,
         camera_name: &str,
-    ) -> io::Result<()> {
-        for buffer_index in 0..buffer_count {
-            let mut buffer = memory_mapped_capture_buffer();
-            buffer.index = buffer_index;
-            if let Err(queue_error) = self.queue_a_dequeued_buffer(buffer) {
-                tracing::error!(
+        is_capturing: &AtomicBool,
+    ) -> NextFilledV4l2Buffer {
+        while is_capturing.load(Ordering::Acquire) {
+            match self.wait_for_a_filled_buffer(WAIT_FOR_A_FILLED_BUFFER_BEFORE_LOOKING_FOR_A_STOP)
+            {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(wait_error) if wait_error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(wait_error) => {
+                    return NextFilledV4l2Buffer::DeviceFailed(format!(
+                        "polling the device failed: {wait_error}"
+                    ));
+                }
+            }
+            match self.dequeue_a_filled_buffer() {
+                Ok(damaged) if damaged.frame_is_damaged() => {
+                    tracing::debug!(
+                        camera = camera_name,
+                        sequence = damaged.sequence(),
+                        "the driver marked a frame damaged; dropping it"
+                    );
+                    self.requeue_a_read_buffer(camera_name, damaged);
+                }
+                Ok(filled) => return NextFilledV4l2Buffer::Filled(filled),
+                Err(dequeue_error)
+                    if matches!(
+                        dequeue_error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(dequeue_error) => {
+                    return NextFilledV4l2Buffer::DeviceFailed(format!(
+                        "the device's stream failed: {dequeue_error}"
+                    ));
+                }
+            }
+        }
+        NextFilledV4l2Buffer::CaptureStopped
+    }
+
+    /// Give a buffer whose frame was read back to the driver. A failure is
+    /// logged: it takes that buffer out of the queue for good, and the capture
+    /// starves once every buffer is gone.
+    fn requeue_a_read_buffer(&mut self, camera_name: &str, buffer: HeldV4l2Buffer) {
+        let buffer_index = buffer.index();
+        if let Err(queue_error) = self.queue_a_held_buffer(buffer) {
+            tracing::error!(
+                camera = camera_name,
+                buffer_index,
+                error = %queue_error,
+                "VIDIOC_QBUF requeue failed — one capture buffer lost"
+            );
+        }
+    }
+}
+
+/// The capture queue of the device a `v4l` stream requested its buffers on,
+/// borrowing that stream so the queue cannot outlive the buffers.
+pub(super) struct V4l2DeviceCaptureBufferQueue<'stream> {
+    device_fd: RawFd,
+    buffer_count: u32,
+    stream: PhantomData<&'stream v4l::io::mmap::Stream<'stream>>,
+}
+
+impl<'stream> V4l2DeviceCaptureBufferQueue<'stream> {
+    /// The queue of `stream`'s device, holding as many buffers as the driver
+    /// granted, which may differ from the count the stream asked for.
+    pub(super) fn of_the_stream(stream: &'stream v4l::io::mmap::Stream<'stream>) -> Self {
+        let device_fd = stream.handle().fd();
+        let buffer_count = (0..VIDEO_MAX_FRAME)
+            .take_while(|&index| query_a_driver_buffer(device_fd, index).is_ok())
+            .count();
+        Self {
+            device_fd,
+            buffer_count: u32::try_from(buffer_count).unwrap_or(u32::MAX),
+            stream: PhantomData,
+        }
+    }
+
+    pub(super) fn device_fd(&self) -> RawFd {
+        self.device_fd
+    }
+
+    pub(super) fn buffer_count(&self) -> u32 {
+        self.buffer_count
+    }
+
+    /// Queue every buffer the driver granted and turn streaming on. A failed
+    /// initial QBUF is logged and streaming starts with the buffers that
+    /// queued; with none of them queued, or a failed STREAMON, capture
+    /// cannot start.
+    pub(super) fn queue_every_buffer_and_stream_on(&mut self, camera_name: &str) -> io::Result<()> {
+        let mut buffers_queued = 0;
+        for buffer_index in 0..self.buffer_count {
+            match self.queue_a_held_buffer(HeldV4l2Buffer::not_yet_queued(buffer_index)) {
+                Ok(()) => buffers_queued += 1,
+                Err(queue_error) => tracing::error!(
                     camera = camera_name,
                     buffer_index,
                     error = %queue_error,
                     "initial VIDIOC_QBUF failed"
-                );
+                ),
             }
         }
-        let mut buffer_type: u32 = v4l::buffer::Type::VideoCapture as u32;
-        // SAFETY: `device_fd` is the open device and STREAMON reads one u32.
-        let result = unsafe {
-            libc::ioctl(
-                self.device_fd,
-                v4l::v4l2::vidioc::VIDIOC_STREAMON as libc::c_ulong,
-                &mut buffer_type,
-            )
-        };
-        if result != 0 {
-            let streamon_error = io::Error::last_os_error();
-            tracing::error!(
-                camera = camera_name,
-                error = %streamon_error,
-                "VIDIOC_STREAMON failed — camera produces no frames; stopping capture thread"
-            );
-            return Err(streamon_error);
+        if buffers_queued == 0 {
+            return Err(io::Error::other(format!(
+                "none of the driver's {} capture buffers could be queued",
+                self.buffer_count
+            )));
         }
-        Ok(())
+        self.set_streaming(vidioc::VIDIOC_STREAMON)
     }
 
     /// Turn streaming off, which hands every buffer back to the capture.
     pub(super) fn stream_off(&mut self) {
-        let mut buffer_type: u32 = v4l::buffer::Type::VideoCapture as u32;
-        // SAFETY: `device_fd` is the open device and STREAMOFF reads one u32.
-        unsafe {
-            libc::ioctl(
-                self.device_fd,
-                v4l::v4l2::vidioc::VIDIOC_STREAMOFF as libc::c_ulong,
-                &mut buffer_type,
-            );
-        }
+        let _ = self.set_streaming(vidioc::VIDIOC_STREAMOFF);
+    }
+
+    fn set_streaming(&mut self, request: vidioc::_IOC_TYPE) -> io::Result<()> {
+        let mut buffer_type = v4l::buffer::Type::VideoCapture as u32;
+        // SAFETY: STREAMON and STREAMOFF read one u32 buffer type.
+        unsafe { v4l::v4l2::ioctl(self.device_fd, request, (&raw mut buffer_type).cast()) }
     }
 }
 
-impl V4l2CaptureBufferQueue for V4l2DeviceCaptureBufferQueue {
+impl V4l2CaptureBufferQueue for V4l2DeviceCaptureBufferQueue<'_> {
     fn wait_for_a_filled_buffer(&mut self, wait: Duration) -> io::Result<bool> {
         let mut readiness = libc::pollfd {
             fd: self.device_fd,
@@ -187,50 +229,63 @@ impl V4l2CaptureBufferQueue for V4l2DeviceCaptureBufferQueue {
         };
         let wait_milliseconds = i32::try_from(wait.as_millis()).unwrap_or(i32::MAX);
         // SAFETY: `readiness` is one live pollfd for the duration of the call.
-        match unsafe { libc::poll(&mut readiness, 1, wait_milliseconds) } {
-            0 => Ok(false),
-            ready if ready > 0 => Ok(true),
-            _ => Err(io::Error::last_os_error()),
-        }
-    }
-
-    fn dequeue_a_filled_buffer(&mut self) -> io::Result<v4l2_buffer> {
-        let mut buffer = memory_mapped_capture_buffer();
-        // SAFETY: `buffer` is a capture buffer descriptor DQBUF fills in.
-        let result = unsafe {
-            libc::ioctl(
-                self.device_fd,
-                v4l::v4l2::vidioc::VIDIOC_DQBUF as libc::c_ulong,
-                &mut buffer,
-            )
-        };
-        if result != 0 {
+        let ready = unsafe { libc::poll(&mut readiness, 1, wait_milliseconds) };
+        if ready < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(buffer)
+        // An error or hangup is never followed by a frame, so it ends the
+        // capture rather than counting as a filled buffer.
+        if ready > 0 && readiness.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(io::Error::other(format!(
+                "the device reported poll events {:#x}",
+                readiness.revents
+            )));
+        }
+        Ok(ready > 0 && readiness.revents & libc::POLLIN != 0)
     }
 
-    fn queue_a_dequeued_buffer(&mut self, mut buffer: v4l2_buffer) -> io::Result<()> {
-        // SAFETY: `buffer` names one of the device's memory-mapped buffers.
-        let result = unsafe {
-            libc::ioctl(
+    fn dequeue_a_filled_buffer(&mut self) -> io::Result<HeldV4l2Buffer> {
+        let mut buffer = memory_mapped_capture_buffer(0);
+        // SAFETY: DQBUF fills in one capture buffer descriptor.
+        unsafe {
+            v4l::v4l2::ioctl(
                 self.device_fd,
-                v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
-                &mut buffer,
-            )
-        };
-        if result != 0 {
-            return Err(io::Error::last_os_error());
+                vidioc::VIDIOC_DQBUF,
+                (&raw mut buffer).cast(),
+            )?;
         }
-        Ok(())
+        Ok(HeldV4l2Buffer(buffer))
+    }
+
+    fn queue_a_held_buffer(&mut self, buffer: HeldV4l2Buffer) -> io::Result<()> {
+        let mut buffer = buffer.0;
+        // SAFETY: QBUF reads one descriptor naming one of the device's buffers.
+        unsafe {
+            v4l::v4l2::ioctl(
+                self.device_fd,
+                vidioc::VIDIOC_QBUF,
+                (&raw mut buffer).cast(),
+            )
+        }
     }
 }
 
-/// An empty descriptor of one of the device's memory-mapped capture buffers.
-pub(super) fn memory_mapped_capture_buffer() -> v4l2_buffer {
+/// What the driver says about its buffer at `index`: its offset and length.
+pub(super) fn query_a_driver_buffer(device_fd: RawFd, index: u32) -> io::Result<v4l2_buffer> {
+    let mut buffer = memory_mapped_capture_buffer(index);
+    // SAFETY: QUERYBUF fills in one capture buffer descriptor.
+    unsafe {
+        v4l::v4l2::ioctl(device_fd, vidioc::VIDIOC_QUERYBUF, (&raw mut buffer).cast())?;
+    }
+    Ok(buffer)
+}
+
+/// A descriptor of the device's memory-mapped capture buffer at `index`.
+fn memory_mapped_capture_buffer(index: u32) -> v4l2_buffer {
     // SAFETY: `v4l2_buffer` is a plain C struct for which all-zero is valid.
     let mut buffer: v4l2_buffer = unsafe { std::mem::zeroed() };
     buffer.type_ = v4l::buffer::Type::VideoCapture as u32;
     buffer.memory = v4l::memory::Memory::Mmap as u32;
+    buffer.index = index;
     buffer
 }
