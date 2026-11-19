@@ -4,8 +4,9 @@
 """The sample that declares each kind of pin, on `tatolabd`: listed among the samples, created
 from the copy the runtime unit carries, played, saved and opened again.
 
-`examples/every-pin-kind` holds typed function and shader nodes, a Graph Input, and one node
-not yet typed that holds a setting. The pin types `graph` names here are what the Studio's
+`examples/every-pin-kind` holds typed function and shader nodes, a Graph Input, one node not
+yet typed that holds a setting, and a node type whose inputs each name the control the Studio
+draws. The pin types `graph` names here are what the Studio's
 recordings are made from, so each later type, mode and flow joins the sample and this check.
 """
 
@@ -58,6 +59,19 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
     },
     "glow": {"image": "texture", "glow": "float", "warmth": "float", "result": "texture"},
     "tally": {"picture": "texture", "tally": None},
+}
+
+#: The control each input of `Caption` names, which the Studio draws in place of its type's
+#: default. The sample lists `Caption` and places none of it.
+CONTROL_NAMED_BY_EACH_CAPTION_INPUT = {
+    "shown": "checkbox",
+    "lines": "dial",
+    "size": "dial",
+    "words": "multiline",
+    "style": "code",
+    "align": "segmented",
+    "anchor": "xy_pad",
+    "font": "file_picker",
 }
 
 #: The nodes whose `process()`, or evaluation, must never raise while the stream plays.
@@ -247,6 +261,13 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
         for node_name in PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     } == PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     assert node_named(graph, "brightness")["type"] == "tatolab.stream:GraphInput"
+    (caption,) = local_api.call_tool(
+        "describe_node_types",
+        {"project_directory": project_directory, "node_types": ["nodes.caption:Caption"]},
+    )["node_types"]
+    assert {
+        pin["name"]: pin.get("annotations", {}).get("control") for pin in caption["inputs"]
+    } == CONTROL_NAMED_BY_EACH_CAPTION_INPUT, caption
     assert_the_stream_runs_cleanly_through_its_links(graph)
     beats_per_minute = input_port_named(node_named(graph, "beat"), "beats_per_minute")
     assert beats_per_minute.get("value_comes_from") == "saved", beats_per_minute
