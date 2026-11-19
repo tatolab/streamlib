@@ -76,20 +76,22 @@ pub(super) fn ports_a_function_node_signature_types(
     Ok(typed_ports)
 }
 
-/// Each port a shader node's program types exactly, by name, with its declaration: its float
-/// inputs, each exactly a 32-bit Float, the four bytes its push constant holds.
+/// Each port a shader node's program types exactly, by name, with its declaration: its inputs
+/// of numbers, a Float exactly a 32-bit Float, the four bytes its push constant holds, and a
+/// Color or a Vector as its signature states it, each part a 32-bit push constant too.
 pub(super) fn ports_a_shader_node_program_types(
     program: &ShaderNodeProgram,
 ) -> Vec<(String, PinDeclaration)> {
     program
-        .float_input_ports()
-        .map(|port| {
-            (
-                port.to_string(),
-                PinDeclaration::exactly(PinType::Float {
+        .number_inputs()
+        .map(|(port, pin_type)| {
+            let pin_type = match pin_type {
+                PinType::Float { .. } => PinType::Float {
                     exact_size: Some(FloatSize::Float32),
-                }),
-            )
+                },
+                other => other.clone(),
+            };
+            (port.to_string(), PinDeclaration::exactly(pin_type))
         })
         .collect()
 }

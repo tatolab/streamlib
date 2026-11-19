@@ -240,7 +240,8 @@ pub(crate) mod a_shader_node_in_this_process {
             .as_any_mut()
             .downcast_mut::<ShaderNodeNativeEvaluator>()
             .expect("the host runs the shader evaluator")
-            .the_value_a_float_input_reads(input_port)
+            .the_numbers_an_input_reads(input_port)
+            .and_then(|numbers| numbers.first().copied())
             .unwrap_or_else(|| panic!("the island reads `{input_port}`"))
     }
 
