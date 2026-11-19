@@ -3,27 +3,27 @@
 
 //! `connect` refuses a link from a function node into a node that runs in the app process, on a
 //! stream no commit builds, in the words its wiring would refuse it in at play, so the link is
-//! never in the graph a stopped stream saves; and refuses, by the same judgement a link check
-//! makes, a link an island cannot take.
+//! never in the graph a stopped stream saves, while a saved graph holding one still opens; and
+//! refuses, by the same judgement a link check makes, a link an island cannot take.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link};
+use super::connect_on_a_test_thread::{
+    connect_on_this_thread, connect_on_this_thread_as, the_links_in,
+};
+use super::the_verdict_connect_takes_on_a_link;
+use crate::core::Error;
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
     PortDescriptor, PortFamily, PortFamilyDeclaration,
 };
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
-use crate::core::graph::{
-    ALinkConnected, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
-};
+use crate::core::graph::{ALinkConnected, InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
-use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::test_support::{MockInputOnlyNode, ensure_test_mocks_registered};
-use crate::core::{Error, Result};
 
 const FUNCTION_NODE: &str = "app_process_check:switch";
 const HELPER_PROCESS_READER: &str = "app_process_check:meter";
@@ -109,34 +109,6 @@ fn a_node_of(compiler: &Compiler, node_type: &str) -> NodeRunId {
     })
 }
 
-fn connect_on_this_thread(
-    compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("current-thread runtime")
-        .block_on(connect_impl(
-            LiveGraphChangeOnOneStream {
-                compiler: Arc::clone(compiler),
-                live: None,
-                stream: LoadedStreamIdentity {
-                    runtime_id: "Rappprocesscheck".to_string(),
-                    stream_id: "main".to_string(),
-                    stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
-                },
-            },
-            from,
-            to,
-            ALinkConnected::MadeNow,
-        ))
-}
-
-fn the_links_in(compiler: &Compiler) -> usize {
-    compiler.scope(|graph, _tx| graph.traversal().e(()).iter().count())
-}
-
 #[test]
 fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
     let compiler = a_stopped_stream_resolving_a_function_node_type();
@@ -164,6 +136,29 @@ fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
         .to_string()
     );
     assert_eq!(the_links_in(&compiler), 0);
+}
+
+/// A saved graph holding a link from a function node into a node in the app process opens with
+/// that link, so the person can see and remove it; the commit that builds the stream refuses it.
+///
+/// Mental-revert: refusing the link on a saved graph's load too fails the whole graph's open.
+#[test]
+fn a_saved_graphs_function_node_into_a_natively_compiled_node_is_kept_as_it_opens() {
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let switch = a_node_of(&compiler, FUNCTION_NODE);
+    let program = a_node_of(
+        &compiler,
+        MockInputOnlyNode::node_class_import_path().as_str(),
+    );
+
+    connect_on_this_thread_as(
+        &compiler,
+        OutputLinkPortRef::new(switch, "result"),
+        InputLinkPortRef::new(program, "in1"),
+        ALinkConnected::OfASavedGraph,
+    )
+    .expect("a saved graph opens with the link it holds");
+    assert_eq!(the_links_in(&compiler), 1);
 }
 
 #[test]
