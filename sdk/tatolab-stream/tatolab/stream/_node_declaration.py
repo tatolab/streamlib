@@ -307,7 +307,9 @@ class NodeDeclarationDecorator:
         maximum=1.0), NumberUnit("Hz"), PinMeaning("frequency")] = 440.0`: its type is the
         pin type, the objects beside it are what the pin states besides, and its default is
         the value the input holds until one is set or linked. `T | None = None` is an input
-        that may be unset and reads `None`. The return annotation is the output `result`.
+        that may be unset and reads `None`. A renamed pin writes the names it had beside it,
+        `FormerlyNamed("frequency_hz")`, and a project saved under one of them opens with its
+        value and links on the pin. The return annotation is the output `result`.
         `Time`, `State[...]` and `Stateful[...]` are read as under `@node.function`, and what
         describes the node is `@node.meta`. A mistake is refused at decoration as a
         `NodeDeclarationRefusal`, and a pin type the runtime does not carry yet is refused by

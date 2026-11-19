@@ -5,7 +5,7 @@
 
 export const CONTROL_CONTRACT_VERSION = 3;
 
-export const CONTROL_CONTRACT_REVISION = 11;
+export const CONTROL_CONTRACT_REVISION = 12;
 
 export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "discover",
@@ -21,6 +21,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "add_node",
   "connect",
   "check_link",
+  "check_link_candidates",
   "import_graph_generator",
   "remove_node",
   "disconnect",
@@ -101,6 +102,7 @@ export const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES = Object.freeze([
   "subscribe_project_log_records",
   "graph",
   "check_link",
+  "check_link_candidates",
   "set_node_input_value",
   "read_project_changes",
   "list_pin_types",
