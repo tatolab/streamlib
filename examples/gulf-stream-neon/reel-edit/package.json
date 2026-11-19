@@ -1,0 +1,17 @@
+{
+  "name": "gulf-stream-neon-reel-edit",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "description": "The Remotion edit of the Gulf Stream Neon reel, 60 fps, in the Tato look. public/ holds the takes, the Studio recordings, the fonts (views/stage/fonts), grain.png, the Tatolab logos and the music; --props swaps the music.",
+  "scripts": {
+    "render:vertical": "remotion render src/index.ts Vertical out/reel-1080x1920.mp4",
+    "render:wide": "remotion render src/index.ts Wide out/reel-1920x1080.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.300",
+    "@remotion/fonts": "4.0.300",
+    "remotion": "4.0.300",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

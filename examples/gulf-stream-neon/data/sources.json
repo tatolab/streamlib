@@ -1,0 +1,36 @@
+{
+  "region": {"lat_min": 24.30, "lat_max": 27.30, "lon_min": -81.00, "lon_max": -77.67},
+  "files": {
+    "bathymetry.npz": {
+      "dataset": "ETOPO 2022 15 Arc-Second Global Relief Model (v1, surface elevation, EGM2008 heights)",
+      "provider": "NOAA National Centers for Environmental Information (NCEI)",
+      "doi": "10.25921/fd45-gt74",
+      "url": "https://www.ngdc.noaa.gov/thredds/dodsC/global/ETOPO2022/15s/15s_surface_elev_netcdf/ETOPO_2022_v1_15s_N30W090_surface.nc",
+      "access": "OPeNDAP subset of tile N30W090, native resolution, no resampling",
+      "license": "U.S. Government work, public domain (NOAA/NCEI); please credit NOAA NCEI",
+      "data_timestamp": "2022 release (tile created 2022-09-30)",
+      "resolution": "15 arc-seconds (~0.004167 deg, ~460 m) ; grid 720 rows x 799 cols, cell-centred",
+      "arrays": {"elevation_m": "float32 [lat, lon], metres, positive up, negative below sea level; row 0 = NORTH edge, col 0 = WEST edge", "lat": "float32, descending (north to south)", "lon": "float32, ascending (west to east)"},
+      "notes": "Land heights come from a surface model (includes buildings/canopy), so max ~214 m over Miami is not terrain."
+    },
+    "surface_currents.npz": {
+      "dataset": "HYCOM ESPC-D-V02 Global 1/12 deg Analysis (HYCOM 2.2.99 + NCODA, expt_03.1), FMRC Best Time Series, surface (depth 0 m) water_u / water_v",
+      "provider": "U.S. Navy FNMOC / NRL, distributed by HYCOM.org",
+      "url": "https://ncss.hycom.org/thredds/ncss/grid/FMRC_ESPC-D-V02_uv3z/FMRC_ESPC-D-V02_uv3z_best.ncd?var=water_u&var=water_v&north=27.5&south=24.1&west=-81.2&east=-77.5&horizStride=1&time=2026-11-16T12:00:00Z&vertCoord=0&accept=netcdf4",
+      "license": "Approved for public release; distribution unlimited (U.S. Government); credit HYCOM.org / U.S. Navy",
+      "data_timestamp": "2026-11-16T12:00:00Z (analysis/nowcast hour 0 of the 2026-11-16T12Z run; newest run available on 2026-11-19)",
+      "resolution": "0.08 deg longitude x 0.04 deg latitude (GLBy0.08 grid, ~8 km x 4.5 km); grid 86 rows x 47 cols, lat 27.52..24.12, lon -81.20..-77.52",
+      "arrays": {"u": "float32 eastward m/s", "v": "float32 northward m/s", "lat": "descending (row 0 = north)", "lon": "ascending (col 0 = west)", "time_utc": "string", "model_run_utc": "string"},
+      "notes": "NaN = model land (HYCOM also masks parts of the very shallow Bahama Banks / Andros). Model output, not a direct observation. NOAA CoastWatch blended NRT currents (noaacwBLENDEDNRTcurrentsDaily) is not served by coastwatch.pfeg ERDDAP (404); HYCOM is finer than OSCAR (1/3 deg) anyway."
+    },
+    "virginia_key_snapshot.json": {
+      "dataset": "NOAA CO-OPS station 8723214 Virginia Key, FL: water_level (MLLW), wind, air_temperature, water_temperature, air_pressure (6-minute, preliminary)",
+      "provider": "NOAA National Ocean Service, Center for Operational Oceanographic Products and Services (CO-OPS)",
+      "url": "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter (station=8723214, units=metric, time_zone=gmt, format=json, application=gulf_stream_neon; begin/end for last 24 h and date=latest per product; exact URLs stored per request in the file)",
+      "license": "U.S. Government work, public domain (NOAA); preliminary data subject to revision",
+      "data_timestamp": "2026-11-18 12:47 to 2026-11-19 12:47 UTC; latest reading 2026-11-19 12:42 UTC; fetched 2026-11-19T12:47:54Z",
+      "resolution": "6-minute samples (240 per product over 24 h); station at 25.7314 N, -80.1618 E"
+    }
+  },
+  "credits": "Bathymetry: NOAA NCEI ETOPO 2022 · Currents: HYCOM.org / U.S. Navy ESPC-D (16 Nov 2026) · Station: NOAA CO-OPS 8723214 Virginia Key"
+}

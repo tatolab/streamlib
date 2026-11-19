@@ -1,0 +1,73 @@
+/* The Gulf Stream Neon stage, in the Tato look from tatolab.com: the Tato inks, Tektur sign
+   lettering for headings, Golos Text for words, JetBrains Mono for numbers, skewed ink slabs,
+   cut corners and a grain overlay. The fonts are bundled (fonts/, SIL OFL 1.1). */
+@font-face { font-family: "Tektur"; font-weight: 800; src: url(fonts/tektur-latin-800-normal.woff2) format("woff2"); }
+@font-face { font-family: "Tektur"; font-weight: 900; src: url(fonts/tektur-latin-900-normal.woff2) format("woff2"); }
+@font-face { font-family: "Golos Text"; font-weight: 400; src: url(fonts/golos-text-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "Golos Text"; font-weight: 600; src: url(fonts/golos-text-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; src: url(fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 700; src: url(fonts/jetbrains-mono-latin-700-normal.woff2) format("woff2"); }
+
+:root {
+  color-scheme: dark;
+  --blue: #2a5bff; --pink: #ff3d8b; --yellow: #ffd60a; --cream: #fff4e0;
+  --ink: #14101f; --mint: #2fd6a0; --violet: #5b2ee6; --band: #0d1a4a;
+  --dsp: "Tektur", "Arial Black", Impact, sans-serif;
+  --txt: "Golos Text", ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+html, body { margin: 0; height: 100%; background: var(--ink); color: var(--cream); font: 13px/1.45 var(--txt); }
+body::after { content: ""; position: fixed; inset: 0; background: url(grain.png); background-size: 220px 220px; mix-blend-mode: overlay; opacity: 0.5; pointer-events: none; z-index: 40; }
+.stage { height: 100%; display: flex; flex-direction: row; }
+.stage-view { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.stage-frame { position: relative; flex: 1; min-height: 0; }
+.stage-picture, .stage-labels { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.stage-picture { cursor: grab; outline: none; touch-action: none; }
+.stage-picture.is-dragging { cursor: grabbing; }
+.stage-labels { pointer-events: none; }
+
+/* The fps counter: a skewed ink slab with a pink offset, like the site's labels. */
+.stage-hud { position: absolute; bottom: 12px; left: 16px; display: flex; align-items: center; gap: 8px; isolation: isolate; padding: 7px 14px 6px; font: 700 12px/1 var(--mono); color: var(--cream); letter-spacing: 0.02em; }
+.stage-hud::before, .stage-hud::after { content: ""; position: absolute; inset: 0; transform: skewX(-14deg); }
+.stage-hud::before { background: var(--ink); z-index: -1; }
+.stage-hud::after { background: var(--pink); translate: 4px 4px; z-index: -2; }
+.stage-live-dot { width: 8px; height: 8px; background: var(--pink); animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: 0.3; } }
+
+/* The live data: an ink sheet with a cut corner and a violet fold. */
+.stage-data { position: absolute; top: 12px; right: 14px; width: 262px; background: var(--ink); padding: 11px 14px 12px; clip-path: polygon(0 0, calc(100% - 22px) 0, 100% 22px, 100% 100%, 12px 100%, 0 calc(100% - 12px)); }
+.stage-data::before { content: ""; position: absolute; right: 0; top: 0; width: 22px; height: 22px; background: var(--violet); clip-path: polygon(0 0, 100% 100%, 0 100%); }
+.stage-data h3 { margin: 0 0 3px; font: 900 13px/1.05 var(--dsp); text-transform: uppercase; letter-spacing: 0.02em; color: var(--yellow); }
+.stage-data-mode { margin: 0 0 8px; font: 700 10px/1.25 var(--mono); color: var(--mint); text-transform: uppercase; letter-spacing: 0.04em; }
+.stage-data dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+.stage-data dt { font: 600 11px/1.4 var(--txt); color: rgba(255, 244, 224, 0.62); }
+.stage-data dd { margin: 0; text-align: right; font: 400 11px/1.4 var(--mono); color: var(--cream); }
+.stage-notice { position: absolute; bottom: 44px; left: 16px; margin: 0; font: 400 11px/1.4 var(--mono); color: var(--cream); }
+
+/* The controls: the deep band, Tektur headings, pink sliders, the reveal in yellow. */
+.stage-panel { width: 252px; flex: none; overflow-y: auto; padding: 14px 16px; background: var(--band); }
+.stage-panel-title { margin: 0 0 6px; font: 900 21px/0.95 var(--dsp); text-transform: uppercase; color: var(--cream); text-shadow: 0.06em 0.07em 0 var(--pink); }
+.stage-panel-status { margin: 0 0 10px; color: rgba(255, 244, 224, 0.7); min-height: 1.4em; font: 400 12px/1.4 var(--txt); }
+.stage-panel-group { display: inline-block; position: relative; isolation: isolate; margin: 14px 0 7px; padding: 4px 9px 3px; font: 800 10.5px/1 var(--dsp); text-transform: uppercase; letter-spacing: 0.06em; color: var(--cream); }
+.stage-panel-group::before { content: ""; position: absolute; inset: 0; background: var(--ink); transform: skewX(-14deg); z-index: -1; }
+.stage-control { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-bottom: 9px; }
+.stage-control label { font: 600 12.5px/1.3 var(--txt); color: var(--cream); }
+.stage-control output { font: 400 12px/1.3 var(--mono); color: rgba(255, 244, 224, 0.8); }
+.stage-control input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--pink); }
+.stage-control.is-select select { grid-column: 1 / -1; width: 100%; background: var(--ink); color: var(--cream); border: 0; padding: 5px 7px; font: 600 12px/1.3 var(--txt); clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px); }
+.stage-control.is-hero label { font: 800 13px/1.2 var(--dsp); text-transform: uppercase; color: var(--yellow); }
+.stage-control.is-hero input[type=range] { accent-color: var(--yellow); }
+.stage-controls { display: flex; gap: 10px; align-items: center; padding: 8px 14px; }
+.stage-controls button { position: relative; isolation: isolate; border: 0; background: none; padding: 6px 16px; font: 800 12px/1 var(--dsp); text-transform: uppercase; letter-spacing: 0.02em; color: var(--ink); cursor: pointer; }
+.stage-controls button::before, .stage-controls button::after { content: ""; position: absolute; inset: 0; transform: skewX(-14deg); }
+.stage-controls button::before { background: var(--yellow); z-index: -1; }
+.stage-controls button::after { background: var(--cream); translate: 3px 3px; z-index: -2; }
+.stage-hint { margin-left: auto; font: 400 11.5px/1.3 var(--txt); color: rgba(255, 244, 224, 0.65); }
+
+/* Docked small beside the graph, the stage is a picture-in-picture: the picture, the fps and the readout. */
+@media (max-width: 760px) {
+  .stage-panel, .stage-controls { display: none; }
+  .stage-data { width: 196px; padding: 7px 10px; }
+  .stage-data h3 { font-size: 10.5px; }
+  .stage-data dt, .stage-data dd { font-size: 9.5px; }
+}
