@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 impl ProjectRepository {
     /// Refuse deleting `asset` while a graph document other than its own references it, as
@@ -57,7 +58,7 @@ impl ProjectRepository {
                 let moved_from = match self.asset_files_waiting_for_their_import.get(&asset.asset) {
                     Some(waiting) if !destination.exists() => {
                         if let Some(parent) = destination.parent() {
-                            std::fs::create_dir_all(parent)?;
+                            create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
                         }
                         std::fs::rename(&waiting.file, &destination)?;
                         Some(waiting.file.clone())
@@ -90,7 +91,10 @@ impl ProjectRepository {
                     .join(format!(".deleted-{}", Uuid::new_v4()));
                 let set = set_aside
                     .parent()
-                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .map_or(
+                        Ok(()),
+                        create_directory_and_its_missing_parents_at_the_process_umask,
+                    )
                     .and_then(|()| std::fs::rename(&file, &set_aside));
                 if let Err(not_set_aside) = set {
                     self.restore_the_sidecar_of(asset);
@@ -105,7 +109,7 @@ impl ProjectRepository {
                 let from_file = from.on_disk_under(&self.project_directory);
                 let to_file = to.on_disk_under(&self.project_directory);
                 if let Some(parent) = to_file.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
                 }
                 if from_file.exists() {
                     std::fs::rename(&from_file, &to_file)?;

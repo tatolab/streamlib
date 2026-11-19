@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use std::os::unix::fs::PermissionsExt;
+use crate::test_support::{UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER, mode_of};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -10,18 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const UMASK_CHILD_SCRATCH_DIRECTORY_ENVIRONMENT_VARIABLE: &str =
     "STREAMLIB_TEST_PROCESS_UMASK_CHILD_SCRATCH_DIRECTORY";
 
-/// The umask iceoryx2 0.10 holds the whole process under while it binds a
-/// listener's socket.
-const UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER: libc::mode_t = 0o177;
-
 /// The child process's own umask, which every directory it makes must carry.
 const THIS_PROCESSS_OWN_UMASK: libc::mode_t = 0o022;
 
 const DIRECTORIES_MADE_BESIDE_THE_BINDS: usize = 400;
-
-fn mode_of(path: &Path) -> u32 {
-    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
-}
 
 /// Directories made while another thread swaps the umask to iceoryx2's bind
 /// umask and back, as a listener bind does, all come out at this process's own
@@ -49,7 +41,7 @@ fn a_directory_made_beside_listener_binds_carries_this_processs_own_umask() {
             let directories_are_still_being_made = Arc::clone(&directories_are_still_being_made);
             move || {
                 while directories_are_still_being_made.load(Ordering::Relaxed) {
-                    with_the_process_umask_held(|| {
+                    with_no_iceoryx2_listener_bind_changing_the_umask(|| {
                         // SAFETY: as iceoryx2's bind does: the umask is swapped
                         // and put back while the lock is held.
                         let own = unsafe { libc::umask(UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER) };

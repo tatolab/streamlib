@@ -68,7 +68,8 @@ const NEW_PROJECT_NAME_NOUNS: &[&str] = &[
 /// root, created when missing.
 pub(crate) fn draw_new_project_directory_under_the_streams_root() -> Result<PathBuf> {
     let streams_root = the_streams_root_new_projects_are_drawn_under()?;
-    create_directory_and_its_missing_parents_at_the_process_umask(&streams_root).map_err(|not_created| {
+    let made = create_directory_and_its_missing_parents_at_the_process_umask(&streams_root);
+    made.map_err(|not_created| {
         Error::Configuration(format!(
             "the streams root {} could not be created, so no project was created: {not_created}",
             streams_root.display()

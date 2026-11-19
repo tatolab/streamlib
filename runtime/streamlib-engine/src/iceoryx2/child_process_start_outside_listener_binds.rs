@@ -11,10 +11,7 @@
 //! the parent does not know, so the two are kept apart by the one lock in
 //! [`streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds`].
 
-use iceoryx2::port::listener::{Listener, ListenerCreateError};
-use iceoryx2::prelude::*;
-use iceoryx2::service::port_factory::event::PortFactory as EventServicePortFactory;
-use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::with_the_process_umask_held;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::with_no_iceoryx2_listener_bind_changing_the_umask;
 
 /// Spawn `command` while no iceoryx2 listener is being bound in this process,
 /// so the child inherits this process's own umask. The lock covers the spawn
@@ -23,20 +20,14 @@ use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener
 pub fn spawn_outside_every_iceoryx2_listener_bind(
     command: &mut std::process::Command,
 ) -> std::io::Result<std::process::Child> {
-    with_the_process_umask_held(|| command.spawn())
-}
-
-/// Bind a listener on `notify_service` while no child process is being
-/// started, and no directory made at the process umask, in this process.
-pub(crate) fn bind_an_iceoryx2_listener_outside_every_child_process_start(
-    notify_service: &EventServicePortFactory<ipc_threadsafe::Service>,
-) -> Result<Listener<ipc_threadsafe::Service>, ListenerCreateError> {
-    with_the_process_umask_held(|| notify_service.listener_builder().create())
+    with_no_iceoryx2_listener_bind_changing_the_umask(|| command.spawn())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start;
+    use iceoryx2::prelude::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -46,7 +37,7 @@ mod tests {
         // SAFETY: `umask` only swaps the process's file-creation mask, and it
         // is put straight back; the lock keeps every listener bind and child
         // start away from the moment it reads 0.
-        let umask = with_the_process_umask_held(|| unsafe {
+        let umask = with_no_iceoryx2_listener_bind_changing_the_umask(|| unsafe {
             let umask = libc::umask(0);
             libc::umask(umask);
             umask

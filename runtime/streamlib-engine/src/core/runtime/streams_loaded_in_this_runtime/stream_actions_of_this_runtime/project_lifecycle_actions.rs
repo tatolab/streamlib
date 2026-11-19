@@ -402,8 +402,10 @@ impl Runner {
                         project_directory.display()
                     )));
                 }
-                create_directory_and_its_missing_parents_at_the_process_umask(&project_directory)
-                    .map_err(|not_created| {
+                let made = create_directory_and_its_missing_parents_at_the_process_umask(
+                    &project_directory,
+                );
+                made.map_err(|not_created| {
                     Error::Configuration(format!(
                         "{} could not be created, so no project was created there: {not_created}",
                         project_directory.display()

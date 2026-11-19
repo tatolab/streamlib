@@ -12,11 +12,11 @@ use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
-use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::with_the_process_umask_held;
 
 use crate::engine_owned_iceoryx2_domain::{
     ChannelDataServiceOpenError, ChannelDataServicePortFactory, ChannelDataServiceSubscriber,
-    ChannelReservedSlotSubscribeError, Iceoryx2DomainRefusal, channel_data_service_builder,
+    ChannelReservedSlotSubscribeError, Iceoryx2DomainRefusal,
+    bind_an_iceoryx2_listener_outside_every_child_process_start, channel_data_service_builder,
     create_iceoryx2_node_in_domain, create_the_reserved_slot_subscriber_of,
     engine_owned_iceoryx2_prefix_for_this_user,
 };
@@ -213,17 +213,15 @@ impl OutputPortViewerReader {
                      `{channel_service_name}`: {failure:?}"
                 ))
             })?;
-        // The bind swaps the process umask, so it waits for every child start
-        // and directory creation of a runtime process sharing this one.
-        let wake_listener =
-            with_the_process_umask_held(|| wake_service.listener_builder().create()).map_err(
-                |failure| {
-                    OutputPortViewerSubscribeRefusal::Transport(format!(
-                        "a viewer could not listen on the wake `{wake_service_name}` of channel \
+        let wake_listener = bind_an_iceoryx2_listener_outside_every_child_process_start(
+            &wake_service,
+        )
+        .map_err(|failure| {
+            OutputPortViewerSubscribeRefusal::Transport(format!(
+                "a viewer could not listen on the wake `{wake_service_name}` of channel \
                  `{channel_service_name}`: {failure:?}"
-                    ))
-                },
-            )?;
+            ))
+        })?;
         let ring_depth = match viewer_reads {
             OutputPortViewerReads::LatestMessage => OUTPUT_PORT_VIEWER_RING_DEPTH,
             OutputPortViewerReads::EveryMessage => {
