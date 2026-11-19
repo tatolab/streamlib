@@ -24,7 +24,7 @@
 //!   wakes up.
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -372,6 +372,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         .map_err(|e| AdapterError::BackendRejected {
             reason: format!("submit_to_queue: {e}"),
         })?;
+        submit_ctx.the_fence_went_out_with_a_queued_submit();
 
         // Block until the GPU has executed the barrier — the next
         // consumer's view assumes the new layout is visible. The wait
@@ -695,6 +696,9 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
     }
 }
 
+#[cfg(test)]
+mod adapter_persistent_submit_context_tests;
+
 /// Persistent per-adapter command pool, command buffer, and
 /// completion fence — replaces the create-and-destroy-per-acquire
 /// pattern that used to churn `vkCreateCommandPool` /
@@ -715,6 +719,11 @@ struct AdapterPersistentSubmitContext {
     pool: vk::CommandPool,
     cmd: vk::CommandBuffer,
     fence: vk::Fence,
+    /// Whether the fence is signaled or a queued batch will signal it.
+    /// False from the reset until a submit carrying the fence queues, so a
+    /// recording or submit that failed in between leaves nothing to wait
+    /// for instead of a fence nothing will ever signal.
+    the_fence_will_signal: AtomicBool,
 }
 
 impl AdapterPersistentSubmitContext {
@@ -757,24 +766,33 @@ impl AdapterPersistentSubmitContext {
             }
         };
 
-        Ok(Self { pool, cmd, fence })
+        Ok(Self {
+            pool,
+            cmd,
+            fence,
+            the_fence_will_signal: AtomicBool::new(true),
+        })
     }
 
     /// Wait for the previous submit's fence, reset it, then reset the
     /// command pool so the single command buffer is ready to be
     /// re-recorded. Steady-state cost is the wait, which is instant
-    /// when the prior submit has already drained.
+    /// when the prior submit has already drained; after a recording or
+    /// submit that failed, nothing is queued and nothing is waited for.
     fn reset_for_recording(&self, device: &vulkanalia::Device) -> Result<(), AdapterError> {
-        unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
-            AdapterError::BackendRejected {
-                reason: format!("wait_for_fences (persistent submit fence): {e}"),
-            }
-        })?;
+        if self.the_fence_will_signal.load(Ordering::Acquire) {
+            unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
+                AdapterError::BackendRejected {
+                    reason: format!("wait_for_fences (persistent submit fence): {e}"),
+                }
+            })?;
+        }
         unsafe { device.reset_fences(&[self.fence]) }.map_err(|e| {
             AdapterError::BackendRejected {
                 reason: format!("reset_fences (persistent submit fence): {e}"),
             }
         })?;
+        self.the_fence_will_signal.store(false, Ordering::Release);
         unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
             .map_err(|e| AdapterError::BackendRejected {
                 reason: format!("reset_command_pool (persistent submit pool): {e}"),
@@ -782,10 +800,18 @@ impl AdapterPersistentSubmitContext {
         Ok(())
     }
 
+    /// Record that a submit carrying the fence queued, so the next reset
+    /// waits for it.
+    fn the_fence_went_out_with_a_queued_submit(&self) {
+        self.the_fence_will_signal.store(true, Ordering::Release);
+    }
+
     /// Tear down the pool + fence. Waits on the fence first to drain
     /// any pending GPU work so destruction is safe.
     fn destroy(self, device: &vulkanalia::Device) {
-        let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        if self.the_fence_will_signal.load(Ordering::Acquire) {
+            let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        }
         unsafe {
             device.destroy_fence(self.fence, None);
             device.destroy_command_pool(self.pool, None);

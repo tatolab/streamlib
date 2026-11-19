@@ -267,6 +267,7 @@ where
         .map_err(|e| AdapterError::BackendRejected {
             reason: format!("submit_to_queue: {e}"),
         })?;
+        submit_ctx.the_fence_went_out_with_a_queued_submit();
 
         Ok(())
     }

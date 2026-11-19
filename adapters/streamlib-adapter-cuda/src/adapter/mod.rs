@@ -12,6 +12,8 @@ use vulkanalia::vk;
 use crate::state::SurfaceState;
 
 mod adapter_persistent_submit_context;
+#[cfg(all(test, target_os = "linux"))]
+mod adapter_persistent_submit_context_tests;
 mod host_copy_image_to_buffer_submit;
 mod host_surface_registration;
 mod peer_timeline_wait;
