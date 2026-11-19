@@ -395,16 +395,16 @@ fn the_link_its_pin_types_or_families_take(
             families
         }
     };
-    if a_link_connected == ALinkConnected::MadeNow {
-        if let Some(refused) = the_first_wired_link_past_an_input_refused(
+    if a_link_connected == ALinkConnected::MadeNow
+        && let Some(refused) = the_first_wired_link_past_an_input_refused(
             graph,
             to_node,
             &input_port.name,
             &ends.output_pin_type,
             &conversions,
-        ) {
-            return Err(Error::InvalidLink(refused));
-        }
+        )
+    {
+        return Err(Error::InvalidLink(refused));
     }
     Ok(LinkTaken {
         verdict: Some(verdict),
