@@ -561,12 +561,12 @@ fn shader_nodes_reading_their_own_image_in_a_cycle_are_failed_on_their_nodes() {
         let node = graph.traversal().v(node_id).first().unwrap();
         let state = node.get::<StateComponent>().unwrap();
         assert_eq!(state.current(), NodeState::Error);
-        let failed_because = node.serialize_components()["failed_because"].clone();
+        let failed_because = node.render_components().failed_because;
         assert!(
             failed_because
-                .as_str()
+                .as_deref()
                 .is_some_and(|why| why.contains("break the cycle")),
-            "{failed_because}"
+            "{failed_because:?}"
         );
         assert!(!node.has::<ShaderNodeIslandHostedHereComponent>());
     }

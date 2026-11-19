@@ -599,7 +599,9 @@ impl LoadedStreamInThisRuntime {
     /// Each link this stream's graph holds set aside, by its validation or as one the engine
     /// cannot wire, each end its node's UUID; one naming a node the graph no longer holds is
     /// left out.
-    fn the_links_set_aside_by_node_uuid(&self) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
+    pub(in crate::core::runtime) fn the_links_set_aside_by_node_uuid(
+        &self,
+    ) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
         let node_uuid_of_each_name: HashMap<String, Uuid> = self
             .the_live_nodes()
             .into_iter()

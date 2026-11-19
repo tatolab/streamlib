@@ -19,7 +19,9 @@ use crate::core::graph::{
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
-use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
+use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
+    LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
+};
 use crate::core::runtime::operations::{RuntimeOperations, WhatALiveConnectMakesOfALink};
 use crate::core::runtime::operations_runtime::{
     ConfigReferencesOfTheAddedNode, WhenTheEngineCannotWireALink, connect_impl,
@@ -36,6 +38,7 @@ impl LoadedStreamInThisRuntime {
     /// connected again, and a disconnect naming a port by a name it had leaves the graph as it
     /// is when it holds no such link. A request to connect a link its document already holds is
     /// refused before it reaches here, so only an undo or a redo of an edit meets a link held.
+    /// A disconnect of a link held set aside, made nowhere, takes it off the graph as drawn.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
         graph_operation: StreamGraphOperation,
@@ -113,6 +116,13 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::Disconnect { link } => {
                 match self.the_link_held_between(&link)? {
                     Some(link_id) => self.disconnect_async(link_id).await?,
+                    None if self.holds_the_link_set_aside(&link) => {
+                        return self
+                            .apply_a_stream_graph_operation_by_reconciling_the_live_graph(
+                                StreamGraphOperation::Disconnect { link },
+                            )
+                            .await;
+                    }
                     None if disconnects_a_port_by_a_name_it_had => {}
                     None => {
                         return Err(Error::GraphError(format!(
@@ -529,6 +539,24 @@ impl LoadedStreamInThisRuntime {
                 &link.target.port,
             ),
         ))
+    }
+
+    /// Whether this stream holds `link`, each node by its UUID, set aside: drawn, and made
+    /// nowhere, since its validation or the engine refused it.
+    fn holds_the_link_set_aside(&self, link: &StreamGraphDocumentLink) -> bool {
+        let (Ok(source_port), Ok(target_port)) = (
+            cast_exposed_name_to_url_safe(&link.source.port),
+            cast_exposed_name_to_url_safe(&link.target.port),
+        ) else {
+            return false;
+        };
+        self.the_links_set_aside_by_node_uuid()
+            .contains(&RunningLinkBetweenTwoNodesByUuid {
+                source_node: link.source.node,
+                source_port: source_port.into_owned(),
+                target_node: link.target.node,
+                target_port: target_port.into_owned(),
+            })
     }
 
     /// The live link `link` names by its ends; `None` when the live graph holds none, and
