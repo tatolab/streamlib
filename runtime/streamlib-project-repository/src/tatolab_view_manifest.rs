@@ -315,6 +315,20 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             }
         }
     }
+    for (index, output) in manifest.outputs.iter().enumerate() {
+        if let Some(pin_type) = &output.pin_type
+            && a_panel_writes(output.family)
+            && !is_a_type_a_panel_writes_a_value_of(pin_type)
+        {
+            issue(
+                format!("outputs[{index}].pin_type"),
+                &format!(
+                    "a panel writes a value onto a `{}` output, and a {pin_type} holds none",
+                    output.family.wire_name()
+                ),
+            );
+        }
+    }
     let input_names: BTreeSet<&str> = manifest
         .inputs
         .iter()
@@ -365,6 +379,12 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         );
     }
     issues
+}
+
+/// Whether a panel writes values of `pin_type` onto an output: one a pin of it holds, or the
+/// samples of an Audio block or the numbers of a Tensor.
+fn is_a_type_a_panel_writes_a_value_of(pin_type: &PinType) -> bool {
+    pin_type.holds_a_stored_value() || matches!(pin_type, PinType::Audio {} | PinType::Tensor {})
 }
 
 fn is_a_contract_version_this_runtime_reads(contract: &str) -> bool {

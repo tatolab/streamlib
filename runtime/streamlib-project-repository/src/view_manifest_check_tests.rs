@@ -118,6 +118,7 @@ fn a_manifest_that_does_not_open_fails_the_check_with_the_readers_words() {
     );
     a_view_folder_holding(&project_directory, "garbled", "{not json");
     std::fs::create_dir_all(project_directory.join("views/empty")).unwrap();
+    std::fs::create_dir_all(project_directory.join("views/folded/tatolab_view.json")).unwrap();
 
     let checked = check_a_projects_view_manifests(&project_directory, None).unwrap();
 
@@ -140,6 +141,11 @@ fn a_manifest_that_does_not_open_fails_the_check_with_the_readers_words() {
                 None,
                 ProjectCodeCheckSeverity::Error
             ),
+            (
+                "view_manifest_refused".to_owned(),
+                None,
+                ProjectCodeCheckSeverity::Error
+            ),
         ]
     );
     assert!(
@@ -148,9 +154,26 @@ fn a_manifest_that_does_not_open_fails_the_check_with_the_readers_words() {
         checked.findings[0].words
     );
     assert!(
-        checked.findings[2].words.contains("not JSON"),
+        checked.findings[2].words.contains("cannot be read"),
         "{}",
         checked.findings[2].words
+    );
+    assert!(
+        checked.findings[3].words.contains("not JSON"),
+        "{}",
+        checked.findings[3].words
+    );
+    assert_eq!(
+        checked
+            .files_checked
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "views/broken/tatolab_view.json",
+            "views/garbled/tatolab_view.json"
+        ],
+        "a manifest whose bytes were not read is no file checked"
     );
 }
 
@@ -200,4 +223,40 @@ fn only_the_projects_own_views_or_those_among_the_paths_are_checked() {
     .unwrap();
     assert_eq!(only_typed.findings, []);
     assert_eq!(only_typed.files_checked.len(), 1);
+}
+
+#[test]
+fn an_imports_views_folder_that_does_not_read_keeps_no_own_view_from_being_checked() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_directory = workspace.path().join("acme");
+    a_project_named(&project_directory, "acme");
+    a_view_folder_holding(&project_directory, "typed", TYPED_MANIFEST);
+    std::fs::create_dir_all(project_directory.join(PROJECT_IMPORTS_DIRECTORY)).unwrap();
+    std::fs::write(
+        project_directory
+            .join(PROJECT_IMPORTS_DIRECTORY)
+            .join("levels"),
+        "not a folder",
+    )
+    .unwrap();
+
+    let checked = check_a_projects_view_manifests(&project_directory, None).unwrap();
+
+    assert_eq!(checked.files_checked.len(), 1);
+}
+
+#[test]
+fn only_a_manifest_directly_in_a_views_folder_is_one_the_check_owns() {
+    assert!(is_the_manifest_of_a_projects_own_view(
+        "views/typed/tatolab_view.json"
+    ));
+    for path in [
+        "nodes/blur.py",
+        "views/tatolab_view.json",
+        "views//tatolab_view.json",
+        "views/typed/dist/tatolab_view.json",
+        "imports/levels/views/meter/tatolab_view.json",
+    ] {
+        assert!(!is_the_manifest_of_a_projects_own_view(path), "{path}");
+    }
 }

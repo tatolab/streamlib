@@ -180,4 +180,6 @@ pub use tatolab_view_manifest::{
     VIEW_CONTRACT_READ_MINOR, a_panel_writes, read_tatolab_view_manifest,
 };
 #[cfg(feature = "history")]
-pub use view_manifest_check::{ViewManifestsChecked, check_a_projects_view_manifests};
+pub use view_manifest_check::{
+    ViewManifestsChecked, check_a_projects_view_manifests, is_the_manifest_of_a_projects_own_view,
+};

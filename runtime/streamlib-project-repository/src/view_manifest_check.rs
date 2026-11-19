@@ -17,8 +17,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use crate::project_asset_file_bytes::content_sha256_of;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_views::{
-    PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME,
-    every_view_a_project_and_its_imports_bring,
+    PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME, every_view_a_project_brings_itself,
 };
 use crate::tatolab_view_manifest::{
     TatolabViewDeclaredPort, VIEW_CONTRACT_READ_MAJOR, VIEW_CONTRACT_READ_MINOR,
@@ -45,10 +44,7 @@ pub fn check_a_projects_view_manifests(
 ) -> Result<ViewManifestsChecked, ProjectRepositoryRefusal> {
     let mut findings = Vec::new();
     let mut files_checked = Vec::new();
-    for view in every_view_a_project_and_its_imports_bring(project_directory)?
-        .into_iter()
-        .filter(|view| view.brought_by.import_folder.is_none())
-    {
+    for view in every_view_a_project_brings_itself(project_directory)? {
         let Some(view_folder_name) = view.folder.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
@@ -86,7 +82,18 @@ pub fn check_a_projects_view_manifests(
                 ));
                 continue;
             }
-            Err(unreadable) => return Err(unreadable.into()),
+            Err(unreadable) => {
+                findings.push(finding(
+                    "view_manifest_refused",
+                    ProjectCodeCheckSeverity::Error,
+                    format!(
+                        "the view does not open: `{TATOLAB_VIEW_MANIFEST_FILE_NAME}` cannot be \
+                         read: {unreadable}"
+                    ),
+                    None,
+                ));
+                continue;
+            }
         };
         files_checked.push(ProjectFileChecked {
             path: manifest_path.clone(),
@@ -136,6 +143,16 @@ pub fn check_a_projects_view_manifests(
         findings,
         files_checked,
     })
+}
+
+/// Whether `path`, a path in a project, is the manifest of one of its own views, which the
+/// `extension_manifest` check reads and no other check does.
+pub fn is_the_manifest_of_a_projects_own_view(path: &str) -> bool {
+    matches!(
+        path.split('/').collect::<Vec<_>>().as_slice(),
+        [PROJECT_VIEWS_DIRECTORY, view_folder_name, TATOLAB_VIEW_MANIFEST_FILE_NAME]
+            if !view_folder_name.is_empty()
+    )
 }
 
 /// What a port declared by `family` alone writes in its place: the one pin type the family's

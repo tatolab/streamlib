@@ -371,3 +371,25 @@ fn a_pin_type_in_a_view_built_for_contract_one_point_zero_is_refused_naming_the_
         "{refusal}"
     );
 }
+
+#[test]
+fn an_output_a_panel_writes_of_a_type_that_holds_no_value_is_refused() {
+    let refusal = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "go", "pin_type": { "type": "trigger" } }]),
+    ))
+    .expect_err("a panel writes no Trigger value");
+    assert!(
+        refusal.contains(
+            "`outputs[0].pin_type`: a panel writes a value onto a `records` output, and a \
+             Trigger holds none."
+        ),
+        "{refusal}"
+    );
+    read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "voice", "pin_type": { "type": "audio" } },
+               { "name": "weights", "pin_type": { "type": "tensor" } }]),
+    ))
+    .expect("a panel writes Audio samples and Tensor numbers");
+}

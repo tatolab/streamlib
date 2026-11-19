@@ -9,7 +9,9 @@ use streamlib::sdk::runtime::{
     check_a_projects_python_node_declarations,
 };
 use streamlib_control_contract::CheckProjectCodeRequest;
-use streamlib_project_repository::{ViewManifestsChecked, check_a_projects_view_manifests};
+use streamlib_project_repository::{
+    ViewManifestsChecked, check_a_projects_view_manifests, is_the_manifest_of_a_projects_own_view,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, ProjectActionRefusalOnTheWire, ProjectCodeCheckFinding,
     ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun, ProjectCodeCheckSeverity,
@@ -44,8 +46,14 @@ impl ControlOperationDispatcher {
                 },
             )
             .await?;
+        let module_paths: Option<Vec<String>> = paths.map(|paths| {
+            paths
+                .into_iter()
+                .filter(|path| !is_the_manifest_of_a_projects_own_view(path))
+                .collect()
+        });
         let declaration_check = tokio::task::spawn_blocking(move || {
-            check_a_projects_python_node_declarations(&project_directory, paths.as_deref())
+            check_a_projects_python_node_declarations(&project_directory, module_paths.as_deref())
         })
         .await
         .map_err(ControlOperationRefusal::the_task_did_not_finish(

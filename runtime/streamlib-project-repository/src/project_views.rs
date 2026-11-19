@@ -61,14 +61,7 @@ pub fn every_view_a_project_and_its_imports_bring(
     project_directory: &Path,
 ) -> Result<Vec<ProjectViewFolderRead>, ProjectRepositoryRefusal> {
     let project_file = TatolabProjectFile::read_from_project_directory(project_directory)?;
-    let mut views = every_view_in_the_views_of(
-        project_directory,
-        &ProjectBringingAView {
-            project: project_file.project,
-            project_name: project_file.name.clone(),
-            import_folder: None,
-        },
-    )?;
+    let mut views = every_view_a_project_brings_itself(project_directory)?;
     for import in every_import_a_project_resolves(project_directory, &project_file)
         .iter()
         .filter(|import| is_one_folder_name(&import.folder))
@@ -98,6 +91,22 @@ pub fn every_view_a_project_and_its_imports_bring(
         )?);
     }
     Ok(views)
+}
+
+/// Every view the project at `project_directory` brings in its own `views/`, by folder name,
+/// reading none of its imports.
+pub(crate) fn every_view_a_project_brings_itself(
+    project_directory: &Path,
+) -> Result<Vec<ProjectViewFolderRead>, ProjectRepositoryRefusal> {
+    let project_file = TatolabProjectFile::read_from_project_directory(project_directory)?;
+    every_view_in_the_views_of(
+        project_directory,
+        &ProjectBringingAView {
+            project: project_file.project,
+            project_name: project_file.name,
+            import_folder: None,
+        },
+    )
 }
 
 /// Each folder of `views/` in `project_directory`, by name; none when it has no `views/`.

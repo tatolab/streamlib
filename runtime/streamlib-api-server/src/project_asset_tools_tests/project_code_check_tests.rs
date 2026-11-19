@@ -133,6 +133,44 @@ async fn a_views_port_declared_by_family_is_a_warning_naming_the_pin_type_and_th
 }
 
 #[tokio::test]
+async fn a_views_manifest_among_the_paths_is_read_by_the_manifest_check_alone() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let interpreter = served.project_directory().join(".venv/bin/python");
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    std::fs::write(
+        &interpreter,
+        "#!/bin/sh\n\
+         if grep -q tatolab_view.json; then echo 'the request named a view manifest' >&2; exit 3; fi\n\
+         printf '%s\\n' '{\"modules\":[],\"checked_with\":[\"tatolab-stream 1.0\"]}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let view_folder = served.project_directory().join("views/monitor");
+    std::fs::create_dir_all(&view_folder).unwrap();
+    std::fs::write(
+        view_folder.join("tatolab_view.json"),
+        r#"{"contract": "1.1", "title": "Monitor", "entry": "index.html", "placement": "node",
+            "inputs": [{"name": "picture", "pin_type": {"type": "texture"}}]}"#,
+    )
+    .unwrap();
+
+    let checked = served
+        .answered(
+            "check_project_code",
+            json!({ "paths": ["views/monitor/tatolab_view.json"] }),
+        )
+        .await;
+
+    assert_eq!(checked["verdict"], "passed", "{checked}");
+    assert_eq!(checked["findings"], json!([]), "{checked}");
+    assert_eq!(
+        checked["files_checked"],
+        json!([{ "path": "views/monitor/tatolab_view.json",
+                 "content_sha256": checked["files_checked"][0]["content_sha256"] }])
+    );
+}
+
+#[tokio::test]
 async fn a_path_that_is_no_file_of_the_project_is_refused_naming_it() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
 
