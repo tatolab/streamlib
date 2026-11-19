@@ -63,7 +63,7 @@ def declare_shader_node(
     _refuse_what_is_not_a_plain_module_level_function(function)
     declared_meta = take_node_meta_held_for_the_kind_decorator(function)
     name = function.__name__
-    signature_reading = _FunctionNodeSignatureReading(function)
+    signature_reading = _FunctionNodeSignatureReading(function, reads_pin_types=False)
     signature = signature_reading.function_signature
     _refuse_a_signature_a_shader_cannot_take(name, signature, signature_reading.config_class)
     _refuse_a_source_that_defines_no_function_named(name, shader_source)

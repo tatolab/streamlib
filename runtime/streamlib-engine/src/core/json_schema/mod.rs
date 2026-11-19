@@ -441,9 +441,10 @@ pub struct PortDescriptorOutput {
     /// schema states it. Absent on a port, and on a setting that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
-    /// What a setting's schema states of it besides its type, such as the
-    /// project assets a String holding an asset's UUID is picked from. Absent
-    /// on a port, and on a setting that states nothing.
+    /// What it states besides its type: a port's range, step, unit, meaning and
+    /// control, as its pin declares them, and a setting's, as its schema states
+    /// them, such as the project assets a String holding an asset's UUID is
+    /// picked from. Absent on one that states nothing.
     #[serde(default, skip_serializing_if = "PinAnnotations::is_empty")]
     #[schemars(with = "Option<serde_json::Value>")]
     #[schema(value_type = Option<Object>)]
@@ -857,6 +858,11 @@ impl From<&crate::core::NodeRuntime> for NodeRuntimeOutput {
 
 impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
     fn from(port: &crate::core::PortDescriptor) -> Self {
+        let declared_pin = port.declared_pin();
+        let annotations = declared_pin
+            .as_ref()
+            .map(|declared| declared.annotations.clone())
+            .unwrap_or_default();
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
@@ -866,13 +872,13 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             audio_window: port.audio_window.clone(),
             values_checked: values_checked_of(&port.family),
             family: Some(port.family.clone()),
-            pin: port.declared_pin().map(|declared| PortDeclaredPinOutput {
+            pin: declared_pin.map(|declared| PortDeclaredPinOutput {
                 pin_type: declared.pin_type,
                 flow: declared.flow,
             }),
             input_mode: port.input_mode,
             default_value: None,
-            annotations: PinAnnotations::default(),
+            annotations,
         }
     }
 }

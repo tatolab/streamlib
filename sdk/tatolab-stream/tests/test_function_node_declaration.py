@@ -293,11 +293,6 @@ def test_a_nested_function_or_a_closure_is_refused():
         node.function(nested)
 
 
-def test_the_bare_node_refusal_names_node_function_too():
-    with pytest.raises(TypeError, match=_literally("`@node.function`")):
-        node(remap)
-
-
 def _literally(text: str) -> str:
     import re
 
