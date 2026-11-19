@@ -76,7 +76,7 @@ impl PageAudioStreamTimeline {
 
 /// The `f32` samples little-endian `bytes` hold; a trailing partial sample is
 /// left out.
-pub fn samples_of_little_endian_f32_bytes(bytes: &[u8]) -> Vec<f32> {
+pub(crate) fn samples_of_little_endian_f32_bytes(bytes: &[u8]) -> Vec<f32> {
     let (samples, _partial_sample) = bytes.as_chunks::<4>();
     samples.iter().copied().map(f32::from_le_bytes).collect()
 }

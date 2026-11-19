@@ -24,8 +24,18 @@ pub const PAGE_AUDIO_SILENCE_GRACE: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub struct PageAudioSilenceWatch {
     wired_audio_input_port_names: Vec<String>,
-    first_input_block_reached_the_page_at_ns: Option<i64>,
-    settled: bool,
+    state: PageAudioSilenceWatchState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PageAudioSilenceWatchState {
+    /// No input block has been seen to reach the page yet.
+    WaitingForAnInputBlock,
+    /// An input block was first seen to reach the page at this instant.
+    Timing { first_seen_at_ns: i64 },
+    /// The watch has warned, the page has published audio, or it has no
+    /// audio input: it never warns again.
+    Settled,
 }
 
 impl PageAudioSilenceWatch {
@@ -39,10 +49,14 @@ impl PageAudioSilenceWatch {
             .filter(|track| track.kind == PageInputTrackKind::Audio)
             .map(|track| track.input_port_name.clone())
             .collect();
+        let state = if wired_audio_input_port_names.is_empty() {
+            PageAudioSilenceWatchState::Settled
+        } else {
+            PageAudioSilenceWatchState::WaitingForAnInputBlock
+        };
         Self {
-            settled: wired_audio_input_port_names.is_empty(),
             wired_audio_input_port_names,
-            first_input_block_reached_the_page_at_ns: None,
+            state,
         }
     }
 
@@ -51,32 +65,40 @@ impl PageAudioSilenceWatch {
     /// since an input block was first seen to reach the page and the page has
     /// published no audio. After a warning, or once the page publishes audio,
     /// it is `None` for good.
+    #[must_use]
     pub fn warning_due(&mut self, now_ns: i64, counters: &BrowserPageCounters) -> Option<String> {
-        if self.settled {
+        if self.state == PageAudioSilenceWatchState::Settled {
             return None;
         }
         if counters.audio_blocks_published.load(Ordering::Relaxed) > 0 {
-            self.settled = true;
+            self.state = PageAudioSilenceWatchState::Settled;
             return None;
         }
-        if counters
-            .page_input_audio_blocks_delivered
-            .load(Ordering::Relaxed)
-            == 0
-        {
-            return None;
-        }
-        let first_at_ns = *self
-            .first_input_block_reached_the_page_at_ns
-            .get_or_insert(now_ns);
-        let silent_for =
-            Duration::from_nanos(u64::try_from(now_ns.saturating_sub(first_at_ns)).unwrap_or(0));
+        let first_seen_at_ns = match self.state {
+            PageAudioSilenceWatchState::Timing { first_seen_at_ns } => first_seen_at_ns,
+            _ if counters
+                .page_input_audio_blocks_delivered
+                .load(Ordering::Relaxed)
+                == 0 =>
+            {
+                return None;
+            }
+            _ => {
+                self.state = PageAudioSilenceWatchState::Timing {
+                    first_seen_at_ns: now_ns,
+                };
+                now_ns
+            }
+        };
+        let silent_for = Duration::from_nanos(
+            u64::try_from(now_ns.saturating_sub(first_seen_at_ns)).unwrap_or(0),
+        );
         if silent_for < PAGE_AUDIO_SILENCE_GRACE {
             return None;
         }
-        self.settled = true;
+        self.state = PageAudioSilenceWatchState::Settled;
+        let first_wired = self.wired_audio_input_port_names.first()?;
         let wired = self.wired_audio_input_port_names.join(", ");
-        let first_wired = &self.wired_audio_input_port_names[0];
         Some(format!(
             "the page has published no audio in the {} s since its wired audio inputs \
              ({wired}) began reaching it, so `audio` stays silent; a page plays an input \
