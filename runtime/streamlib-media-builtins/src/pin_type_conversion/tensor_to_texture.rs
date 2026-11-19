@@ -167,11 +167,7 @@ pub fn the_format_picked_for_the_input(input: &PinType) -> Option<PinConversionO
             })?
             .to_string()
     };
-    let output_pin_type = PinType::Texture {
-        pixel_formats: TexturePixelFormat::from_wire_name(&format)
-            .into_iter()
-            .collect(),
-    };
+    let output_pin_type = the_texture_of_the_format(&format);
     Some(PinConversionOutputPicked {
         input_values: streamlib::sdk::serde_json::Map::from_iter([(
             "format".to_string(),
@@ -179,6 +175,30 @@ pub fn the_format_picked_for_the_input(input: &PinType) -> Option<PinConversionO
         )]),
         output_pin_type,
     })
+}
+
+/// The Texture a `TensorToTexture` holding `held` writes: one of the `format` it holds, or of the
+/// default `format` when it holds none; `None` when it holds a `format` no one `[h, w, c]`
+/// tensor holds.
+pub fn the_texture_written_under_the_settings(
+    held: &streamlib::sdk::serde_json::Map<String, streamlib::sdk::serde_json::Value>,
+) -> Option<PinType> {
+    let format = match held.get("format") {
+        None => default_image_format_wire_name(),
+        Some(format) => format.as_str()?.to_owned(),
+    };
+    TextureFormat::from_wire_name(&format)
+        .filter(|format| tensor_element_and_channels_of_one_pixel(*format).is_some())?;
+    Some(the_texture_of_the_format(&format))
+}
+
+/// A Texture of the one pixel format `format` names by its wire name.
+fn the_texture_of_the_format(format: &str) -> PinType {
+    PinType::Texture {
+        pixel_formats: TexturePixelFormat::from_wire_name(format)
+            .into_iter()
+            .collect(),
+    }
 }
 
 /// The texture format `config.format` names, refused unless one `[h, w, c]`

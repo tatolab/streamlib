@@ -119,7 +119,9 @@ impl ControlOperationDispatcher {
                 ..
             } => link,
             WhatAConnectAsks::ThroughANode {
-                because: GraphTransactionNodeInsertedBecause::ClosesALoop,
+                because:
+                    GraphTransactionNodeInsertedBecause::ClosesALoop
+                    | GraphTransactionNodeInsertedBecause::ForAnotherReason,
                 ..
             } => {
                 return Err(not_checked_yet(

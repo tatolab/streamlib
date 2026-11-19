@@ -169,6 +169,9 @@ impl StreamGraphTransactionExecutor<'_> {
                     ProjectTransactionAsSentAndAnswered {
                         actions_as_sent,
                         inputs_overridden_by_links: overridden_by_links.clone(),
+                        nodes_inserted_on_links: the_nodes_inserted_on_links(
+                            &what_the_answer_names_of_each_added_node,
+                        ),
                     },
                     project_operations,
                     ProjectTransactionLineage::NewEdit,
@@ -385,13 +388,13 @@ impl StreamGraphTransactionExecutor<'_> {
             streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
         let convert_node_a_link_needs = |link: &StreamGraphDocumentLink| {
             let because = if !reached.is_the_streams_own_level() {
-                WhyNoConvertNodeIsPlaced::TheLinkIsAtAPlacedLevel
+                WhyALinkIsJudgedByNodeTypes::TheLinkIsAtAPlacedLevel
             } else if the_stream_takes_its_edits_once_the_documents_hold_them {
-                WhyNoConvertNodeIsPlaced::TheStreamTakesItsEditsLater
+                WhyALinkIsJudgedByNodeTypes::TheStreamTakesItsEditsLater
             } else {
                 return the_convert_node_a_live_connect_places(stream_operations.as_ref(), link);
             };
-            refuse_a_link_needing_a_node_connect_does_not_place(
+            refuse_a_link_judged_by_the_node_types_of_its_level(
                 stream_operations.as_ref(),
                 &level_as_drawn,
                 link,

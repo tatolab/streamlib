@@ -17,8 +17,9 @@ pub(super) struct WhatAnAnswerNamesBesideItsOperations<'named> {
 
 impl StreamGraphTransactionExecutor<'_> {
     /// The answer of `applied_before`, the transaction of the project `project` an action sent
-    /// again under its key first applied: each edit of a loaded stream under its stream id, and
-    /// each input value set that a link overrode, as its first answer named them.
+    /// again under its key first applied: each edit of a loaded stream under its stream id, each
+    /// input value set that a link overrode, and each node a `connect` inserted on its link, as
+    /// its first answer named them.
     pub(super) fn the_answer_of_a_graph_transaction_applied_before(
         &self,
         project: Uuid,
@@ -41,6 +42,20 @@ impl StreamGraphTransactionExecutor<'_> {
                 .unwrap_or_else(|| stream.to_string());
             applied_live.push((stream_id, graph_operation));
         }
+        let what_the_answer_names_of_each_added_node = applied_before
+            .transaction
+            .nodes_inserted_on_links
+            .iter()
+            .map(|inserted| {
+                (
+                    inserted.node,
+                    WhatTheAnswerNamesOfAnAddedNode {
+                        label: None,
+                        inserted_because: Some(inserted.inserted_because),
+                    },
+                )
+            })
+            .collect();
         self.the_answer_of_a_graph_transaction(
             GraphEditMode::Commit,
             Some(applied_before.transaction.transaction.to_string()),
@@ -52,7 +67,7 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             applied_live,
             WhatAnAnswerNamesBesideItsOperations {
-                what_the_answer_names_of_each_added_node: &HashMap::new(),
+                what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
             },
         )

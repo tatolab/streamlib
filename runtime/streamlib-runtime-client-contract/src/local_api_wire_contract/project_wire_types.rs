@@ -478,7 +478,8 @@ pub enum ControlOperationRefusalCode {
     LinkPinTypesDoNotConnect,
     /// The two ends of the link sent connect only through a conversion a module or the project's
     /// own node declares, which `connect` never places; the runtime's words name each such node
-    /// type, and with exactly one `suggested_call` is the `transact` that places it between them.
+    /// type. With exactly one, `suggested_call` is the `transact` that places it between them,
+    /// only when both ends are UUID-named nodes the edited level holds.
     LinkNeedsAModuleConversion,
     /// The link sent ends at an input that is a setting, which takes a stored value and never a
     /// link; `refused_field` names it.

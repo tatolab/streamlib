@@ -909,7 +909,10 @@ fn the_format_picked_for(input: &PinType) -> Option<PinConversionOutputPicked> {
 
 fn a_tensor_to_texture_conversion_picking_its_format() -> PinConversion {
     PinConversion {
-        output_picked_for_the_input: Some(PinConversionOutputPick(the_format_picked_for)),
+        output_picked_for_the_input: Some(PinConversionOutputPick {
+            picked_for: the_format_picked_for,
+            given_under: |_| None,
+        }),
         ..a_conversion(
             NodeClassImportPath::of_built_in_node("TensorToTexture"),
             PinType::Tensor {},

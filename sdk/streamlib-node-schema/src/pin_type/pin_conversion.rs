@@ -37,16 +37,32 @@ impl PinConversion {
                 input_values: serde_json::Map::new(),
                 output_pin_type: self.output_pin_type.clone(),
             }),
-            Some(PinConversionOutputPick(pick)) => pick(input),
+            Some(PinConversionOutputPick { picked_for, .. }) => picked_for(input),
         }
+    }
+
+    /// The type a node of it gives on its output while it holds `held`, each setting by its
+    /// input's name; `None` when its output gives `output_pin_type` whatever it holds, or `held`
+    /// names no setting it takes.
+    pub fn output_given_under(
+        &self,
+        held: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<PinType> {
+        let PinConversionOutputPick { given_under, .. } = self.output_picked_for_the_input?;
+        given_under(held)
     }
 }
 
-/// The one function a conversion whose output follows a setting supplies: for the type of the
-/// input its output feeds, the settings it then holds and the type its output then gives, or
-/// `None` when none of its settings gives a type that input takes.
+/// The two functions a conversion whose output follows a setting supplies.
 #[derive(Clone, Copy)]
-pub struct PinConversionOutputPick(pub fn(&PinType) -> Option<PinConversionOutputPicked>);
+pub struct PinConversionOutputPick {
+    /// For the type of the input its output feeds, the settings it then holds and the type its
+    /// output then gives; `None` when none of its settings gives a type that input takes.
+    pub picked_for: fn(&PinType) -> Option<PinConversionOutputPicked>,
+    /// For the settings a node of it holds, each by its input's name, the type its output gives;
+    /// `None` when they name no setting it takes.
+    pub given_under: fn(&serde_json::Map<String, serde_json::Value>) -> Option<PinType>,
+}
 
 impl std::fmt::Debug for PinConversionOutputPick {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -57,7 +73,8 @@ impl std::fmt::Debug for PinConversionOutputPick {
 // `fn_addr_eq` compares addresses, so one function may compare unequal across codegen units.
 impl PartialEq for PinConversionOutputPick {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::fn_addr_eq(self.0, other.0)
+        std::ptr::fn_addr_eq(self.picked_for, other.picked_for)
+            && std::ptr::fn_addr_eq(self.given_under, other.given_under)
     }
 }
 

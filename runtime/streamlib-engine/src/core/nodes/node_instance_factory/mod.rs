@@ -271,8 +271,9 @@ impl NodeInstanceFactory {
     }
 
     /// Register `P`, a node type stating a conversion whose output follows a setting, with
-    /// `pick`, the one function that picks that setting for the input its output feeds; log
-    /// rather than return a registration that fails, or a `P` stating no conversion.
+    /// `pick`, the functions that pick that setting for the input its output feeds and give the
+    /// type its output gives under the settings a node holds; log rather than return a
+    /// registration that fails, or a `P` stating no conversion.
     pub fn register_a_conversion_whose_output_a_setting_picks<P>(
         &self,
         pick: PinConversionOutputPick,

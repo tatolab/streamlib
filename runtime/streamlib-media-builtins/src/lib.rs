@@ -103,9 +103,10 @@ pub fn register_the_conversion_node_types() {
     NODE_REGISTRY.register::<pin_type_conversion::TextureToTensor::Node>();
     NODE_REGISTRY.register_a_conversion_whose_output_a_setting_picks::<
         pin_type_conversion::TensorToTexture::Node,
-    >(PinConversionOutputPick(
-        pin_type_conversion::tensor_to_texture::the_format_picked_for_the_input,
-    ));
+    >(PinConversionOutputPick {
+        picked_for: pin_type_conversion::tensor_to_texture::the_format_picked_for_the_input,
+        given_under: pin_type_conversion::tensor_to_texture::the_texture_written_under_the_settings,
+    });
 }
 
 #[cfg(test)]

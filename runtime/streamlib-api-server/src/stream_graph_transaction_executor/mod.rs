@@ -11,9 +11,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use streamlib::sdk::descriptors::{
-    ConvertNodeToInsert, PinConversion, PinLinkOutcome, PinLinkRefusal,
-};
+use streamlib::sdk::descriptors::{ConvertNodeToInsert, PinLinkOutcome};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, PortOfANodeOfAType, RuntimeOperations,
     StreamLocation, WhatALiveConnectMakesOfALink,
@@ -25,9 +23,9 @@ use streamlib_project_repository::{
     ProjectAction, ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation,
     ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
     ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered,
-    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
-    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphAction,
-    StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
+    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionNodeInsertedOnALink,
+    ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
+    StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
     StreamGraphDocumentNote, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
@@ -153,9 +151,10 @@ fn the_convert_node_a_live_connect_places(
     }
 }
 
-/// Where a transaction's `connect` places no convert node on a link that needs one.
+/// Why a transaction's `connect` judges a link by the node types of its level, before anything
+/// is written, rather than by the running stream as it makes the link.
 #[derive(Clone, Copy)]
-enum WhyNoConvertNodeIsPlaced {
+enum WhyALinkIsJudgedByNodeTypes {
     /// The link is inside a placed stream, not at the stream's own level.
     TheLinkIsAtAPlacedLevel,
     /// An earlier operation of the transaction has the stream take its edits once the
@@ -163,16 +162,17 @@ enum WhyNoConvertNodeIsPlaced {
     TheStreamTakesItsEditsLater,
 }
 
-/// Refuse `link`, drawn at `level_as_drawn`, before anything is written, when its two typed
-/// ends, judged by the node types of that level as the running stream `stream_operations`
-/// resolves them, connect only through a convert node, which `connect` does not place there
-/// `because`; at a placed level, also when only a module's conversion bridges them, as the
-/// stream's own level refuses such a link.
-fn refuse_a_link_needing_a_node_connect_does_not_place(
+/// Refuse `link`, drawn at `level_as_drawn`, before anything is written, as the stream's own
+/// level refuses a link made live, when its two typed ends, judged by the node types of that
+/// level as the running stream `stream_operations` resolves them, do not connect as they are:
+/// one only a convert node bridges, which `connect` does not place there `because`, and any
+/// their pin types refuse. A link either end of which is untyped, or no node of the level, is
+/// left to the stream to judge as it takes the edit.
+fn refuse_a_link_judged_by_the_node_types_of_its_level(
     stream_operations: &dyn RuntimeOperations,
     level_as_drawn: &StreamGraphDocument,
     link: &StreamGraphDocumentLink,
-    because: WhyNoConvertNodeIsPlaced,
+    because: WhyALinkIsJudgedByNodeTypes,
 ) -> Result<(), GraphRequestRefusal> {
     let (Ok(source), Ok(target)) = (
         level_as_drawn.node(link.source.node),
@@ -194,21 +194,20 @@ fn refuse_a_link_needing_a_node_connect_does_not_place(
     );
     let convert_node = match verdict.map(|verdict| verdict.outcome) {
         Some(PinLinkOutcome::ConnectsThroughConvertNode(convert_node)) => convert_node,
-        Some(PinLinkOutcome::Refused(refusal))
-            if matches!(because, WhyNoConvertNodeIsPlaced::TheLinkIsAtAPlacedLevel)
-                && only_a_modules_conversion_bridges(&refusal) =>
-        {
+        Some(PinLinkOutcome::Refused(refusal)) => {
             return Err(streamlib::sdk::error::Error::PinLinkRefused(refusal).into());
         }
-        _ => return Ok(()),
+        Some(PinLinkOutcome::Connects | PinLinkOutcome::ConnectsWithFreeConversion(_)) | None => {
+            return Ok(());
+        }
     };
     let words = match because {
-        WhyNoConvertNodeIsPlaced::TheLinkIsAtAPlacedLevel => format!(
+        WhyALinkIsJudgedByNodeTypes::TheLinkIsAtAPlacedLevel => format!(
             "{}: `connect` places that node itself only at a stream's own level, and this link \
              is inside a placed stream; add the node and its two links there yourself",
             convert_node.refusal_without_it
         ),
-        WhyNoConvertNodeIsPlaced::TheStreamTakesItsEditsLater => format!(
+        WhyALinkIsJudgedByNodeTypes::TheStreamTakesItsEditsLater => format!(
             "{}, or connect the link in a transaction of its own: `connect` places that node \
              itself only on a stream that takes the edit live, and an earlier operation of this \
              transaction has the stream take its edits once the documents hold them",
@@ -219,17 +218,6 @@ fn refuse_a_link_needing_a_node_connect_does_not_place(
         RefusalCodeAndPlace::coded(ControlOperationRefusalCode::LinkPinTypesDoNotConnect),
         words,
     ))
-}
-
-/// Whether `refusal` refuses two pin types that only conversions `connect` never places, a
-/// module's, bridge.
-fn only_a_modules_conversion_bridges(refusal: &PinLinkRefusal) -> bool {
-    matches!(
-        refusal,
-        PinLinkRefusal::PinTypesDoNotConnect { conversions_that_bridge, .. }
-            if !conversions_that_bridge.is_empty()
-                && !conversions_that_bridge.iter().any(PinConversion::may_be_inserted)
-    )
 }
 
 /// One loaded stream a transaction edits: its operations, where it lives, and its graph as the
@@ -378,6 +366,25 @@ fn the_graph_node_an_edit_adds_or_configures(
 struct WhatTheAnswerNamesOfAnAddedNode {
     label: Option<String>,
     inserted_because: Option<GraphTransactionNodeInsertedBecause>,
+}
+
+/// Each node of `what_the_answer_names_of_each_added_node` a `connect` inserted on its link, and
+/// why, in the order of their UUIDs, as a transaction keeps them for an action sent again.
+fn the_nodes_inserted_on_links(
+    what_the_answer_names_of_each_added_node: &HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
+) -> Vec<ProjectTransactionNodeInsertedOnALink> {
+    let mut inserted: Vec<ProjectTransactionNodeInsertedOnALink> =
+        what_the_answer_names_of_each_added_node
+            .iter()
+            .filter_map(|(&node, named)| {
+                Some(ProjectTransactionNodeInsertedOnALink {
+                    node,
+                    inserted_because: named.inserted_because?,
+                })
+            })
+            .collect();
+    inserted.sort_by_key(|inserted| inserted.node);
+    inserted
 }
 
 /// Record what the answer names of the node `operation` adds, under the UUID `drawn_uuid_of`

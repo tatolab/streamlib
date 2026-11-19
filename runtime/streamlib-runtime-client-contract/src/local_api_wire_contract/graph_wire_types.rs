@@ -55,7 +55,7 @@ pub struct InsertedNodeOnTheWire {
 }
 
 /// Why a `connect` placed a node of its own on the link it asked for, the link carried through
-/// it. The set grows: a reason a client does not know still names an inserted node.
+/// it. The set grows: a reason a client does not know reads as `for_another_reason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
@@ -65,6 +65,11 @@ pub enum GraphTransactionNodeInsertedBecause {
     ConvertsPinTypes,
     /// The link closes a loop of function nodes, which this `PreviousValue` node breaks.
     ClosesALoop,
+    /// A reason this client does not know, which a newer runtime gives; this runtime never
+    /// sends it.
+    // `#[serde(other)]` holds only on the last variant, so a new reason goes above this one.
+    #[serde(other)]
+    ForAnotherReason,
 }
 
 /// A labelled group a graph transaction made.

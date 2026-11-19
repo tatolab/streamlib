@@ -133,9 +133,8 @@ pub(crate) fn the_ends_a_link_is_judged_by(
 }
 
 /// The judgement of a link from `from` to `to` by its two ends' pin types, among
-/// `conversions`: a convert node's output, when the node holds the settings its conversion picks
-/// for that input, judged by the type it gives under them. `None` when either end is no node of
-/// `graph`, or either port is untyped.
+/// `conversions`: a convert node's output judged by the type it gives under the settings it
+/// holds. `None` when either end is no node of `graph`, or either port is untyped.
 pub(crate) fn the_verdict_on_a_link_between_typed_ends(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -149,28 +148,47 @@ pub(crate) fn the_verdict_on_a_link_between_typed_ends(
         input,
         ..
     } = the_typed_ends_of(graph, from, to)?;
+    Some(the_verdict_of_the_typed_ends(
+        graph,
+        from_node,
+        output_port,
+        output,
+        input,
+        conversions,
+    ))
+}
+
+/// The judgement of a link from `output`, at `output_port` of `from_node`, into `input`, among
+/// `conversions`: the output of a node of a conversion whose output follows a setting judged by
+/// the type it gives under the settings it holds.
+fn the_verdict_of_the_typed_ends(
+    graph: &Graph,
+    from_node: &GraphNode,
+    output_port: &PortInfo,
+    output: PinLinkEnd<'_>,
+    input: PinLinkInputEnd<'_>,
+    conversions: &[PinConversion],
+) -> PinLinkVerdict {
     let output_given = the_type_a_convert_node_gives_under_what_it_holds(
         graph,
         from_node,
         output_port,
-        input.end.pin_type,
         conversions,
     );
     let output = match &output_given {
         Some(pin_type) => PinLinkEnd { pin_type, ..output },
         None => output,
     };
-    Some(pin_link_verdict(output, input, conversions))
+    pin_link_verdict(output, input, conversions)
 }
 
-/// The type `output_port` of `node` gives into an input of `input`, when `node` is a node of a
-/// conversion whose output follows a setting and holds each setting that conversion picks for
-/// that input; `None` for any other output, which gives the type it states.
+/// The type `output_port` of `node` gives under the settings it holds, its config with its pin
+/// values over it, when `node` is a node of a conversion whose output follows a setting; `None`
+/// for any other output, which gives the type it states.
 fn the_type_a_convert_node_gives_under_what_it_holds(
     graph: &Graph,
     node: &GraphNode,
     output_port: &PortInfo,
-    input: &PinType,
     conversions: &[PinConversion],
 ) -> Option<PinType> {
     let conversion = conversions.iter().find(|conversion| {
@@ -178,20 +196,14 @@ fn the_type_a_convert_node_gives_under_what_it_holds(
             && conversion.output_port_name == output_port.name
             && conversion.output_picked_for_the_input.is_some()
     })?;
-    let picked = conversion.output_picked_for(input)?;
-    let held = the_pin_values_with_the_live_ones_over_them(graph, node);
-    let holds = |name: &String| {
-        held.get(name).or_else(|| {
-            node.config
-                .as_ref()
-                .and_then(|config| config.get(name.as_str()))
-        })
-    };
-    picked
-        .input_values
-        .iter()
-        .all(|(name, value)| holds(name) == Some(value))
-        .then_some(picked.output_pin_type)
+    let mut held = node
+        .config
+        .as_ref()
+        .and_then(|config| config.as_object())
+        .cloned()
+        .unwrap_or_default();
+    held.extend(the_pin_values_with_the_live_ones_over_them(graph, node));
+    conversion.output_given_under(&held)
 }
 
 /// The verdict of a link from `output_port` of the node named `output_node_name` to
@@ -278,7 +290,8 @@ fn the_link_its_pin_types_or_families_take(
         });
     };
     let conversions = graph.node_types_this_stream_resolves().pin_conversions();
-    let verdict = pin_link_verdict(output, input, &conversions);
+    let verdict =
+        the_verdict_of_the_typed_ends(graph, from_node, output_port, output, input, &conversions);
     if let Some(refusal) = verdict.refusal_of_the_link_made_as_it_is() {
         if a_link_connected == ALinkConnected::OfASavedGraph
             && matches!(refusal, PinLinkRefusal::PinTypesDoNotConnect { .. })

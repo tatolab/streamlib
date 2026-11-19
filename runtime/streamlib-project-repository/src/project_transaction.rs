@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use streamlib_runtime_client_contract::local_api_wire_contract::GraphTransactionInputOverriddenByALink;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
+};
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
@@ -755,6 +757,19 @@ pub struct ProjectTransaction {
     /// named it; an action sent again under its key is answered with them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    /// Each node a `connect` of its actions inserted on its link, and why, as their answer named
+    /// it; an action sent again under its key is answered with them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes_inserted_on_links: Vec<ProjectTransactionNodeInsertedOnALink>,
+}
+
+/// A node a `connect` inserted on the link it asked for, by its UUID, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTransactionNodeInsertedOnALink {
+    /// The node's UUID.
+    pub node: Uuid,
+    /// Why the `connect` inserted it.
+    pub inserted_because: GraphTransactionNodeInsertedBecause,
 }
 
 /// What the caller of a transaction sent, and what the answer it was sent named beside the
@@ -765,6 +780,8 @@ pub struct ProjectTransactionAsSentAndAnswered {
     pub actions_as_sent: Vec<ProjectAction>,
     /// Each input value they set that a link overrides.
     pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    /// Each node a `connect` of theirs inserted on its link, and why.
+    pub nodes_inserted_on_links: Vec<ProjectTransactionNodeInsertedOnALink>,
 }
 
 impl ProjectTransaction {

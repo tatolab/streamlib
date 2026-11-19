@@ -18,6 +18,7 @@ use super::*;
     execution = manual,
     input("tensor", delivery_profile = "newest", pin_type = Tensor),
     input("bgra_video", delivery_profile = "newest", pin_type = Texture, formats = ["bgra8_unorm"]),
+    input("rgba_video", delivery_profile = "newest", pin_type = Texture, formats = ["rgba8_unorm"]),
     input("nv12_video", delivery_profile = "newest", pin_type = Texture, formats = ["nv12"]),
     input("count", delivery_profile = "newest", pin_type = Integer),
     input("audio", delivery_profile = "newest", pin_type = Audio),
@@ -140,8 +141,9 @@ fn link(source: (&str, &str), target: (&str, &str)) -> (String, String, String, 
 
 /// A Texture linked into a Tensor gets a collapsed `TextureToTensor` and both its links in one
 /// edit, drawn halfway between the two nodes; the answer names the node, its type and why it
-/// was inserted, with both links; and one `undo` removes the node and both links, from the
-/// document and the running graph.
+/// was inserted, with both links, and the same `connect` sent again under its key answers the
+/// same; and one `undo` removes the node and both links, from the document and the running
+/// graph.
 ///
 /// Mental-revert: refusing the link, as the engine's own connect does, answers
 /// `link_pin_types_do_not_connect` and adds nothing.
@@ -153,15 +155,14 @@ async fn a_link_a_built_in_conversion_bridges_gets_its_convert_node_in_one_edit(
     let saved_before = project.the_graph_document_of("main");
     let live_before = engine.the_live_graph_of(&stream_id);
 
+    let mut connect = connected_by_alice(&camera_into_model(
+        project.stream_asset_of("main"),
+        "video",
+        "tensor",
+    ));
+    connect["idempotency_key"] = json!("convert-gesture");
     let applied = engine
-        .the_answer_or_the_refusal_of(
-            "connect",
-            connected_by_alice(&camera_into_model(
-                project.stream_asset_of("main"),
-                "video",
-                "tensor",
-            )),
-        )
+        .the_answer_or_the_refusal_of("connect", connect.clone())
         .await
         .unwrap_or_else(|refusal| panic!("the link connects through a node: {refusal:?}"));
 
@@ -205,6 +206,18 @@ async fn a_link_a_built_in_conversion_bridges_gets_its_convert_node_in_one_edit(
         3,
         "the running graph holds the convert node"
     );
+    let sent_again = engine
+        .the_answer_or_the_refusal_of("connect", connect)
+        .await
+        .unwrap_or_else(|refusal| panic!("the connect sent again answers: {refusal:?}"));
+    assert_eq!(
+        sent_again["transaction"], applied["transaction"],
+        "{sent_again}"
+    );
+    assert_eq!(
+        sent_again["added_nodes"], applied["added_nodes"],
+        "{sent_again}"
+    );
 
     let undone = engine
         .the_answer_or_the_refusal_of(
@@ -236,10 +249,13 @@ async fn a_link_a_built_in_conversion_bridges_gets_its_convert_node_in_one_edit(
 /// holding `format` `bgra8_unorm`, the format it picks for that input; into an input that takes
 /// only `nv12`, which it never writes, the link is refused and nothing is added.
 ///
+/// A second link out of that node, into an input that takes only `rgba8_unorm`, is refused by
+/// its pin types: the node writes the `bgra8_unorm` it holds.
+///
 /// Mental-revert: a conversion judged by its output as it states itself, a Texture of no format,
 /// is placed into the `nv12` input with a warning, and the node into `bgra8_unorm` holds no
 /// `format`; a link out of the node judged by that same declared output warns that it states no
-/// format.
+/// format, and the second link connects with that warning.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_placed_without_one() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -294,6 +310,25 @@ async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_pla
         json!({ "format": "bgra8_unorm" }),
         "{inserted}"
     );
+
+    let saved_before = project.the_graph_document_of("main");
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            connected_by_alice(&json!({
+                "stream": stream_asset,
+                "source": { "node": inserted["id"], "port": "image" },
+                "target": { "node": MODEL_NODE_UUID, "port": "rgba_video" },
+            })),
+        )
+        .await
+        .expect_err("the node writes bgra8_unorm, which the input does not take");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+        "{refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
 /// `check_link` answers `connects_through_convert_node` with the node `connect` would place, its
@@ -483,10 +518,12 @@ const SPARE_NODE_UUID: &str = "e6e6e6e6-e6e6-4e6e-8e6e-e6e6e6e6e6e6";
 
 /// A link needing a convert node on a stream an earlier operation of the same transaction has
 /// take its edits once the documents hold them, here a collapse placing a stream, is refused
-/// before anything is written, naming the node and the transaction of its own that places it.
+/// before anything is written, naming the node and the transaction of its own that places it;
+/// so is one only a module's conversion bridges, `link_needs_a_module_conversion`. A Float into
+/// an Integer connects there.
 ///
-/// Mental-revert: connecting it as it is writes the link to the document, and the running
-/// stream only warns of it as it takes the edit.
+/// Mental-revert: connecting either refused link as it is writes it to the document, and the
+/// running stream only warns of it as it takes the edit.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -531,15 +568,52 @@ async fn a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later_is_ref
         "{refusal:?}"
     );
     assert_eq!(project.the_graph_document_of("main"), saved_before);
+
+    let collapsed_then_connected = |output: &str, input: &str| {
+        json!({ "operations": [
+            { "operation": "collapse_selection_into_subgraph", "stream": stream_asset,
+              "nodes": [SPARE_NODE_UUID], "name": "sub" },
+            { "operation": "connect", "stream": stream_asset,
+              "source": { "node": CAMERA_NODE_UUID, "port": output },
+              "target": { "node": MODEL_NODE_UUID, "port": input } },
+        ], "author": an_agent_named("alice") })
+    };
+    let refusal = engine
+        .the_answer_or_the_refusal_of("transact", collapsed_then_connected("gate", "audio"))
+        .await
+        .expect_err("only a module's conversion bridges a Boolean into Audio");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkNeedsAModuleConversion,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+
+    engine
+        .the_answer_or_the_refusal_of("transact", collapsed_then_connected("level", "count"))
+        .await
+        .unwrap_or_else(|refusal| panic!("a Float connects into an Integer: {refusal:?}"));
+    assert!(
+        the_links_in(&project.the_graph_document_of("main")).contains(&link(
+            (CAMERA_NODE_UUID, "level"),
+            (MODEL_NODE_UUID, "count")
+        )),
+        "{}",
+        project.the_graph_document_of("main")
+    );
 }
 
 /// A Tensor linked into a Texture input that takes `bgra8_unorm` inside a placed stream, where
 /// `connect` places no convert node, is refused before anything is written, naming the node to
 /// add there; a Boolean linked into Audio, which only a module's conversion bridges, is refused
 /// `link_needs_a_module_conversion` with the `transact` that places it at that level, as at the
-/// stream's own level; neither graph document changes.
+/// stream's own level; a Tensor into an input that takes only `nv12`, which no conversion
+/// bridges, is refused by its pin types; neither graph document changes. A Float into an Integer
+/// connects there.
 ///
-/// Mental-revert: connecting either as it is writes the link to the placed stream's document.
+/// Mental-revert: connecting any of the three refused links as it is writes it to the placed
+/// stream's document.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_link_needing_a_convert_node_inside_a_placed_stream_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -623,8 +697,34 @@ async fn a_link_needing_a_convert_node_inside_a_placed_stream_is_refused() {
               "target": { "node": model_drawn, "port": "audio" } },
         ]})
     );
+    let connected_inside = |output: &str, input: &str| {
+        json!({ "stream": stream_asset, "level": [subgraph],
+                "source": { "node": camera_drawn, "port": output },
+                "target": { "node": model_drawn, "port": input },
+                "author": an_agent_named("alice") })
+    };
+    let refusal = engine
+        .the_answer_or_the_refusal_of("connect", connected_inside("tensor_out", "nv12_video"))
+        .await
+        .expect_err("no conversion writes nv12 from a Tensor");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+        "{refusal:?}"
+    );
     assert_eq!(project.the_graph_document_of("sub"), sub_before);
     assert_eq!(project.the_graph_document_of("main"), main_before);
+
+    engine
+        .the_answer_or_the_refusal_of("connect", connected_inside("level", "count"))
+        .await
+        .unwrap_or_else(|refusal| panic!("a Float connects into an Integer: {refusal:?}"));
+    assert_eq!(
+        the_links_in(&project.the_graph_document_of("sub")).len(),
+        1,
+        "{}",
+        project.the_graph_document_of("sub")
+    );
 }
 
 const TENSOR_ISLAND_TYPE: &str = "convert_node_test:TensorIsland";
