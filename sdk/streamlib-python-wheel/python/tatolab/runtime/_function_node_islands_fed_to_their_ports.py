@@ -29,6 +29,7 @@ from tatolab.runtime._function_node_preparation import (
     how_one_function_node_is_called,
     prepare_function_node_to_evaluate,
 )
+from tatolab.runtime._function_node_stored_values import STORED_VALUE_TYPES
 
 
 class FunctionNodeIslandsFedToTheirPorts:
@@ -341,6 +342,7 @@ def _where_each_input_takes_its_value(
     """Each input's earlier node output, or else its pin value, or else its declared default."""
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
     value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
+    pin_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_pin_types))
     where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], PinValueCarried]]" = []
     for input_port in prepared.input_ports:
         linked_from = linked_from_by_input_port.get(input_port)
@@ -365,6 +367,7 @@ def _where_each_input_takes_its_value(
                         node_id,
                         input_port,
                         value_type_by_input_port[input_port],
+                        pin_type_by_input_port.get(input_port),
                         pin_values_by_input_port[input_port],
                     ),
                 )
@@ -402,11 +405,15 @@ def _output_index(
 
 
 def _a_pin_value_as_the_island_carries_it(
-    node_id: str, input_port: str, value_type: str, pin_value: Any
+    node_id: str,
+    input_port: str,
+    value_type: str,
+    pin_type: "Optional[dict[str, Any]]",
+    pin_value: Any,
 ) -> PinValueCarried:
     what_it_is = f"function node `{node_id}`'s pin on input `{input_port}`"
-    if value_type in PART_VALUE_TYPES:
-        return pin_value_carried(value_type, pin_value, what_it_is)
+    if value_type in PART_VALUE_TYPES or value_type in STORED_VALUE_TYPES:
+        return pin_value_carried(value_type, pin_value, what_it_is, pin_type)
     if not isinstance(pin_value, (bool, int, float)):
         raise FunctionNodeDoesNotCompile(
             f"{what_it_is} is {pin_value!r}, and an island input takes a number or a bool. "

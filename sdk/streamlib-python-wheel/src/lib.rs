@@ -131,6 +131,14 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        python_function_node_island::read_the_stored_value_at_an_input_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_function_node_island::write_the_stored_value_on_an_output_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_function_node_island::hand_an_unread_message_on,
         module
     )?)?;

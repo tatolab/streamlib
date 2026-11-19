@@ -4,7 +4,7 @@
 use super::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, FunctionNodeLanguage, NodeClassImportPath,
+    AudioWindowContractDeclaredValues, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
     NodeClassShortName, NodeDescriptor, NodeKind, NodeRuntime, NodeScheduling, PinDeclaration,
     PortDescriptor, PortFamilyDeclaration, PortFamilyDeclarationDirection,
     refuse_audio_window_beside_a_skipping_delivery_profile,
@@ -474,6 +474,18 @@ fn read_pin_declaration(
         .map_err(|refusal| {
             format!("port {port_name:?}: {DESCRIBED_PIN_DECLARATION_KEY} {refusal}")
         })?;
+    let declared_pin_types = match &pin_declaration.pin_type {
+        DeclaredPinType::Is { pin_type } => std::slice::from_ref(pin_type),
+        DeclaredPinType::OneOf { pin_types } => pin_types.as_slice(),
+        DeclaredPinType::Any
+        | DeclaredPinType::SameAsInput { .. }
+        | DeclaredPinType::SetByInput { .. } => &[],
+    };
+    for pin_type in declared_pin_types {
+        pin_type.validate().map_err(|refusal| {
+            format!("port {port_name:?} declares the pin type {pin_type}, and {refusal}")
+        })?;
+    }
     if matches!(direction, PortDirection::Output) && pin_declaration.may_be_unset {
         return Err(format!(
             "output port {port_name:?} declares that it may be unset, and only an input holds a \
@@ -483,9 +495,10 @@ fn read_pin_declaration(
     Ok(pin_declaration)
 }
 
-/// Read the value an input port reads while nothing is linked into it: a
-/// number or a bool on a Channels input, or `null` on an optional function
-/// node input of any family.
+/// Read the value an input port reads while nothing is linked into it: on a port whose author
+/// declares its pin, a stored value of the type it declares, or `null` when it may be unset;
+/// on any other port, a number or a bool on a Channels input, or `null` on an optional
+/// function node input of any family.
 fn read_pin_default(
     pin_default: &serde_json::Value,
     port: &PortDescriptor,
@@ -496,6 +509,17 @@ fn read_pin_default(
             "output port {:?} declares a pin default, and only an input reads one",
             port.name
         ));
+    }
+    if let Some(pin_declaration) = &port.pin_declaration {
+        return pin_declaration
+            .check_value(pin_default)
+            .map(|()| pin_default.clone())
+            .map_err(|not_taken| {
+                format!(
+                    "input port {:?} declares the pin default {pin_default}, and it takes {}",
+                    port.name, not_taken.takes
+                )
+            });
     }
     if !pin_default.is_null()
         && port.family.family != crate::core::descriptors::PortFamily::Channels

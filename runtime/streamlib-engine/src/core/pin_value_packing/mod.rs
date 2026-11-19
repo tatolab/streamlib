@@ -9,14 +9,17 @@
 //!
 //! A number, a Boolean, a Color, a Vector, a Rectangle and a Transform each pack as a control
 //! message: a Channels block of one f64 sample on each of 1, 4, n, 4 and 16 channels at rate 0,
-//! which states no regular rate, its parts in the order their stored form lists them.
+//! which states no regular rate, its parts in the order their stored form lists them. A
+//! String, a Menu, an Asset and a List of them pack as a Records message `{"value": ...}`, and
+//! a List of numbers or values of parts as an Array frame of one attribute.
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use streamlib_ipc_types::{
-    ArrayFrameCpuAttributeToPack, ChannelsBlockDescriptorBody, ChannelsBlockSampleType,
-    DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
-    array_frame_payload_of_cpu_attributes,
+    ArrayFrameAttributeResidency, ArrayFrameCpuAttributeToPack, ArrayFrameDescriptorBody,
+    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
+    DataChannelPayloadDescriptorKind, RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES,
+    array_frame_attribute_table_of, array_frame_payload_of_cpu_attributes,
 };
 use streamlib_node_schema::pin_type::{
     ColorPinValue, RectanglePinValue, TransformPinValue, VectorComponentCount, VectorPinValue,
@@ -28,8 +31,13 @@ use crate::core::descriptors::{PinType, PortFamily};
 #[cfg(test)]
 mod tests;
 
-/// The Array attribute a Tensor a client writes as a number or a list of numbers is carried as.
+/// The Array attribute a Tensor a client writes as a number or a list of numbers is carried as,
+/// and the one attribute a List of numbers or values of parts travels as.
 pub const VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME: &str = "values";
+
+/// The key of the one entry of the Records message a String, a Menu, an Asset or a List of
+/// them travels as.
+pub const RECORDS_MESSAGE_VALUE_KEY: &str = "value";
 
 /// The element type of an Array attribute a client writes.
 const ARRAY_ATTRIBUTE_WRITTEN_BY_A_CLIENT_DTYPE: &str = "float64";
@@ -131,6 +139,11 @@ pub fn channel_count_of(pin_type: &PinType) -> Option<usize> {
 /// list of numbers nested to any depth, and an Audio block `{"samples": [[...], ...],
 /// "sample_rate"}` channel by channel, starting at `next_start_sample`. A control message starts
 /// at `next_start_sample` too.
+///
+/// A String, a Menu, an Asset, and a List of anything but numbers and values of parts, pack as
+/// a Records message `{"value": ...}`, a Menu as its option name. A List of numbers, Colors,
+/// Vectors, Rectangles or Transforms packs as an Array frame of one `float64` attribute,
+/// `values`, of shape `[n]` for numbers or `[n, parts]`, each element's parts in order.
 pub fn pack_pin_value(
     pin_type: &PinType,
     value: &Value,
@@ -146,25 +159,202 @@ pub fn pack_pin_value(
             &the_channel_values_of_a_stored_value(pin_type, value)?,
             next_start_sample,
         )),
+        PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
+            the_array_frame_of_a_list_of_parts(pin_type, element_type, value)
+        }
+        PinType::String {}
+        | PinType::Menu { .. }
+        | PinType::Asset { .. }
+        | PinType::ListOf { .. } => the_records_message_of_a_stored_value(pin_type, value),
         _ => Err(format!("a {pin_type} value does not pack onto a link yet")),
     }
 }
 
 /// The JSON form of the value of `pin_type` `message` carries, read as `pin_type` reads it, or
 /// why it does not read: a control message of another size is read with the free conversion the
-/// link verdict allows.
+/// link verdict allows, as is each element of a List of numbers or values of parts; a value a
+/// Records message carries is checked as a set value is, so a Menu refuses a name that is none
+/// of its options.
 pub fn unpack_pin_value(
     pin_type: &PinType,
     message: PackedPinValueRef<'_>,
 ) -> Result<Value, String> {
-    if channel_count_of(pin_type).is_none() {
-        return Err(format!("a {pin_type} value does not unpack off a link yet"));
+    match pin_type {
+        _ if channel_count_of(pin_type).is_some() => {
+            let read = the_channel_values_a_pin_type_reads(
+                pin_type,
+                &the_channel_values_a_control_message_carries(message)?,
+            )?;
+            Ok(the_stored_value_of_channel_values(pin_type, &read))
+        }
+        PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
+            the_list_of_parts_an_array_frame_carries(element_type, message)
+        }
+        PinType::String {}
+        | PinType::Menu { .. }
+        | PinType::Asset { .. }
+        | PinType::ListOf { .. } => the_stored_value_a_records_message_carries(pin_type, message),
+        _ => Err(format!("a {pin_type} value does not unpack off a link yet")),
     }
-    let read = the_channel_values_a_pin_type_reads(
-        pin_type,
-        &the_channel_values_a_control_message_carries(message)?,
-    )?;
-    Ok(the_stored_value_of_channel_values(pin_type, &read))
+}
+
+/// `value`, a stored value of `pin_type`, as the Records message `{"value": value}`, which a
+/// String, a Menu, an Asset and a List of them travel as, and a helper's island carries any List
+/// as; or why `pin_type` does not take it.
+pub fn the_records_message_of_a_stored_value(
+    pin_type: &PinType,
+    value: &Value,
+) -> Result<PackedPinValue, String> {
+    pin_type
+        .check_value(value)
+        .map_err(|not_taken| format!("`{value}` is not {}", not_taken.takes))?;
+    let payload = rmp_serde::to_vec_named(&serde_json::json!({ RECORDS_MESSAGE_VALUE_KEY: value }))
+        .map_err(|why| format!("the value does not encode: {why}"))?;
+    if payload.len() > RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES {
+        return Err(format!(
+            "the value encodes to {} bytes, past the {RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES} a \
+             Records message holds",
+            payload.len()
+        ));
+    }
+    Ok(PackedPinValue {
+        payload_descriptor: DataChannelPayloadDescriptor::records_message(),
+        payload,
+    })
+}
+
+/// The stored value of `pin_type` the Records message `message` carries under `value`, checked
+/// as a set value is; or why it carries none.
+pub fn the_stored_value_a_records_message_carries(
+    pin_type: &PinType,
+    message: PackedPinValueRef<'_>,
+) -> Result<Value, String> {
+    if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)
+        != Some(DataChannelPayloadDescriptorKind::RecordsMessage)
+    {
+        return Err(format!(
+            "a {pin_type} travels as a Records message, and the message is none"
+        ));
+    }
+    let record: Value = rmp_serde::from_slice(message.payload)
+        .map_err(|why| format!("the Records message does not decode: {why}"))?;
+    let Value::Object(mut record) = record else {
+        return Err("the Records message holds no map".to_owned());
+    };
+    let value = record.remove(RECORDS_MESSAGE_VALUE_KEY).ok_or_else(|| {
+        format!("a {pin_type} travels as `{{\"{RECORDS_MESSAGE_VALUE_KEY}\": ...}}`, and the message holds no `{RECORDS_MESSAGE_VALUE_KEY}`")
+    })?;
+    pin_type
+        .check_value(&value)
+        .map_err(|not_taken| format!("`{value}` is not {}", not_taken.takes))?;
+    Ok(value)
+}
+
+/// `value`, a stored List of `element_type`, a number or a value of parts, as an Array frame of
+/// one attribute holding each element's parts in order.
+fn the_array_frame_of_a_list_of_parts(
+    pin_type: &PinType,
+    element_type: &PinType,
+    value: &Value,
+) -> Result<PackedPinValue, String> {
+    pin_type
+        .check_value(value)
+        .map_err(|not_taken| format!("`{value}` is not {}", not_taken.takes))?;
+    let elements = value.as_array().map(Vec::as_slice).unwrap_or_default();
+    let parts_per_element = channel_count_of(element_type).unwrap_or(1);
+    let mut data = Vec::with_capacity(elements.len() * parts_per_element * 8);
+    for element in elements {
+        for part in the_channel_values_of_a_stored_value(element_type, element)? {
+            data.extend_from_slice(&part.to_le_bytes());
+        }
+    }
+    let shape = match parts_per_element {
+        1 => vec![elements.len() as u64],
+        parts => vec![elements.len() as u64, parts as u64],
+    };
+    the_array_frame_of_attributes(&[ArrayAttributeOfAJsonValue {
+        name: VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME.to_owned(),
+        shape,
+        data,
+    }])
+}
+
+/// The List of `element_type`, a number or a value of parts, the Array frame `message` carries
+/// in its one CPU attribute of shape `[n]` or `[n, parts]`, `float64` or `float32`.
+fn the_list_of_parts_an_array_frame_carries(
+    element_type: &PinType,
+    message: PackedPinValueRef<'_>,
+) -> Result<Value, String> {
+    if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)
+        != Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+    {
+        return Err(format!(
+            "a List of {element_type} travels as an Array frame, and the message is none"
+        ));
+    }
+    let body = ArrayFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body);
+    let rows = array_frame_attribute_table_of(body, message.payload).map_err(|why| why.reason)?;
+    let [row] = rows.as_slice() else {
+        return Err(format!(
+            "a List travels as an Array frame of one attribute, and the message holds {}",
+            rows.len()
+        ));
+    };
+    let ArrayFrameAttributeResidency::Cpu {
+        payload_byte_offset,
+        byte_len,
+    } = row.residency
+    else {
+        return Err(format!(
+            "Array attribute {:?} is on the GPU, and a List is read on the CPU",
+            row.name
+        ));
+    };
+    let (element_count, parts_per_element) = match row.shape.as_slice() {
+        [element_count] => (*element_count as usize, 1),
+        [element_count, parts] => (*element_count as usize, *parts as usize),
+        shape => {
+            return Err(format!(
+                "a List's Array attribute has the shape [n] or [n, parts], and {:?} has {shape:?}",
+                row.name
+            ));
+        }
+    };
+    let sample_bytes = match row.dtype.as_str() {
+        "float64" => 8,
+        "float32" => 4,
+        dtype => {
+            return Err(format!(
+                "a List's Array attribute holds float64 or float32, and {:?} holds {dtype}",
+                row.name
+            ));
+        }
+    };
+    let data = &message.payload[payload_byte_offset as usize..][..byte_len as usize];
+    if data.len() != element_count * parts_per_element * sample_bytes {
+        return Err(format!(
+            "Array attribute {:?} states the shape {:?} and holds {} bytes",
+            row.name,
+            row.shape,
+            data.len()
+        ));
+    }
+    let numbers: Vec<f64> = data
+        .chunks_exact(sample_bytes)
+        .map(|sample| match sample_bytes {
+            8 => f64::from_le_bytes(sample.try_into().unwrap_or_default()),
+            _ => f64::from(f32::from_le_bytes(sample.try_into().unwrap_or_default())),
+        })
+        .collect();
+    numbers
+        .chunks(parts_per_element.max(1))
+        .take(element_count)
+        .map(|parts| {
+            the_channel_values_a_pin_type_reads(element_type, parts)
+                .map(|read| the_stored_value_of_channel_values(element_type, &read))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Value::Array)
 }
 
 /// The numbers `value`, a stored value of `pin_type` in its JSON form, packs as, one per

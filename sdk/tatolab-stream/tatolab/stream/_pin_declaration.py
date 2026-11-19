@@ -37,6 +37,7 @@ from ._pin_types import (
     PIN_TYPE_SPELLINGS,
     PIN_VALUE_CLASSES,
     ExactNumberSize,
+    Asset,
     PinValueOfParts,
     pin_type_spelling_written_as,
 )
@@ -59,6 +60,8 @@ type NodeDeclarationFindingCode = Literal[
     "pin_type_unknown",
     "pin_type_not_read_yet",
     "exact_size_only_as_an_element",
+    "menu_options_not_valid",
+    "list_element_not_taken",
     "pin_annotation_not_taken",
     "pin_annotation_repeated",
     "value_input_has_no_default",
@@ -235,7 +238,13 @@ class _PinReading:
             )
         return sizes[0] if sizes else None
 
-    def _pin_type_of(self, written_type: object, exact_size: Optional[ExactNumberSize]) -> PinType:
+    def _pin_type_of(
+        self,
+        written_type: object,
+        exact_size: Optional[ExactNumberSize],
+        *,
+        as_an_element: bool = False,
+    ) -> PinType:
         written_form = self._written_form_of(written_type, exact_size)
         spelling = pin_type_spelling_written_as(written_form)
         row = _PIN_TYPE_DESCRIPTION_BY_NAME[spelling.pin_type_name]
@@ -253,10 +262,14 @@ class _PinReading:
             )
         if _is_a_value_class_of_parts(written_type):
             return dict(written_type.pin_type)  # pyright: ignore[reportReturnType]
+        if written_form == "Literal":
+            return self._menu_pin_type_of(written_type)
+        if written_form == "list":
+            return self._list_pin_type_of(written_type)
         if exact_size is None:
             pin_type: PinType = {"type": spelling.pin_type_name}  # pyright: ignore[reportAssignmentType]
             return pin_type
-        if exact_size.size in INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS:
+        if exact_size.size in INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS and not as_an_element:
             raise self._refusal(
                 f"{self._pin_named} is typed `{written_form}`, and a single pin holds a whole "
                 f"number exact to 2^53 at most, so `{written_form}` types only an element of a "
@@ -266,6 +279,56 @@ class _PinReading:
         if exact_size.size in INTEGER_BOUNDS_OF_EACH_SIZE:
             return {"type": "integer", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
         return {"type": "float", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
+
+    def _menu_pin_type_of(self, written_type: object) -> PinType:
+        option_names = typing.get_args(written_type)
+        if not all(isinstance(option, str) for option in option_names):
+            raise self._refusal(
+                f"{self._pin_named} is typed {_name_of(written_type)}, and a Menu's options are "
+                f"names. To fix: list strings, `Literal[\"sine\", \"square\"]`.",
+                "menu_options_not_valid",
+            )
+        if len(set(option_names)) != len(option_names):
+            raise self._refusal(
+                f"{self._pin_named} is typed {_name_of(written_type)}, which lists an option "
+                f"twice. To fix: list each option once.",
+                "menu_options_not_valid",
+            )
+        return {"type": "menu", "option_names": list(option_names)}  # pyright: ignore[reportReturnType]
+
+    def _list_pin_type_of(self, written_type: object) -> PinType:
+        element_annotations = typing.get_args(written_type)
+        if len(element_annotations) != 1:
+            raise self._refusal(
+                f"{self._pin_named} is typed {_name_of(written_type)}, and a List names the type "
+                f"of its elements. To fix: `list[float]`, or a List of another type.",
+                "list_element_not_taken",
+            )
+        element_type, metadata, optional = self._written_type_metadata_and_optional(
+            element_annotations[0]
+        )
+        not_an_element = [
+            entry for entry in metadata if not isinstance(entry, (ExactNumberSize, Description))
+        ]
+        if optional or not_an_element:
+            raise self._refusal(
+                f"{self._pin_named} is typed {_name_of(written_type)}, and a List element is "
+                f"a value of one type with no annotation of its own, never `None`. To fix: "
+                f"annotate the List, `Annotated[list[float], ...]`.",
+                "list_element_not_taken",
+            )
+        element_form = self._written_form_of(element_type, self._exact_size_among(metadata))
+        if element_form not in _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES:
+            raise self._refusal(
+                f"{self._pin_named} is typed {_name_of(written_type)}, and a List element is a "
+                f"small type, {_written_forms_a_list_element_takes()}; `{element_form}` is not. "
+                f"To fix: type its elements as one of them.",
+                "list_element_not_taken",
+            )
+        element_pin_type = self._pin_type_of(
+            element_type, self._exact_size_among(metadata), as_an_element=True
+        )
+        return {"type": "list_of", "element_type": element_pin_type}  # pyright: ignore[reportReturnType]
 
     def _written_form_of(self, written_type: object, exact_size: Optional[ExactNumberSize]) -> str:
         if written_type is typing.Any:
@@ -296,7 +359,7 @@ class _PinReading:
             return "Literal"
         if written_type is list or typing.get_origin(written_type) is list:
             return "list"
-        if _is_a_value_class_of_parts(written_type):
+        if _is_a_value_class_of_parts(written_type) or written_type is Asset:
             return written_type.__name__
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
@@ -435,8 +498,61 @@ class _PinReading:
                 if type(default) is not value_class:
                     raise not_of_its_type
                 return default.stored_value()
+            case {"type": "string"}:
+                if not isinstance(default, str):
+                    raise not_of_its_type
+                return default
+            case {"type": "menu", "option_names": option_names}:
+                if default not in option_names:
+                    raise self._refusal(
+                        f"{self._pin_named} defaults to {default!r}, which is none of its "
+                        f"options, {', '.join(repr(option) for option in option_names)}. To "
+                        f"fix: default to one of them.",
+                        "pin_default_not_of_its_type",
+                    )
+                return default
+            case {"type": "asset"}:
+                if type(default) is not Asset:
+                    raise not_of_its_type
+                return default.stored_value()
+            case {"type": "list_of", "element_type": element_type}:
+                if not isinstance(default, (list, tuple)):
+                    raise not_of_its_type
+                element_row = _PIN_TYPE_DESCRIPTION_BY_NAME[element_type["type"]]
+                return [
+                    self._default_of_its_type(element, element_type, element_row)
+                    for element in default  # pyright: ignore[reportUnknownVariableType]
+                ]
             case _:
                 raise not_of_its_type
+
+
+# The written forms of the small types, which a List element takes.
+_WRITTEN_FORMS_A_LIST_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
+    spelling.written_form
+    for spelling in PIN_TYPE_SPELLINGS
+    if spelling.pin_type_name
+    in (
+        "boolean",
+        "integer",
+        "float",
+        "string",
+        "menu",
+        "color",
+        "vector",
+        "rectangle",
+        "transform",
+        "asset",
+    )
+)
+
+
+def _written_forms_a_list_element_takes() -> str:
+    return ", ".join(
+        f"`{spelling.written_form}`"
+        for spelling in PIN_TYPE_SPELLINGS
+        if spelling.written_form in _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES
+    )
 
 
 def _is_a_value_class_of_parts(written_type: object) -> typing.TypeGuard[type[PinValueOfParts]]:

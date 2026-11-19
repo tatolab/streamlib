@@ -52,6 +52,8 @@ pub enum FunctionNodeIslandOutputValue {
     ControlValue(Vec<f64>),
     /// A `dict`, as a Records message's msgpack payload.
     RecordsMessage(Vec<u8>),
+    /// A String, a Menu, an Asset or a List, packed as its pin type packs it.
+    Packed(PackedPinValue),
     /// A message the island read off a channel and hands on unread.
     MessageHandedOnUnread(MessageAFunctionNodeIslandHandsOnUnread),
     /// Nothing at this read: the reader reads no message from the port.
@@ -301,6 +303,13 @@ impl InputPortFedByAFunctionNodeIsland {
                     records_message_payload,
                     DataChannelPayloadDescriptor::records_message(),
                 )
+            }
+            FunctionNodeIslandOutputValue::Packed(PackedPinValue {
+                payload_descriptor,
+                payload,
+            }) => {
+                self.reads_answered.fetch_add(1, Ordering::Relaxed);
+                (payload, payload_descriptor)
             }
         };
         Ok(Some(MessageReadFromInputPort {
