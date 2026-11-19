@@ -200,7 +200,7 @@ def play(local_api: LocalApiClient, project_directory: str, stream_id: str) -> N
     played = local_api.stream_action_once_ended(
         queued_playback["action"], timeout=PROJECT_LOAD_TIMEOUT_SECONDS
     )
-    assert played["state"] == "done", played
+    assert played["state"] == "done", json.dumps(played)
     assert {stream["stream"]: stream["state"] for stream in played["streams"]} == {
         stream_id: "running"
     }, played

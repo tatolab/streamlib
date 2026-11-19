@@ -24,6 +24,12 @@ from tatolab.stream import (
 )
 
 
+#: The font asset a new `Caption` names. A function node takes a value on every input, so the
+#: font has a default; the sample holds no such asset, so the Studio names it by its UUID until
+#: one is picked.
+DEFAULT_FONT = Asset("5d1e8c27-4b9a-4f3e-a6c0-9e2b7d41f058")
+
+
 @node.meta(
     category="Every pin kind",
     description="A caption's words and how it is laid out, each set with the control it names.",
@@ -63,10 +69,10 @@ def Caption(
         Description("Where the caption's box sits in the frame."),
     ] = Vector2(0.0, -0.5),
     font: Annotated[
-        Asset | None,
+        Asset,
         PinControl("file_picker"),
-        Description("The font the caption is set in."),
-    ] = None,
+        Description("The font the caption is set in, an asset of the project."),
+    ] = DEFAULT_FONT,
 ) -> str:
     """The caption's words as shown: nothing while not `shown`, else at most `lines` of
     `words`."""
