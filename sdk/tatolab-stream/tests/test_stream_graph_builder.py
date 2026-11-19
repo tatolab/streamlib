@@ -106,7 +106,7 @@ def config_compiled_for(config: "Mapping[str, Any]") -> "dict[str, Any]":
         "def main(stream_builder):\n    stream_builder.add(StandInMarker, config=config_under_test)\n",
         namespace,
     )
-    return run_graph_generator(graph_generator(namespace["main"]))["nodes"][0]["config"]
+    return run_graph_generator(graph_generator(namespace["main"]))["nodes"][0]["input_values"]
 
 
 def a_config_holding_itself() -> "dict[str, Any]":
@@ -273,9 +273,9 @@ def test_a_stream_name_casting_to_nothing_is_refused_naming_it() -> None:
 
 def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None:
     assert run_graph_generator(every_kind_of_node)["nodes"] == [
-        {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
-        {"name": "framedarkener", "type": FRAME_DARKENER_TYPE, "config": {}},
-        {"name": "standinmarker", "type": StandInMarker.type, "config": {}},
+        {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "input_values": {}},
+        {"name": "framedarkener", "type": FRAME_DARKENER_TYPE, "input_values": {}},
+        {"name": "standinmarker", "type": StandInMarker.type, "input_values": {}},
     ]
 
 
@@ -284,7 +284,7 @@ def test_a_native_marker_is_the_type_its_class_carries() -> None:
         {
             "name": "channelstorecords",
             "type": CHANNELS_TO_RECORDS_TYPE,
-            "config": RIG_CHANNELS_TO_RECORDS,
+            "input_values": RIG_CHANNELS_TO_RECORDS,
         },
     ]
 
@@ -442,7 +442,7 @@ def test_an_add_refused_for_its_config_records_nothing(config: Any) -> None:
 
 
 def test_config_is_normalised_to_plain_json() -> None:
-    config = run_graph_generator(a_configured_stream)["nodes"][0]["config"]
+    config = run_graph_generator(a_configured_stream)["nodes"][0]["input_values"]
 
     assert config == {
         "title": "Rig",
@@ -459,7 +459,7 @@ def test_config_is_normalised_to_plain_json() -> None:
 def test_a_node_with_no_config_records_an_empty_object() -> None:
     graph = run_graph_generator(every_kind_of_node)
 
-    assert [each_node["config"] for each_node in graph["nodes"]] == [{}, {}, {}]
+    assert [each_node["input_values"] for each_node in graph["nodes"]] == [{}, {}, {}]
 
 
 def test_a_config_that_is_not_a_mapping_is_refused() -> None:
@@ -648,9 +648,9 @@ def test_a_config_nested_one_past_what_a_graph_carries_is_refused_at_add_by_key_
     )
     assert str(refusal.value) == (
         f"config nests too deep for a graph: `{deepest_key_path}` is a container 124 "
-        f"deep counting `config` itself, and a config nests at most 123 — "
+        f"deep counting `config` itself, and `config` nests at most 123 — "
         f"a graph nests at most 126 containers from its root, and the graph, its "
-        f"`nodes` list and the node enclose every config. Nest the data at most 123 "
+        f"`nodes` list and the node enclose every node's values. Nest the data at most 123 "
         f"containers deep, or carry the deeper part as a `str`"
     )
 
@@ -661,7 +661,7 @@ def test_a_config_nested_5000_deep_is_refused_by_name_rather_than_by_recursion()
 
     assert type(refusal.value) is ValueError
     assert str(refusal.value).startswith("config nests too deep for a graph: ")
-    assert "a config nests at most 123" in str(refusal.value)
+    assert "`config` nests at most 123" in str(refusal.value)
 
 
 def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:
@@ -800,8 +800,8 @@ def test_a_hand_built_reference_reaches_the_graph_cast() -> None:
     assert run_graph_generator(hand_built_references) == {
         "stream": "hand_built_references",
         "nodes": [
-            {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
-            {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "config": {}},
+            {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "input_values": {}},
+            {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "input_values": {}},
         ],
         "links": [
             {

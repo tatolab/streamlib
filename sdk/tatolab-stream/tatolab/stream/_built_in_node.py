@@ -34,5 +34,5 @@ class BuiltInNode(Generic[ConfigTypeOfTheBuiltInNode]):
             raise TypeError(
                 f"`{type(self).__name__}` is a built-in node, which the runtime runs; it "
                 f"is never constructed in Python. Pass the class itself to "
-                f"`stream_builder.add({type(self).__name__}, config={{...}})`."
+                f"`stream_builder.add({type(self).__name__}, input_values={{...}})`."
             )

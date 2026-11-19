@@ -48,6 +48,7 @@ STREAM_GRAPH_BUILDER_SOURCES = tuple(
         "_stream_graph_builder.py",
         "_stream_builder.py",
         "_graph_generator_detection.py",
+        "_typed_node_pins.py",
     )
 )
 
@@ -117,16 +118,16 @@ def test_a_stream_compiles_to_its_graph() -> None:
             {
                 "name": "channelstorecords",
                 "type": CHANNELS_TO_RECORDS_TYPE,
-                "config": RIG_CHANNELS_TO_RECORDS,
+                "input_values": RIG_CHANNELS_TO_RECORDS,
             },
-            {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
-            {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "config": {}},
-            {"name": "backup-meter", "type": BRIGHTNESS_READER_TYPE, "config": {}},
-            {"name": "frameinverter-2", "type": FRAME_INVERTER_TYPE, "config": {}},
+            {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "input_values": {}},
+            {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "input_values": {}},
+            {"name": "backup-meter", "type": BRIGHTNESS_READER_TYPE, "input_values": {}},
+            {"name": "frameinverter-2", "type": FRAME_INVERTER_TYPE, "input_values": {}},
             {
                 "name": "rigmonitor",
                 "type": RIG_MONITOR_TYPE,
-                "config": {"name": "Rig Monitor"},
+                "input_values": {"name": "Rig Monitor"},
             },
         ],
         "links": [
@@ -173,9 +174,9 @@ def test_a_stream_that_adds_nothing_compiles_to_an_empty_graph() -> None:
 
 def test_each_compile_returns_a_fresh_graph() -> None:
     first = run_graph_generator(a_configured_stream)
-    first["nodes"][0]["config"]["overlay"]["labels"].append("mutated")
+    first["nodes"][0]["input_values"]["overlay"]["labels"].append("mutated")
 
-    assert run_graph_generator(a_configured_stream)["nodes"][0]["config"][
+    assert run_graph_generator(a_configured_stream)["nodes"][0]["input_values"][
         "overlay"
     ]["labels"] == ["left", "right"]
 
@@ -472,6 +473,9 @@ def test_the_builder_modules_import_nothing_native() -> None:
                 (1, "_port_family_declaration"),
                 (1, "_stream_builder"),
                 (1, "_graph_generator_detection"),
+                (1, "_typed_node_pins"),
+                (1, "_contract_pin_types"),
+                (1, "_pin_declaration"),
             }, module_name
 
 
@@ -482,7 +486,7 @@ def test_a_node_reference_in_config_compiles_to_the_node_object_it_names() -> No
         BrightnessReader, config={"source": inverter, "nested": [{"also": inverter}]}
     )
 
-    assert stream_builder._compiled_graph()["nodes"][1]["config"] == {
+    assert stream_builder._compiled_graph()["nodes"][1]["input_values"] == {
         "source": {"node": "frameinverter"},
         "nested": [{"also": {"node": "frameinverter"}}],
     }
@@ -546,11 +550,11 @@ def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_on
     stream_builder.add(BrightnessReader, config={"source": getter})
 
     nodes = stream_builder._compiled_graph()["nodes"]
-    assert nodes[1]["config"] == {
+    assert nodes[1]["input_values"] == {
         "variable": "connection",
         "node_reference": {"node": "frameinverter"},
     }
-    assert nodes[3]["config"] == {"source": {"node": "getvariable"}}
+    assert nodes[3]["input_values"] == {"source": {"node": "getvariable"}}
 
 
 def test_a_node_reference_in_the_deepest_container_a_config_nests_is_refused_as_too_deep() -> None:
@@ -585,7 +589,7 @@ def test_interface_nodes_compile_with_their_family_written_by_its_wire_name() ->
     stream_builder.connect(inverter.output("video_to_downstream"), leaving.input("value"))
 
     graph = stream_builder._compiled_graph()
-    assert [(node["name"], node["type"], node["config"]) for node in graph["nodes"]] == [
+    assert [(node["name"], node["type"], node["input_values"]) for node in graph["nodes"]] == [
         ("graphinput", "tatolab.stream:GraphInput", {"port": "camera", "family": "image"}),
         ("frameinverter", FrameInverter.__module__ + ":FrameInverter", {}),
         ("graphoutput", "tatolab.stream:GraphOutput", {"port": "inverted", "family": "image"}),

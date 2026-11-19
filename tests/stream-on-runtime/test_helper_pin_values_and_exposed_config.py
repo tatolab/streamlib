@@ -22,10 +22,12 @@ from helper_placement_streams import (
     lfo_into_python_sink_reporting_each_batch_it_reads,
     python_class_reporting_its_configured_level,
     python_sink_reading_the_pin_value_of_its_unlinked_input,
+    typed_level_scaled_by_the_gain_its_input_values_hold_into_python_sink,
 )
 from helper_process_observation import (
     helper_process_ids_started_in,
 )
+from stream_runs_on_tatolabd import TatolabRunOfAProject
 
 
 pytestmark = pytest.mark.requires_gpu
@@ -392,3 +394,56 @@ def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_l
     assert unlinked_again["lowest"] == unlinked_again["highest"] == pytest.approx(0.25), (
         f"a field its link stops driving reads the config again, and the class read {unlinked_again}"
     )
+
+
+def test_a_typed_node_built_with_input_values_starts_with_them_and_reopens_with_them(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A typed function node the stream builder gave `gain` 0.5 through `input_values`
+    scales its level 1.0 to 0.5 from its first call, `graph` shows the 0.5 as the value its
+    document saved, and the project stopped and opened again reads 0.5 again.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        typed_level_scaled_by_the_gain_its_input_values_hold_into_python_sink
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    started, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert started["lowest"] == started["highest"] == pytest.approx(0.5), (
+        f"the level 1.0 scaled by the gain 0.5 its input values hold, and the class read {started}"
+    )
+
+    def the_gain_of_the_scaled_node(stream: str) -> "tuple[dict, dict]":
+        (scaled,) = [
+            node
+            for node in local_api.call_tool("graph", {"stream": stream})["nodes"]
+            if node["name"] == "scaled"
+        ]
+        (gain,) = [port for port in scaled["ports"]["inputs"] if port["name"] == "gain"]
+        return scaled, gain
+
+    scaled, gain = the_gain_of_the_scaled_node(stream_id)
+    assert scaled["input_values"] == {"gain": 0.5}, scaled
+    assert gain["value"] == pytest.approx(0.5) and gain["value_comes_from"] == "saved", gain
+
+    first_run = tatolabd.stream_runs[-1]
+    assert first_run.stop_the_stream() == 0
+    reopened_at = time.monotonic_ns()
+    tatolabd.run_stream(
+        TatolabRunOfAProject(
+            working_directory=first_run.working_directory,
+            dir_as_typed=first_run.project_dir_argument,
+        )
+    )
+    reopened_stream_id = tatolabd.await_the_latest_stream_loaded()
+    reopened, _ = the_first_value_batch_read_after(
+        tatolabd, reopened_at, from_occurrence=occurrence + 1
+    )
+    _, gain_reopened = the_gain_of_the_scaled_node(reopened_stream_id)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert reopened["lowest"] == reopened["highest"] == pytest.approx(0.5), (
+        f"the reopened project reads the gain its document saved, and the class read {reopened}"
+    )
+    assert gain_reopened["value_comes_from"] == "saved", gain_reopened

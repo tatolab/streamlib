@@ -77,7 +77,7 @@ def test_a_stream_names_the_sink_by_the_type_the_module_publishes():
     graph = run_graph_generator(a_virtual_camera)
 
     assert [
-        (node["name"], node["type"], node["config"]) for node in graph["nodes"]
+        (node["name"], node["type"], node["input_values"]) for node in graph["nodes"]
     ] == [
         (
             "virtualcamerasink",
