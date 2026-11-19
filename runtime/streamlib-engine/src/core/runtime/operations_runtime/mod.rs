@@ -972,3 +972,6 @@ mod connect_judges_two_typed_pins_by_their_verdict_tests;
 
 #[cfg(test)]
 mod connect_refuses_an_island_into_the_app_process_tests;
+
+#[cfg(test)]
+mod connect_resolves_a_pin_type_found_another_way_tests;

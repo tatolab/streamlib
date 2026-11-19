@@ -112,6 +112,7 @@ mod tests {
             audio_window: None,
             pin_default: None,
             pin: None,
+            declared_pin_type: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             former_names: Vec::new(),
             may_be_unset: false,

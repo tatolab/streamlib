@@ -127,6 +127,9 @@ impl PythonNodeDeclaration {
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
         declare_each_typed_port(&mut descriptor, typed_ports)?;
         descriptor.conversion = read_whether_it_states_a_conversion(described_node_type)?;
+        if let Some(refusal) = descriptor.refusal_of_a_port_whose_type_no_input_finds() {
+            return Err(refusal);
+        }
         for output in &descriptor.outputs {
             if let Some(followed_input_port) = output.family.family_follows_input_port.as_deref()
                 && !descriptor
@@ -486,6 +489,14 @@ fn read_pin_declaration(
             format!("port {port_name:?} declares the pin type {pin_type}, and {refusal}")
         })?;
     }
+    if matches!(direction, PortDirection::Output)
+        && matches!(pin_declaration.pin_type, DeclaredPinType::Any)
+    {
+        return Err(format!(
+            "output port {port_name:?} declares any type, and only an input takes any type; an \
+             output carrying what such an input reads declares the type of that input"
+        ));
+    }
     if matches!(direction, PortDirection::Output) && pin_declaration.may_be_unset {
         return Err(format!(
             "output port {port_name:?} declares that it may be unset, and only an input holds a \
@@ -786,3 +797,6 @@ mod ports_typed_by_a_signature;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod pin_type_found_another_way_tests;
