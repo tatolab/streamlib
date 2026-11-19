@@ -11,14 +11,19 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
+use streamlib::sdk::descriptors::{PinType, VectorComponentCount};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
-    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
-    DataChannelPayloadDescriptorKind, FunctionNodeIslandEvaluatedAtEachRead,
-    FunctionNodeIslandOutputValue, GpuPoolSlotFrameDescriptorBody,
-    HelperProcessLossCountBoardWriter, ImageFrameDescriptorBody, InputMailboxesInner,
-    MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
+    DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
+    FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputValue,
+    GpuPoolSlotFrameDescriptorBody, HelperProcessLossCountBoardWriter, ImageFrameDescriptorBody,
+    InputMailboxesInner, MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
+};
+
+use streamlib::sdk::pin_value_packing::{
+    PackedPinValueRef, the_channel_values_a_control_message_carries,
+    the_channel_values_a_pin_type_reads,
 };
 
 use crate::python_bag_conversion::{records_message_dict_of, records_message_payload_of};
@@ -45,6 +50,9 @@ pub(crate) enum FunctionNodeValue {
     Number(f64),
     /// A `dict`, which only a node run as Python takes or gives.
     Record(Py<PyAny>),
+    /// A Color, a Vector, a Rectangle or a Transform: its parts in the order its stored form
+    /// lists them, which only a node run as Python takes or gives.
+    Parts(Vec<f64>),
     /// A message read off a channel, which a node hands on without reading it.
     MessageHandedOnUnread(Arc<MessageAFunctionNodeIslandHolds>),
     /// No value: a link from outside the island that carried none yet, a
@@ -60,6 +68,11 @@ impl FunctionNodeValue {
             Self::Record(_) => Err(Error::Runtime(format!(
                 "function node `{node_id}` runs compiled and takes a number on input \
                  {input_index}, and was handed a dict"
+            ))),
+            Self::Parts(parts) => Err(Error::Runtime(format!(
+                "function node `{node_id}` runs compiled and takes a number on input \
+                 {input_index}, and was handed a value of {} parts",
+                parts.len()
             ))),
             Self::MessageHandedOnUnread(_) => Err(Error::Runtime(format!(
                 "function node `{node_id}` takes a number on input {input_index}, and was \
@@ -80,6 +93,7 @@ impl FunctionNodeValue {
         match self {
             Self::Number(number) => Self::Number(*number),
             Self::Record(record) => Python::attach(|python| Self::Record(record.clone_ref(python))),
+            Self::Parts(parts) => Self::Parts(parts.clone()),
             Self::MessageHandedOnUnread(message) => {
                 Self::MessageHandedOnUnread(Arc::clone(message))
             }
@@ -91,6 +105,7 @@ impl FunctionNodeValue {
         Ok(match self {
             Self::Number(number) => number.into_pyobject(python)?.into_any(),
             Self::Record(record) => record.bind(python).clone(),
+            Self::Parts(parts) => PyTuple::new(python, parts)?.into_any(),
             Self::MessageHandedOnUnread(message) => Bound::new(
                 python,
                 UnreadMessageAFunctionNodeHandsOn {
@@ -103,8 +118,9 @@ impl FunctionNodeValue {
     }
 
     /// `value` as a function node gives it: `None` as nothing, a message it
-    /// was handed as that message, a `dict` as a record, anything else as the
-    /// number it converts to.
+    /// was handed as that message, a `dict` as a record, a `tuple` of numbers
+    /// as the parts of a Color, a Vector, a Rectangle or a Transform, anything
+    /// else as the number it converts to.
     fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         if value.is_none() {
             return Ok(Self::Nothing);
@@ -117,6 +133,9 @@ impl FunctionNodeValue {
         if value.is_instance_of::<PyDict>() {
             return Ok(Self::Record(value.clone().unbind()));
         }
+        if value.is_instance_of::<PyTuple>() {
+            return Ok(Self::Parts(value.extract::<Vec<f64>>()?));
+        }
         Ok(Self::Number(value.extract::<f64>()?))
     }
 
@@ -126,7 +145,8 @@ impl FunctionNodeValue {
         output_index: usize,
     ) -> Result<FunctionNodeIslandOutputValue> {
         Ok(match self {
-            Self::Number(number) => FunctionNodeIslandOutputValue::ControlValue(*number),
+            Self::Number(number) => FunctionNodeIslandOutputValue::ControlValue(vec![*number]),
+            Self::Parts(parts) => FunctionNodeIslandOutputValue::ControlValue(parts.clone()),
             Self::Record(record) => Python::attach(|python| {
                 records_message_payload_of(
                     &format!("function node `{node_id}`'s output {output_index}"),
@@ -253,10 +273,14 @@ impl UnreadMessageAFunctionNodeHandsOn {
 
 /// How a function node input reads the messages a link from outside its
 /// island carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum HowAnInputReadsALinkFromOutsideItsIsland {
-    /// As the control value a Channels message carries: its first sample.
+    /// As the number a control message carries: the first sample of its first
+    /// channel.
     ControlValue,
+    /// As the parts of a value of the pin type, one on each channel of a
+    /// control message, read with the free conversion a link allows.
+    Parts(PinType),
     /// As the dict a Records message carries.
     Record,
     /// As the message itself, handed on unread: nothing at an evaluation no new
@@ -271,45 +295,77 @@ impl HowAnInputReadsALinkFromOutsideItsIsland {
             "float" | "int" | "bool" => Ok(Self::ControlValue),
             "records" => Ok(Self::Record),
             "unread_message" => Ok(Self::MessageHandedOnUnread),
-            unknown => Err(format!(
-                "an input of value type {unknown:?} cannot read a link from a node outside its \
-                 island; it reads a number, a dict or an `UnreadMessage`"
-            )),
+            value_type => the_pin_type_a_value_type_carries_in_parts(value_type)
+                .map(Self::Parts)
+                .ok_or_else(|| {
+                    format!(
+                        "an input of value type {value_type:?} cannot read a link from a node \
+                         outside its island; it reads a number, a Color, a Vector, a \
+                         Rectangle, a Transform, a dict or an `UnreadMessage`"
+                    )
+                }),
         }
     }
 }
 
-/// The control value a Channels message carries: its first sample.
+/// The pin type of a value the bootstrap names `value_type` and carries as its
+/// parts: a Color, a Vector of each size, a Rectangle or a Transform.
+///
+/// Wire contract with the helper bootstrap: these value type names.
+pub(crate) fn the_pin_type_a_value_type_carries_in_parts(value_type: &str) -> Option<PinType> {
+    Some(match value_type {
+        "color" => PinType::Color {},
+        "vector2" => PinType::Vector {
+            component_count: VectorComponentCount::Two,
+        },
+        "vector3" => PinType::Vector {
+            component_count: VectorComponentCount::Three,
+        },
+        "vector4" => PinType::Vector {
+            component_count: VectorComponentCount::Four,
+        },
+        "rectangle" => PinType::Rectangle {},
+        "transform" => PinType::Transform {},
+        _ => return None,
+    })
+}
+
+/// The parts a control message carries, read as `read_as` reads them: one
+/// number, the first sample of its first channel, for `None`; the parts of a
+/// value of the pin type for `Some`, with the free conversion a link allows.
+fn the_parts_a_message_carries(
+    message: &MessageReadFromInputPort,
+    read_as: Option<&PinType>,
+    node_id: &str,
+    reader_input_port: &str,
+) -> Result<Vec<f64>> {
+    let channel_values = the_channel_values_a_control_message_carries(PackedPinValueRef {
+        payload_descriptor: &message.payload_descriptor,
+        payload: message.payload.bytes(),
+    });
+    let read = match (channel_values, read_as) {
+        (Ok(channel_values), None) => Ok(channel_values.into_iter().take(1).collect()),
+        (Ok(channel_values), Some(pin_type)) => {
+            the_channel_values_a_pin_type_reads(pin_type, &channel_values)
+        }
+        (Err(refusal), _) => Err(refusal),
+    };
+    read.map_err(|refusal| {
+        Error::Runtime(format!(
+            "function node `{node_id}` reads {} off the link it reads at \
+             {reader_input_port:?}, and {refusal}",
+            read_as.map_or_else(|| "a number".to_owned(), |pin_type| format!("a {pin_type}"))
+        ))
+    })
+}
+
+/// The number a control message carries: the first sample of its first channel.
 fn the_control_value_a_message_carries(
     message: &MessageReadFromInputPort,
     node_id: &str,
     reader_input_port: &str,
 ) -> Result<f64> {
-    let refusal = |what_it_carries: &str| {
-        Error::Runtime(format!(
-            "function node `{node_id}` reads a number off the link it reads at \
-             {reader_input_port:?}, and the message {what_it_carries}"
-        ))
-    };
-    let descriptor = message.payload_descriptor;
-    if DataChannelPayloadDescriptorKind::from_wire(descriptor.kind)
-        != Some(DataChannelPayloadDescriptorKind::ChannelsBlock)
-    {
-        return Err(refusal("is no Channels block"));
-    }
-    let block = ChannelsBlockDescriptorBody::from_descriptor_body(&descriptor.body);
-    let payload = message.payload.bytes();
-    match ChannelsBlockSampleType::from_wire(block.sample_type) {
-        Some(ChannelsBlockSampleType::F64) => payload
-            .get(..8)
-            .map(|sample| f64::from_le_bytes(sample.try_into().unwrap_or_default()))
-            .ok_or_else(|| refusal("carries no sample")),
-        Some(ChannelsBlockSampleType::F32) => payload
-            .get(..4)
-            .map(|sample| f64::from(f32::from_le_bytes(sample.try_into().unwrap_or_default())))
-            .ok_or_else(|| refusal("carries no sample")),
-        None => Err(refusal("names a sample type this build does not know")),
-    }
+    Ok(the_parts_a_message_carries(message, None, node_id, reader_input_port)?[0])
 }
 
 /// Reads the newest message at one of the reader's input ports, past any older
@@ -463,7 +519,7 @@ impl FunctionNodeIslandEvaluation {
                     continue;
                 };
                 let newest_message = (self.read_the_newest_message_at)(reader_input_port)?;
-                match (newest_message, *read_as) {
+                match (newest_message, &*read_as) {
                     (Some(message), HowAnInputReadsALinkFromOutsideItsIsland::ControlValue) => {
                         *value_read_last =
                             FunctionNodeValue::Number(the_control_value_a_message_carries(
@@ -471,6 +527,17 @@ impl FunctionNodeIslandEvaluation {
                                 &function_node.node_id,
                                 reader_input_port,
                             )?);
+                        self.values_last_read_off_links_from_outside_islands
+                            .lock()
+                            .insert(reader_input_port.clone(), value_read_last.duplicated());
+                    }
+                    (Some(message), HowAnInputReadsALinkFromOutsideItsIsland::Parts(pin_type)) => {
+                        *value_read_last = FunctionNodeValue::Parts(the_parts_a_message_carries(
+                            &message,
+                            Some(pin_type),
+                            &function_node.node_id,
+                            reader_input_port,
+                        )?);
                         self.values_last_read_off_links_from_outside_islands
                             .lock()
                             .insert(reader_input_port.clone(), value_read_last.duplicated());
@@ -814,6 +881,34 @@ pub(crate) fn read_the_control_value_at_an_input_port(
         .map(|message| the_control_value_a_message_carries(&message, node_id, input_port))
         .transpose()
         .map_err(|refusal| PyValueError::new_err(refusal.to_string()))
+}
+
+/// The parts of the value `input_port` holds for this read, a value of the pin
+/// type the bootstrap names `value_type`, read as an island reads one off a
+/// control message with the free conversion a link allows, and any other
+/// message refused by name; `None` when no message arrived since the last read.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, node_id, input_port, value_type))]
+pub(crate) fn read_the_parts_at_an_input_port<'py>(
+    python: Python<'py>,
+    link_data_access: &PythonNodeLinkDataAccess,
+    node_id: &str,
+    input_port: &str,
+    value_type: &str,
+) -> PyResult<Option<Bound<'py, PyTuple>>> {
+    let pin_type = the_pin_type_a_value_type_carries_in_parts(value_type).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "value type {value_type:?} is no Color, Vector, Rectangle or Transform"
+        ))
+    })?;
+    link_data_access
+        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
+        .map(|message| {
+            the_parts_a_message_carries(&message, Some(&pin_type), node_id, input_port)
+                .map_err(|refusal| PyValueError::new_err(refusal.to_string()))
+                .and_then(|parts| PyTuple::new(python, parts))
+        })
+        .transpose()
 }
 
 /// Write `message` on `output_port` exactly as it arrived, its descriptor,

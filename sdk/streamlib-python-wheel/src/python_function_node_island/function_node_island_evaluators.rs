@@ -83,6 +83,15 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
     }
 }
 
+/// The value a function node input reads while nothing links into it, as the
+/// bootstrap hands it over: a number, or the `tuple` of the parts of a Color, a
+/// Vector, a Rectangle or a Transform.
+#[derive(Debug, FromPyObject)]
+pub(crate) enum PinValueTheBootstrapHandsOver {
+    Number(f64),
+    Parts(Vec<f64>),
+}
+
 /// One function node as the bootstrap hands it over: its id, its breadcrumb
 /// number, its compiled evaluate entry's address or the object that runs it as
 /// Python, where each input takes its value, its config values, its initial
@@ -92,7 +101,7 @@ pub(super) type FunctionNodeHandedOverByTheBootstrap = (
     String,
     u32,
     Py<PyAny>,
-    Vec<(Option<(usize, usize)>, f64)>,
+    Vec<(Option<(usize, usize)>, PinValueTheBootstrapHandsOver)>,
     Vec<f64>,
     Vec<f64>,
     usize,
@@ -144,9 +153,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                     {
                         WhereAFunctionNodeInputTakesItsValue::ItsPin(FunctionNodeValue::Nothing)
                     }
-                    None => WhereAFunctionNodeInputTakesItsValue::ItsPin(
-                        FunctionNodeValue::Number(pin_value),
-                    ),
+                    None => WhereAFunctionNodeInputTakesItsValue::ItsPin(match pin_value {
+                        PinValueTheBootstrapHandsOver::Number(number) => {
+                            FunctionNodeValue::Number(number)
+                        }
+                        PinValueTheBootstrapHandsOver::Parts(parts) => {
+                            FunctionNodeValue::Parts(parts)
+                        }
+                    }),
                     Some((source_node_index, output_index)) if source_node_index > node_index => {
                         WhereAFunctionNodeInputTakesItsValue::ALaterNodesOutputAtTheLastEvaluation {
                             node_index: source_node_index,

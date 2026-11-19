@@ -18,6 +18,9 @@ from tatolab.runtime._function_node_carried_values import (
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
     FunctionNodeReadyToEvaluate,
+    PART_VALUE_TYPES,
+    PinValueCarried,
+    pin_value_carried,
 )
 from tatolab.runtime._function_node_body_run_as_python import (
     FunctionNodeBodyRunAsPython,
@@ -334,10 +337,11 @@ def _where_each_input_takes_its_value(
     pin_values_by_input_port: "dict[str, Any]",
     node_index_by_node_id: "dict[str, int]",
     output_ports_by_node_id: "dict[str, tuple[str, ...]]",
-) -> "list[tuple[Optional[tuple[int, int]], float]]":
+) -> "list[tuple[Optional[tuple[int, int]], PinValueCarried]]":
     """Each input's earlier node output, or else its pin value, or else its declared default."""
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
-    where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], float]]" = []
+    value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
+    where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], PinValueCarried]]" = []
     for input_port in prepared.input_ports:
         linked_from = linked_from_by_input_port.get(input_port)
         if linked_from is not None and _is_read_through_the_reader(linked_from):
@@ -355,7 +359,15 @@ def _where_each_input_takes_its_value(
             )
         elif input_port in pin_values_by_input_port:
             where_each_input_takes_its_value.append(
-                (None, _a_pin_value_as_f64(node_id, input_port, pin_values_by_input_port[input_port]))
+                (
+                    None,
+                    _a_pin_value_as_the_island_carries_it(
+                        node_id,
+                        input_port,
+                        value_type_by_input_port[input_port],
+                        pin_values_by_input_port[input_port],
+                    ),
+                )
             )
         elif input_port in prepared.pin_defaults_by_input_port:
             where_each_input_takes_its_value.append(
@@ -389,8 +401,12 @@ def _output_index(
     return output_ports.index(output_port)
 
 
-def _a_pin_value_as_f64(node_id: str, input_port: str, pin_value: Any) -> float:
+def _a_pin_value_as_the_island_carries_it(
+    node_id: str, input_port: str, value_type: str, pin_value: Any
+) -> PinValueCarried:
     what_it_is = f"function node `{node_id}`'s pin on input `{input_port}`"
+    if value_type in PART_VALUE_TYPES:
+        return pin_value_carried(value_type, pin_value, what_it_is)
     if not isinstance(pin_value, (bool, int, float)):
         raise FunctionNodeDoesNotCompile(
             f"{what_it_is} is {pin_value!r}, and an island input takes a number or a bool. "

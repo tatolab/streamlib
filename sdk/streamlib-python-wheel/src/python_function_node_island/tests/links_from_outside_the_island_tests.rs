@@ -136,7 +136,13 @@ fn a_gate_reading_a_link_from_outside_its_island(
             "gate".to_string(),
             0,
             compiled_to(hand_the_message_on_while_open),
-            vec![(None, 0.0), (None, if is_open { 1.0 } else { 0.0 })],
+            vec![
+                (None, PinValueTheBootstrapHandsOver::Number(0.0)),
+                (
+                    None,
+                    PinValueTheBootstrapHandsOver::Number(if is_open { 1.0 } else { 0.0 }),
+                ),
+            ],
             vec![],
             vec![],
             1,
@@ -326,7 +332,7 @@ fn a_number_read_off_a_link_from_outside_the_island_keeps_the_newest_control_val
                 "add_one".to_string(),
                 0,
                 compiled_to(add_one_and_count_calls),
-                vec![(None, 0.0)],
+                vec![(None, PinValueTheBootstrapHandsOver::Number(0.0))],
                 vec![],
                 vec![0.0],
                 1,
@@ -375,7 +381,7 @@ fn a_number_read_off_a_link_from_outside_the_island_keeps_the_newest_control_val
             .evaluate_the_island_output_for_this_read()
             .unwrap()
             .value,
-        FunctionNodeIslandOutputValue::ControlValue(6.0)
+        FunctionNodeIslandOutputValue::ControlValue(vec![6.0])
     );
     stream_time_ns.store(300, Ordering::SeqCst);
     assert_eq!(
@@ -383,7 +389,7 @@ fn a_number_read_off_a_link_from_outside_the_island_keeps_the_newest_control_val
             .evaluate_the_island_output_for_this_read()
             .unwrap()
             .value,
-        FunctionNodeIslandOutputValue::ControlValue(6.0),
+        FunctionNodeIslandOutputValue::ControlValue(vec![6.0]),
         "a number keeps the newest value its link carried"
     );
 }
@@ -398,7 +404,7 @@ fn an_add_one_island_reading_a_link_from_outside_its_island(
             "add_one".to_string(),
             0,
             compiled_to(add_one_and_count_calls),
-            vec![(None, 0.0)],
+            vec![(None, PinValueTheBootstrapHandsOver::Number(0.0))],
             vec![],
             vec![0.0],
             1,
@@ -445,7 +451,7 @@ fn an_island_replacing_another_starts_from_the_control_value_its_link_last_carri
             .evaluate_the_island_output_for_this_read()
             .unwrap()
             .value,
-        FunctionNodeIslandOutputValue::ControlValue(6.0)
+        FunctionNodeIslandOutputValue::ControlValue(vec![6.0])
     );
 
     let (replacement_stream_time_ns, replacement_stream_clock_now_ns) =
@@ -462,7 +468,7 @@ fn an_island_replacing_another_starts_from_the_control_value_its_link_last_carri
             .evaluate_the_island_output_for_this_read()
             .unwrap()
             .value,
-        FunctionNodeIslandOutputValue::ControlValue(6.0)
+        FunctionNodeIslandOutputValue::ControlValue(vec![6.0])
     );
 }
 
@@ -491,7 +497,7 @@ fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started
                 "hand_on".to_string(),
                 0,
                 compiled_to(count_calls_and_hand_out_a_token_naming_no_message_input),
-                vec![(None, 0.0)],
+                vec![(None, PinValueTheBootstrapHandsOver::Number(0.0))],
                 vec![],
                 vec![0.0],
                 1,
@@ -537,4 +543,163 @@ fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started
         island.the_state_each_stateful_function_node_last_returned(),
         vec![(0, vec![0.0])]
     );
+}
+
+/// An object as the bootstrap builds one to run a body as Python: this one
+/// halves the red, green and blue of the Color it is handed as its parts, and
+/// answers the dimmed Color as its parts.
+fn run_as_python_dimming_a_colour() -> Py<PyAny> {
+    Python::initialize();
+    Python::attach(|python| {
+        let namespace = PyDict::new(python);
+        crate::python_class_from_source_for_tests::class_from_source_in_namespace(
+            python,
+            "class DimsAColourAsPython:\n\
+             \x20   def evaluate(self, input_values, now_ns):\n\
+             \x20       ((red, green, blue, alpha),) = input_values\n\
+             \x20       return [(red / 2, green / 2, blue / 2, alpha)]\n\
+             \x20   def state_values(self):\n\
+             \x20       return []\n\
+             \x20   def resume_from_state_values(self, state_values):\n\
+             \x20       pass\n",
+            "DimsAColourAsPython",
+            &namespace,
+        )
+        .call0()
+        .unwrap()
+        .unbind()
+    })
+}
+
+fn an_island_dimming_a_colour(
+    pin_value: PinValueTheBootstrapHandsOver,
+    inputs_read_from_links_from_outside_the_island: Vec<(usize, String, String)>,
+    read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
+    stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
+) -> FunctionNodeIslandEvaluatedInThisHelper {
+    FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+        vec![(
+            "dim".to_string(),
+            0,
+            run_as_python_dimming_a_colour(),
+            vec![(None, pin_value)],
+            vec![],
+            vec![],
+            1,
+            vec![],
+        )],
+        (0, 0),
+        stream_clock_now_ns,
+        None,
+        &|_| None,
+        HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+            how_each_node_carries_its_values: vec![HowAFunctionNodeCarriesValuesBeyondNumbers {
+                inputs_read_from_links_from_outside_the_island,
+                ..Default::default()
+            }],
+            read_the_newest_message_at,
+            values_last_read_off_links_from_outside_islands: Arc::default(),
+            claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
+        },
+        raises_noted_in_a_record_of_its_own(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_colour_pin_reaches_a_node_run_as_python_as_its_parts_and_its_colour_is_a_control_value() {
+    let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+    let (_queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
+    let island = an_island_dimming_a_colour(
+        PinValueTheBootstrapHandsOver::Parts(vec![1.0, 0.5, 0.25, 0.75]),
+        Vec::new(),
+        read_the_newest_message_at,
+        stream_clock_now_ns,
+    );
+    stream_time_ns.store(1, Ordering::SeqCst);
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::ControlValue(vec![0.5, 0.25, 0.125, 0.75])
+    );
+}
+
+#[test]
+fn a_colour_read_off_a_link_from_outside_the_island_takes_a_vector_with_an_alpha_of_1() {
+    let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+    let (queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
+    let island = an_island_dimming_a_colour(
+        PinValueTheBootstrapHandsOver::Parts(vec![0.0, 0.0, 0.0, 1.0]),
+        vec![(
+            0,
+            READER_INPUT_PORT_OF_THE_LINK_FROM_OUTSIDE_THE_ISLAND.to_string(),
+            "color".to_string(),
+        )],
+        read_the_newest_message_at,
+        stream_clock_now_ns,
+    );
+    queued.lock().push(a_message_of(
+        [0.5f64, 0.25]
+            .iter()
+            .flat_map(|part| part.to_le_bytes())
+            .collect(),
+        streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::channels_block(
+            ChannelsBlockDescriptorBody {
+                start_sample: 0,
+                sample_rate: 0,
+                channel_count: 2,
+                samples_per_channel: 1,
+                sample_type: ChannelsBlockSampleType::F64 as u32,
+            },
+        ),
+        10,
+    ));
+    stream_time_ns.store(1, Ordering::SeqCst);
+    assert_eq!(
+        island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value,
+        FunctionNodeIslandOutputValue::ControlValue(vec![0.25, 0.125, 0.0, 1.0])
+    );
+}
+
+#[test]
+fn a_transform_read_off_a_control_message_of_another_size_is_refused_naming_both() {
+    let refusal = the_parts_a_message_carries(
+        &a_channels_block_of_one_f64_sample(1.0, 10),
+        Some(&PinType::Transform {}),
+        "place-1",
+        "x",
+    )
+    .expect_err("a Transform reads exactly 16 channels");
+    assert!(
+        refusal
+            .to_string()
+            .contains("function node `place-1` reads a Transform")
+            && refusal.to_string().contains("carries 1"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn each_value_type_of_parts_names_its_pin_type() {
+    for (value_type, channel_count) in [
+        ("color", 4),
+        ("vector2", 2),
+        ("vector3", 3),
+        ("vector4", 4),
+        ("rectangle", 4),
+        ("transform", 16),
+    ] {
+        let pin_type = the_pin_type_a_value_type_carries_in_parts(value_type).unwrap();
+        assert_eq!(
+            streamlib::sdk::pin_value_packing::channel_count_of(&pin_type),
+            Some(channel_count),
+            "{value_type}"
+        );
+    }
+    assert_eq!(the_pin_type_a_value_type_carries_in_parts("float"), None);
 }

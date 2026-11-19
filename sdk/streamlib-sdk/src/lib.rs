@@ -37,6 +37,7 @@ pub mod sdk {
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
     pub use streamlib_engine::core::node_interpreter;
+    pub use streamlib_engine::core::pin_value_packing;
     pub use streamlib_engine::core::prelude;
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;

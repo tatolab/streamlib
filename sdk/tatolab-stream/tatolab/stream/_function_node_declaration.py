@@ -40,6 +40,7 @@ from ._node_config_schema import (
 )
 from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
 from ._pin_declaration import NO_DEFAULT, NodeDeclarationRefusal, read_pin_declaration
+from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 __all__ = [
     "FunctionNode",
@@ -86,7 +87,8 @@ _FUNCTION_LOCAL_MARKER = "<locals>"
 # The output a function's one returned value is.
 _SINGLE_OUTPUT_NAME = "result"
 
-# The value a typed pin of each built-in type hands the body, as the signature stamp names it.
+# The value a typed pin of each built-in number type hands the body, as the signature stamp
+# names it; a value class of parts names its own.
 _SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME: "dict[str, str]" = {
     "boolean": "bool",
     "integer": "int",
@@ -600,7 +602,7 @@ class _FunctionNodeSignatureReading:
             described_output_annotation, f"output `{_SINGLE_OUTPUT_NAME}`"
         )
         value_annotation, _ = _value_annotation_and_whether_optional(output_annotation)
-        if (
+        if value_annotation not in PIN_VALUE_CLASSES and (
             typing.get_origin(value_annotation) is tuple
             or value_annotation is tuple
             or _is_a_record_of_outputs(value_annotation)
@@ -618,10 +620,12 @@ class _FunctionNodeSignatureReading:
         declared = read_pin_declaration(
             self._function_name, _SINGLE_OUTPUT_NAME, output_annotation, direction="output"
         )
+        value_class = _the_value_class_of_parts_a_pin_declares(declared.declaration)
+        channel_names = [port_name] if value_class is None else list(value_class.part_names())
         output_port = {
             "name": port_name,
             "description": port_description or "",
-            "family": {"family": "channels", "names": {"stated": [port_name]}, "dtype": "f64"},
+            "family": {"family": "channels", "names": {"stated": channel_names}, "dtype": "f64"},
             "pin_declaration": declared.declaration,
         }
         signature_output = {
@@ -697,8 +701,23 @@ class _FunctionNodeSignatureReading:
         return port_name
 
 
+def _the_value_class_of_parts_a_pin_declares(
+    declaration: PinDeclarationOnTheWire,
+) -> "Optional[type[PinValueOfParts]]":
+    """The value class of the type a typed pin declares, when it travels as its parts; `None` for a number."""
+    declared_pin_type = declaration["pin_type"]
+    assert declared_pin_type["kind"] == "is", "a function node's pin is exactly one type"
+    for value_class in PIN_VALUE_CLASSES:
+        if value_class.pin_type == declared_pin_type["pin_type"]:
+            return value_class
+    return None
+
+
 def _signature_value_type_of(declaration: PinDeclarationOnTheWire) -> str:
     """The value a typed pin hands the body, as the signature stamp names it."""
+    value_class = _the_value_class_of_parts_a_pin_declares(declaration)
+    if value_class is not None:
+        return value_class.value_type
     declared_pin_type = declaration["pin_type"]
     assert declared_pin_type["kind"] == "is", "a function node's pin is exactly one type"
     return _SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME[declared_pin_type["pin_type"]["type"]]
