@@ -7,7 +7,9 @@ Every project in `examples/` and `packages/` is checked: each directory holding 
 `tatolab-project.json`, and each first-party module that ships without one, checked in a
 scratch project holding a copy of its package. A project whose own code holds no Python is
 listed and not checked. Each project's `.venv` is made with `uv sync`, as the runtime makes a
-project's, so `UV_FIND_LINKS` reaches a `tatolab-stream` built from this checkout.
+project's, with `tatolab-stream` held at this checkout's version, so `UV_FIND_LINKS` reaches the
+one built from this checkout even while PyPI holds a later release, or this version built from
+older code.
 
 The unit's `tatolabd` is started once, and `tatolab check --json --dir <project>` asked of it
 for each project. A project fails when its check fails, or when its Python node declarations
@@ -72,6 +74,9 @@ RUNTIME_ANSWER_WAIT_SECONDS = 60.0
 
 VENV_SYNC_TIMEOUT_SECONDS = 1800.0
 """The longest one project's `uv sync` may take, native builds and large wheels included."""
+
+TATOLAB_STREAM_PYPROJECT = Path("sdk") / "tatolab-stream" / "pyproject.toml"
+"""Where, under the repository's root, this checkout's `tatolab-stream` states its version."""
 
 CHECK_TIMEOUT_SECONDS = 180.0
 """The longest one `tatolab check` may take; the runtime bounds its own check at 60 seconds."""
@@ -285,13 +290,33 @@ def the_directory_to_check(project: InTreeProject, scratch_directory: Path) -> P
     return scratch_project
 
 
-def check_a_project(runtime_unit: RuntimeUnit, project: InTreeProject, directory: Path) -> ProjectCheckOutcome:
+def this_checkouts_tatolab_stream_version(repository: Path) -> str:
+    """The version this checkout's `tatolab-stream` states."""
+    return tomllib.loads((repository / TATOLAB_STREAM_PYPROJECT).read_text(encoding="utf-8"))["project"]["version"]
+
+
+def the_venv_sync_command(directory: Path, tatolab_stream_version: str) -> list[str]:
+    """`uv sync` of the project in `directory`, its `tatolab-stream` held at `tatolab_stream_version`."""
+    return [
+        "uv",
+        "sync",
+        "--quiet",
+        "--project",
+        str(directory),
+        "--upgrade-package",
+        f"tatolab-stream=={tatolab_stream_version}",
+    ]
+
+
+def check_a_project(
+    runtime_unit: RuntimeUnit, project: InTreeProject, directory: Path, tatolab_stream_version: str
+) -> ProjectCheckOutcome:
     """Make the project's `.venv` and ask the runtime to check its code; a step that fails or runs
     out of time leaves the project not fully checked, and the run goes on to the next."""
     outcome = ProjectCheckOutcome(project)
     try:
         synced = subprocess.run(
-            ["uv", "sync", "--quiet", "--project", str(directory)],
+            the_venv_sync_command(directory, tatolab_stream_version),
             capture_output=True,
             text=True,
             timeout=VENV_SYNC_TIMEOUT_SECONDS,
@@ -333,6 +358,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
     runtime_unit = RuntimeUnit(arguments.runtime_unit.resolve())
+    tatolab_stream_version = this_checkouts_tatolab_stream_version(arguments.repository.resolve())
     projects = (
         [InTreeProject(str(directory), directory.resolve(), True) for directory in arguments.project]
         if arguments.project
@@ -344,7 +370,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="in-tree-project-check-") as scratch, runtime_unit.serving():
         for project in to_check:
             print(f"checking {project.name}", file=sys.stderr, flush=True)
-            outcomes.append(check_a_project(runtime_unit, project, the_directory_to_check(project, Path(scratch))))
+            outcomes.append(
+                check_a_project(
+                    runtime_unit, project, the_directory_to_check(project, Path(scratch)), tatolab_stream_version
+                )
+            )
     sys.stdout.write(the_report(outcomes, unchecked))
     return the_exit_code_of(outcomes)
 
