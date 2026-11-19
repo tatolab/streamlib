@@ -4541,7 +4541,7 @@ export interface ProjectCodeCheckRun {
  * One check of a project's code. The set grows: a check a client does not know is still
  * answered with its state and its findings.
  */
-export type ProjectCodeCheckKind = "python_node_declarations";
+export type ProjectCodeCheckKind = "python_node_declarations" | "extension_manifest";
 
 /**
  * How one check ended. The set grows: a state a client does not know reads as `not_checked`.
@@ -4559,7 +4559,8 @@ export interface ProjectCodeCheckFinding {
   /**
    * What was found, for a caller to branch on: the code the declaration reader refused with,
    * such as `value_input_has_no_default`, `module_does_not_import` for a module that does not
-   * import, or `declaration_retired` for a node declared in a retired form.
+   * import, `declaration_retired` for a node declared in a retired form, or
+   * `port_declared_by_family` for a view's port its manifest declares by `family` alone.
    */
   finding_code: string;
   /**
@@ -5521,9 +5522,15 @@ export interface ProjectViewDeclaredPort {
    */
   name: string;
   /**
-   * The port family's wire name.
+   * The port family's wire name: the family its pin type's messages belong to, where it
+   * names one. Served until the contract's version changes, for a client that reads no
+   * `pin_type`.
    */
   family: string;
+  /**
+   * The pin type the port carries; absent on a port its manifest declares by `family` alone.
+   */
+  pin_type?: PinType | null;
   /**
    * What the port carries.
    */
@@ -7425,7 +7432,7 @@ export interface ControlOperations {
   /**
    * Check a project's code on disk without running a stream, answering each finding as data.
    *
-   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. The one check today is `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
+   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Two checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
    *
    * Since contract version 3, experimental.
    */
@@ -7677,7 +7684,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 15;
+export declare const CONTROL_CONTRACT_REVISION: 16;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

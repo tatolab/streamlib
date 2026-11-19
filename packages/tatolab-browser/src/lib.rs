@@ -13,6 +13,9 @@ compile_error!("tatolab-browser runs on Linux and macOS");
 
 pub mod browser_host_tab_client;
 pub mod page_audio_blocks;
+pub mod page_audio_silence_watch;
+#[cfg(test)]
+mod page_audio_silence_watch_tests;
 pub mod page_data_messages;
 pub mod page_input_messages;
 pub mod painted_page_image_frame;

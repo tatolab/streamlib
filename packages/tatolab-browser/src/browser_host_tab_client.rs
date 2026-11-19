@@ -40,7 +40,8 @@ use tatolab_module_sdk::{
     records_message_payload_descriptor,
 };
 
-use crate::page_audio_blocks::PageAudioStreamTimeline;
+use crate::page_audio_blocks::{PageAudioStreamTimeline, samples_of_little_endian_f32_bytes};
+use crate::page_audio_silence_watch::PageAudioSilenceWatch;
 use crate::page_data_messages::{
     events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
 };
@@ -1062,13 +1063,6 @@ fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
     }
 }
 
-/// The `f32` samples little-endian `bytes` hold; a trailing partial sample is
-/// left out.
-fn samples_of_little_endian_f32_bytes(bytes: &[u8]) -> Vec<f32> {
-    let (samples, _partial_sample) = bytes.as_chunks::<4>();
-    samples.iter().copied().map(f32::from_le_bytes).collect()
-}
-
 /// A page rendering for one node: open from `open` until `close`.
 pub struct BrowserPageRendering {
     tab: Arc<BrowserHostTabOfOneNode>,
@@ -1226,6 +1220,9 @@ fn deliver_data_and_page_inputs_to_the_page(
     let mut held_while_the_browser_host_is_away = DataMessagesHeldForTheBrowserHost::default();
     let mut read_back_rgba_pixels_by_input: Vec<Vec<u8>> =
         page_input_ports.iter().map(|_| Vec::new()).collect();
+    let mut page_audio_silence_watch = PageAudioSilenceWatch::of_the_page_input_tracks(
+        page_input_ports.iter().map(|port| &port.track),
+    );
     while !delivery_stopped() {
         for (page_input_port, read_back_rgba_pixels) in page_input_ports
             .iter()
@@ -1240,6 +1237,11 @@ fn deliver_data_and_page_inputs_to_the_page(
                 ));
                 return;
             }
+        }
+        if let Some(warning) =
+            page_audio_silence_watch.warning_due(module_host.monotonic_now_ns(), &tab.counters)
+        {
+            tab.log(ModuleHostLogLevel::Warn, &warning);
         }
         send_the_data_messages_held_for_the_browser_host(
             tab,
@@ -1624,19 +1626,6 @@ mod tests {
             let refusal = refuse_a_config_cef_cannot_render(&broken).expect_err(named);
             assert!(refusal.contains(named), "{refusal}");
         }
-    }
-
-    #[test]
-    fn interleaved_little_endian_samples_are_read_back_and_a_partial_one_is_left_out() {
-        let mut bytes: Vec<u8> = [0.5f32, -1.0, 0.25]
-            .iter()
-            .flat_map(|sample| sample.to_le_bytes())
-            .collect();
-        bytes.push(7);
-        assert_eq!(
-            samples_of_little_endian_f32_bytes(&bytes),
-            [0.5, -1.0, 0.25]
-        );
     }
 
     #[test]

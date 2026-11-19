@@ -59,9 +59,9 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     std::fs::write(broken_folder.join("tatolab_view.json"), "{").expect("a manifest cut short");
     let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
     let deck_manifest = json!({
-        "contract": "1.0", "title": "DJ Deck", "description": "Two decks and a crossfader.",
+        "contract": "1.1", "title": "DJ Deck", "description": "Two decks and a crossfader.",
         "icon": "icon.svg", "preview": "preview.png", "entry": "index.html", "placement": "node",
-        "inputs": [{ "name": "waveform", "family": "channels" }],
+        "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" } }],
         "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
     });
     a_view_folder_in(cell.path(), "deck", &deck_manifest);
@@ -98,7 +98,8 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
             "opens": true, "not_opened_because": null,
             "title": "DJ Deck", "description": "Two decks and a crossfader.",
             "icon": "icon.svg", "preview": "preview.png", "placement": "node",
-            "inputs": [{ "name": "waveform", "family": "channels", "description": null, "range": null }],
+            "inputs": [{ "name": "waveform", "family": "channels", "pin_type": { "type": "audio" },
+                         "description": null, "range": null }],
             "outputs": [{ "name": "crossfader", "family": "array", "description": null, "range": [-1.0, 1.0] }],
             "manifest": deck_manifest,
         })
@@ -132,7 +133,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
 const DECK_NODE_UUID: &str = "decdecde-cdec-4dec-8dec-decdecdecdec";
 
 /// A graph document holding a node of the project's view `deck` loads it with the view's ports,
-/// and a panel's write onto it is live data alone: refused while the node does not run, and the
+/// each of the pin type its manifest names, and a panel's write onto it is live data alone: refused while the node does not run, and the
 /// graph document on disk keeps nothing of it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_a_write_records_nothing()
@@ -149,8 +150,8 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
         project.path(),
         "deck",
         &json!({
-            "contract": "1.0", "title": "Deck", "entry": "index.html", "placement": "node",
-            "inputs": [{ "name": "waveform", "family": "channels" }],
+            "contract": "1.1", "title": "Deck", "entry": "index.html", "placement": "node",
+            "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" } }],
             "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
         }),
     );
@@ -165,6 +166,13 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
         deck.to_string().contains("waveform") && deck.to_string().contains("crossfader"),
         "the view node takes the view's ports: {deck}"
     );
+    let waveform = super::input_value_set_tests::the_input_named(&deck, "waveform");
+    assert_eq!(
+        waveform["pin_type"],
+        json!({ "type": "audio" }),
+        "{waveform}"
+    );
+    assert_eq!(waveform["flow"], "stream", "{waveform}");
 
     let refused_result = tool_call_result(
         engine.operations_on_the_loaded_streams(),

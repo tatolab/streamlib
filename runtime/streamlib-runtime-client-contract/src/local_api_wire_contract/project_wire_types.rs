@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use streamlib_node_schema::pin_type::PinType;
 
 use super::NodeTypeCategoryFrom;
 use super::graph_wire_types::RefusedGraphLinkOnTheWire;
@@ -776,8 +777,13 @@ pub struct ProjectViewListed {
 pub struct ProjectViewDeclaredPort {
     /// The port's name.
     pub name: String,
-    /// The port family's wire name.
+    /// The port family's wire name: the family its pin type's messages belong to, where it
+    /// names one. Served until the contract's version changes, for a client that reads no
+    /// `pin_type`.
     pub family: String,
+    /// The pin type the port carries; absent on a port its manifest declares by `family` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_type: Option<PinType>,
     /// What the port carries.
     pub description: Option<String>,
     /// The lowest and highest value an Array port carries.
