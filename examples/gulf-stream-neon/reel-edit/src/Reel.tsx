@@ -62,7 +62,7 @@ const T3_GRAPH: Rect = { x: 2024, y: 112, w: 1408, h: 478 };
 const T3_PREVIEW: Rect = { x: 2088, y: 640, w: 1280, h: 720 };
 export const SCENES: Scene[] = [
   live({ at: 0, until: 8, from: 13.0, slab: "The ocean off Miami", sub: "Real NOAA data, live in Tato Studio", detail: { x: 1924, y: 118, w: 286, h: 172 }, focus: [1300, 400] }),
-  live({ at: 8, until: 16, src: T3, from: 72.0, picture: T3_STAGE, slab: "Change it while it plays", sub: "drag · real map → neon", focus: [1100, 600] }),
+  live({ at: 8, until: 16, src: T3, from: 72.0, picture: T3_STAGE, slab: "Build realtime interactive experiences", sub: "drag · real map → neon", focus: [1100, 600] }),
   { at: 16, until: 18, kind: "broll", src: "take", from: 10.0, slab: "60 FPS on an RTX 3090", sub: "two million particles on the real Gulf Stream" },
   live({ at: 18, until: 19, from: 84.0, slab: "Drag · skyline height", detail: { x: 2228, y: 722, w: 284, h: 52 }, focus: [1100, 700] }),
   live({ at: 19, until: 20, src: T3, from: 36.0, picture: T3_STAGE, slab: "Orbit · zoom · fly", focus: [1100, 700] }),
@@ -221,8 +221,10 @@ const EndCard: React.FC<{ scene: Scene; vertical: boolean; credit: string }> = (
       <AbsoluteFill style={{ background: INK.blue, clipPath: `polygon(0 0, ${slide * 130}% 0, ${slide * 130 - 30}% 100%, 0 100%)` }} />
       <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", opacity: shown, transform: `translateY(${rise}px)`, padding: vertical ? "0 70px" : "0 160px" }}>
         <Img src={staticFile("tatolab-logo-on-blue.svg")} style={{ width: vertical ? 560 : 520 }} />
-        <div style={{ marginTop: vertical ? 70 : 46, fontFamily: DSP, fontWeight: 900, fontSize: big, lineHeight: 0.98, textTransform: "uppercase", color: INK.cream, textAlign: "center", textShadow: `0.034em 0.04em 0 ${INK.pink}` }}>Change it while it plays.</div>
-        <div style={{ marginTop: 34, fontFamily: TXT, fontWeight: 600, fontSize: vertical ? 34 : 30, color: INK.cream, textAlign: "center" }}>Tato is the open source engine for live experiences.</div>
+        <div style={{ marginTop: vertical ? 70 : 46, fontFamily: DSP, fontWeight: 900, fontSize: big, lineHeight: 0.98, textTransform: "uppercase", color: INK.cream, textAlign: "center", textShadow: `0.034em 0.04em 0 ${INK.pink}` }}>Build realtime interactive experiences</div>
+        <div style={{ marginTop: 34, fontFamily: TXT, fontWeight: 600, fontSize: vertical ? 34 : 30, lineHeight: 1.4, color: INK.cream, textAlign: "center", maxWidth: vertical ? 880 : 1180 }}>
+          If you've used TouchDesigner, Blender or Unreal Engine, you'll feel right at home. Tato is free (like free free) and open source. What will you build?
+        </div>
         <div style={{ marginTop: 40 }}>
           <Slab fill={INK.yellow} shadow={INK.ink} color={INK.ink} size={vertical ? 46 : 40}>tatolab.com</Slab>
         </div>
