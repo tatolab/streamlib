@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use super::stored_value_check::integer_bounds;
 use super::{
-    BundleMember, DeclaredPinType, FloatSize, PinDeclaration, PinNumberRange, PinType,
+    BuiltInPinTypeName, BundleMember, DeclaredPinType, FloatSize, PinDeclaration, PinNumberRange, PinType,
     VectorComponentCount,
 };
 
@@ -52,13 +52,12 @@ impl PinType {
             Self::Boolean {} => json!({ "type": "boolean" }),
             Self::Integer { exact_size } => {
                 let (lowest, highest) = integer_bounds(*exact_size);
-                let mut schema = json!({ "type": "integer" });
-                bounded_within(
-                    &mut schema,
-                    the_tighter_lower_bound(lowest as f64, range),
-                    the_tighter_upper_bound(highest as f64, range),
-                );
-                schema
+                let (lowest, highest) = whole_bounds_within(lowest, highest, range);
+                json!({
+                    "type": "integer",
+                    "minimum": a_whole_json_number(lowest),
+                    "maximum": a_whole_json_number(highest),
+                })
             }
             Self::Float { exact_size } => {
                 let mut schema = json!({ "type": "number" });
@@ -76,14 +75,18 @@ impl PinType {
             Self::String {} => json!({ "type": "string" }),
             Self::Menu { option_names } => json!({ "type": "string", "enum": option_names }),
             Self::Color {} => an_object_of_numbers(&["red", "green", "blue", "alpha"], &[]),
-            Self::Vector { component_count } => an_object_of_numbers(
-                match component_count {
-                    VectorComponentCount::Two => &["x", "y"],
-                    VectorComponentCount::Three => &["x", "y", "z"],
-                    VectorComponentCount::Four => &["x", "y", "z", "w"],
-                },
-                &[],
-            ),
+            Self::Vector { component_count } => {
+                let (components, unused): (&[&str], &[&str]) = match component_count {
+                    VectorComponentCount::Two => (&["x", "y"], &["z", "w"]),
+                    VectorComponentCount::Three => (&["x", "y", "z"], &["w"]),
+                    VectorComponentCount::Four => (&["x", "y", "z", "w"], &[]),
+                };
+                let mut schema = an_object_of_numbers(components, &[]);
+                for key in unused {
+                    schema["properties"][*key] = json!({ "type": "null" });
+                }
+                schema
+            }
             Self::Rectangle {} => {
                 an_object_of_numbers(&["x", "y", "width", "height"], &["width", "height"])
             }
@@ -138,6 +141,29 @@ fn the_tighter_upper_bound(own: f64, range: Option<PinNumberRange>) -> f64 {
     range
         .and_then(|range| range.maximum)
         .map_or(own, |maximum| maximum.min(own))
+}
+
+/// An Integer's own bounds, `lowest` and `highest`, held within `range` too, each rounded in to
+/// the nearest whole number; exact, since an Integer's bounds pass 2^53.
+fn whole_bounds_within(
+    lowest: i128,
+    highest: i128,
+    range: Option<PinNumberRange>,
+) -> (i128, i128) {
+    let minimum = range.and_then(|range| range.minimum);
+    let maximum = range.and_then(|range| range.maximum);
+    (
+        minimum.map_or(lowest, |minimum| (minimum.ceil() as i128).max(lowest)),
+        maximum.map_or(highest, |maximum| (maximum.floor() as i128).min(highest)),
+    )
+}
+
+/// `whole` as a JSON number, exact; every Integer bound fits an `i64` or a `u64`.
+fn a_whole_json_number(whole: i128) -> Value {
+    i64::try_from(whole)
+        .map(Value::from)
+        .or_else(|_| u64::try_from(whole).map(Value::from))
+        .unwrap_or_else(|_| json!(whole as f64))
 }
 
 /// `schema` given `minimum` and `maximum`, a whole bound written as a whole number.
@@ -207,18 +233,22 @@ fn a_bundle_object(members: &[BundleMember]) -> Value {
     })
 }
 
-/// A pin type by its `type` tag, one of `among`'s when it names any.
+/// A pin type: one of `among`, each as the contract writes it, when it names any; else any
+/// pin type by a built-in `type` tag.
 fn a_pin_type_choice(among: &[PinType]) -> Value {
-    let mut type_tag = json!({ "type": "string" });
     if !among.is_empty() {
-        type_tag["enum"] = among
-            .iter()
-            .map(|pin_type| json!(pin_type.built_in_name()))
-            .collect();
+        return json!({
+            "enum": among
+                .iter()
+                .filter_map(|pin_type| serde_json::to_value(pin_type).ok())
+                .collect::<Vec<_>>(),
+        });
     }
     json!({
         "type": "object",
-        "properties": { "type": type_tag },
+        "properties": {
+            "type": { "enum": BuiltInPinTypeName::EVERY_NAME },
+        },
         "required": ["type"],
     })
 }

@@ -53,10 +53,14 @@ impl ControlOperationDispatcher {
             .the_node_types_the_projects_loaded_streams_described(project)
             .await?;
         let conversions: Vec<PinTypeConversionListed> = NODE_REGISTRY
-            .list_registered()
+            .pin_conversions()
             .iter()
-            .chain(described.values())
-            .filter_map(|descriptor| descriptor.pin_conversion().ok().flatten())
+            .cloned()
+            .chain(
+                described
+                    .values()
+                    .filter_map(|descriptor| descriptor.pin_conversion().ok().flatten()),
+            )
             .map(|conversion| PinTypeConversionListed {
                 from: conversion.input_pin_type,
                 to: conversion.output_pin_type,

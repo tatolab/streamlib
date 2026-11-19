@@ -10,9 +10,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::core::descriptors::{
-    NodeDescriptor, NodeInputMode, NodeValueLifetime, PinDeclaration, PortDescriptor,
+    NodeDescriptor, NodeInputMode, NodeKind, NodeValueLifetime, PinDeclaration, PortDescriptor,
     SettingReadTime,
 };
+use crate::core::graph::PortInfo;
+use crate::core::graph::input_values::the_input_port_takes_a_value;
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigFieldDescribedAsASetting, the_config_fields_a_node_of_the_type_can_expose,
     the_config_fields_described_as_settings,
@@ -37,7 +39,7 @@ impl NodeTypePortsDescribedOnTheWire {
             inputs: descriptor
                 .inputs
                 .iter()
-                .map(an_input_port_described)
+                .map(|port| an_input_port_described(descriptor.node_kind, port))
                 .chain(
                     the_config_fields_described_as_settings(descriptor)
                         .into_iter()
@@ -79,13 +81,21 @@ fn a_port_described(port: &PortDescriptor) -> NodeTypePortDescribed {
     }
 }
 
-/// `port` as an input: its mode, the one it declares, else a link and a value where its type
-/// holds a stored value and a link alone where it does not.
-fn an_input_port_described(port: &PortDescriptor) -> NodeTypeInputDescribed {
+/// `port`, an input of a node of `node_kind`, as an input: its mode, the one it declares, else
+/// the one its pin type and the node's kind give it; and the JSON Schema of a value it takes,
+/// only where it takes one.
+fn an_input_port_described(node_kind: NodeKind, port: &PortDescriptor) -> NodeTypeInputDescribed {
     let declared = port.declared_pin();
     let mode = port
         .input_mode
-        .unwrap_or_else(|| the_mode_of_an_input_declaring_none(declared.as_ref()));
+        .unwrap_or_else(|| the_mode_of_an_input_declaring_none(node_kind, port));
+    let takes_a_value = the_input_port_takes_a_value(
+        Some(node_kind),
+        &PortInfo {
+            input_mode: Some(mode),
+            ..PortInfo::from(port)
+        },
+    );
     let (mode, read) = NodeTypeInputMode::of(mode);
     NodeTypeInputDescribed {
         port: a_port_described(port),
@@ -95,20 +105,32 @@ fn an_input_port_described(port: &PortDescriptor) -> NodeTypeInputDescribed {
         lifetime: Some(port.lifetime),
         value_json_schema: declared
             .as_ref()
+            .filter(|_| takes_a_value)
             .and_then(PinDeclaration::value_json_schema),
     }
 }
 
-/// The mode of an input port that declares none: a link only where its pin type holds no stored
-/// value, else a link or a value.
-fn the_mode_of_an_input_declaring_none(declared: Option<&PinDeclaration>) -> NodeInputMode {
-    let holds_no_stored_value = declared
-        .and_then(|declared| declared.clone().into_resolved())
-        .is_some_and(|resolved| !resolved.pin_type.holds_a_stored_value());
-    if holds_no_stored_value {
-        NodeInputMode::WireOnly
-    } else {
+/// The mode of `port`, an input of a node of `node_kind` that declares none: a setting read at
+/// setup where its pin type never takes a wire; else a link alone where the engine sets it no
+/// value, as on a type that holds none; else a link or a value.
+fn the_mode_of_an_input_declaring_none(
+    node_kind: NodeKind,
+    port: &PortDescriptor,
+) -> NodeInputMode {
+    let port_info = PortInfo::from(port);
+    if port_info
+        .pin
+        .as_ref()
+        .is_some_and(|pin| !pin.pin_type.takes_a_wire())
+    {
+        return NodeInputMode::SettingOnly {
+            read: SettingReadTime::AtSetup,
+        };
+    }
+    if the_input_port_takes_a_value(Some(node_kind), &port_info) {
         NodeInputMode::WireOrValue
+    } else {
+        NodeInputMode::WireOnly
     }
 }
 

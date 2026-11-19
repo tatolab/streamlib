@@ -38,5 +38,20 @@ pub struct DescribeNodeTypesRequest {
         description = "The node types to describe, each as `list_node_types` names it under `node_type`.",
         length(min = 1)
     )]
+    #[serde(deserialize_with = "at_least_one_node_type")]
     pub node_types: Vec<String>,
+}
+
+/// The node types a request names, refused when it names none, as the schema's `minItems` says.
+fn at_least_one_node_type<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let node_types = Vec::<String>::deserialize(deserializer)?;
+    if node_types.is_empty() {
+        return Err(serde::de::Error::custom(
+            "`node_types` names no node type; name at least one, as `list_node_types` lists it",
+        ));
+    }
+    Ok(node_types)
 }

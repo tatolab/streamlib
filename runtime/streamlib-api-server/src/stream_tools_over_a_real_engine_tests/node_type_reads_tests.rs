@@ -13,6 +13,10 @@ use super::input_value_set_tests::{
 use super::project_node_type_listing_tests::STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING;
 use super::*;
 
+use streamlib::sdk::descriptors::{
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
+    PortDescriptor, PortFamily, PortFamilyDeclaration,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 /// A native conversion from Audio to a Tensor, a pair no other test links.
@@ -143,6 +147,84 @@ async fn every_built_in_pin_type_is_listed_with_its_schema_and_the_conversions_f
     );
     assert!(row("bundle")["how_to_declare"].is_string(), "{listed}");
     assert!(row("float").get("how_to_declare").is_none(), "{listed}");
+}
+
+/// A conversion a node type registered by its descriptor alone states is not listed: the engine
+/// builds no node of that type, so it offers no such conversion.
+///
+/// Mental-revert: reading conversions from every registered descriptor lists Rectangle's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversion_no_node_can_be_built_for_is_not_listed() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        let port = |name: &str, pin_type: PinType| {
+            PortDescriptor::new(
+                name,
+                "",
+                true,
+                PortFamilyDeclaration::of_family(
+                    PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
+                ),
+            )
+            .with_delivery_profile("newest")
+            .with_pin_declaration(PinDeclaration::exactly(pin_type))
+        };
+        let descriptor = NodeDescriptor {
+            conversion: true,
+            ..NodeDescriptor::new(
+                NodeClassShortName::new("RectangleToTensor").expect("a short name"),
+                NodeClassImportPath::new("tests.described:RectangleToTensor").expect("a node type"),
+                "a conversion registered by its descriptor alone",
+            )
+        }
+        .with_input(port("rectangle", PinType::Rectangle {}))
+        .with_output(port("array", PinType::Tensor {}));
+        NODE_REGISTRY
+            .register_descriptor_only(descriptor)
+            .expect("the descriptor registers");
+    });
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+
+    let listed = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "list_pin_types",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("the pin types are listed");
+
+    let rectangle = listed["pin_types"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["name"] == "rectangle")
+        .expect("Rectangle is listed");
+    assert_eq!(rectangle["converts_to"], json!([]), "{rectangle}");
+}
+
+/// `describe_node_types` naming no node type is refused before it reads the project.
+///
+/// Mental-revert: decoding the list as any list describes nothing and answers success.
+#[tokio::test(flavor = "multi_thread")]
+async fn describing_no_node_type_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_listing(json!([]));
+
+    let answered = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "describe_node_types",
+        json!({ "project_directory": project.path(), "node_types": [] }),
+    )
+    .await;
+
+    assert_eq!(answered["isError"], true, "{answered}");
+    assert!(
+        answered.to_string().contains("names no node type"),
+        "{answered}"
+    );
 }
 
 /// The project's sources are listed as its interpreter read them, each node type by the first

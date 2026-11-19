@@ -16,7 +16,8 @@ pub enum NodeValueLifetime {
     /// Kept in the project's store: it survives Stop, Play, close and a restart.
     #[default]
     Kept,
-    /// Forgotten at Stop: the next Play starts the node from its defaults.
+    /// Forgotten at Stop: its live value is dropped, and the next Play reads its saved value, or
+    /// its declared default where it has none.
     Reset,
 }
 
