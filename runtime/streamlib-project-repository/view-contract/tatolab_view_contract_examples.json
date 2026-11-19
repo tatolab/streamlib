@@ -1,5 +1,5 @@
 {
-  "contract": "1.0",
+  "contract": "1.1",
   "examples": [
     {
       "named": "a node view declaring every field",
@@ -70,6 +70,105 @@
         "accepts": { "files": [] },
         "capabilities": ["camera"]
       }
+    },
+    {
+      "named": "a 1.1 node view whose ports name their pin types, one stating the family it agrees with",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Monitor",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [{ "name": "picture", "pin_type": { "type": "texture" } }],
+        "outputs": [
+          { "name": "level", "family": "channels", "pin_type": { "type": "float" } }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Monitor",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [{ "name": "picture", "family": "image", "pin_type": { "type": "texture" } }],
+        "outputs": [
+          { "name": "level", "family": "channels", "pin_type": { "type": "float" } }
+        ],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
+    },
+    {
+      "named": "a 1.1 node view whose port is declared by family alone",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Fader",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "fader", "family": "array", "range": [0, 1] }]
+      },
+      "opens": true
+    },
+    {
+      "named": "a port naming neither its pin type nor its family",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Bare",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level" }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a port whose family is not the one its pin type is carried as",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Disagree",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "family": "records", "pin_type": { "type": "float" } }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a port of a pin type no link carries alone",
+      "manifest": {
+        "contract": "1.1",
+        "title": "List",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [
+          { "name": "items", "pin_type": { "type": "list_of", "element_type": { "type": "float" } } }
+        ]
+      },
+      "opens": false,
+      "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a port of no known pin type",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Unknown",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "pin_type": { "type": "decibels" } }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0].pin_type.type"
+    },
+    {
+      "named": "a pin type in a view built for 1.0",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Early",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "pin_type": { "type": "float" } }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0].pin_type"
     },
     {
       "named": "a view built for a later minor",

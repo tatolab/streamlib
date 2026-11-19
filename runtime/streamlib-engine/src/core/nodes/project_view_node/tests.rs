@@ -223,6 +223,118 @@ fn a_panel_writes_array_channels_and_records_outputs_alone() {
 ///
 /// Mental-revert: writing each output as its message is made reaches `beat`, the first, and is
 /// refused for the node holding no output writer, before `fader` is ever looked at.
+fn the_monitor_manifest() -> JsonValue {
+    json!({
+        "contract": "1.1", "title": "Monitor", "entry": "index.html", "placement": "node",
+        "inputs": [{ "name": "picture", "pin_type": { "type": "texture" } },
+                   { "name": "gain", "family": "channels" }],
+        "outputs": [{ "name": "caption", "pin_type": { "type": "string" } }]
+    })
+}
+
+#[test]
+fn a_port_whose_view_names_its_pin_type_is_exactly_that_type_and_one_by_family_alone_is_untyped() {
+    let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
+        "acme-dj:monitor",
+        the_monitor_manifest(),
+    ))
+    .expect("a node view that opens is a node type");
+    let pins = |ports: &[PortDescriptor]| -> Vec<(
+        String,
+        Vec<PortFamily>,
+        Option<DeclaredPinType>,
+        Option<PinFlow>,
+    )> {
+        ports
+            .iter()
+            .map(|port| {
+                (
+                    port.name.clone(),
+                    port.family.families_an_input_takes(),
+                    port.pin_declaration
+                        .as_ref()
+                        .map(|pin| pin.pin_type.clone()),
+                    port.pin_declaration.as_ref().map(|pin| pin.flow),
+                )
+            })
+            .collect()
+    };
+    let string = || DeclaredPinType::Is {
+        pin_type: PinType::String {},
+    };
+    assert_eq!(
+        pins(&descriptor.inputs),
+        [
+            (
+                "picture".to_string(),
+                vec![PortFamily::Image],
+                Some(DeclaredPinType::Is {
+                    pin_type: PinType::Texture {
+                        pixel_formats: vec![]
+                    }
+                }),
+                Some(PinFlow::Stream),
+            ),
+            ("gain".to_string(), vec![PortFamily::Channels], None, None),
+            (
+                "caption".to_string(),
+                vec![PortFamily::Records],
+                Some(DeclaredPinType::Any),
+                Some(PinFlow::Value)
+            ),
+        ]
+    );
+    assert_eq!(
+        pins(&descriptor.outputs),
+        [(
+            "caption".to_string(),
+            vec![PortFamily::Records],
+            Some(string()),
+            Some(PinFlow::Value)
+        )]
+    );
+}
+
+#[test]
+fn a_value_a_panel_writes_onto_a_typed_output_is_packed_as_its_pin_type() {
+    let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
+        "acme-dj:monitor",
+        the_monitor_manifest(),
+    ))
+    .expect("a node view that opens is a node type");
+    let node = GraphNode::new(
+        descriptor.node_class_import_path.clone(),
+        None,
+        "monitor",
+        Some(json!({})),
+        descriptor
+            .inputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+        descriptor
+            .outputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+    );
+    let monitor = ValueSourceNode::for_the_node(&node, descriptor);
+
+    let caption = json!("Encore");
+    let message = monitor
+        .the_message_to_publish("caption", &caption)
+        .expect("a String output carries a string");
+
+    let packed = pack_pin_value(&PinType::String {}, &caption, 0).expect("a string packs");
+    assert_eq!(message.payload, packed.payload);
+    assert!(
+        monitor
+            .the_message_to_publish("caption", &json!({ "track": "drop" }))
+            .is_err(),
+        "a String output carries no record"
+    );
+}
+
 #[test]
 fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any() {
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
