@@ -18,6 +18,7 @@ use crate::core::runtime::{HowALoadedStreamEnded, RuntimeStatus};
 use crate::core::{Error, Result};
 use serial_test::serial;
 
+mod a_start_whose_wiring_fails_tests;
 mod loaded_streams_shutdown_and_wait_tests;
 mod runner_construction_and_description_tests;
 mod surface_share_service_tests;
