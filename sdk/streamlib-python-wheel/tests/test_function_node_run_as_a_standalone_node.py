@@ -370,6 +370,36 @@ def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_famil
     assert (bytes(payload), timestamp_ns) == (b"a frame's descriptor", 21)
 
 
+def test_the_pool_hands_on_every_part_of_a_control_message_its_island_answers():
+    from tatolab.runtime._function_node_pool import the_node_class_the_function_node_pool_runs_as
+
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    pool_class = the_node_class_the_function_node_pool_runs_as(
+        {"carries": [{"input_port": "island_0", "output_port": "island_0_output", "family": "channels"}]},
+        data_plane,
+    )
+    pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)
+    destination = _engine.open_node_link_data_access_for_helper_process()
+    node_interpreter_bootstrap.wire_link_data_access(
+        destination, {"inputs": [_wiring_of_one_link_end("input", "read", "L-out-of-the-pool-of-parts")]}
+    )
+    node_interpreter_bootstrap.wire_link_data_access(
+        data_plane,
+        {"outputs": [_wiring_of_one_link_end("output", "island_0_output", "L-out-of-the-pool-of-parts")]},
+    )
+    island = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["island_0"])
+    color_parts = [0.5, 0.25, 1.0, 1.0]
+
+    island.write_block("island_0", "d", [[part] for part in color_parts], sample_rate=0)
+    pool.process(_ContextOfOneProcess())
+
+    payload = destination.read_from_input_port("read")
+    assert payload is not None
+    assert bytes(payload) == struct.pack("<4d", *color_parts), "each part reaches the reader, in order"
+    pool.process(_ContextOfOneProcess())
+    assert destination.read_from_input_port("read") is None, "each message is handed on once"
+
+
 def test_a_promoted_function_node_starts_from_its_pin_values():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     runner_class = the_node_class_a_promoted_function_node_runs_as(
