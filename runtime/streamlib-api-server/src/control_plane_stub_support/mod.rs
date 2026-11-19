@@ -698,6 +698,14 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 >,
             ) {
             }
+            fn check_a_projects_extension_code(
+                &self,
+                project_directory: &::std::path::Path,
+                paths: ::std::option::Option<&[String]>,
+            ) -> ::streamlib::sdk::runtime::ExtensionCodeCheck {
+                ::streamlib::sdk::runtime::ExtensionCodeCheckersHeld::default()
+                    .check_a_projects_extension_code(project_directory, paths, None)
+            }
         }
     };
 }

@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The operation checking a project's code on disk without running a stream: its Python node
-//! declarations, and its views' manifests and node UI manifest.
+//! declarations, its views' manifests and node UI manifest, and its views' and controls' code
+//! against the extension SDK kit.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use streamlib::sdk::runtime::{
-    PythonNodeDeclarationCheck, PythonNodeDeclarationFinding, PythonNodeDeclarationFindingSeverity,
+    ExtensionCodeCheck, ExtensionCodeCheckKind, ExtensionCodeCheckRun, ExtensionCodeFinding,
+    ExtensionCodeFindingSeverity, ExtensionCodeNotCheckedCode, PythonNodeDeclarationCheck,
+    PythonNodeDeclarationFinding, PythonNodeDeclarationFindingSeverity,
     check_a_projects_python_node_declarations,
 };
 use streamlib_control_contract::CheckProjectCodeRequest;
@@ -62,6 +66,15 @@ impl ControlOperationDispatcher {
             ),
             None => None,
         };
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        let extension_project_directory = project_directory.clone();
+        let extension_paths = paths.clone();
+        let extension_code_check = tokio::task::spawn_blocking(move || {
+            operations_on_the_loaded_streams.check_a_projects_extension_code(
+                &extension_project_directory,
+                extension_paths.as_deref(),
+            )
+        });
         let module_paths: Option<Vec<String>> = paths.map(|paths| {
             paths
                 .into_iter()
@@ -78,10 +91,16 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "check_project_code failed: the declaration check",
         ))?;
+        let extension_code_check = extension_code_check.await.map_err(
+            ControlOperationRefusal::the_task_did_not_finish(
+                "check_project_code failed: the extension code check",
+            ),
+        )?;
         Ok(the_answer_of_the_checks(
             declaration_check,
             view_manifests_checked,
             node_ui_manifest_checked,
+            extension_code_check,
         ))
     }
 
@@ -142,11 +161,12 @@ struct NodeUiManifestChecked {
 /// The answer of a `python_node_declarations` run that ended as `declaration_check` did, and an
 /// `extension_manifest` run over the views as `view_manifests_checked` and over the node UI
 /// manifest as `node_ui_manifest_checked`, `None` when the project has none or `paths` leaves it
-/// out.
+/// out, and the `extension_types` and `extension_lint` runs of `extension_code_check`.
 fn the_answer_of_the_checks(
     declaration_check: PythonNodeDeclarationCheck,
     view_manifests_checked: ViewManifestsChecked,
     node_ui_manifest_checked: Option<NodeUiManifestChecked>,
+    extension_code_check: ExtensionCodeCheck,
 ) -> ProjectCodeCheckResult {
     let ViewManifestsChecked {
         run: mut extension_manifest_run,
@@ -176,11 +196,116 @@ fn the_answer_of_the_checks(
         findings.extend(node_ui_manifest_findings);
         files_checked.extend(file_checked);
     }
+    let ExtensionCodeCheck {
+        types,
+        lint,
+        findings: extension_code_findings,
+        files_checked: extension_files_checked,
+    } = extension_code_check;
+    let extension_code_findings: Vec<ProjectCodeCheckFinding> = extension_code_findings
+        .into_iter()
+        .map(an_extension_code_finding_on_the_wire)
+        .collect();
+    let types_run = the_run_of_an_extension_code_check(types, &extension_code_findings);
+    let lint_run = the_run_of_an_extension_code_check(lint, &extension_code_findings);
+    findings.extend(extension_code_findings);
+    files_checked.extend(
+        extension_files_checked
+            .into_iter()
+            .map(|file| ProjectFileChecked {
+                path: file.path,
+                content_sha256: file.content_sha256,
+            }),
+    );
     ProjectCodeCheckResult::of(
-        vec![declarations_run, extension_manifest_run],
+        vec![
+            declarations_run,
+            extension_manifest_run,
+            types_run,
+            lint_run,
+        ],
         findings,
         files_checked,
     )
+}
+
+/// The check an extension code check's `kind` is on the wire.
+fn the_check_of_an_extension_code_kind(kind: ExtensionCodeCheckKind) -> ProjectCodeCheckKind {
+    match kind {
+        ExtensionCodeCheckKind::Types => ProjectCodeCheckKind::ExtensionTypes,
+        ExtensionCodeCheckKind::Lint => ProjectCodeCheckKind::ExtensionLint,
+    }
+}
+
+/// The `extension_types` or `extension_lint` run that ended as `run` did, failed when one of
+/// `findings` of its check is an error.
+fn the_run_of_an_extension_code_check(
+    run: ExtensionCodeCheckRun,
+    findings: &[ProjectCodeCheckFinding],
+) -> ProjectCodeCheckRun {
+    let check = the_check_of_an_extension_code_kind(run.kind);
+    let (state, not_checked_because) = match run.not_checked {
+        Some(not_checked) => (
+            ProjectCodeCheckState::NotChecked,
+            Some(ProjectActionRefusalOnTheWire {
+                refused_file: not_checked.folder_being_checked.map(|path| {
+                    ProjectFilePlaceOnTheWire {
+                        path,
+                        line: None,
+                        column: None,
+                    }
+                }),
+                ..ProjectActionRefusalOnTheWire::of_the_action(
+                    CHECK_PROJECT_CODE,
+                    match not_checked.code {
+                        ExtensionCodeNotCheckedCode::ExtensionSdkNotFound => {
+                            ControlOperationRefusalCode::ExtensionSdkNotFound
+                        }
+                        ExtensionCodeNotCheckedCode::ProgramNotCarried => {
+                            ControlOperationRefusalCode::RuntimeFailed
+                        }
+                        ExtensionCodeNotCheckedCode::RanOutOfTime => {
+                            ControlOperationRefusalCode::CheckRanOutOfTime
+                        }
+                        ExtensionCodeNotCheckedCode::Refused => {
+                            ControlOperationRefusalCode::Refused
+                        }
+                    },
+                    not_checked.words,
+                )
+            }),
+        ),
+        None if findings.iter().any(|finding| {
+            finding.check == check && finding.severity == ProjectCodeCheckSeverity::Error
+        }) =>
+        {
+            (ProjectCodeCheckState::Failed, None)
+        }
+        None => (ProjectCodeCheckState::Passed, None),
+    };
+    ProjectCodeCheckRun {
+        check,
+        state,
+        not_checked_because,
+        checked_with: run.checked_with,
+    }
+}
+
+fn an_extension_code_finding_on_the_wire(finding: ExtensionCodeFinding) -> ProjectCodeCheckFinding {
+    ProjectCodeCheckFinding {
+        check: the_check_of_an_extension_code_kind(finding.kind),
+        finding_code: finding.finding_code,
+        severity: match finding.severity {
+            ExtensionCodeFindingSeverity::Error => ProjectCodeCheckSeverity::Error,
+            ExtensionCodeFindingSeverity::Warning => ProjectCodeCheckSeverity::Warning,
+        },
+        words: finding.words,
+        path: finding.path,
+        line: finding.line,
+        column: finding.column,
+        node_type: None,
+        port: None,
+    }
 }
 
 /// The `python_node_declarations` run that ended as `declaration_check` did, its findings and

@@ -49,6 +49,8 @@ async fn a_declaration_error_is_answered_with_its_check_place_and_code() {
                 "checked_with": ["tatolab-stream 1.0"],
             },
             { "check": "extension_manifest", "state": "passed" },
+            { "check": "extension_types", "state": "passed" },
+            { "check": "extension_lint", "state": "passed" },
         ])
     );
     assert_eq!(

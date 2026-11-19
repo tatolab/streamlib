@@ -156,8 +156,11 @@ pub use runtime::a_project_on_disk_for_a_test;
 pub use runtime::{
     ArmedEngineTeardownWatchdog, BoxFuture, CrashOfThePreviousRuntimeRun, CreateProjectRequest,
     CreatedProjectFirstCommit, DescriptionOfTheAbandonedNodeThreads,
-    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, EveryStreamEndedDuringTheWait,
-    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, FunctionNodeState,
+    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE,
+    EveryStreamEndedDuringTheWait, ExtensionCodeCheck, ExtensionCodeCheckKind,
+    ExtensionCodeCheckRun, ExtensionCodeCheckers, ExtensionCodeCheckersHeld, ExtensionCodeFinding,
+    ExtensionCodeFindingSeverity, ExtensionCodeNotChecked, ExtensionCodeNotCheckedCode,
+    ExtensionFileChecked, FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, FunctionNodeState,
     FunctionNodeStatesCarriedForEveryStream, FunctionNodeStatesCarriedForOneStream,
     HowALoadedStreamEnded, HowThePreviousRuntimeRunEnded, ImportedProjectPythonSources,
     LoadedStreamHolding, LoadedStreamInThisRuntime, LoadedStreamTag, MachineName,

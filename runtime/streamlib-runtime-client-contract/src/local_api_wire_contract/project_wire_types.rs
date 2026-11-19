@@ -494,6 +494,9 @@ pub enum ControlOperationRefusalCode {
     /// A check of the project's code was still running at its bound and was killed; the
     /// runtime's words give the bound, and `refused_file` the file it was checking.
     CheckRanOutOfTime,
+    /// A check of the project's views and controls found no extension SDK kit to check them
+    /// against; the runtime's words name each place it looked.
+    ExtensionSdkNotFound,
     /// The request was understood and not done; changing it can help. The runtime's words say
     /// what to change.
     // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.
