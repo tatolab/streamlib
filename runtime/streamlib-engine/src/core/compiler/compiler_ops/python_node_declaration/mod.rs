@@ -483,9 +483,10 @@ fn read_pin_declaration(
     Ok(pin_declaration)
 }
 
-/// Read the value an input port reads while nothing is linked into it: a
-/// number or a bool on a Channels input, or `null` on an optional function
-/// node input of any family.
+/// Read the value an input port reads while nothing is linked into it: on a port whose author
+/// declares its pin, a stored value of the type it declares, or `null` when it may be unset;
+/// on any other port, a number or a bool on a Channels input, or `null` on an optional
+/// function node input of any family.
 fn read_pin_default(
     pin_default: &serde_json::Value,
     port: &PortDescriptor,
@@ -496,6 +497,17 @@ fn read_pin_default(
             "output port {:?} declares a pin default, and only an input reads one",
             port.name
         ));
+    }
+    if let Some(pin_declaration) = &port.pin_declaration {
+        return pin_declaration
+            .check_value(pin_default)
+            .map(|()| pin_default.clone())
+            .map_err(|not_taken| {
+                format!(
+                    "input port {:?} declares the pin default {pin_default}, and it takes {}",
+                    port.name, not_taken.takes
+                )
+            });
     }
     if !pin_default.is_null()
         && port.family.family != crate::core::descriptors::PortFamily::Channels

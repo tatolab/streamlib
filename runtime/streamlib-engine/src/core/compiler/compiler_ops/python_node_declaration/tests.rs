@@ -911,3 +911,25 @@ fn a_stated_conversion_reaches_the_descriptor_and_one_that_is_no_bool_is_refused
         "got {refusal}"
     );
 }
+
+#[test]
+fn a_typed_pins_default_is_a_stored_value_of_the_type_it_declares() {
+    let colour = serde_json::json!({"red": 1.0, "green": 0.5, "blue": 0.25, "alpha": 1.0});
+    let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
+        {"name": "tint", "family": {"family": "channels"}, "description": "",
+         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "color"}}, "flow": "value"},
+         "pin_default": colour},
+    ])))
+    .unwrap_or_else(|refusal| panic!("a Color default reads on a Color pin: {refusal}"));
+    assert_eq!(declaration.descriptor.inputs[0].pin_default, Some(colour));
+
+    let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+        "name": "tint", "family": {"family": "channels"}, "description": "",
+        "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "color"}}, "flow": "value"},
+        "pin_default": 0.5,
+    }])));
+    assert!(
+        refusal.contains("\"tint\"") && refusal.contains("a colour"),
+        "got {refusal}"
+    );
+}
