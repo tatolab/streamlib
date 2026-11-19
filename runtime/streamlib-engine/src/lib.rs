@@ -249,9 +249,10 @@ pub mod sdk {
             __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
             DynamicNodeConstructorFn, EmptyConfig, GeneratedNode, InstalledModuleOfANodeType,
             ManualNode, NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec, NodeState,
-            NodeStateComponent, NodeTypesOneStreamResolves, OutOfProcessFarSideLinkDelivery,
-            OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
-            ReactiveNode, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
+            NodeStateComponent, NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
+            OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
+            OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ReactiveNode,
+            VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
         };
 
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};

@@ -39,6 +39,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionToolResult,
     NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
+    SuggestedOperationCall,
 };
 use uuid::Uuid;
 
@@ -53,6 +54,7 @@ mod former_port_names;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
+mod ports_of_the_node_a_refusal_names;
 mod request_application;
 mod request_to_graph_operation;
 mod streams_each_operation_names;
@@ -481,6 +483,7 @@ pub(crate) struct GraphTransactionRefusal {
     refused_operation_index: Option<usize>,
     what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
     refusal: GraphRequestRefusal,
+    suggested_call: Option<Box<SuggestedOperationCall>>,
 }
 
 impl GraphTransactionRefusal {
@@ -493,6 +496,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: Some(refused_operation_index),
             what_the_refused_operation_names: Box::new(what_the_refused_operation_names),
             refusal: refusal.into(),
+            suggested_call: None,
         }
     }
 
@@ -511,6 +515,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: None,
             what_the_refused_operation_names: Box::default(),
             refusal: refusal.into(),
+            suggested_call: None,
         }
     }
 
@@ -554,6 +559,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: self.refused_operation_index,
             refused_link: what_the_refused_operation_names.link,
             refused_params_pointer,
+            suggested_call: self.suggested_call.map(|suggested| *suggested),
             ..code_and_place.on_the_refusal_of(tool_name, runtime_words)
         }
     }
@@ -594,8 +600,36 @@ impl StreamGraphTransactionExecutor<'_> {
                 .into_iter()
                 .unzip();
         let stream_locations = the_location_of_each_listed_stream(listings);
+        self.apply_to_the_streams_each_names(
+            requests,
+            &stream_id_of_each_request,
+            &stream_locations,
+            mode,
+            author,
+            idempotency_key,
+        )
+        .map_err(|refusal| {
+            self.suggesting_the_ports_of_the_node_type_a_port_not_found_names(
+                refusal,
+                &stream_id_of_each_request,
+                &stream_locations,
+            )
+        })
+    }
+
+    /// Apply `requests`, each on the stream of the same place in `stream_id_of_each_request`,
+    /// as one transaction by `author`.
+    fn apply_to_the_streams_each_names(
+        &self,
+        requests: Vec<StreamGraphAction>,
+        stream_id_of_each_request: &[String],
+        stream_locations: &HashMap<String, StreamLocation>,
+        mode: GraphEditMode,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+    ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
         let mut stream_ids_in_order: Vec<String> = Vec::new();
-        for stream_id in &stream_id_of_each_request {
+        for stream_id in stream_id_of_each_request {
             if !stream_ids_in_order.contains(stream_id) {
                 stream_ids_in_order.push(stream_id.clone());
             }
@@ -603,13 +637,13 @@ impl StreamGraphTransactionExecutor<'_> {
         if mode == GraphEditMode::Live {
             self.refuse_an_input_set_twice_in_a_live_transaction(
                 &requests,
-                &stream_id_of_each_request,
+                stream_id_of_each_request,
             )?;
         }
         if mode == GraphEditMode::Live
             && let Some(applied) = self.apply_input_values_set_live_apart_from_the_graph(
                 &requests,
-                &stream_id_of_each_request,
+                stream_id_of_each_request,
             )?
         {
             return Ok(applied);
@@ -617,7 +651,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let project_repository = match mode {
             GraphEditMode::Live => None,
             GraphEditMode::Commit => Some(
-                self.the_one_project_the_streams_belong_to(&stream_ids_in_order, &stream_locations)
+                self.the_one_project_the_streams_belong_to(&stream_ids_in_order, stream_locations)
                     .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             ),
         };
@@ -634,12 +668,12 @@ impl StreamGraphTransactionExecutor<'_> {
         let applied = self.apply_the_requests(
             requests
                 .into_iter()
-                .zip(stream_id_of_each_request)
+                .zip(stream_id_of_each_request.iter().cloned())
                 .collect(),
             mode,
             author,
             idempotency_key,
-            &stream_locations,
+            stream_locations,
             project_repository_held.as_deref_mut(),
         )?;
         if let Some(project_repository_held) = project_repository_held {

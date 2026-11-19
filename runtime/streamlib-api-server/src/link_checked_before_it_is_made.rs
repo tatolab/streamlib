@@ -47,12 +47,6 @@ impl ControlOperationDispatcher {
         let of_an_engine_error = |refusal: streamlib::sdk::error::Error| {
             ControlOperationRefusal::of_an_engine_error(CheckLink::METHOD_NAME, &refusal)
         };
-        let refused_as_connect_refuses = |refusal: GraphRequestRefusal| {
-            LinkCheckResult::of_a_link_connect_refuses(
-                GraphTransactionRefusal::of_a_connect(&source, &target, refusal)
-                    .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
-            )
-        };
         if level.is_some_and(|level| !level.is_empty()) {
             return Err(not_checked_yet(
                 "the link is inside a placed stream; check one at the stream's own level, with \
@@ -60,17 +54,33 @@ impl ControlOperationDispatcher {
             ));
         }
 
+        let refused_as_connect_refuses = |refusal: GraphRequestRefusal| {
+            GraphTransactionRefusal::of_a_connect(&source, &target, refusal)
+        };
+        let answered_as_connect_answers = |refusal: GraphTransactionRefusal| {
+            LinkCheckResult::of_a_link_connect_refuses(
+                refusal.into_the_refusal_on_the_wire(Connect::METHOD_NAME),
+            )
+        };
+
         let listings = self.operations_on_the_loaded_streams.list_streams();
         let stream_id = match StreamsTheRuntimeHolds::listed_in(&listings).the_stream_named(&stream)
         {
             Ok((_, stream_id)) => stream_id,
             Err(runtime_words) => {
-                return Ok(refused_as_connect_refuses(GraphRequestRefusal::coded(
-                    RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
-                    runtime_words,
+                return Ok(answered_as_connect_answers(refused_as_connect_refuses(
+                    GraphRequestRefusal::coded(
+                        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
+                        runtime_words,
+                    ),
                 )));
             }
         };
+        let project_directory = listings
+            .iter()
+            .find(|listing| listing.stream_id == stream_id)
+            .and_then(|listing| listing.stream_location.as_ref())
+            .map(|location| location.project_directory.clone());
         let stream_operations = self
             .operations_on_the_loaded_streams
             .runtime_operations_of_the_stream_a_call_names(&stream_id)
@@ -79,6 +89,16 @@ impl ControlOperationDispatcher {
             .to_json_async()
             .await
             .map_err(of_an_engine_error)?;
+        let refused_on_the_running_stream = |refusal: GraphRequestRefusal| {
+            let refusal = refused_as_connect_refuses(refusal);
+            answered_as_connect_answers(match &project_directory {
+                Some(project_directory) => refusal.suggesting_the_ports_of_the_node_type_it_names(
+                    project_directory,
+                    &rendered_graph,
+                ),
+                None => refusal,
+            })
+        };
         let operation = match the_operation_a_connect_asks_of_the_running_stream(
             source.clone(),
             target.clone(),
@@ -86,7 +106,7 @@ impl ControlOperationDispatcher {
             stream_operations.as_ref(),
         ) {
             Ok(operation) => operation,
-            Err(refusal) => return Ok(refused_as_connect_refuses(refusal)),
+            Err(refusal) => return Ok(refused_on_the_running_stream(refusal)),
         };
         let StreamGraphOperation::Connect { link } = operation else {
             return Err(not_checked_yet(
@@ -101,7 +121,7 @@ impl ControlOperationDispatcher {
             Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade) => Err(not_checked_yet(
                 "the link reaches a node that runs as no node of its own, such as a fragment",
             )),
-            Err(refusal) => Ok(refused_as_connect_refuses(refusal.into())),
+            Err(refusal) => Ok(refused_on_the_running_stream(refusal.into())),
         }
     }
 }

@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The operation listing the node types a project offers.
+//! The operation listing the node types a project offers, and the one listing from source it
+//! and `list_node_types` both read.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,7 @@ struct OneImportReadForItsNodeTypeListing {
 /// The sources the project's interpreter lists for the project in `project_directory`, read off
 /// the async runtime.
 async fn the_node_type_sources_the_projects_interpreter_lists(
+    method_name: &'static str,
     project_directory: PathBuf,
     import_sources: Vec<ImportedProjectPythonSources>,
 ) -> Result<Vec<NodeTypeSourceReadWithoutRunningIt>, ControlOperationRefusal> {
@@ -56,18 +58,17 @@ async fn the_node_type_sources_the_projects_interpreter_lists(
         )
     })
     .await
-    .map_err(ControlOperationRefusal::the_task_did_not_finish(
-        "list_project_node_types failed: the listing",
-    ))?
-    .map_err(|refusal| format!("list_project_node_types failed: {refusal}"))?
+    .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
+        "{method_name} failed: the listing"
+    )))?
+    .map_err(|refusal| format!("{method_name} failed: {refusal}"))?
     .into_iter()
     .map(serde_json::from_value::<NodeTypeSourceReadWithoutRunningIt>)
     .collect::<Result<Vec<_>, _>>()
     .map_err(|not_a_source| {
         ControlOperationRefusal::failed(format!(
-            "list_project_node_types failed: the project's interpreter listed a source this \
-             runtime does not read ({not_a_source}); its `tatolab-stream` may differ from \
-             the runtime's"
+            "{method_name} failed: the project's interpreter listed a source this runtime does \
+             not read ({not_a_source}); its `tatolab-stream` may differ from the runtime's"
         ))
     })
 }
@@ -81,16 +82,35 @@ fn the_module_name_of_a_python_file(path: &str) -> String {
     package_or_module.replace('/', ".")
 }
 
-use streamlib_control_contract::ListProjectNodeTypesRequest;
+use streamlib_control_contract::{
+    ControlOperation, ListProjectNodeTypes, ListProjectNodeTypesRequest,
+};
+
 impl ControlOperationDispatcher {
     pub(crate) async fn list_project_node_types(
         &self,
         ListProjectNodeTypesRequest { project_directory }: ListProjectNodeTypesRequest,
     ) -> Result<ListProjectNodeTypesToolResult, ControlOperationRefusal> {
+        self.the_node_types_the_project_offers_read_from_source(
+            ListProjectNodeTypes::METHOD_NAME,
+            project_directory,
+        )
+        .await
+    }
+
+    /// The node types and graph generators the project in `project_directory` offers, by
+    /// source, read from source without running it for the operation `method_name`: kept as the
+    /// project's last listing, with what it changed announced on the project's feed and the feed
+    /// followed for the changes that list it again.
+    pub(crate) async fn the_node_types_the_project_offers_read_from_source(
+        &self,
+        method_name: &'static str,
+        project_directory: PathBuf,
+    ) -> Result<ListProjectNodeTypesToolResult, ControlOperationRefusal> {
         let listing_started = self.project_node_types_last_listed.start_a_listing();
         let project_read = self
             .a_project_repository_call_off_the_async_runtime(
-                "list_project_node_types",
+                method_name,
                 project_directory,
                 |project_repository| {
                     let mut import_sources = Vec::new();
@@ -154,6 +174,7 @@ impl ControlOperationDispatcher {
             )
             .await?;
         let mut sources = the_node_type_sources_the_projects_interpreter_lists(
+            method_name,
             project_read.project_directory.clone(),
             project_read.import_sources,
         )

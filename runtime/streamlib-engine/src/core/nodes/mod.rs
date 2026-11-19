@@ -9,6 +9,7 @@ pub mod __generated_private;
 mod empty_config;
 mod node_instance_factory;
 mod node_spec;
+mod node_type_ports_described_on_the_wire;
 mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;
 mod project_view_node;
@@ -33,6 +34,7 @@ pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
 };
 pub use node_spec::NodeSpec;
+pub use node_type_ports_described_on_the_wire::NodeTypePortsDescribedOnTheWire;
 pub(crate) use node_types_one_stream_resolves::{
     HowANodeOfADescribedTypeRuns, is_a_natively_compiled_node_type,
 };

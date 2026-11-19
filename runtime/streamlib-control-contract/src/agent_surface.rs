@@ -453,6 +453,8 @@ mod tests {
                 "stop_playback",
                 "pause_playback",
                 "resume_playback",
+                "list_node_types",
+                "describe_node_types",
                 "logs",
                 "undo",
                 LIST_OPERATION_GROUPS_TOOL_NAME,

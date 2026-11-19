@@ -167,138 +167,9 @@ export type NamedPinTypeImportPath = string;
 export type PinFlow = "value" | "stream" | "trigger";
 
 /**
- * A Boolean's stored value: a JSON boolean.
+ * The name of a built-in pin type: the `type` tag of its pin type.
  */
-export type BooleanPinValue = boolean;
-
-/**
- * An Integer's stored value: a whole number, within its exact size when the type states one
- * and exact to 2^53 when it states none.
- */
-export type IntegerPinValue = number | bigint;
-
-/**
- * A Float's stored value: any JSON number; `1` is taken as 1.0.
- */
-export type FloatPinValue = number;
-
-/**
- * A String's stored value: any text; the empty string is a value.
- */
-export type StringPinValue = string;
-
-/**
- * A Menu's stored value: one of the type's option names, spelled as declared.
- */
-export type MenuPinValue = string;
-
-/**
- * A Color's stored value: sRGB red, green and blue and alpha, each 0 for none and 1 for full,
- * not linear light and not multiplied by alpha. Alpha 1 is opaque. A number outside 0 to 1 is
- * taken as sent.
- */
-export interface ColorPinValue {
-  red: number;
-  green: number;
-  blue: number;
-  alpha: number;
-}
-
-/**
- * A Vector's stored value: `x` and `y`, with `z` for three components and `w` for four, and no
- * other key. The type's declared size says which keys it holds.
- */
-export interface VectorPinValue {
-  x: number;
-  y: number;
-  /**
-   * Present for three and four components.
-   */
-  z?: number;
-  /**
-   * Present for four components.
-   */
-  w?: number;
-}
-
-/**
- * A Rectangle's stored value: its left edge `x`, its top edge `y`, and a `width` and `height`
- * of 0 or more. The node says whether they are pixels or a share of the frame.
- */
-export interface RectanglePinValue {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-/**
- * A Transform's stored value: a 4 by 4 matrix as 16 numbers, row by row. It multiplies a
- * column, so the fourth number of each of the first three rows is the translation.
- */
-export type TransformPinValue = Array<number>;
-
-/**
- * An Asset's stored value: the asset's UUID as `list_assets` answers it, with `from`, the
- * import's project UUID, for an asset of an import. Never a bare string.
- */
-export interface AssetPinValue {
-  /**
-   * The asset's UUID.
-   */
-  asset: string;
-  /**
-   * The UUID of the imported project that holds the asset; absent, the project's own.
-   */
-  from?: string;
-}
-
-/**
- * A List's stored value: a list of its element's form, in order. `[]` is a value.
- */
-export type ListPinValue = Array<unknown>;
-
-/**
- * A bundle's stored value: an object keyed by member name, each member in its own type's form.
- * Only a member that declares a default may be left out.
- */
-export type BundlePinValue = { [key: string]: unknown };
-
-/**
- * A config value naming another node of the graph, of any type.
- */
-export interface NodeReferenceInConfig {
-  /**
-   * The referenced node's name, as `add` gave it.
-   */
-  node: string;
-}
-
-/**
- * What a port declares about what it carries.
- */
-export interface PinDeclaration {
-  /**
-   * The type it carries, or how that type is found.
-   */
-  pin_type: DeclaredPinType;
-  /**
-   * How its messages are read.
-   */
-  flow: PinFlow;
-  /**
-   * What it states besides its type, none of which decides a link.
-   */
-  annotations?: PinAnnotations;
-  /**
-   * Names the port had before, each of which still finds it.
-   */
-  former_names?: Array<string>;
-  /**
-   * Whether an input may hold no value and read as nothing.
-   */
-  may_be_unset?: boolean;
-}
+export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
 
 /**
  * The pin type a port declares, or how it is found.
@@ -443,9 +314,138 @@ export interface PinProjectAssetAnnotation {
 }
 
 /**
- * The name of a built-in pin type: the `type` tag of its pin type.
+ * A Boolean's stored value: a JSON boolean.
  */
-export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
+export type BooleanPinValue = boolean;
+
+/**
+ * An Integer's stored value: a whole number, within its exact size when the type states one
+ * and exact to 2^53 when it states none.
+ */
+export type IntegerPinValue = number | bigint;
+
+/**
+ * A Float's stored value: any JSON number; `1` is taken as 1.0.
+ */
+export type FloatPinValue = number;
+
+/**
+ * A String's stored value: any text; the empty string is a value.
+ */
+export type StringPinValue = string;
+
+/**
+ * A Menu's stored value: one of the type's option names, spelled as declared.
+ */
+export type MenuPinValue = string;
+
+/**
+ * A Color's stored value: sRGB red, green and blue and alpha, each 0 for none and 1 for full,
+ * not linear light and not multiplied by alpha. Alpha 1 is opaque. A number outside 0 to 1 is
+ * taken as sent.
+ */
+export interface ColorPinValue {
+  red: number;
+  green: number;
+  blue: number;
+  alpha: number;
+}
+
+/**
+ * A Vector's stored value: `x` and `y`, with `z` for three components and `w` for four, and no
+ * other key. The type's declared size says which keys it holds.
+ */
+export interface VectorPinValue {
+  x: number;
+  y: number;
+  /**
+   * Present for three and four components.
+   */
+  z?: number;
+  /**
+   * Present for four components.
+   */
+  w?: number;
+}
+
+/**
+ * A Rectangle's stored value: its left edge `x`, its top edge `y`, and a `width` and `height`
+ * of 0 or more. The node says whether they are pixels or a share of the frame.
+ */
+export interface RectanglePinValue {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A Transform's stored value: a 4 by 4 matrix as 16 numbers, row by row. It multiplies a
+ * column, so the fourth number of each of the first three rows is the translation.
+ */
+export type TransformPinValue = Array<number>;
+
+/**
+ * An Asset's stored value: the asset's UUID as `list_assets` answers it, with `from`, the
+ * import's project UUID, for an asset of an import. Never a bare string.
+ */
+export interface AssetPinValue {
+  /**
+   * The asset's UUID.
+   */
+  asset: string;
+  /**
+   * The UUID of the imported project that holds the asset; absent, the project's own.
+   */
+  from?: string;
+}
+
+/**
+ * A List's stored value: a list of its element's form, in order. `[]` is a value.
+ */
+export type ListPinValue = Array<unknown>;
+
+/**
+ * A bundle's stored value: an object keyed by member name, each member in its own type's form.
+ * Only a member that declares a default may be left out.
+ */
+export type BundlePinValue = { [key: string]: unknown };
+
+/**
+ * A config value naming another node of the graph, of any type.
+ */
+export interface NodeReferenceInConfig {
+  /**
+   * The referenced node's name, as `add` gave it.
+   */
+  node: string;
+}
+
+/**
+ * What a port declares about what it carries.
+ */
+export interface PinDeclaration {
+  /**
+   * The type it carries, or how that type is found.
+   */
+  pin_type: DeclaredPinType;
+  /**
+   * How its messages are read.
+   */
+  flow: PinFlow;
+  /**
+   * What it states besides its type, none of which decides a link.
+   */
+  annotations?: PinAnnotations;
+  /**
+   * Names the port had before, each of which still finds it.
+   */
+  former_names?: Array<string>;
+  /**
+   * Whether an input may hold no value and read as nothing.
+   */
+  may_be_unset?: boolean;
+}
 
 /** A contract component that states a built-in pin type's stored value. */
 export type PinValueComponentName = "BooleanPinValue" | "IntegerPinValue" | "FloatPinValue" | "StringPinValue" | "MenuPinValue" | "ColorPinValue" | "VectorPinValue" | "RectanglePinValue" | "TransformPinValue" | "AssetPinValue" | "ListPinValue" | "BundlePinValue" | "NodeReferenceInConfig" | "PinType";

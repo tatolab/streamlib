@@ -5,7 +5,7 @@
 
 export const CONTROL_CONTRACT_VERSION = 3;
 
-export const CONTROL_CONTRACT_REVISION = 9;
+export const CONTROL_CONTRACT_REVISION = 10;
 
 export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "discover",
@@ -75,6 +75,9 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "create_node_file",
   "write_project_file",
   "list_project_node_types",
+  "list_pin_types",
+  "list_node_types",
+  "describe_node_types",
   "list_project_views",
   "write_studio_view_output",
   "write_graph_input",
@@ -100,6 +103,9 @@ export const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES = Object.freeze([
   "check_link",
   "set_node_input_value",
   "read_project_changes",
+  "list_pin_types",
+  "list_node_types",
+  "describe_node_types",
 ]);
 
 export const CONTROL_JSON_RPC_ROUTE_PATH = "/control";
