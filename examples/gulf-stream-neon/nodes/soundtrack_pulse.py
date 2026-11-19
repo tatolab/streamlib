@@ -29,6 +29,10 @@ class SoundtrackPulseConfig:
     soundtrack_path: str = "media/soundtrack.wav"
 
 
+@node.meta(
+    category="Gulf Stream Neon",
+    description="The soundtrack heard: its kick envelope and loudness at stream time, as records every compute node pulses on.",
+)
 @node.process(execution="continuous", interval_ms=33)
 class SoundtrackPulse:
     """Publishes the soundtrack's kick envelope and loudness, step by step."""

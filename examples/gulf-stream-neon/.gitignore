@@ -3,3 +3,5 @@ __pycache__/
 *.py[cod]
 capture/
 media/
+imports/
+data/station_log.jsonl
