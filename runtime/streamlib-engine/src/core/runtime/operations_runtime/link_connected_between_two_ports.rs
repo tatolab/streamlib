@@ -18,7 +18,7 @@ use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::{PinLinkOutcome, PinLinkVerdict};
 use crate::core::graph::{
     ALinkConnected, Graph, LinkUniqueId, refuse_a_link_its_pin_types_or_families_refuse,
-    the_verdict_of_two_typed_ends,
+    the_verdict_on_a_link_between_typed_ends,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
@@ -125,7 +125,10 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
         match refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow) {
             Ok((verdict, _)) => Ok(verdict),
             Err(refusal @ Error::PinLinkRefused(_)) => {
-                let Some(verdict) = the_verdict_of_two_typed_ends(graph, &from, &to) else {
+                let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+                let Some(verdict) =
+                    the_verdict_on_a_link_between_typed_ends(graph, &from, &to, &conversions)
+                else {
                     return Err(refusal);
                 };
                 let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome

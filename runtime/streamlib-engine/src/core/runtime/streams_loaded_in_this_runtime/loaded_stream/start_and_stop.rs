@@ -40,7 +40,10 @@ impl LoadedStreamInThisRuntime {
         engine: &EngineResourcesSharedByEveryStream,
     ) -> Result<StreamClock> {
         let stream_clock_spec = self.compiler.scope(|graph, _tx| graph.stream_clock_spec());
-        stream_clock_spec.refusal_unless_this_runtime_runs_it(self.stream_id())?;
+        crate::core::context::refuse_a_stream_clock_this_runtime_cannot_run(
+            &stream_clock_spec,
+            self.stream_id(),
+        )?;
         let stream_clock = StreamClock::starting_now(stream_clock_spec);
         if stream_clock_spec.is_real() {
             return Ok(stream_clock);

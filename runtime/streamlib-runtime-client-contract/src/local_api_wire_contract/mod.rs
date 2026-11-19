@@ -5,14 +5,29 @@
 //! port, and the shape of each result a client parses, written once for the runtime that serves
 //! them and every client that calls them.
 
+mod graph_answer_link_wire_types;
+mod graph_answer_node_component_wire_types;
 mod graph_answer_wire_types;
 mod graph_wire_types;
 mod link_check_wire_types;
 mod log_wire_types;
 mod project_wire_types;
 mod runtime_health_wire_types;
+mod stream_clock_spec;
 mod stream_wire_types;
 
+pub use graph_answer_link_wire_types::{
+    GraphInterfacePortDirectionOnTheWire, GraphInterfacePortOnTheWire,
+    GraphLinkComponentsOnTheWire, GraphLinkOnTheWire, GraphLinkPortRefOnTheWire,
+    GraphLinkStateComponentOnTheWire, GraphLinkStateOnTheWire, GraphVariableOnTheWire,
+    LinkCarriedThroughTheFunctionNodePoolOnTheWire,
+};
+pub use graph_answer_node_component_wire_types::{
+    FunctionNodeHostOnTheWire, FunctionNodePromotionOnTheWire, GraphNodeComponentsOnTheWire,
+    HelperProcessRestartsOnTheWire, NodeInstanceOnTheWire, NodeMetricsOnTheWire,
+    NodeReadyBarrierOnTheWire, NodeShutdownChannelOnTheWire, NodeStateOnTheWire,
+    NodeThreadHandleOnTheWire, ShaderNodeFusedGroupOnTheWire,
+};
 pub use graph_answer_wire_types::{
     ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
     GraphNodeKindOnTheWire, GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
@@ -27,8 +42,8 @@ pub use graph_wire_types::{
     RefusedGraphLinkOnTheWire,
 };
 pub use link_check_wire_types::{
-    ConvertNodeToInsertOnTheWire, FreePinConversionOnTheWire, LinkCheckResult,
-    PinLinkOutcomeOnTheWire, PinLinkWarningOnTheWire,
+    ConvertNodeToInsertOnTheWire, LinkCheckResult, PinLinkMarksOnTheWire, PinLinkOutcomeOnTheWire,
+    PinLinkWarningOnTheWire,
 };
 pub use log_wire_types::LogsToolResult;
 pub use project_wire_types::{
@@ -56,6 +71,7 @@ pub use runtime_health_wire_types::{
     DescribeRuntimeToolResult, LOOPBACK_HTTP_LISTENER_DEFAULT_PORT,
     MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH, MachineRuntimeLockHolderPidAnswer,
 };
+pub use stream_clock_spec::{DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClockSpec};
 pub use stream_wire_types::{
     CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
     DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, ListStreamsToolResult,

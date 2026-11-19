@@ -19,8 +19,14 @@ use crate::generate_runtime_client::{
 
 /// The keywords `control_contract_check.js` checks a value against whose stated value, once its
 /// shape is right, needs no further look here.
-const KEYWORDS_CHECKED_AS_STATED: &[&str] =
-    &["const", "minimum", "minItems", "maxItems", "required"];
+const KEYWORDS_CHECKED_AS_STATED: &[&str] = &[
+    "const",
+    "minimum",
+    "exclusiveMinimum",
+    "minItems",
+    "maxItems",
+    "required",
+];
 
 /// The keywords that state no check: the checker reads past them.
 const KEYWORDS_THAT_STATE_NO_CHECK: &[&str] = &["description", "default"];
@@ -155,7 +161,9 @@ fn refuse_what_the_checker_does_not_know(
                     );
                 }
             }
-            "minimum" if !stated.is_number() => bail!("{place_of_the_keyword} is not a number"),
+            "minimum" | "exclusiveMinimum" if !stated.is_number() => {
+                bail!("{place_of_the_keyword} is not a number")
+            }
             "minItems" | "maxItems" if !stated.is_u64() => {
                 bail!("{place_of_the_keyword} is not a whole number")
             }

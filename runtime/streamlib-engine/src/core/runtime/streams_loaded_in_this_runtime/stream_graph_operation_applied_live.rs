@@ -15,7 +15,7 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{
     LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
-    the_default_name_a_new_node_takes, the_verdict_of_a_link_the_graph_holds,
+    the_default_name_a_new_node_takes, the_verdict_on_a_link_between_typed_ends,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
@@ -500,8 +500,10 @@ impl LoadedStreamInThisRuntime {
     ) -> Option<crate::core::descriptors::PinLinkVerdict> {
         let link = self.the_link_under_the_current_port_names(link)?;
         let (from, to) = self.the_ends_of_the_link(&link).ok()?;
-        self.compiler
-            .scope_reading(|graph| the_verdict_of_a_link_the_graph_holds(graph, &from, &to))
+        self.compiler.scope_reading(|graph| {
+            let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+            the_verdict_on_a_link_between_typed_ends(graph, &from, &to, &conversions)
+        })
     }
 
     /// `link`, each node by its UUID, with each of its ports under its current name; `None` when

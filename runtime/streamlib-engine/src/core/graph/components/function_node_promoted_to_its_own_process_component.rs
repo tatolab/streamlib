@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use serde_json::Value as JsonValue;
+use streamlib_runtime_client_contract::local_api_wire_contract::FunctionNodePromotionOnTheWire;
 
 use super::HowItsHelpersRanAFunctionNode;
 use crate::core::execution::ProcessExecution;
@@ -34,11 +34,11 @@ pub struct FunctionNodePromotionOutOfItsReadersIslands {
 
 impl FunctionNodePromotionOutOfItsReadersIslands {
     /// The `metrics` entry of a promoted function node.
-    pub fn to_json(&self) -> JsonValue {
-        serde_json::json!({
-            "promotions": 1,
-            "after_crashing_the_helper_of": self.after_crashing_the_helper_of,
-            "reason": self.reason,
-        })
+    pub fn rendered(&self) -> FunctionNodePromotionOnTheWire {
+        FunctionNodePromotionOnTheWire {
+            promotions: 1,
+            after_crashing_the_helper_of: self.after_crashing_the_helper_of.clone(),
+            reason: self.reason.clone(),
+        }
     }
 }

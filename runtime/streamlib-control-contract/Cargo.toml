@@ -25,5 +25,8 @@ streamlib-project-repository = { path = "../streamlib-project-repository", defau
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.82", features = ["json-schema"] }
 uuid = { version = "1.11", features = ["serde"] }
 
+[dev-dependencies]
+jsonschema = { version = "0.60", default-features = false }
+
 [lints]
 workspace = true

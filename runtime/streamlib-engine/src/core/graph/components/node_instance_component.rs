@@ -4,23 +4,19 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde_json::Value as JsonValue;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeInstanceOnTheWire;
 
-use super::JsonSerializableComponent;
+use super::GraphRenders;
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 use crate::core::nodes::NodeInstance;
 
 pub struct NodeInstanceComponent(pub Arc<Mutex<NodeInstance>>);
 
-impl JsonSerializableComponent for NodeInstanceComponent {
-    fn json_key(&self) -> &'static str {
-        "node_instance"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!({
-            "attached": true,
-            "arc_strong_count": Arc::strong_count(&self.0),
-            "arc_weak_count": Arc::weak_count(&self.0)
-        })
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodeInstanceComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.node_instance = Some(NodeInstanceOnTheWire {
+            arc_strong_count: Arc::strong_count(&self.0),
+            arc_weak_count: Arc::weak_count(&self.0),
+        });
     }
 }

@@ -30,13 +30,15 @@ pub(super) struct InputValueTestNodeConfig {
 }
 
 /// A native node taking a config, a typed `gain` input, an Image `video` input that takes only
-/// a link, and a typed `level` output a `gain` can be linked from.
+/// a link, a typed `level` output a `gain` can be linked from, and an Integer `count` output a
+/// `gain` reads for free.
 #[streamlib::sdk::node(
     execution = manual,
     config = crate::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNodeConfig,
     input("gain", delivery_profile = "newest", pin_type = Float),
     input("video", delivery_profile = "newest", family = Image),
     output("level", pin_type = Float),
+    output("count", pin_type = Integer),
 )]
 pub(super) struct InputValueTestNode;
 

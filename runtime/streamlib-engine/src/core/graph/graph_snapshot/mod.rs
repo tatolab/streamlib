@@ -182,7 +182,15 @@ const GRAPH_FRAGMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a link",
     spec_keys: &["source", "target"],
-    live_keys: &["id", "capacity", "state", "error_reason", "components"],
+    live_keys: &[
+        "id",
+        "capacity",
+        "state",
+        "error_reason",
+        "free_conversion",
+        "warnings",
+        "components",
+    ],
 };
 
 const GRAPH_LINK_END_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {

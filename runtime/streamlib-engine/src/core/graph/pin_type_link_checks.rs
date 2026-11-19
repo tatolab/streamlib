@@ -123,27 +123,15 @@ pub(crate) fn the_ends_a_link_is_judged_by(
     })
 }
 
-/// The verdict of a link from `from` to `to` in `graph` by its two typed ends, among the
-/// conversions `graph`'s stream resolves, made nowhere; `None` when either end is no typed port of
-/// it.
-pub(crate) fn the_verdict_of_two_typed_ends(
+/// The judgement of a link from `from` to `to` by its two ends' pin types, among
+/// `conversions`: a convert node's output, when the node holds the settings its conversion picks
+/// for that input, judged by the type it gives under them. `None` when either end is no node of
+/// `graph`, or either port is untyped.
+pub(crate) fn the_verdict_on_a_link_between_typed_ends(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-) -> Option<PinLinkVerdict> {
-    let TypedLinkEnds { output, input, .. } = the_typed_ends_of(graph, from, to)?;
-    let conversions = graph.node_types_this_stream_resolves().pin_conversions();
-    Some(pin_link_verdict(output, input, &conversions))
-}
-
-/// The verdict of `from` to `to`, a link `graph` holds, by its two typed ends, among the
-/// conversions `graph`'s stream resolves: a convert node's output, when the node holds the
-/// settings its conversion picks for that input, judged by the type it gives under them. `None`
-/// when either end is no typed port of it.
-pub(crate) fn the_verdict_of_a_link_the_graph_holds(
-    graph: &Graph,
-    from: &OutputLinkPortRef,
-    to: &InputLinkPortRef,
+    conversions: &[PinConversion],
 ) -> Option<PinLinkVerdict> {
     let TypedLinkEnds {
         from_node,
@@ -152,19 +140,18 @@ pub(crate) fn the_verdict_of_a_link_the_graph_holds(
         input,
         ..
     } = the_typed_ends_of(graph, from, to)?;
-    let conversions = graph.node_types_this_stream_resolves().pin_conversions();
     let output_given = the_type_a_convert_node_gives_under_what_it_holds(
         graph,
         from_node,
         output_port,
         input.end.pin_type,
-        &conversions,
+        conversions,
     );
     let output = match &output_given {
         Some(pin_type) => PinLinkEnd { pin_type, ..output },
         None => output,
     };
-    Some(pin_link_verdict(output, input, &conversions))
+    Some(pin_link_verdict(output, input, conversions))
 }
 
 /// The type `output_port` of `node` gives into an input of `input`, when `node` is a node of a

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{FreePinConversionOnTheWire, PinLinkWarningOnTheWire};
+use super::PinLinkMarksOnTheWire;
 
 /// The link a refused operation names, each end as the caller named it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,12 +106,9 @@ pub struct GraphTransactionConnectedLink {
     /// Why a link reading `error` will carry nothing, in the refusing end's own words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
-    /// How the input reads what the output carries as its own type, when it does so for free.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub free_conversion: Option<FreePinConversionOnTheWire>,
-    /// What the link does that a person may not expect; none of these blocks it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<PinLinkWarningOnTheWire>,
+    /// What the link converts and warns of, as the judgement of its two typed ends says.
+    #[serde(flatten)]
+    pub marks: PinLinkMarksOnTheWire,
 }
 
 /// An input a graph transaction set a value on while a link feeds it, so the link's messages

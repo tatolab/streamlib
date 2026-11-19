@@ -3,7 +3,7 @@
 
 use super::*;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    FreePinConversionOnTheWire, InsertedNodeOnTheWire, PinLinkWarningOnTheWire,
+    InsertedNodeOnTheWire, PinLinkMarksOnTheWire,
 };
 
 /// What the answer of a graph transaction names beside the operations it applied: the `as` of
@@ -126,15 +126,11 @@ impl StreamGraphTransactionExecutor<'_> {
                 StreamGraphOperation::AddNode { links, .. } => links.as_slice(),
                 _ => &[],
             };
-            let stream_operations = stream_operations_of(&stream_id);
             for link in links_the_operation_connects {
-                let verdict = stream_operations.as_ref().and_then(|stream_operations| {
-                    stream_operations.the_verdict_of_a_link_it_holds(link)
-                });
                 let graph_render = graph_render_of_each_stream
                     .entry(stream_id.clone())
                     .or_insert_with(|| {
-                        let stream_operations = stream_operations.as_ref()?;
+                        let stream_operations = stream_operations_of(&stream_id)?;
                         match self
                             .async_runtime
                             .block_on(stream_operations.to_json_async())
@@ -150,7 +146,11 @@ impl StreamGraphTransactionExecutor<'_> {
                             }
                         }
                     });
-                let (state, error_reason) = graph_render
+                let HowTheGraphReadsALink {
+                    state,
+                    error_reason,
+                    marks,
+                } = graph_render
                     .as_ref()
                     .map(|graph_render| how_the_graph_reads_the_link(graph_render, link))
                     .unwrap_or_default();
@@ -160,19 +160,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     target: link_end_on_the_wire(&link.target),
                     state,
                     error_reason,
-                    free_conversion: verdict.as_ref().and_then(|verdict| match verdict.outcome {
-                        PinLinkOutcome::ConnectsWithFreeConversion(free_conversion) => {
-                            Some(FreePinConversionOnTheWire::of(free_conversion))
-                        }
-                        PinLinkOutcome::Connects
-                        | PinLinkOutcome::ConnectsThroughConvertNode(_)
-                        | PinLinkOutcome::Refused(_) => None,
-                    }),
-                    warnings: verdict
-                        .iter()
-                        .flat_map(|verdict| &verdict.warnings)
-                        .map(PinLinkWarningOnTheWire::of)
-                        .collect(),
+                    marks,
                 });
             }
             let mut operation = serde_json::to_value(&applied).unwrap_or_default();
@@ -203,12 +191,20 @@ fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWi
     }
 }
 
-/// The `state` and `error_reason` the `graph` render `graph_render` gives `link`, whose ends it
-/// names by node name.
+/// What the `graph` render of a link says of it: its `state`, its `error_reason`, and what it
+/// converts and warns of.
+#[derive(Default)]
+struct HowTheGraphReadsALink {
+    state: Option<String>,
+    error_reason: Option<String>,
+    marks: PinLinkMarksOnTheWire,
+}
+
+/// What the `graph` render `graph_render` says of `link`, whose ends it names by node name.
 fn how_the_graph_reads_the_link(
     graph_render: &Value,
     link: &StreamGraphDocumentLink,
-) -> (Option<String>, Option<String>) {
+) -> HowTheGraphReadsALink {
     let node_name_of = |node: Uuid| {
         graph_render["nodes"]
             .as_array()
@@ -222,7 +218,7 @@ fn how_the_graph_reads_the_link(
         node_name_of(link.source.node),
         node_name_of(link.target.node),
     ) else {
-        return (None, None);
+        return HowTheGraphReadsALink::default();
     };
     let end_is = |end: &Value, name: &str, port: &str| {
         end["node"].as_str() == Some(name) && end["port"].as_str() == Some(port)
@@ -237,8 +233,12 @@ fn how_the_graph_reads_the_link(
                     && end_is(&rendered["target"], &target_name, &link.target.port)
             })
     else {
-        return (None, None);
+        return HowTheGraphReadsALink::default();
     };
     let text_at = |key: &str| rendered_link[key].as_str().map(str::to_owned);
-    (text_at("state"), text_at("error_reason"))
+    HowTheGraphReadsALink {
+        state: text_at("state"),
+        error_reason: text_at("error_reason"),
+        marks: serde_json::from_value(rendered_link.clone()).unwrap_or_default(),
+    }
 }

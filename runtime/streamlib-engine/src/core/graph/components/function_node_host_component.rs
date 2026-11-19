@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use serde_json::Value as JsonValue;
+use streamlib_runtime_client_contract::local_api_wire_contract::FunctionNodeHostOnTheWire;
 
-use super::JsonSerializableComponent;
+use super::GraphRenders;
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 /// Where a function node runs, rendered by `graph` as `host`: inside the read
 /// of each node its island feeds, or in a helper process of its own once
@@ -16,19 +17,13 @@ pub enum FunctionNodeHostComponent {
     InAHelperProcessOfItsOwn,
 }
 
-impl JsonSerializableComponent for FunctionNodeHostComponent {
-    fn json_key(&self) -> &'static str {
-        "host"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        match self {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for FunctionNodeHostComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.host = Some(match self {
             Self::InsideTheReadOf(reader_ids) => {
-                serde_json::json!({ "inside_the_read_of": reader_ids })
+                FunctionNodeHostOnTheWire::InsideTheReadOf(reader_ids.clone())
             }
-            Self::InAHelperProcessOfItsOwn => {
-                serde_json::json!({ "in_a_helper_process_of_its_own": true })
-            }
-        }
+            Self::InAHelperProcessOfItsOwn => FunctionNodeHostOnTheWire::InAHelperProcessOfItsOwn,
+        });
     }
 }

@@ -146,12 +146,11 @@ fn each_island_node_renders_how_its_readers_helper_ran_it() {
             .v(node_id)
             .first()
             .unwrap()
-            .serialize_components()
-            .get("ran_compiled")
-            .cloned()
+            .render_components()
+            .ran_compiled
     };
-    assert_eq!(ran_compiled(&graph, &lfo), Some(JsonValue::Null));
-    assert_eq!(ran_compiled(&graph, &remap), Some(JsonValue::Null));
+    assert_eq!(ran_compiled(&graph, &lfo), None);
+    assert_eq!(ran_compiled(&graph, &remap), None);
 
     graph
         .traversal()
@@ -165,8 +164,8 @@ fn each_island_node_renders_how_its_readers_helper_ran_it() {
             lfo.to_string(): true,
             remap.to_string(): false,
         })));
-    assert_eq!(ran_compiled(&graph, &lfo), Some(JsonValue::Bool(true)));
-    assert_eq!(ran_compiled(&graph, &remap), Some(JsonValue::Bool(false)));
+    assert_eq!(ran_compiled(&graph, &lfo), Some(true));
+    assert_eq!(ran_compiled(&graph, &remap), Some(false));
 }
 
 /// `graph` renders a raise the reader's helper reports for an island node as
@@ -191,9 +190,8 @@ fn each_island_node_renders_the_raise_its_readers_helper_reports_on_it() {
             .v(node_id)
             .first()
             .unwrap()
-            .serialize_components()
-            .get("process_raising_because")
-            .cloned()
+            .render_components()
+            .process_raising_because
     };
     let how_the_readers_helper_ran_each_function_node = graph
         .traversal()
@@ -204,7 +202,7 @@ fn each_island_node_renders_the_raise_its_readers_helper_reports_on_it() {
         .unwrap()
         .0
         .how_its_far_side_ran_each_function_node();
-    assert_eq!(process_raising_because(&graph, &lfo), Some(JsonValue::Null));
+    assert_eq!(process_raising_because(&graph, &lfo), None);
 
     how_the_readers_helper_ran_each_function_node.note_why_the_helper_finds_it_raising(
         lfo.as_str(),
@@ -212,18 +210,13 @@ fn each_island_node_renders_the_raise_its_readers_helper_reports_on_it() {
     );
     assert_eq!(
         process_raising_because(&graph, &lfo),
-        Some(JsonValue::from(
-            "raised RuntimeError: broke on purpose (nodes/lfo.py, line 3)"
-        ))
+        Some("raised RuntimeError: broke on purpose (nodes/lfo.py, line 3)".to_string())
     );
-    assert_eq!(
-        process_raising_because(&graph, &remap),
-        Some(JsonValue::Null)
-    );
+    assert_eq!(process_raising_because(&graph, &remap), None);
 
     how_the_readers_helper_ran_each_function_node
         .note_why_the_helper_finds_it_raising(lfo.as_str(), None);
-    assert_eq!(process_raising_because(&graph, &lfo), Some(JsonValue::Null));
+    assert_eq!(process_raising_because(&graph, &lfo), None);
 }
 
 #[test]
@@ -245,9 +238,9 @@ fn graph_names_each_function_nodes_host_as_the_readers_its_island_feeds() {
             .v(node_id)
             .first()
             .unwrap()
-            .serialize_components()
-            .get("host")
-            .cloned()
+            .render_components()
+            .host
+            .map(|host| serde_json::to_value(host).unwrap())
     };
     let name_of = |node_id: &NodeRunId| {
         graph

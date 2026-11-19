@@ -5,9 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
-use serde_json::Value as JsonValue;
+use streamlib_runtime_client_contract::local_api_wire_contract::ShaderNodeFusedGroupOnTheWire;
 
-use super::JsonSerializableComponent;
+use super::GraphRenders;
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 /// The shader nodes one evaluator runs as one island, and how its evaluations
 /// cut them into kernels.
@@ -61,20 +62,19 @@ impl ShaderNodeFusedGroupOfAnIsland {
 /// first), and the submissions and dispatches every evaluation recorded.
 pub struct ShaderNodeFusedGroupComponent(pub Arc<ShaderNodeFusedGroupOfAnIsland>);
 
-impl JsonSerializableComponent for ShaderNodeFusedGroupComponent {
-    fn json_key(&self) -> &'static str {
-        "fused_group"
-    }
-
-    fn to_json(&self) -> JsonValue {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for ShaderNodeFusedGroupComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         let fused_group = &self.0;
-        serde_json::json!({
-            "evaluated_by": fused_group.evaluated_by,
-            "members": fused_group.member_names_in_evaluation_order,
-            "kernels": *fused_group.member_names_of_each_kernel_last_evaluated.lock(),
-            "submissions": fused_group.submissions(),
-            "dispatches": fused_group.dispatches(),
-        })
+        components.fused_group = Some(ShaderNodeFusedGroupOnTheWire {
+            evaluated_by: fused_group.evaluated_by.clone(),
+            members: fused_group.member_names_in_evaluation_order.clone(),
+            kernels: fused_group
+                .member_names_of_each_kernel_last_evaluated
+                .lock()
+                .clone(),
+            submissions: fused_group.submissions(),
+            dispatches: fused_group.dispatches(),
+        });
     }
 }
 
@@ -89,8 +89,13 @@ mod tests {
             vec!["tint".into(), "blur".into(), "vignette".into()],
         ));
         let component = ShaderNodeFusedGroupComponent(Arc::clone(&fused_group));
-        assert_eq!(component.to_json()["kernels"], JsonValue::Null);
-        assert_eq!(component.to_json()["submissions"], 0);
+        let rendered = |component: &ShaderNodeFusedGroupComponent| {
+            let mut components = GraphNodeComponentsOnTheWire::default();
+            component.render_onto(&mut components);
+            serde_json::to_value(components.fused_group).unwrap()
+        };
+        assert_eq!(rendered(&component)["kernels"], serde_json::Value::Null);
+        assert_eq!(rendered(&component)["submissions"], 0);
 
         fused_group.note_an_evaluation_of_the_kernels(vec![
             vec!["tint".into()],
@@ -100,7 +105,7 @@ mod tests {
             vec!["tint".into()],
             vec!["blur".into(), "vignette".into()],
         ]);
-        let rendered = component.to_json();
+        let rendered = rendered(&component);
         assert_eq!(rendered["evaluated_by"], "vignette");
         assert_eq!(
             rendered["members"],

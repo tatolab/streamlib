@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use streamlib_node_schema::NodeClassImportPath;
 use streamlib_node_schema::pin_type::{
-    ConvertNodeToInsert, FreePinConversion, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
+    ConvertNodeToInsert, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
 };
 
 use super::ProjectActionRefusalOnTheWire;
@@ -69,6 +69,39 @@ impl LinkCheckResult {
             convert_node: None,
             refusal: Some(refusal),
             warnings: Vec::new(),
+        }
+    }
+}
+
+/// What a link made between two typed ends converts and warns of, as the judgement of those
+/// ends says: the marks a link carries in `graph` and in a transaction's answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct PinLinkMarksOnTheWire {
+    /// `true` when the input reads what the output carries as its own type at no cost: Boolean,
+    /// Integer and Float among themselves, a Vector into a Vector or a Color, one number into a
+    /// Vector or a Color, or a Menu into a String. Absent on every other link.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub free_conversion: bool,
+    /// What the link does that a person may not expect, as the judgement of its two ends' pin
+    /// types says; none of these blocks it. Absent when it warns of nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<PinLinkWarningOnTheWire>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl PinLinkMarksOnTheWire {
+    /// The marks of a link `connect` makes as `verdict` judges it; with no verdict, a link with
+    /// an end untyped, neither.
+    pub fn of(verdict: Option<&PinLinkVerdict>) -> Self {
+        let answered = LinkCheckResult::of_a_link_connect_makes(verdict);
+        Self {
+            free_conversion: answered.outcome
+                == PinLinkOutcomeOnTheWire::ConnectsWithFreeConversion,
+            warnings: answered.warnings,
         }
     }
 }
@@ -140,43 +173,6 @@ impl ConvertNodeToInsertOnTheWire {
     }
 }
 
-/// How the input reads what the output carries as its own type, at no cost. The set grows: a
-/// conversion a client does not know reads as a free conversion it cannot name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
-#[serde(rename_all = "snake_case")]
-pub enum FreePinConversionOnTheWire {
-    /// Boolean, Integer and Float among themselves; a Float read as an Integer rounds half away
-    /// from zero.
-    BetweenNumbers,
-    /// A Vector into one of another size, its components dropped or padded with 0.
-    BetweenVectors,
-    /// A Vector into a Color, x, y, z and w read as red, green, blue and alpha, alpha padded
-    /// with 1.
-    VectorIntoColor,
-    /// One number into a Vector, read as every component.
-    NumberSpreadOverVector,
-    /// One number into a Color, read as red, green and blue, with an alpha of 1.
-    NumberSpreadOverColor,
-    /// A Menu into a String, its option name read as the text.
-    MenuOptionNameAsString,
-}
-
-impl FreePinConversionOnTheWire {
-    /// The wire form of `free_conversion`.
-    pub fn of(free_conversion: FreePinConversion) -> Self {
-        match free_conversion {
-            FreePinConversion::BetweenNumbers => Self::BetweenNumbers,
-            FreePinConversion::BetweenVectors => Self::BetweenVectors,
-            FreePinConversion::VectorIntoColor => Self::VectorIntoColor,
-            FreePinConversion::NumberSpreadOverVector => Self::NumberSpreadOverVector,
-            FreePinConversion::NumberSpreadOverColor => Self::NumberSpreadOverColor,
-            FreePinConversion::MenuOptionNameAsString => Self::MenuOptionNameAsString,
-        }
-    }
-}
-
 /// What a link does that a person may not expect, tagged by its `warning`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -211,7 +207,7 @@ pub enum PinLinkWarningOnTheWire {
 
 impl PinLinkWarningOnTheWire {
     /// The wire form of `warning`.
-    pub fn of(warning: &PinLinkWarning) -> Self {
+    fn of(warning: &PinLinkWarning) -> Self {
         match warning {
             PinLinkWarning::MeaningsDiffer {
                 output_meaning,

@@ -92,8 +92,9 @@ pub trait RuntimeOperations: Send + Sync {
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink>;
 
-    /// The verdict of `link`, a link this stream's live graph holds, each node by its UUID, by
-    /// its two typed ends; `None` when either end is no typed port of a node that runs.
+    /// The verdict of `link`, between two nodes this stream's live graph runs, each by its UUID,
+    /// by its two typed ends, whether the graph holds the link or not; `None` when either end is
+    /// no typed port of a node that runs.
     fn the_verdict_of_a_link_it_holds(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,

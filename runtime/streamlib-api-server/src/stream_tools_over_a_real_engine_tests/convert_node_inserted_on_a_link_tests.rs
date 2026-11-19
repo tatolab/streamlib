@@ -347,7 +347,7 @@ async fn a_connected_link_says_when_it_converts_for_free() {
         .unwrap_or_else(|refusal| panic!("a Float is read as an Integer: {refusal:?}"));
 
     assert_eq!(
-        applied["connected_links"][0]["free_conversion"], "between_numbers",
+        applied["connected_links"][0]["free_conversion"], true,
         "{applied}"
     );
     assert!(applied["added_nodes"].as_array().is_some_and(Vec::is_empty));

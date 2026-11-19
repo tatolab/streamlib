@@ -47,8 +47,7 @@ pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
     ALinkConnected, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
     refuse_a_link_its_pin_types_or_families_refuse, the_ends_a_link_is_judged_by,
-    the_verdict_of_a_link_between_declared_ports, the_verdict_of_a_link_the_graph_holds,
-    the_verdict_of_two_typed_ends,
+    the_verdict_of_a_link_between_declared_ports, the_verdict_on_a_link_between_typed_ends,
 };
 pub(crate) use port_family_link_checks::{
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
@@ -63,14 +62,13 @@ pub use validation::validate_graph;
 
 pub(crate) use components::HowOneReadersHelperRanEachFunctionNode;
 pub use components::{
-    Component, ComponentMap, ComponentSerializer, DeviceMatchedAudioWindowContractsComponent,
+    ComponentMap, ComponentRenderer, DeviceMatchedAudioWindowContractsComponent,
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
-    FunctionNodePromotionOutOfItsReadersIslands, FunctionNodeRanCompiledComponent,
+    FunctionNodePromotionOutOfItsReadersIslands, FunctionNodeRanCompiledComponent, GraphRenders,
     HelperProcessRestartRecord, HelperProcessRestartsComponent, HowItsHelpersRanAFunctionNode,
-    Iceoryx2ServicesHeldOpenForLinkComponent, JsonSerializableComponent,
-    LinkCarriedThroughTheFunctionNodePoolComponent,
-    LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkStateComponent,
-    LinkTypeInfoComponent, LossCountsOfPortsInThisProcess, NodeFailureReasonComponent,
+    Iceoryx2ServicesHeldOpenForLinkComponent, LinkCarriedThroughTheFunctionNodePoolComponent,
+    LinkComponent, LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkStateComponent,
+    LossCountsOfPortsInThisProcess, NodeComponent, NodeFailureReasonComponent,
     NodeInstanceComponent, NodeLossCounts, NodeMetrics, NodeNotReadyBecauseComponent,
     NodePauseGateComponent, NodeReadyBarrierComponent, NodeReadyBarrierHandle, ObservableNodeState,
     OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
@@ -79,7 +77,7 @@ pub use components::{
     ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
     StepProgressCallbackInFlight, StepProgressOfOneNode, StepProgressOfOneNodeComponent,
     StepProgressReadingOfOneNode, StorableComponent, ThreadHandleComponent,
-    default_component_serializers, default_components,
+    default_component_renderers, default_components,
 };
 pub(crate) use components::{
     NodeInstanceWithItsOutOfProcessLinkWiring, SourceSideHeldOpenForAReaderOutsideItsStream,
