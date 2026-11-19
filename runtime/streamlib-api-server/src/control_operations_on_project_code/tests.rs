@@ -19,6 +19,26 @@ fn a_warning_in(path: &str) -> PythonNodeDeclarationFinding {
     }
 }
 
+/// The answer of `declaration_check` beside an `extension_manifest` run over a project with no
+/// view.
+fn the_answer_of_the_declaration_check(
+    declaration_check: PythonNodeDeclarationCheck,
+) -> ProjectCodeCheckResult {
+    the_answer_of_the_checks(
+        declaration_check,
+        ViewManifestsChecked {
+            run: ProjectCodeCheckRun {
+                check: ProjectCodeCheckKind::ExtensionManifest,
+                state: ProjectCodeCheckState::Passed,
+                not_checked_because: None,
+                checked_with: Vec::new(),
+            },
+            findings: Vec::new(),
+            files_checked: Vec::new(),
+        },
+    )
+}
+
 #[test]
 fn a_check_killed_at_its_bound_answers_not_checked_with_the_file_it_was_importing() {
     let answer = the_answer_of_the_declaration_check(PythonNodeDeclarationCheck {

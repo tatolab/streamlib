@@ -1,0 +1,26 @@
+{
+  "contract": "1.0",
+  "title": "Gulf Stream Neon stage",
+  "description": "The ocean off Miami, live: real NOAA bathymetry, the real Gulf Stream and Virginia Key's readings. Slide the real chart into neon, drag the time of day, orbit, fly, and click the water to drop an eddy the current carries north.",
+  "entry": "index.html",
+  "placement": "node",
+  "inputs": [
+    {
+      "name": "video",
+      "family": "image",
+      "description": "The finished picture to show and steer."
+    },
+    {
+      "name": "station",
+      "family": "records",
+      "description": "NOAA Virginia Key's readings, from NoaaStationFeed, for the live data panel."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "camera",
+      "family": "records",
+      "description": "Where the stage has been orbited, zoomed and flown to, and where it was last clicked to drop an eddy."
+    }
+  ]
+}

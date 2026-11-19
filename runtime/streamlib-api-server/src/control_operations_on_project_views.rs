@@ -30,6 +30,7 @@ fn the_declared_port_on_the_wire(port: &TatolabViewDeclaredPort) -> ProjectViewD
     ProjectViewDeclaredPort {
         name: port.name.clone(),
         family: port.family.wire_name().to_owned(),
+        pin_type: port.pin_type.clone(),
         description: port.description.clone(),
         range: port.range,
     }

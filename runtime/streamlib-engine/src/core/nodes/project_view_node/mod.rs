@@ -19,8 +19,8 @@ use streamlib_project_repository::{
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PortDescriptor, PortFamily,
-    PortFamilyDeclaration, SettingReadTime,
+    NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
+    PortFamily, PortFamilyDeclaration, SettingReadTime,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -34,7 +34,7 @@ use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_t
 use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
 pub use crate::core::pin_value_packing::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 use crate::core::pin_value_packing::{
-    PackedPinValue, the_message_a_value_written_onto_an_output_is,
+    PackedPinValue, pack_pin_value, the_message_a_value_written_onto_an_output_is,
 };
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
@@ -89,7 +89,7 @@ pub(crate) fn the_node_type_of_a_project_view(
         .iter()
         .map(|port| {
             if a_panel_writes(port.family) {
-                the_port_a_view_declares(port).with_pin_declaration(carried_as_a_value(Vec::new()))
+                the_port_a_view_declares(port).with_pin_declaration(written_as_a_value(port))
             } else {
                 the_port_a_view_declares(port)
             }
@@ -145,6 +145,19 @@ fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
         annotations: PinAnnotations::default(),
         former_names,
         may_be_unset: false,
+    }
+}
+
+/// The pin an output `port`, one a panel writes, declares: exactly its pin type where it names
+/// one, read as a value, which keeps its last message for a reader that connects later; else
+/// a value of any type, its family alone deciding what it takes.
+fn written_as_a_value(port: &TatolabViewDeclaredPort) -> PinDeclaration {
+    match &port.pin_type {
+        Some(pin_type) => PinDeclaration {
+            flow: PinFlow::Value,
+            ..PinDeclaration::exactly(pin_type.clone())
+        },
+        None => carried_as_a_value(Vec::new()),
     }
 }
 
@@ -214,13 +227,18 @@ fn the_config_schema_of_a_view_node(settings: Option<&JsonValue>) -> JsonValue {
     config_schema
 }
 
+/// The port `port` declares, of its family, and of exactly its pin type where it names one.
 fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
-    PortDescriptor::new(
+    let declared = PortDescriptor::new(
         port.name.clone(),
         port.description.clone().unwrap_or_default(),
         false,
         PortFamilyDeclaration::of_family(port.family),
-    )
+    );
+    match &port.pin_type {
+        Some(pin_type) => declared.with_pin_declaration(PinDeclaration::exactly(pin_type.clone())),
+        None => declared,
+    }
 }
 
 /// The family the `value` ports of a `GraphInput` declare, which they carry while its config
@@ -287,6 +305,7 @@ pub(crate) struct ValueSourceNode {
     descriptor: NodeDescriptor,
     config_json: JsonValue,
     family_of_each_output: HashMap<String, PortFamily>,
+    pin_type_of_each_typed_output: HashMap<String, PinType>,
     current_value_of_each_output: HashMap<String, JsonValue>,
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
@@ -329,6 +348,14 @@ impl ValueSourceNode {
                 (families.len() == 1).then(|| (port.name.clone(), families[0]))
             })
             .collect();
+        let pin_type_of_each_typed_output = descriptor
+            .outputs
+            .iter()
+            .filter_map(|port| match &port.pin_declaration.as_ref()?.pin_type {
+                DeclaredPinType::Is { pin_type } => Some((port.name.clone(), pin_type.clone())),
+                _ => None,
+            })
+            .collect();
         Self {
             node_name: node.display_name.clone(),
             descriptor,
@@ -337,6 +364,7 @@ impl ValueSourceNode {
                 .clone()
                 .unwrap_or_else(|| JsonValue::Object(Default::default())),
             family_of_each_output,
+            pin_type_of_each_typed_output,
             current_value_of_each_output: HashMap::new(),
             next_start_sample_of_each_channels_output: HashMap::new(),
             output_writer: None,
@@ -344,8 +372,9 @@ impl ValueSourceNode {
         }
     }
 
-    /// The message `value`, written onto output `port`, is sent as, refused in the words of the
-    /// output's family when it carries no such value.
+    /// The message `value`, written onto output `port`, is sent as: packed as its pin type where
+    /// the output names one, else as its family carries it; refused in the words of the output's
+    /// family when it carries no such value.
     fn the_message_to_publish<'value>(
         &self,
         port: &'value str,
@@ -366,10 +395,13 @@ impl ValueSourceNode {
         let PackedPinValue {
             payload_descriptor,
             payload,
-        } = the_message_a_value_written_onto_an_output_is(family, value, next_start_sample)
-            .map_err(|why| {
-                the_refusal_of_a_value_an_output_does_not_carry(&self.node_name, port, family, &why)
-            })?;
+        } = match self.pin_type_of_each_typed_output.get(port) {
+            Some(pin_type) => pack_pin_value(pin_type, value, next_start_sample),
+            None => the_message_a_value_written_onto_an_output_is(family, value, next_start_sample),
+        }
+        .map_err(|why| {
+            the_refusal_of_a_value_an_output_does_not_carry(&self.node_name, port, family, &why)
+        })?;
         let channels_start_sample_after = (family == PortFamily::Channels).then(|| {
             let body = ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
             next_start_sample + u64::from(body.samples_per_channel)
