@@ -150,6 +150,7 @@ impl Runner {
                 runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce::naming(
                     "the runtime unit's uv",
                 ),
+                extension_code_checkers: Default::default(),
                 created_project_first_commit: OnceLock::new(),
                 project_history_recording_first_party_package_moves: Mutex::new(None),
                 shared_native_services:

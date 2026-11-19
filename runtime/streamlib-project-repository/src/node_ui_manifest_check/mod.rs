@@ -14,8 +14,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectFileChecked,
 };
 
+use crate::content_sha256::content_sha256_of;
 use crate::node_ui_manifest::{NODE_UI_DIRECTORY, NODE_UI_MANIFEST_FILE_NAME};
-use crate::project_asset_file_bytes::content_sha256_of;
 use crate::project_node_ui_elements::{NodeUiManifestFileRead, the_node_ui_manifest_file_read};
 
 /// The project's own node UI manifest, read for the `extension_manifest` check.

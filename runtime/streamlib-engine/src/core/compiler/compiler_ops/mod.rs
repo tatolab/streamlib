@@ -4,6 +4,7 @@
 mod apply_node_config_update_op;
 pub(crate) mod cross_floor_check_in_the_projects_interpreter;
 pub(crate) mod entry_run_in_the_projects_interpreter;
+pub(crate) mod extension_code_checked_against_the_kit;
 pub(crate) mod function_node_island;
 pub(crate) mod function_node_pool;
 pub(crate) mod function_node_promotion;

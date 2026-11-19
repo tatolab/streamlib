@@ -4,6 +4,11 @@
 //! A shader node's program: its Slang function and the signature its describe
 //! states.
 
+use crate::core::descriptors::PinType;
+use crate::core::graph::input_values::the_control_value_of_a_pin;
+use crate::core::pin_value_packing::{
+    channel_count_of, the_channel_values_a_pin_type_reads, the_channel_values_of_a_stored_value,
+};
 use crate::core::rhi::{ComputeBindingKind, TextureFormat};
 
 /// The side of the square workgroup each shader node's kernel runs in.
@@ -24,14 +29,109 @@ const SHADER_NODE_SIGNATURE_INPUTS_KEY: &str = "inputs";
 const SHADER_NODE_SIGNATURE_OUTPUT_PORT_KEY: &str = "output_port";
 const SHADER_NODE_SIGNATURE_INPUT_PORT_KEY: &str = "port";
 const SHADER_NODE_SIGNATURE_INPUT_VALUE_TYPE_KEY: &str = "value_type";
+const SHADER_NODE_SIGNATURE_INPUT_PIN_TYPE_KEY: &str = "pin_type";
 
 /// The value one input of a shader node takes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShaderNodeInputValueType {
     /// An Image, read in Slang as an `ImageInput`.
     ImageFrame,
-    /// A float, read in Slang as a push constant.
-    Float,
+    /// A value of numbers of this pin type, a Float, a Color or a Vector, read in Slang as a
+    /// `float` or a `float2`, `float3` or `float4` of its parts, carried as push constants.
+    Numbers(PinType),
+}
+
+impl ShaderNodeInputValueType {
+    /// The numbers a value of this type carries as push constants: none for an Image.
+    pub(crate) fn number_count(&self) -> usize {
+        match self {
+            Self::ImageFrame => 0,
+            Self::Numbers(pin_type) => channel_count_of(pin_type).unwrap_or_default(),
+        }
+    }
+
+    /// The Slang type the shader's function takes a value of numbers as.
+    pub(crate) fn slang_type_of_its_numbers(&self) -> &'static str {
+        match self.number_count() {
+            2 => "float2",
+            3 => "float3",
+            4 => "float4",
+            _ => "float",
+        }
+    }
+
+    /// The numbers `value`, a stored value of this type, carries as push constants; a value
+    /// absent, or one this type does not hold, reads as the number 0 does: a Float of 0, a
+    /// Vector of zeros, an opaque black Color. A Float takes a Boolean as 1 or 0.
+    pub(crate) fn numbers_a_stored_value_holds(
+        &self,
+        value: Option<&serde_json::Value>,
+    ) -> Vec<f32> {
+        let Self::Numbers(pin_type) = self else {
+            return Vec::new();
+        };
+        value
+            .and_then(|value| match pin_type {
+                PinType::Float { .. } => {
+                    the_control_value_of_a_pin(value).map(|number| vec![number as f32])
+                }
+                _ => the_channel_values_of_a_stored_value(pin_type, value)
+                    .ok()
+                    .map(|numbers| numbers.into_iter().map(|number| number as f32).collect()),
+            })
+            .or_else(|| self.numbers_a_control_message_carries(&[0.0]))
+            .unwrap_or_default()
+    }
+
+    /// The numbers a control message whose channels hold `channel_values` carries as push
+    /// constants, read with the free conversion a link allows: one number as every part of a
+    /// Vector, or as the red, green and blue of an opaque Color. None for an Image, or a message
+    /// of no channel.
+    pub(crate) fn numbers_a_control_message_carries(
+        &self,
+        channel_values: &[f64],
+    ) -> Option<Vec<f32>> {
+        let Self::Numbers(pin_type) = self else {
+            return None;
+        };
+        the_channel_values_a_pin_type_reads(pin_type, channel_values)
+            .ok()
+            .map(|numbers| numbers.into_iter().map(|number| number as f32).collect())
+    }
+
+    /// The type a describe states for an input as `value_type`, with its `pin_type` when it
+    /// states one: an Image, or a Float, a Color or a Vector. A describe of an older SDK states
+    /// a Float by its `value_type` alone.
+    fn read_from_the_signature(
+        value_type: &str,
+        pin_type: Option<&serde_json::Value>,
+    ) -> std::result::Result<Self, String> {
+        if value_type == "image_frame" {
+            return Ok(Self::ImageFrame);
+        }
+        let pin_type = match pin_type {
+            Some(pin_type) => {
+                serde_json::from_value::<PinType>(pin_type.clone()).map_err(|not_a_pin_type| {
+                    format!("a shader input's pin type does not read: {not_a_pin_type}")
+                })?
+            }
+            None if value_type == "float" => PinType::Float { exact_size: None },
+            None => {
+                return Err(format!(
+                    "a shader input's value type is {value_type:?} and states no pin type"
+                ));
+            }
+        };
+        match pin_type {
+            PinType::Float { .. } | PinType::Color {} | PinType::Vector { .. } => {
+                Ok(Self::Numbers(pin_type))
+            }
+            other => Err(format!(
+                "a shader input is a {other}; a shader takes `image_frame` inputs and Float, \
+                 Color and Vector values"
+            )),
+        }
+    }
 }
 
 /// One input of a shader node's signature, in the order its Slang function
@@ -132,17 +232,10 @@ impl ShaderNodeProgram {
             })?
             .iter()
             .map(|input| {
-                let value_type =
-                    match string_at(input, SHADER_NODE_SIGNATURE_INPUT_VALUE_TYPE_KEY)?.as_str() {
-                        "image_frame" => ShaderNodeInputValueType::ImageFrame,
-                        "float" => ShaderNodeInputValueType::Float,
-                        other => {
-                            return Err(format!(
-                                "a shader input's value type is {other:?}; a shader takes \
-                                 `image_frame` and `float` inputs"
-                            ));
-                        }
-                    };
+                let value_type = ShaderNodeInputValueType::read_from_the_signature(
+                    &string_at(input, SHADER_NODE_SIGNATURE_INPUT_VALUE_TYPE_KEY)?,
+                    input.get(SHADER_NODE_SIGNATURE_INPUT_PIN_TYPE_KEY),
+                )?;
                 Ok(ShaderNodeSignatureInput {
                     port: string_at(input, SHADER_NODE_SIGNATURE_INPUT_PORT_KEY)?,
                     value_type,
@@ -164,12 +257,12 @@ impl ShaderNodeProgram {
         let push_constant_byte_len = program.push_constant_byte_len();
         if push_constant_byte_len > SHADER_NODE_PUSH_CONSTANT_BYTES_AT_MOST {
             return Err(format!(
-                "{} takes {} Images and {} floats, whose push constants are {push_constant_byte_len} \
-                 bytes, past the {SHADER_NODE_PUSH_CONSTANT_BYTES_AT_MOST} every device takes; take \
-                 fewer inputs",
+                "{} takes {} Images and {} numbers, whose push constants are \
+                 {push_constant_byte_len} bytes, past the {SHADER_NODE_PUSH_CONSTANT_BYTES_AT_MOST} \
+                 every device takes; take fewer inputs",
                 program.function_name,
                 program.image_input_count(),
-                program.float_input_ports().count()
+                program.number_count()
             ));
         }
         Ok(program)
@@ -177,29 +270,41 @@ impl ShaderNodeProgram {
 
     /// The ports of the Image inputs, in signature order.
     pub(crate) fn image_input_ports(&self) -> impl Iterator<Item = &str> {
-        self.inputs_of(ShaderNodeInputValueType::ImageFrame)
-    }
-
-    /// The ports of the float inputs, in signature order.
-    pub(crate) fn float_input_ports(&self) -> impl Iterator<Item = &str> {
-        self.inputs_of(ShaderNodeInputValueType::Float)
-    }
-
-    fn inputs_of(&self, value_type: ShaderNodeInputValueType) -> impl Iterator<Item = &str> {
         self.inputs
             .iter()
-            .filter(move |input| input.value_type == value_type)
+            .filter(|input| input.value_type == ShaderNodeInputValueType::ImageFrame)
             .map(|input| input.port.as_str())
+    }
+
+    /// The port and pin type of each input taking a value of numbers, in signature order.
+    pub(crate) fn number_inputs(&self) -> impl Iterator<Item = (&str, &PinType)> {
+        self.inputs
+            .iter()
+            .filter_map(|input| match &input.value_type {
+                ShaderNodeInputValueType::Numbers(pin_type) => {
+                    Some((input.port.as_str(), pin_type))
+                }
+                ShaderNodeInputValueType::ImageFrame => None,
+            })
     }
 
     fn image_input_count(&self) -> usize {
         self.image_input_ports().count()
     }
 
+    /// The numbers every value input carries together, one push constant apiece.
+    fn number_count(&self) -> usize {
+        self.inputs
+            .iter()
+            .map(|input| input.value_type.number_count())
+            .sum()
+    }
+
     /// The bytes of the kernel's push constants: the output extent, each
-    /// Image input's extent and row pitch, then each float, four bytes apiece.
+    /// Image input's extent and row pitch, then each number of each value,
+    /// four bytes apiece.
     pub(crate) fn push_constant_byte_len(&self) -> usize {
-        4 * (2 + 3 * self.image_input_count() + self.float_input_ports().count())
+        4 * (2 + 3 * self.image_input_count() + self.number_count())
     }
 
     /// Whether the node reads an Image beyond its own pixel, through `sample(uv)`.
@@ -234,7 +339,10 @@ mod tests {
     fn the_signature_reads_into_its_image_and_float_inputs_in_order() {
         let program = blend_program();
         assert_eq!(program.image_input_ports().collect::<Vec<_>>(), ["a", "b"]);
-        assert_eq!(program.float_input_ports().collect::<Vec<_>>(), ["amount"]);
+        assert_eq!(
+            program.number_inputs().collect::<Vec<_>>(),
+            [("amount", &PinType::Float { exact_size: None })]
+        );
         assert_eq!(program.output_port, "result");
     }
 

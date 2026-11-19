@@ -14,7 +14,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectCodeCheckState, ProjectFileChecked,
 };
 
-use crate::project_asset_file_bytes::content_sha256_of;
+use crate::content_sha256::content_sha256_of;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_views::{
     PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME, every_view_a_project_brings_itself,

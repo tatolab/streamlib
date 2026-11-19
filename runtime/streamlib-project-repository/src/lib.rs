@@ -4,6 +4,7 @@
 //! A project as a versioned repository of assets, which the runtime alone writes.
 
 mod canonical_project_json;
+mod content_sha256;
 mod core_project_import;
 mod manifest_fields;
 mod node_ui_manifest;
@@ -47,6 +48,7 @@ mod tatolab_view_manifest;
 mod view_manifest_check;
 
 pub use canonical_project_json::canonical_project_json_bytes;
+pub use content_sha256::content_sha256_of;
 pub use core_project_import::{
     CORE_PROJECT_IMPORT_FOLDER, every_import_a_project_resolves, link_the_core_project_into,
     link_the_core_project_into_each_import_of, the_core_project_link_in,
@@ -68,9 +70,7 @@ pub use project_asset::{
     every_asset_uuid_the_project_holds, the_file_of_an_asset,
 };
 #[cfg(feature = "history")]
-pub use project_asset_file_bytes::{
-    PROJECT_UPLOADS_DIRECTORY, content_sha256_of, the_upload_file_of,
-};
+pub use project_asset_file_bytes::{PROJECT_UPLOADS_DIRECTORY, the_upload_file_of};
 pub use project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
@@ -84,8 +84,8 @@ pub use project_history_repository::{
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
 pub use project_node_ui_elements::{
-    ProjectNodeUiElementsListed, ProjectNodeUiManifestRead,
-    every_node_ui_element_a_project_and_its_imports_bring,
+    NodeUiManifestFileRead, ProjectNodeUiElementsListed, ProjectNodeUiManifestRead,
+    every_node_ui_element_a_project_and_its_imports_bring, the_node_ui_manifest_file_read,
 };
 pub use project_pyproject_import_sources::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,

@@ -290,6 +290,17 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             history,
         )
     }
+    fn check_a_projects_extension_code(
+        &self,
+        project_directory: &Path,
+        paths: Option<&[String]>,
+    ) -> streamlib::sdk::runtime::ExtensionCodeCheck {
+        OperationsOnTheStreamsLoadedInThisRuntime::check_a_projects_extension_code(
+            self.engine.as_ref(),
+            project_directory,
+            paths,
+        )
+    }
 }
 
 /// A run of the project in the folder `project_folder_name`, which

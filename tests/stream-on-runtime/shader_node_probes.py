@@ -14,6 +14,7 @@ import os
 import traceback
 
 from tatolab.stream import (
+    Color,
     ColorInfo,
     Image,
     ImageFrameToWrite,
@@ -57,6 +58,16 @@ QUARTER_AMOUNT = 0.25
 def QuarterAmount() -> float:  # noqa: N802
     """A quarter, whatever the time: a function node with a value to link into a shader node."""
     return QUARTER_AMOUNT
+
+
+#: What `HalfRedQuarterGreen` hands out: a Color no shader node of these scenarios has as its default.
+HALF_RED_QUARTER_GREEN = Color(0.5, 0.25, 1.0)
+
+
+@node
+def HalfRedQuarterGreen() -> Color:  # noqa: N802
+    """A Color, whatever the time: a function node with a Color to link into a shader node."""
+    return HALF_RED_QUARTER_GREEN
 
 
 @dataclasses.dataclass
