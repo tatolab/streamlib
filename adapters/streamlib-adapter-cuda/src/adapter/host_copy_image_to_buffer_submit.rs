@@ -260,13 +260,13 @@ where
             .signal_semaphore_infos(&signal_infos)
             .build();
 
-        unsafe {
-            self.device
-                .submit_to_queue(queue, &[submit], submit_ctx.fence)
-        }
-        .map_err(|e| AdapterError::BackendRejected {
-            reason: format!("submit_to_queue: {e}"),
-        })?;
+        submit_ctx
+            .submit_carrying_the_fence(|fence| unsafe {
+                self.device.submit_to_queue(queue, &[submit], fence)
+            })
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("submit_to_queue: {e}"),
+            })?;
 
         Ok(())
     }

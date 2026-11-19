@@ -24,7 +24,7 @@
 //!   wakes up.
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -74,7 +74,7 @@ pub struct VulkanSurfaceAdapter<D: VulkanRhiDevice> {
     submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
     /// Counts how many times the persistent submit context was
     /// (re)created — used by tests to lock the amortisation invariant
-    /// from #620 / #640 (steady-state acquires must not grow live
+    /// (steady-state acquires must not grow live
     /// pools).
     submit_ctx_create_count: AtomicUsize,
 }
@@ -97,7 +97,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     /// subsequent acquire.
     ///
     /// Hidden from the public docs because callers shouldn't depend
-    /// on it; tests use it to lock #620 / #640's amortisation
+    /// on it; tests use it to lock its amortisation
     /// invariant.
     #[doc(hidden)]
     pub fn submit_pool_create_count(&self) -> usize {
@@ -153,7 +153,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         self.surfaces.unregister(id).is_some()
     }
 
-    /// Producer-side QFOT release for cross-process publishing (#633).
+    /// Producer-side QFOT release for cross-process publishing.
     ///
     /// Issues a queue-family-ownership-transfer release barrier on the
     /// adapter's device queue, transitioning the surface from its
@@ -285,11 +285,9 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     ///
     /// Synchronous: blocks on the per-submit fence until the GPU has
     /// executed the barrier, because the next consumer needs the new
-    /// layout to be visible. Pre-#640 this used `vkQueueWaitIdle` —
-    /// queue-wide drain; #640 narrowed it to a fence on the submit
-    /// itself, which composes correctly with concurrent unrelated
-    /// activity sharing the same queue (mirrors the cpu-readback
-    /// `vkQueueWaitIdle` → fence migration in #532).
+    /// layout to be visible. The wait is on the submit's own fence, not
+    /// the whole queue, so concurrent unrelated activity sharing the
+    /// queue is not drained.
     fn transition_layout_sync(
         &self,
         image: vk::Image,
@@ -365,19 +363,18 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .command_buffer_infos(&cmd_infos)
             .build();
 
-        unsafe {
-            self.device
-                .submit_to_queue(queue, &[submit], submit_ctx.fence)
-        }
-        .map_err(|e| AdapterError::BackendRejected {
-            reason: format!("submit_to_queue: {e}"),
-        })?;
+        submit_ctx
+            .submit_carrying_the_fence(|fence| unsafe {
+                self.device.submit_to_queue(queue, &[submit], fence)
+            })
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("submit_to_queue: {e}"),
+            })?;
 
         // Block until the GPU has executed the barrier — the next
         // consumer's view assumes the new layout is visible. The wait
-        // is per-submit (not queue-wide like the pre-#640
-        // `vkQueueWaitIdle`), so concurrent unrelated submits on the
-        // same queue aren't drained.
+        // is per-submit, so concurrent unrelated submits on the same
+        // queue aren't drained.
         unsafe { device.wait_for_fences(&[submit_ctx.fence], true, u64::MAX) }.map_err(|e| {
             AdapterError::BackendRejected {
                 reason: format!("wait_for_fences (transition_layout_sync): {e}"),
@@ -695,14 +692,16 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
     }
 }
 
+#[cfg(test)]
+mod adapter_persistent_submit_context_tests;
+
 /// Persistent per-adapter command pool, command buffer, and
 /// completion fence — replaces the create-and-destroy-per-acquire
 /// pattern that used to churn `vkCreateCommandPool` /
 /// `vkDestroyCommandPool` on every layout transition. Same shape
 /// lives in `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
 /// and `streamlib-adapter-cuda::adapter::AdapterPersistentSubmitContext`;
-/// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
-/// Notes — `streamlib-surface-adapter` deliberately does not depend on
+/// fix ALL THREE if you change ANY: `streamlib-surface-adapter` deliberately does not depend on
 /// `vulkanalia`, so duplication is the project pattern here).
 ///
 /// The fence is created signaled so the first submit doesn't block.
@@ -715,6 +714,11 @@ struct AdapterPersistentSubmitContext {
     pool: vk::CommandPool,
     cmd: vk::CommandBuffer,
     fence: vk::Fence,
+    /// Whether the fence is signaled or a queued batch will signal it.
+    /// False from the reset until a submit carrying the fence queues, so a
+    /// recording or submit that failed in between leaves nothing to wait
+    /// for instead of a fence nothing will ever signal.
+    the_fence_will_signal: AtomicBool,
 }
 
 impl AdapterPersistentSubmitContext {
@@ -757,24 +761,33 @@ impl AdapterPersistentSubmitContext {
             }
         };
 
-        Ok(Self { pool, cmd, fence })
+        Ok(Self {
+            pool,
+            cmd,
+            fence,
+            the_fence_will_signal: AtomicBool::new(true),
+        })
     }
 
     /// Wait for the previous submit's fence, reset it, then reset the
     /// command pool so the single command buffer is ready to be
     /// re-recorded. Steady-state cost is the wait, which is instant
-    /// when the prior submit has already drained.
+    /// when the prior submit has already drained; after a recording or
+    /// submit that failed, nothing is queued and nothing is waited for.
     fn reset_for_recording(&self, device: &vulkanalia::Device) -> Result<(), AdapterError> {
-        unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
-            AdapterError::BackendRejected {
-                reason: format!("wait_for_fences (persistent submit fence): {e}"),
-            }
-        })?;
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
+            unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
+                AdapterError::BackendRejected {
+                    reason: format!("wait_for_fences (persistent submit fence): {e}"),
+                }
+            })?;
+        }
         unsafe { device.reset_fences(&[self.fence]) }.map_err(|e| {
             AdapterError::BackendRejected {
                 reason: format!("reset_fences (persistent submit fence): {e}"),
             }
         })?;
+        self.the_fence_will_signal.store(false, Ordering::Relaxed);
         unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
             .map_err(|e| AdapterError::BackendRejected {
                 reason: format!("reset_command_pool (persistent submit pool): {e}"),
@@ -782,10 +795,23 @@ impl AdapterPersistentSubmitContext {
         Ok(())
     }
 
-    /// Tear down the pool + fence. Waits on the fence first to drain
-    /// any pending GPU work so destruction is safe.
+    /// Run `submit` with the fence as its completion signal, and once it
+    /// has queued, have the next reset and the teardown wait for it.
+    fn submit_carrying_the_fence<E>(
+        &self,
+        submit: impl FnOnce(vk::Fence) -> Result<(), E>,
+    ) -> Result<(), E> {
+        submit(self.fence)?;
+        self.the_fence_will_signal.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Tear down the pool and fence, first waiting for a queued submit to
+    /// drain.
     fn destroy(self, device: &vulkanalia::Device) {
-        let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
+            let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        }
         unsafe {
             device.destroy_fence(self.fence, None);
             device.destroy_command_pool(self.pool, None);
