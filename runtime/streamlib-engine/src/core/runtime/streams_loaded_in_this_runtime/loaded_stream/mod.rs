@@ -38,6 +38,7 @@ use crate::core::runtime::{
 };
 use crate::core::{Error, Result};
 
+mod edits_its_document_holds_not_live;
 mod input_values_set_live;
 mod live_graph_edits;
 mod live_input_values_at_load_and_stop;
@@ -144,6 +145,10 @@ pub struct LoadedStreamInThisRuntime {
     display_name: RwLock<String>,
     /// The project and stream asset the stream is.
     stream_location: StreamLocation,
+    /// Each edit its graph document holds that its running graph did not take, as the
+    /// diagnostic at the part it changes, until the stream is brought to its document.
+    edits_its_document_holds_not_live:
+        Mutex<Vec<streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticOnTheWire>>,
 }
 
 /// What a loaded stream is keyed by and shown as: its id, its display name,
@@ -325,6 +330,7 @@ impl LoadedStreamInThisRuntime {
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
             is_held_stopped: AtomicBool::new(false),
+            edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -535,6 +541,7 @@ impl LoadedStreamInThisRuntime {
             &mut graph_response.nodes,
             value_of_each_graph_input,
         );
+        self.render_the_document_over_the_live_graph_while_edits_are_not_live(&mut graph_response);
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
     }

@@ -305,6 +305,7 @@ impl Runner {
             );
             return None;
         }
+        loaded.forget_the_edits_its_document_holds_not_live();
         if loaded.display_name() != stream_asset.display_name {
             loaded.rename(stream_asset.display_name.clone());
         }

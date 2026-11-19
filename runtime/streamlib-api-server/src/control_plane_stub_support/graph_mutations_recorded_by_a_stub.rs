@@ -137,6 +137,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<bool> {
             Ok(true)
         }
+        fn hold_an_edit_its_document_holds_not_live(
+            &self,
+            _graph_operation: &::streamlib_project_repository::StreamGraphOperation,
+            _refusal: &str,
+        ) {
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             graph_operation: ::streamlib_project_repository::StreamGraphOperation,

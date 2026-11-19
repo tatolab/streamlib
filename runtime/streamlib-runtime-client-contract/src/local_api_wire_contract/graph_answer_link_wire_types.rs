@@ -36,6 +36,10 @@ pub struct GraphLinkOnTheWire {
     pub marks: PinLinkMarksOnTheWire,
     /// What the runtime keeps on the link, by what it is.
     pub components: GraphLinkComponentsOnTheWire,
+    /// `false` on a link the stream's graph document holds and its running graph does not hold
+    /// yet, carrying nothing until the stream's playback stops; absent on every other link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<bool>,
 }
 
 /// One end of a link of a stream's graph: a node by its name, and one of its ports.

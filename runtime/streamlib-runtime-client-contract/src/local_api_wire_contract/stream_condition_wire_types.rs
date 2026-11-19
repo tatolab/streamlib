@@ -85,7 +85,8 @@ pub enum StreamPlaybackOnTheWire {
 pub enum StreamHealthOnTheWire {
     /// Nothing is wrong with it.
     Healthy,
-    /// A node of it failed, keeps raising or is not ready, whatever its playback.
+    /// A node of it failed, keeps raising or is not ready, or its graph document holds an edit its
+    /// running graph did not take, whatever its playback.
     Degraded,
     /// It cannot play until the recovery its diagnostic names is made.
     // `#[serde(other)]` holds only on the last variant, so a new value goes above this one.
@@ -171,6 +172,10 @@ pub enum DiagnosticKindOnTheWire {
     NodeRaising,
     /// A running node says it is not ready yet.
     NodeNotReady,
+    /// An edit the stream's graph document holds that its running graph did not take: `graph`
+    /// shows the document's graph, each part the running graph does not hold yet carrying
+    /// `live: false`, and the stream takes the edit when its playback stops.
+    EditNotLive,
     /// A problem of a kind this client does not know; the runtime never sends it. Its `words`
     /// say what it is, and its `recovery` what recovers from it.
     // `#[serde(other)]` holds only on the last variant, so a new kind goes above this one.
@@ -186,7 +191,7 @@ impl DiagnosticKindOnTheWire {
             Self::LoadRefused | Self::NodeTypeNotDescribed | Self::NodeRaising => {
                 DiagnosticRecoveryOnTheWire::FixTheCode
             }
-            Self::StartRefused | Self::NodeFailed => {
+            Self::StartRefused | Self::NodeFailed | Self::EditNotLive => {
                 DiagnosticRecoveryOnTheWire::RestartThePlayback
             }
             Self::LinkRefused => DiagnosticRecoveryOnTheWire::FixTheLink,

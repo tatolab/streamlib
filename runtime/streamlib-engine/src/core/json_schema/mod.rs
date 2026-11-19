@@ -535,6 +535,7 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             inputs_waiting_for_a_value: Vec::new(),
             components: the_components_of_a_node_with_its_health(node),
             fragment: None,
+            live: None,
         }
     }
 }

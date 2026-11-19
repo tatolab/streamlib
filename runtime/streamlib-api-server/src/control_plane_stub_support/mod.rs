@@ -195,6 +195,13 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<bool> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn hold_an_edit_its_document_holds_not_live(
+            &self,
+            _graph_operation: &::streamlib_project_repository::StreamGraphOperation,
+            _refusal: &str,
+        ) {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             _graph_operation: ::streamlib_project_repository::StreamGraphOperation,

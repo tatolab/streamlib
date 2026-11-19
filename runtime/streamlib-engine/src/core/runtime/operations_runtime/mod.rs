@@ -663,6 +663,18 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn hold_an_edit_its_document_holds_not_live(
+        &self,
+        graph_operation: &streamlib_project_repository::StreamGraphOperation,
+        refusal: &str,
+    ) {
+        LoadedStreamInThisRuntime::hold_an_edit_its_document_holds_not_live(
+            self,
+            graph_operation,
+            refusal,
+        );
+    }
+
     fn what_a_live_connect_makes_of_the_link(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,

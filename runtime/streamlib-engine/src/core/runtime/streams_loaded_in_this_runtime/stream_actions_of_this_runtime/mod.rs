@@ -331,7 +331,7 @@ fn every_node_uuid_the_graph_documents_of_the_project_hold(
 
 /// The project file of the stream at `location` and the graph document holding its stream
 /// asset, or why its project or document is not where it was recorded.
-fn the_graph_document_of_the_stream_at(
+pub(in crate::core::runtime) fn the_graph_document_of_the_stream_at(
     location: &StreamLocation,
 ) -> std::result::Result<(TatolabProjectFile, ProjectStreamDocument), String> {
     let project_directory = &location.project_directory;
@@ -809,6 +809,7 @@ mod stream_action_queue;
 mod stream_records;
 mod streams_to_read_or_edit;
 
+pub(in crate::core::runtime) use recorded_stream_reload::the_graph_the_document_of_the_stream_at_holds;
 pub use streams_to_read_or_edit::StreamsToReadOrEdit;
 
 #[cfg(test)]
