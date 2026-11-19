@@ -19,11 +19,10 @@ enum GraphEditBatchState {
     Open(Box<dyn GraphEditBatch>),
     /// Closed, its edits compiled in one commit.
     Closed,
-    /// Taken back whole: only the values its edits set are left to reverse.
-    TakenBack,
-    /// Taken back only as far as nothing built or wired holds it, since its commit failed after
-    /// it changed what runs: every edit is left to reverse.
-    TakenBackOnlyAsFarAsNothingBuiltOrWiredHoldsIt,
+    /// Taken back: whole, which leaves only the values its edits set to reverse, or only as far
+    /// as nothing built or wired holds it, since its commit failed after it changed what runs,
+    /// which leaves every edit to reverse.
+    TakenBack(HowFarARefusedBatchWasTakenBack),
 }
 
 impl StreamATransactionEdits {
@@ -46,13 +45,25 @@ impl StreamATransactionEdits {
             graph_edit_batch,
         })
     }
+}
 
-    /// The batch of graph edits open on this stream, to apply a graph edit through.
-    pub(super) fn open_graph_edit_batch(&self) -> Result<&dyn GraphEditBatch, String> {
-        match &self.graph_edit_batch {
-            GraphEditBatchState::Open(graph_edit_batch) => Ok(graph_edit_batch.as_ref()),
-            _ => Err("the stream holds no batch of graph edits open to apply to".to_owned()),
-        }
+/// The batch of graph edits open on the stream `stream_id` of `streams`, to apply a graph edit
+/// through.
+pub(super) fn the_open_batch_of<'streams>(
+    streams: &'streams BTreeMap<String, StreamATransactionEdits>,
+    stream_id: &str,
+) -> Result<&'streams dyn GraphEditBatch, String> {
+    match streams
+        .get(stream_id)
+        .map(|stream| &stream.graph_edit_batch)
+    {
+        Some(GraphEditBatchState::Open(graph_edit_batch)) => Ok(graph_edit_batch.as_ref()),
+        Some(_) => Err(format!(
+            "stream `{stream_id}` holds no batch of graph edits open to apply to"
+        )),
+        None => Err(format!(
+            "stream `{stream_id}` holds no batch of graph edits"
+        )),
     }
 }
 
@@ -212,11 +223,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 continue;
             }
             let applied_to_the_running_stream = || {
-                let graph_edit_batch = streams
-                    .get(stream_id)
-                    .ok_or_else(|| format!("stream `{stream_id}` holds no batch of graph edits"))?
-                    .open_graph_edit_batch()
-                    .map_err(|refusal| format!("stream `{stream_id}`: {refusal}"))?;
+                let graph_edit_batch = the_open_batch_of(&streams, stream_id)?;
                 self.async_runtime
                     .block_on(
                         graph_edit_batch
@@ -356,8 +363,10 @@ impl StreamGraphTransactionExecutor<'_> {
             let Some(stream) = streams.get(&stream_id) else {
                 continue;
             };
-            if matches!(stream.graph_edit_batch, GraphEditBatchState::TakenBack)
-                && !sets_a_value_a_take_back_leaves(&applied.operation)
+            if matches!(
+                stream.graph_edit_batch,
+                GraphEditBatchState::TakenBack(HowFarARefusedBatchWasTakenBack::Whole)
+            ) && !sets_a_value_a_take_back_leaves(&applied.operation)
             {
                 continue;
             }
@@ -422,7 +431,8 @@ pub(super) fn take_back_the_graph_edits_of_each_stream(
 ) {
     for stream in streams.values_mut() {
         if let GraphEditBatchState::Open(_) = stream.graph_edit_batch {
-            stream.graph_edit_batch = GraphEditBatchState::TakenBack;
+            stream.graph_edit_batch =
+                GraphEditBatchState::TakenBack(HowFarARefusedBatchWasTakenBack::Whole);
         }
     }
 }
@@ -441,12 +451,7 @@ pub(super) fn close_the_graph_edits_of_each_stream(
             continue;
         };
         if let Err(refused) = graph_edit_batch.close() {
-            stream.graph_edit_batch = match refused.taken_back {
-                HowFarARefusedBatchWasTakenBack::Whole => GraphEditBatchState::TakenBack,
-                HowFarARefusedBatchWasTakenBack::AsFarAsNothingBuiltOrWiredHoldsIt => {
-                    GraphEditBatchState::TakenBackOnlyAsFarAsNothingBuiltOrWiredHoldsIt
-                }
-            };
+            stream.graph_edit_batch = GraphEditBatchState::TakenBack(refused.taken_back);
             first_refusal.get_or_insert(refused.refusal);
         }
     }

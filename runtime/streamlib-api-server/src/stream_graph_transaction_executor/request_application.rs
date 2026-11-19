@@ -434,11 +434,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
                 _ => None,
             };
-            let graph_edit_batch = streams
-                .get(stream_id)
-                .ok_or_else(|| format!("stream `{stream_id}` holds no batch of graph edits"))?
-                .open_graph_edit_batch()
-                .map_err(|refusal| format!("stream `{stream_id}`: {refusal}"))?;
+            let graph_edit_batch = the_open_batch_of(streams, stream_id)?;
             let applied = self
                 .async_runtime
                 .block_on(graph_edit_batch.apply_a_stream_graph_operation_live(edit_as_drawn))?;

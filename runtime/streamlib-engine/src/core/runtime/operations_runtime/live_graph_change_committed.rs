@@ -28,15 +28,21 @@ pub(super) async fn commit_live_graph_change(
         return Ok(());
     };
     let compiler = Arc::clone(compiler);
-    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
-        compiler.commit(&runtime_ctx)
-    }))
-    .await
-    .map_err(|join_failure| {
-        Error::Runtime(format!(
-            "the graph change's compile task did not finish: {join_failure}"
-        ))
-    })?
+    compile_on_a_blocking_thread(move || compiler.commit(&runtime_ctx)).await?
+}
+
+/// Run `compile` on one of the engine's blocking threads, carrying this thread's project log
+/// route; refused when its task does not finish.
+async fn compile_on_a_blocking_thread<T: Send + 'static>(
+    compile: impl FnOnce() -> T + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(compile))
+        .await
+        .map_err(|join_failure| {
+            Error::Runtime(format!(
+                "the graph change's compile task did not finish: {join_failure}"
+            ))
+        })
 }
 
 /// Compile the graph edits held for one commit, releasing the compiler's hold in the turn the
@@ -56,14 +62,12 @@ pub(super) async fn commit_the_graph_edits_held_for_one_commit(
             });
     };
     let compiler = Arc::clone(compiler);
-    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
+    compile_on_a_blocking_thread(move || {
         compiler.commit_releasing_the_hold_for_one_commit(&runtime_ctx)
-    }))
+    })
     .await
-    .map_err(|join_failure| ACommitFailed {
-        refusal: Error::Runtime(format!(
-            "the graph change's compile task did not finish: {join_failure}"
-        )),
+    .map_err(|refusal| ACommitFailed {
+        refusal,
         after_changing_what_runs: true,
     })?
 }

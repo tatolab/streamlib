@@ -25,6 +25,29 @@ use crate::core::runtime::operations::{
 };
 use crate::core::{Error, Result};
 
+/// How long a lifecycle change waiting for the stream's one writer waits between looks at it,
+/// and at the stream's shutdown escalation.
+const WAIT_BETWEEN_LOOKS_AT_THE_ONE_WRITER: std::time::Duration =
+    std::time::Duration::from_millis(5);
+
+/// A change of a stream's lifecycle that waits for the batch of graph edits open on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::core::runtime) enum ALifecycleChange {
+    Start,
+    Stop,
+    Resume,
+}
+
+impl std::fmt::Display for ALifecycleChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Start => "started",
+            Self::Stop => "stopped",
+            Self::Resume => "resumed",
+        })
+    }
+}
+
 tokio::task_local! {
     static THE_GRAPH_EDITS_THIS_TASK_HOLDS: Arc<GraphEditsHeldForOneCommit>;
 }
@@ -181,11 +204,7 @@ impl LoadedStreamInThisRuntime {
         held: &GraphEditsHeldForOneCommit,
     ) -> std::result::Result<(), GraphEditBatchRefused> {
         if let Err(refusal) = self.refuse_a_reactive_reader_only_islands_feed() {
-            self.take_back_the_graph_edits_held_for_one_commit(held);
-            return Err(GraphEditBatchRefused {
-                refusal,
-                taken_back: HowFarARefusedBatchWasTakenBack::Whole,
-            });
+            return Err(self.take_back_whole(held, refusal));
         }
         let logged = self
             .compiler
@@ -217,21 +236,29 @@ impl LoadedStreamInThisRuntime {
         &self,
         held: &Arc<GraphEditsHeldForOneCommit>,
     ) -> std::result::Result<(), GraphEditBatchRefused> {
-        let closed = self.this_stream_held_for_a_task().and_then(|stream| {
-            let held = Arc::clone(held);
-            self.block_on_the_engines_tokio_runtime(async move {
-                Ok(stream
-                    .close_the_graph_edits_held_for_one_commit(&held)
-                    .await)
-            })
-        });
-        closed.unwrap_or_else(|refusal| {
-            self.take_back_the_graph_edits_held_for_one_commit(held);
-            Err(GraphEditBatchRefused {
-                refusal,
-                taken_back: HowFarARefusedBatchWasTakenBack::Whole,
-            })
+        let stream = self
+            .this_stream_held_for_a_task()
+            .map_err(|refusal| self.take_back_whole(held, refusal))?;
+        let held_by_the_close = Arc::clone(held);
+        self.block_on_the_engines_tokio_runtime(async move {
+            Ok(stream
+                .close_the_graph_edits_held_for_one_commit(&held_by_the_close)
+                .await)
         })
+        .map_err(|refusal| self.take_back_whole(held, refusal))?
+    }
+
+    /// Take `held` back whole, refused for `refusal`.
+    fn take_back_whole(
+        &self,
+        held: &GraphEditsHeldForOneCommit,
+        refusal: Error,
+    ) -> GraphEditBatchRefused {
+        self.take_back_the_graph_edits_held_for_one_commit(held);
+        GraphEditBatchRefused {
+            refusal,
+            taken_back: HowFarARefusedBatchWasTakenBack::Whole,
+        }
     }
 
     /// Announce each event `held` kept of what stands once its edits compiled.
@@ -296,14 +323,15 @@ impl LoadedStreamInThisRuntime {
         self.block_on_the_engines_tokio_runtime(async move { Ok(one_writer.lock_owned().await) })
     }
 
-    /// Hold this stream's one writer of the graph for `change`, a start, a stop or a resume, so
-    /// it waits for a batch of graph edits open on another thread to close or be taken back;
-    /// refused on the thread that holds the batch, or inside graph edits held for one commit,
-    /// which would wait for themselves.
+    /// Hold this stream's one writer of the graph for `change`, so it waits for a batch of
+    /// graph edits open on another thread to close or be taken back; refused on the thread
+    /// that holds the batch, or inside graph edits held for one commit, which would wait for
+    /// themselves. A stop notes it waits on an open graph edit, and stops waiting once the
+    /// stream's shutdown is forced, answering no writer held.
     pub(in crate::core::runtime) fn hold_the_one_writer_for_a_lifecycle_change(
         &self,
-        change: &str,
-    ) -> Result<OwnedMutexGuard<()>> {
+        change: ALifecycleChange,
+    ) -> Result<Option<OwnedMutexGuard<()>>> {
         let this_thread_holds_a_batch =
             *self.thread_holding_a_graph_edit_batch.lock() == Some(std::thread::current().id());
         if this_thread_holds_a_batch
@@ -311,11 +339,34 @@ impl LoadedStreamInThisRuntime {
         {
             return Err(Error::Runtime(format!(
                 "the stream `{}` was not {change}: its caller holds graph edits of it open, and \
-                 {change} waits for them to close. To fix: close the batch of graph edits first",
+                 the change waits for them to close. To fix: close the batch of graph edits \
+                 first",
                 self.stream_id()
             )));
         }
-        self.hold_the_one_writer_from_synchronous_code()
+        let one_writer = &self.one_writer_of_the_graph_at_a_time;
+        if let Ok(held) = Arc::clone(one_writer).try_lock_owned() {
+            return Ok(Some(held));
+        }
+        if change == ALifecycleChange::Stop {
+            self.teardown_progress_note()
+                .note_what_the_teardown_is_waiting_on("an open graph edit");
+        }
+        loop {
+            if change == ALifecycleChange::Stop
+                && self.this_streams_shutdown_escalation().is_forced()
+            {
+                tracing::warn!(
+                    "the stream `{}` stops with a graph edit still open: its shutdown was forced",
+                    self.stream_id()
+                );
+                return Ok(None);
+            }
+            match Arc::clone(one_writer).try_lock_owned() {
+                Ok(held) => return Ok(Some(held)),
+                Err(_) => std::thread::sleep(WAIT_BETWEEN_LOOKS_AT_THE_ONE_WRITER),
+            }
+        }
     }
 
     /// Open a batch of graph edits on this stream for one writer, once no other writer's are
@@ -365,7 +416,6 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
 
     fn close(mut self: Box<Self>) -> std::result::Result<(), GraphEditBatchRefused> {
         self.open = false;
-        *self.stream.thread_holding_a_graph_edit_batch.lock() = None;
         self.stream
             .close_the_graph_edits_held_for_one_commit_from_synchronous_code(&self.held)
     }
@@ -373,8 +423,8 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
 
 impl Drop for GraphEditBatchOfALoadedStream {
     fn drop(&mut self) {
+        *self.stream.thread_holding_a_graph_edit_batch.lock() = None;
         if self.open {
-            *self.stream.thread_holding_a_graph_edit_batch.lock() = None;
             self.stream
                 .take_back_the_graph_edits_held_for_one_commit(&self.held);
         }

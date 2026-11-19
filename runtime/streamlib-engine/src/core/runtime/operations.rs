@@ -38,7 +38,9 @@ pub enum WhatALiveConnectMakesOfALink {
 }
 
 /// One writer's batch of graph edits on one stream, from
-/// [`RuntimeOperations::open_a_graph_edit_batch`].
+/// [`RuntimeOperations::open_a_graph_edit_batch`]. It is used on the thread that opened it: a
+/// start, a stop or a resume of the stream on that thread is refused while it is open, since
+/// each waits for it to close.
 #[must_use = "a batch of graph edits is closed, or taken back when it is dropped"]
 pub trait GraphEditBatch: Send {
     /// Apply `graph_operation` to the stream's live graph inside the batch, as

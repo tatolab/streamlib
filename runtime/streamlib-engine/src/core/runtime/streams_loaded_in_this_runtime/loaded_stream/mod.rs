@@ -451,7 +451,9 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// What this stream's teardown is waiting on, read by its watchdog.
-    fn teardown_progress_note(&self) -> &TeardownProgressNoteOfOneStream {
+    pub(in crate::core::runtime) fn teardown_progress_note(
+        &self,
+    ) -> &TeardownProgressNoteOfOneStream {
         &self
             .this_streams_identity_and_handles
             .teardown_progress_note

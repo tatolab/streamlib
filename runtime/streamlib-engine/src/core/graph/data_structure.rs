@@ -10,6 +10,7 @@ use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
 use super::nodes::{GraphNode, NodeRunId};
+use super::{GraphEdgeWithComponents, PendingDeletionComponent};
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
@@ -145,16 +146,18 @@ impl Graph {
     /// Whether `link` stands: neither it nor a node it joins is pending deletion, so an edit
     /// judges the graph as it is once what is pending deletion leaves.
     pub fn stands(&self, link: &Link) -> bool {
-        use super::{GraphEdgeWithComponents, PendingDeletionComponent};
-        let the_node_stands = |node_run_id: &NodeRunId| {
-            self.digraph
-                .node_weights()
-                .find(|node| &node.id == node_run_id)
-                .is_none_or(GraphNode::stands)
-        };
+        let the_node_stands =
+            |node_run_id: &NodeRunId| self.node(node_run_id).is_none_or(GraphNode::stands);
         !link.has::<PendingDeletionComponent>()
             && the_node_stands(link.source().node_run_id())
             && the_node_stands(link.to_port().node_run_id())
+    }
+
+    /// The node `node_run_id`, if the graph holds it.
+    fn node(&self, node_run_id: &NodeRunId) -> Option<&GraphNode> {
+        self.digraph
+            .node_weights()
+            .find(|node| &node.id == node_run_id)
     }
 
     /// The link feeding input `input` of the node `node_run_id`.
@@ -171,15 +174,12 @@ impl Graph {
         from: super::OutputLinkPortRef,
         to: super::InputLinkPortRef,
     ) -> (super::OutputLinkPortRef, super::InputLinkPortRef) {
-        let node_of = |node_run_id: &NodeRunId| {
-            self.digraph
-                .node_weights()
-                .find(|node| &node.id == node_run_id)
-        };
-        let from = node_of(from.node_run_id())
+        let from = self
+            .node(from.node_run_id())
             .and_then(|node| node.try_output(from.port_name()))
             .unwrap_or(from);
-        let to = node_of(to.node_run_id())
+        let to = self
+            .node(to.node_run_id())
             .and_then(|node| node.try_input(to.port_name()))
             .unwrap_or(to);
         (from, to)

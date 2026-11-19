@@ -849,3 +849,67 @@ fn a_batch_swapping_the_island_feeding_a_port_is_taken() {
     });
     assert_eq!(link_into_the_port, Some(other_switch));
 }
+
+/// A batch swapping a source an island reads, at the function node pool's inbound cap, the old
+/// source's link out first, is taken: the link leaving no longer counts toward the pool.
+///
+/// Mental-revert: counting the island's reads pending deletion refuses the new source's link
+/// as taking the pool past its cap.
+#[test]
+fn a_batch_swapping_a_source_an_island_reads_at_the_pools_cap_is_taken() {
+    const READS_OF_EACH_ISLAND: usize = 32;
+    let islands = streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION / READS_OF_EACH_ISLAND;
+    let (_runner, stream, _project) = a_stopped_stream_resolving_a_reactive_reader();
+    let async_runtime = an_async_runtime();
+    let mut nodes: Vec<(String, &str)> = vec![("spare".to_owned(), SOURCE)];
+    let mut links = Vec::new();
+    for island in 0..islands {
+        let switch = format!("switch_{island}");
+        let reader = format!("reader_{island}");
+        links.push(((switch.clone(), "result"), (reader.clone(), "in1")));
+        for read in 0..READS_OF_EACH_ISLAND {
+            let source = format!("source_{island}_{read}");
+            links.push(((source.clone(), "out"), (switch.clone(), "x")));
+            nodes.push((source, SOURCE));
+        }
+        nodes.push((switch, SWITCH));
+        nodes.push((reader, MANUAL_READER));
+    }
+    let nodes: Vec<(&str, &str)> = nodes
+        .iter()
+        .map(|(name, node_type)| (name.as_str(), *node_type))
+        .collect();
+    let links: Vec<((&str, &str), (&str, &str))> = links
+        .iter()
+        .map(|((source, output), (target, input))| {
+            ((source.as_str(), *output), (target.as_str(), *input))
+        })
+        .collect();
+    load(&stream, a_document_of(&nodes, &links));
+    assert_eq!(
+        the_links_set_aside(&stream),
+        Vec::new(),
+        "the pool is at its cap"
+    );
+
+    let batch = a_graph_edit_batch_of(&stream);
+    for operation in [
+        StreamGraphOperation::Disconnect {
+            link: a_document_link(("source_0_0", "out"), ("switch_0", "x")),
+        },
+        StreamGraphOperation::Connect {
+            link: a_document_link(("spare", "out"), ("switch_0", "x")),
+        },
+    ] {
+        async_runtime
+            .block_on(batch.apply_a_stream_graph_operation_live(operation))
+            .expect("the swap leaves the pool at its cap");
+    }
+    batch.close().expect("the swap closes");
+
+    assert_eq!(
+        the_live_links(&stream),
+        islands * (READS_OF_EACH_ISLAND + 1)
+    );
+    let _ = the_link_out_of(&stream, "spare");
+}

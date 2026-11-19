@@ -293,11 +293,9 @@ pub(crate) fn the_reader_a_removal_strands(
                 .into_iter()
                 .find(|reader_id| {
                     is_a_reader_judged(reader_id)
-                        && is_reactive_and_left_fed_only_by_islands(
-                            graph,
-                            reader_id,
-                            links_to_remove,
-                        )
+                        && is_reactive_and_left_fed_only_by_islands(graph, reader_id, |link_id| {
+                            links_to_remove.contains(link_id)
+                        })
                 })
         {
             return Ok(Some(reader_id));
@@ -347,43 +345,44 @@ pub(crate) fn refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands(
 pub(crate) fn the_island_links_into_a_reactive_reader_only_islands_feed(
     graph: &Graph,
 ) -> impl Iterator<Item = (LinkUniqueId, Error)> + '_ {
-    let links: Vec<&Link> = graph.traversal().e(()).iter().collect();
-    let links_leaving: Vec<LinkUniqueId> = links
+    let links_leaving: HashSet<LinkUniqueId> = graph
+        .traversal()
+        .e(())
         .iter()
         .filter(|link| !graph.stands(link))
         .map(|link| link.id.clone())
         .collect();
-    let leaving: HashSet<&str> = links_leaving.iter().map(LinkUniqueId::as_str).collect();
-    let links_standing: Vec<&Link> = links
-        .into_iter()
-        .filter(|link| !leaving.contains(link.id.as_str()))
-        .collect();
     let mut stranded_by_reader: HashMap<NodeRunId, bool> = HashMap::new();
-    links_standing.into_iter().filter_map(move |link| {
-        let reader_id = link.to_port().node_run_id();
-        let strands_its_reader =
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
-                && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
-                && *stranded_by_reader
-                    .entry(reader_id.clone())
-                    .or_insert_with(|| {
-                        if links_leaving.is_empty() {
-                            is_a_reactive_reader_only_islands_feed(graph, reader_id)
-                        } else {
-                            is_reactive_and_left_fed_only_by_islands(
-                                graph,
-                                reader_id,
-                                &links_leaving,
-                            )
-                        }
-                    });
-        strands_its_reader.then(|| {
-            (
-                link.id.clone(),
-                the_refusal_of_a_reactive_reader_fed_only_by_islands(reader_id),
-            )
+    graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| graph.stands(link))
+        .filter_map(move |link| {
+            let reader_id = link.to_port().node_run_id();
+            let strands_its_reader =
+                runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
+                    && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
+                    && *stranded_by_reader
+                        .entry(reader_id.clone())
+                        .or_insert_with(|| {
+                            if links_leaving.is_empty() {
+                                is_a_reactive_reader_only_islands_feed(graph, reader_id)
+                            } else {
+                                is_reactive_and_left_fed_only_by_islands(
+                                    graph,
+                                    reader_id,
+                                    |link_id| links_leaving.contains(link_id),
+                                )
+                            }
+                        });
+            strands_its_reader.then(|| {
+                (
+                    link.id.clone(),
+                    the_refusal_of_a_reactive_reader_fed_only_by_islands(reader_id),
+                )
+            })
         })
-    })
 }
 
 /// Whether `reader_id` runs reactively and only function node islands feed it, so no source
@@ -420,27 +419,24 @@ fn runs_reactively(graph: &Graph, reader_id: &NodeRunId) -> bool {
     execution == Some(ProcessExecution::Reactive)
 }
 
+/// Whether `reader_id` runs reactively and, once each link `is_removed` takes leaves, only
+/// function node islands are left to feed it, and no link from outside any island into them.
 fn is_reactive_and_left_fed_only_by_islands(
     graph: &Graph,
     reader_id: &NodeRunId,
-    links_to_remove: &[LinkUniqueId],
+    is_removed: impl Fn(&LinkUniqueId) -> bool,
 ) -> bool {
     let links_left_into_the_reader: Vec<&Link> = graph
         .traversal()
         .e(())
         .iter()
-        .filter(|link| {
-            link.to_port().node_run_id() == reader_id
-                && !links_to_remove
-                    .iter()
-                    .any(|removed_link_id| removed_link_id.as_str() == link.id())
-        })
+        .filter(|link| link.to_port().node_run_id() == reader_id && !is_removed(&link.id))
         .collect();
     let island = the_function_nodes_upstream_of(graph, reader_id);
     let the_island_reads_a_link_left_from_outside_any_island =
         the_links_into_function_nodes_from_outside_any_island(graph, &island)
             .iter()
-            .any(|link_id| !links_to_remove.contains(link_id));
+            .any(|link_id| !is_removed(link_id));
     runs_reactively(graph, reader_id)
         && !the_island_reads_a_link_left_from_outside_any_island
         && links_left_into_the_reader.iter().any(|link| {

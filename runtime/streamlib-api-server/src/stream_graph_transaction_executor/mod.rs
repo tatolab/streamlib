@@ -53,7 +53,7 @@ mod former_port_names;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
-use live_application_and_reversal::StreamATransactionEdits;
+use live_application_and_reversal::{StreamATransactionEdits, the_open_batch_of};
 mod request_application;
 mod request_to_graph_operation;
 mod streams_each_operation_names;

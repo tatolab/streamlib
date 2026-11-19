@@ -369,7 +369,8 @@ fn the_links_into_function_nodes_from_outside_any_island(
         .e(())
         .iter()
         .filter(|link| {
-            function_node_ids.contains(link.to_port().node_run_id())
+            graph.stands(link)
+                && function_node_ids.contains(link.to_port().node_run_id())
                 && !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
         })
         .map(|link| link.id.clone())
@@ -791,7 +792,7 @@ pub(crate) fn the_reader_input_ports_a_function_node_feeds(
             continue;
         }
         for link in graph.traversal().e(()).iter() {
-            if link.source().node_run_id() != &following_id {
+            if link.source().node_run_id() != &following_id || !graph.stands(link) {
                 continue;
             }
             let destination_id = link.to_port().node_run_id();

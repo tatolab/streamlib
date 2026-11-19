@@ -494,3 +494,22 @@ fn a_batch_whose_commit_fails_after_a_removal_says_it_was_not_taken_back_whole()
     assert_eq!(stream.status(), RuntimeStatus::Started);
     stream.stop().expect("the stream stops");
 }
+
+/// A forced shutdown of a playing stream ends it even while a batch stays open: the stop stops
+/// waiting for the batch once the shutdown is forced.
+///
+/// Mental-revert: a stop that waits for the stream's one writer whatever the shutdown's
+/// escalation leaves a wedged batch holding the stream past its forced shutdown.
+#[test]
+#[serial]
+fn a_forced_shutdown_ends_a_stream_whose_batch_stays_open() {
+    let (_runner, stream, _project) = a_stream_whose_windowed_port_one_source_feeds();
+    play(&stream);
+
+    let batch = a_graph_edit_batch_of(&stream);
+    stream.force_this_streams_shutdown("a batch stays open");
+    let ended = stream.wait_for_this_streams_end_within(Duration::from_secs(10));
+    drop(batch);
+
+    assert!(ended, "the forced shutdown ended the stream");
+}

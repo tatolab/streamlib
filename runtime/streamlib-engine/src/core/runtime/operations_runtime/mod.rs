@@ -42,7 +42,7 @@ pub(in crate::core::runtime) use link_disconnected::disconnect_impl;
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
 mod reactive_reader_rule_of_an_edit;
-pub(super) use graph_edits_in_one_commit::GraphEditsHeldForOneCommit;
+pub(super) use graph_edits_in_one_commit::{ALifecycleChange, GraphEditsHeldForOneCommit};
 pub(super) use link_connected_between_two_ports::{
     ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
     refuse_a_held_link_the_engine_cannot_wire, the_verdict_connect_takes_on_a_link,

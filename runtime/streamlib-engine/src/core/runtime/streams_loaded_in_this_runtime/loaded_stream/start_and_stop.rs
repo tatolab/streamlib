@@ -30,6 +30,7 @@ use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_
 use crate::core::runtime::runtime::EngineResourcesSharedByEveryStream;
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_step_coordinator::StreamStepCoordinatorOfOneStream;
 use crate::core::runtime::{RuntimeOperations, RuntimeStatus};
+use crate::core::runtime::operations_runtime::ALifecycleChange;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
@@ -136,7 +137,8 @@ impl LoadedStreamInThisRuntime {
         graph_state_at_the_start: GraphState,
     ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
-        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("started")?;
+        let _no_graph_edits_open =
+            self.hold_the_one_writer_for_a_lifecycle_change(ALifecycleChange::Start)?;
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
         if self.this_streams_shutdown_escalation().is_requested() {
             return Err(Error::Runtime(format!(
@@ -257,7 +259,8 @@ impl LoadedStreamInThisRuntime {
 
     #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop(&self) -> Result<()> {
-        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("stopped")?;
+        let _no_graph_edits_open =
+            self.hold_the_one_writer_for_a_lifecycle_change(ALifecycleChange::Stop)?;
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
         self.stop_holding_the_start_or_stop_lock().0
     }
@@ -357,7 +360,8 @@ impl LoadedStreamInThisRuntime {
     /// saved value again.
     #[tracing::instrument(name = "stream.stop_playback", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop_playback_keeping_the_graph(&self) -> Result<()> {
-        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("stopped")?;
+        let _no_graph_edits_open =
+            self.hold_the_one_writer_for_a_lifecycle_change(ALifecycleChange::Stop)?;
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
         let (stopped, inputs_reset) = self.with_no_other_input_value_change(|| {
             let inputs_reset = self.forget_every_live_value_reset_at_the_stop();
@@ -618,7 +622,8 @@ impl LoadedStreamInThisRuntime {
 
     pub fn resume(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
-        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("resumed")?;
+        let _no_graph_edits_open =
+            self.hold_the_one_writer_for_a_lifecycle_change(ALifecycleChange::Resume)?;
         *self.status.lock() = RuntimeStatus::Starting;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResuming);
 
