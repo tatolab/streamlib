@@ -252,7 +252,11 @@ impl LoadedStreamInThisRuntime {
                 Err(failed) => {
                     self.compiler
                         .take_back_what_operations_did_to_the_graph(&logged);
+                    let events_held = std::mem::take(&mut *held.events_held.lock());
                     self.restore_what_was_drawn_and_drop_the_events(held);
+                    if failed.after_changing_what_runs {
+                        self.announce_each_event_of_what_a_failed_commit_left_changed(events_held);
+                    }
                     return Err(GraphEditBatchRefused {
                         refusal: failed.refusal,
                         taken_back: if failed.after_changing_what_runs {
@@ -348,6 +352,60 @@ impl LoadedStreamInThisRuntime {
             }
         }
         if held.the_graph_changed.load(Ordering::SeqCst) {
+            self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        }
+    }
+
+    /// Announce each of `events_held` whose change a commit that failed after it changed what
+    /// runs left in the graph once taken back as far as nothing built or wired holds it: a node
+    /// added that stays, a node removed that left, a link connected that stands and a link
+    /// disconnected that left; then that the graph changed, when any did.
+    fn announce_each_event_of_what_a_failed_commit_left_changed(
+        &self,
+        events_held: Vec<(Option<LinkUniqueId>, RuntimeEvent)>,
+    ) {
+        let (node_is_in_the_graph, link_is_in_the_graph, link_stands) = (
+            |node_run_id: &NodeRunId| {
+                self.compiler
+                    .scope_reading(|graph| graph.traversal().v(node_run_id).exists())
+            },
+            |link_id: &LinkUniqueId| {
+                self.compiler
+                    .scope_reading(|graph| graph.traversal().e(link_id).exists())
+            },
+            |link_id: &LinkUniqueId| {
+                self.compiler.scope_reading(|graph| {
+                    graph
+                        .traversal()
+                        .e(link_id)
+                        .first()
+                        .is_some_and(|link| graph.stands(link))
+                })
+            },
+        );
+        let mut the_graph_changed = false;
+        for (of_the_link, event) in events_held {
+            let announced = match (&event, &of_the_link) {
+                (
+                    RuntimeEvent::RuntimeWillAddNode { node_run_id }
+                    | RuntimeEvent::RuntimeDidAddNode { node_run_id },
+                    _,
+                ) => node_is_in_the_graph(node_run_id),
+                (
+                    RuntimeEvent::RuntimeWillRemoveNode { node_run_id }
+                    | RuntimeEvent::RuntimeDidRemoveNode { node_run_id },
+                    _,
+                ) => !node_is_in_the_graph(node_run_id),
+                (_, Some(link_id)) if announces_a_connect(&event) => link_stands(link_id),
+                (_, Some(link_id)) => !link_is_in_the_graph(link_id),
+                (_, None) => false,
+            };
+            if announced {
+                the_graph_changed = true;
+                self.publish_on_this_streams_topic(event);
+            }
+        }
+        if the_graph_changed {
             self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         }
     }
