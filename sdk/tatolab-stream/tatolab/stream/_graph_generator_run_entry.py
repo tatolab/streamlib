@@ -12,7 +12,7 @@ on `sys.path`. Whatever the project's code does, stdout carries exactly one JSON
 the exit code is 0. The object is one of:
 
 - `{"generator", "placed"}` — the fragment node the generator's run is stored as: its
-  `name`, its generator as `type`, its promoted settings as `config` and its `fragment`;
+  `name`, its generator as `type`, its promoted settings as `input_values` and its `fragment`;
 - `{"generator", "failed_because"}` — the module did not import, `GENERATOR` names no
   `@graph_generator`, or the generator refused or raised, with its traceback.
 
