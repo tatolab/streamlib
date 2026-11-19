@@ -610,3 +610,23 @@ class AnInnerGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
             outer[:half, :, :] = self.EDIT_VALUE
             self._open_the_inner_door_or_take_its_refusal(frame)
             outer[half : self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
+
+
+@node.process
+class ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
+    """`with frame.cpu()` writing inside `with frame.writable()` before the
+    outer scope mints its first tensor: the outer scope's blit-back would
+    overwrite the inner edit with a staging filled before it."""
+
+    REFUSAL_NAMES = "has an edit staged through"
+
+    def _open_the_inner_door(self, frame) -> None:
+        with frame.cpu() as inner_pixels:
+            inner_pixels[self.ROWS_TO_EDIT :, :, :] = self.EDIT_VALUE + 1
+
+    def _edit_the_top_rows(self, frame) -> None:
+        import torch
+
+        with frame.writable() as outer_tensor:
+            self._open_the_inner_door_or_take_its_refusal(frame)
+            torch.from_dlpack(outer_tensor)[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE

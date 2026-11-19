@@ -101,6 +101,10 @@ STREAM_BY_PROBE_AND_SOURCE = {
         "AnInnerGpuWriteDoorKeepsTheOuterEditProbe",
         "test_pattern",
     ): cast_claim_streams.an_inner_gpu_write_door_keeps_the_outer_edit_probe_off_the_test_pattern,
+    (
+        "ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe",
+        "test_pattern",
+    ): cast_claim_streams.a_cpu_door_inside_a_gpu_write_door_keeps_the_outer_edit_probe_off_the_test_pattern,
 }
 
 
@@ -451,3 +455,23 @@ def test_an_inner_gpu_write_door_over_the_same_frame_is_refused_and_keeps_the_ou
     if sys.platform != "darwin":
         assert observation["the_inner_door_was_refused_by_name"]
     _assert_the_edit_reached_the_surface(observation)
+
+
+@pytest.mark.rig_only_capability(reason="CUDA")
+def test_a_cpu_edit_inside_a_gpu_write_door_over_the_same_frame_is_refused(
+    start_tatolabd_running_stream,
+):
+    """`with frame.cpu()` writing inside `with frame.writable()` before the
+    outer scope's first tensor: on Linux the outer scope holds the frame's
+    pool slot from its entry, so the inner edit is refused by name rather
+    than overwritten at the outer scope's exit, and the outer edit lands."""
+    _require_a_device_consumer()
+    observation = run_claim_probe(
+        start_tatolabd_running_stream,
+        "ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe",
+        source="test_pattern",
+    )
+
+    if sys.platform != "darwin":
+        assert observation["the_inner_door_was_refused_by_name"]
+        _assert_the_edit_reached_the_surface(observation)
