@@ -61,8 +61,8 @@ pub use node_ui_manifest::{
 };
 #[cfg(feature = "history")]
 pub use node_ui_manifest_check::{
-    NodeUiManifestToCheck, is_a_projects_own_node_ui_manifest, the_findings_of_a_node_ui_manifest,
-    the_node_ui_manifest_a_check_reads, the_path_of_a_projects_own_node_ui_manifest,
+    NodeUiManifestToCheck, the_findings_of_a_node_ui_manifest, the_node_ui_manifest_a_check_reads,
+    the_path_of_a_projects_own_node_ui_manifest,
 };
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,
@@ -192,6 +192,4 @@ pub use tatolab_view_manifest::{
     VIEW_CONTRACT_READ_MINOR, a_panel_writes, read_tatolab_view_manifest,
 };
 #[cfg(feature = "history")]
-pub use view_manifest_check::{
-    ViewManifestsChecked, check_a_projects_view_manifests, is_the_manifest_of_a_projects_own_view,
-};
+pub use view_manifest_check::{ViewManifestsChecked, check_a_projects_view_manifests};

@@ -233,3 +233,20 @@ fn a_type_error_fails_extension_types_alone_and_lists_the_files_checked() {
         }]
     );
 }
+
+#[test]
+fn the_declaration_check_imports_only_the_python_files_among_the_paths() {
+    assert_eq!(
+        the_python_module_paths_among(Some(vec![
+            "views/meter/main.ts".to_owned(),
+            "nodes/clamp.py".to_owned(),
+            "views/meter/tato-view.json".to_owned(),
+        ])),
+        Some(vec!["nodes/clamp.py".to_owned()]),
+    );
+    assert_eq!(
+        the_python_module_paths_among(Some(vec!["views/meter/main.ts".to_owned()])),
+        Some(Vec::new()),
+    );
+    assert_eq!(the_python_module_paths_among(None), None);
+}

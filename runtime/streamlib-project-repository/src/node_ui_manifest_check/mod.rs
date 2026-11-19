@@ -132,11 +132,5 @@ pub fn the_findings_of_a_node_ui_manifest(
     findings
 }
 
-/// Whether `path`, a path in a project, is its own node UI manifest, which the
-/// `extension_manifest` check reads and no other check does.
-pub fn is_a_projects_own_node_ui_manifest(path: &str) -> bool {
-    path == the_path_of_a_projects_own_node_ui_manifest()
-}
-
 #[cfg(test)]
 mod tests;
