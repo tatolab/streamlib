@@ -41,7 +41,7 @@ fn register_the_audio_to_tensor_test_conversion_once() {
 }
 
 /// A project whose venv's interpreter lists `sources` as its node types.
-fn a_project_listing(sources: Value) -> ProjectWithGraphDocuments {
+pub(super) fn a_project_listing(sources: Value) -> ProjectWithGraphDocuments {
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
     write_an_executable_script_from_a_child_process(
         &project.interpreter(),
@@ -58,7 +58,7 @@ fn a_project_listing(sources: Value) -> ProjectWithGraphDocuments {
 /// The project's own node code, as the listing reads it: `nodes.mix:Mixer`, whose ports its
 /// source states, and `nodes.camera:Camera`, which registers its ports in code; and a graph
 /// generator promoting one setting.
-fn the_project_source() -> Value {
+pub(super) fn the_project_source() -> Value {
     json!({
         "source": "project",
         "node_types": [
@@ -256,9 +256,11 @@ async fn a_projects_node_types_are_listed_by_source_with_the_runtimes_own_last()
         sources[0]["node_types"],
         json!([
             { "node_type": "nodes.mix:Mixer", "documentation": "Mixes two levels.",
-              "category": "Audio", "kind": "function", "described_from": "source" },
+              "category": "Audio", "category_from": "declaration", "kind": "function",
+              "described_from": "source" },
             { "node_type": "nodes.camera:Camera", "documentation": "A camera.",
-              "category": null, "kind": "process", "described_from": "source" },
+              "category": null, "category_from": null, "kind": "process",
+              "described_from": "source" },
         ])
     );
     assert_eq!(
@@ -275,8 +277,8 @@ async fn a_projects_node_types_are_listed_by_source_with_the_runtimes_own_last()
         built_in.iter().any(|listed| listed
             == &json!({
                 "node_type": InputValueTestNode::node_class_import_path().as_str(),
-                "documentation": "", "category": null, "kind": "process",
-                "described_from": "built_in",
+                "documentation": "", "category": null, "category_from": null,
+                "kind": "process", "described_from": "built_in",
             })),
         "{listed}"
     );
@@ -397,7 +399,7 @@ async fn a_project_node_type_is_described_from_source_or_says_why_it_is_not() {
         &json!({
             "node_type": "nodes.mix:Mixer", "source": "project", "described_from": "source",
             "documentation": "Mixes two levels.\n\nThe second is scaled first.",
-            "category": "Audio", "kind": "function",
+            "category": "Audio", "category_from": "declaration", "kind": "function",
             "declared_at": { "path": "nodes/mix.py", "line": 7 },
             "inputs": [{ "name": "level", "documentation": "the level",
                          "family": { "family": "channels" }, "annotation": "float",

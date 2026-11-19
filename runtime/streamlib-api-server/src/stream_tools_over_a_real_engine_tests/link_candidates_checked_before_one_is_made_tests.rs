@@ -367,9 +367,8 @@ async fn a_project_node_type_nothing_placed_is_not_checked_and_leaves_the_catalo
     std::fs::write(nodes.join("__init__.py"), "").expect("the nodes package is written");
     std::fs::write(nodes.join("watcher.py"), WATCHER_SOURCE).expect("the node file is written");
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    let catalog_before = the_node_catalog_of(&engine, &stream_id);
     assert!(
-        !catalog_before
+        !the_node_catalog_of(&engine, &stream_id)
             .iter()
             .any(|node_type| node_type == WATCHER_TYPE)
     );
@@ -400,7 +399,14 @@ async fn a_project_node_type_nothing_placed_is_not_checked_and_leaves_the_catalo
             .is_some_and(|why| why.contains("not described yet") && why.contains("`add_node`")),
         "{answer}"
     );
-    assert_eq!(the_node_catalog_of(&engine, &stream_id), catalog_before);
+    // Other tests register built-ins in the one process-wide registry as this one runs, so the
+    // catalog is checked for the type the check could have described, not compared whole.
+    assert!(
+        !the_node_catalog_of(&engine, &stream_id)
+            .iter()
+            .any(|node_type| node_type == WATCHER_TYPE),
+        "the check describes no node type"
+    );
 }
 
 /// A graph interface's or a fragment's node type, as a candidate, is listed under `not_checked`

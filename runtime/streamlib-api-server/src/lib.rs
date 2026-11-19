@@ -7,6 +7,7 @@ mod control_json_rpc_adapter;
 mod control_operation_dispatcher;
 mod control_operations_on_loaded_streams;
 mod control_operations_on_new_projects;
+mod control_operations_on_node_type_groups;
 mod control_operations_on_node_types;
 mod control_operations_on_one_project;
 mod control_operations_on_project_archives;
@@ -35,6 +36,7 @@ mod mcp_resources;
 mod mcp_stdio_upgrade;
 mod mcp_stream_action_resources;
 mod new_node_file_template;
+mod node_type_groups_of_a_project;
 mod notifications_sent_at_most_once_each_interval;
 #[cfg(test)]
 mod project_asset_tools_tests;

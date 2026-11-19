@@ -188,6 +188,7 @@ impl ProjectWithGraphDocuments {
             cover: None,
             created_with_runtime: None,
             dependencies: Vec::new(),
+            node_type_groups: Default::default(),
         };
         std::fs::write(
             project_directory.join(PROJECT_FILE_NAME),
