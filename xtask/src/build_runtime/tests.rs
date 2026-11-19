@@ -296,6 +296,62 @@ fn the_runtime_unit_binaries_replace_what_bin_holds_and_stay_executable() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn the_typescript_compiler_replaces_its_directory_in_bin_with_its_library_files_beside_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = tempfile::TempDir::new().unwrap();
+    let compiler_directory = scratch.path().join("staged");
+    std::fs::create_dir_all(&compiler_directory).unwrap();
+    std::fs::write(compiler_directory.join("tsc"), "new tsc").unwrap();
+    std::fs::set_permissions(
+        compiler_directory.join("tsc"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::write(compiler_directory.join("lib.d.ts"), "/// lib").unwrap();
+    let bin_directory = runtime_unit_binary_directory_in_the_workspace(scratch.path());
+    let placed_compiler =
+        bin_directory.join(RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY);
+    let placed_directory = placed_compiler.parent().unwrap();
+    std::fs::create_dir_all(placed_directory).unwrap();
+    std::fs::write(placed_directory.join("lib.removed.d.ts"), "/// old").unwrap();
+
+    replace_the_typescript_compiler_in(&bin_directory, &compiler_directory).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&placed_compiler).unwrap(),
+        "new tsc"
+    );
+    assert_eq!(
+        std::fs::metadata(&placed_compiler)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    assert!(placed_directory.join("lib.d.ts").is_file());
+    assert!(!placed_directory.join("lib.removed.d.ts").exists());
+}
+
+#[test]
+fn a_staged_directory_without_the_typescript_compiler_is_refused() {
+    let scratch = tempfile::TempDir::new().unwrap();
+    let compiler_directory = scratch.path().join("staged");
+    std::fs::create_dir_all(&compiler_directory).unwrap();
+    std::fs::write(compiler_directory.join("lib.d.ts"), "/// lib").unwrap();
+
+    let refusal = replace_the_typescript_compiler_in(
+        &runtime_unit_binary_directory_in_the_workspace(scratch.path()),
+        &compiler_directory,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(refusal.contains("holds no tsc"), "{refusal}");
+}
+
 #[test]
 fn a_unit_for_the_machine_builds_every_binary_package_without_the_test_root_feature() {
     assert_eq!(

@@ -67,7 +67,8 @@ jobs:
 
       # Stages the Vulkan loader and MoltenVK, builds the release wheel at the
       # deployment target the maturin project pins, lays out its lend, builds
-      # `tatolabd`, `tatolab` and `tatolab-video-poster-frame` into `bin/`. It refuses a lend missing a driver
+      # `tatolabd`, `tatolab` and `tatolab-video-poster-frame` into `bin/` beside uv, oxlint and
+      # `typescript/tsc`. It refuses a lend missing a driver
       # file, and a wheel carrying anything beside `tatolab/runtime/` and its
       # `.dist-info`.
       - name: Build the runtime unit

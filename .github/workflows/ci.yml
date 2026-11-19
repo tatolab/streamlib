@@ -629,6 +629,21 @@ jobs:
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
 
+      # With an empty environment, so no Node and nothing on a PATH: the
+      # compiler checks a file against the library files beside it, and each
+      # program's size in the unit is printed.
+      - name: The runtime unit's TypeScript compiler and linter run with no Node
+        run: |
+          printf 'export const found: boolean = [1, 2].includes(2);\n' > "$RUNNER_TEMP/checked.ts"
+          env -i target/tatolab-runtime/bin/typescript/tsc --ignoreConfig --strict --noEmit --target es2023 "$RUNNER_TEMP/checked.ts"
+          printf 'export const missing: boolean = [1, 2].includes(2);\n' > "$RUNNER_TEMP/unchecked.ts"
+          if env -i target/tatolab-runtime/bin/typescript/tsc --ignoreConfig --strict --noEmit --lib es5 "$RUNNER_TEMP/unchecked.ts"; then
+            echo "tsc took Array.prototype.includes under es5's library files, so it read none" >&2
+            exit 1
+          fi
+          env -i target/tatolab-runtime/bin/oxlint --version
+          du -sh target/tatolab-runtime/bin/typescript target/tatolab-runtime/bin/oxlint
+
       # The wheel's own suite on the unit's own wheel: the casts, a node
       # interpreter's bootstrap and helper process, and the
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
@@ -1136,6 +1151,21 @@ jobs:
           rm -rf target/tatolab-runtime
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
+
+      # With an empty environment, so no Node and nothing on a PATH: the
+      # compiler checks a file against the library files beside it, and each
+      # program's size in the unit is printed.
+      - name: The runtime unit's TypeScript compiler and linter run with no Node
+        run: |
+          printf 'export const found: boolean = [1, 2].includes(2);\n' > "$RUNNER_TEMP/checked.ts"
+          env -i target/tatolab-runtime/bin/typescript/tsc --ignoreConfig --strict --noEmit --target es2023 "$RUNNER_TEMP/checked.ts"
+          printf 'export const missing: boolean = [1, 2].includes(2);\n' > "$RUNNER_TEMP/unchecked.ts"
+          if env -i target/tatolab-runtime/bin/typescript/tsc --ignoreConfig --strict --noEmit --lib es5 "$RUNNER_TEMP/unchecked.ts"; then
+            echo "tsc took Array.prototype.includes under es5's library files, so it read none" >&2
+            exit 1
+          fi
+          env -i target/tatolab-runtime/bin/oxlint --version
+          du -sh target/tatolab-runtime/bin/typescript target/tatolab-runtime/bin/oxlint
 
       # The wheel's own suite on the unit's own wheel: the casts, a node
       # interpreter's bootstrap and helper process, and the
