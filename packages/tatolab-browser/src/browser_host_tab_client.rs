@@ -187,6 +187,18 @@ pub struct BrowserPageCounters {
     pub browser_host_reconnects: AtomicU64,
 }
 
+impl BrowserPageCounters {
+    /// Count one audio input block that reached the page, and whether it held sound.
+    fn count_an_input_audio_block_delivered(&self, carries_sound: bool) {
+        self.page_input_audio_blocks_delivered
+            .fetch_add(1, Ordering::Relaxed);
+        if carries_sound {
+            self.page_input_audio_blocks_with_sound_delivered
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// What the tab's two threads share.
 struct BrowserHostTabOfOneNode {
     config: BrowserPageConfig,
@@ -1319,12 +1331,11 @@ fn deliver_what_one_page_input_holds(
                     {
                         *read_back_rgba_pixels = rgba_pixels;
                     }
-                    count_one_page_input_send(
-                        tab,
-                        input_port_name,
-                        outcome,
-                        &tab.counters.page_input_video_frames_delivered,
-                    );
+                    count_one_page_input_send(tab, input_port_name, outcome, || {
+                        tab.counters
+                            .page_input_video_frames_delivered
+                            .fetch_add(1, Ordering::Relaxed);
+                    });
                 }
                 Err(refusal) => count_a_page_input_chunk_that_did_not_reach_the_page(
                     tab,
@@ -1360,17 +1371,10 @@ fn deliver_what_one_page_input_holds(
                                 interleaved_samples_le_f32: block.interleaved_samples_le_f32,
                             },
                         );
-                        if carries_sound && matches!(outcome, SendToTheBrowserHostOutcome::Sent) {
+                        count_one_page_input_send(tab, input_port_name, outcome, || {
                             tab.counters
-                                .page_input_audio_blocks_with_sound_delivered
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        count_one_page_input_send(
-                            tab,
-                            input_port_name,
-                            outcome,
-                            &tab.counters.page_input_audio_blocks_delivered,
-                        );
+                                .count_an_input_audio_block_delivered(carries_sound)
+                        });
                     }
                     Err(refusal) => count_a_page_input_chunk_that_did_not_reach_the_page(
                         tab,
@@ -1426,12 +1430,10 @@ fn count_one_page_input_send(
     tab: &BrowserHostTabOfOneNode,
     input_port_name: &str,
     outcome: SendToTheBrowserHostOutcome,
-    delivered: &AtomicU64,
+    count_the_delivery: impl FnOnce(),
 ) {
     match outcome {
-        SendToTheBrowserHostOutcome::Sent => {
-            delivered.fetch_add(1, Ordering::Relaxed);
-        }
+        SendToTheBrowserHostOutcome::Sent => count_the_delivery(),
         SendToTheBrowserHostOutcome::RefusedBeforeWriting(refusal) => {
             count_a_page_input_chunk_that_did_not_reach_the_page(tab, input_port_name, &refusal)
         }
@@ -1570,6 +1572,18 @@ mod tests {
             let refusal = refuse_a_config_cef_cannot_render(&broken).expect_err(named);
             assert!(refusal.contains(named), "{refusal}");
         }
+    }
+
+    #[test]
+    fn an_input_audio_block_with_sound_is_counted_as_delivered_and_as_sounding() {
+        let counters = BrowserPageCounters::default();
+        counters.count_an_input_audio_block_delivered(false);
+        counters.count_an_input_audio_block_delivered(true);
+        counters.count_an_input_audio_block_delivered(false);
+        let delivered = &counters.page_input_audio_blocks_delivered;
+        let with_sound = &counters.page_input_audio_blocks_with_sound_delivered;
+        assert_eq!(delivered.load(Ordering::Relaxed), 3);
+        assert_eq!(with_sound.load(Ordering::Relaxed), 1);
     }
 
     #[test]
