@@ -122,3 +122,99 @@ fn a_config_fields_range_reaches_the_value_schema_of_its_setting() {
         Some(json!({ "type": "number", "minimum": 0, "maximum": 1 }))
     );
 }
+
+/// The value schema `describe_node_types` states for the setting `name` of a type whose config
+/// schema is `config_schema`, and a validator built from it.
+fn the_value_schema_of_the_setting(
+    config_schema: serde_json::Value,
+    name: &str,
+) -> (serde_json::Value, jsonschema::Validator) {
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new("Compositor").unwrap(),
+        NodeClassImportPath::new("nodes.compose:Compositor").unwrap(),
+        "",
+    )
+    .with_config_schema(config_schema);
+    let value_json_schema = NodeTypePortsDescribedOnTheWire::of(&descriptor)
+        .inputs
+        .into_iter()
+        .find(|input| input.port.name == name)
+        .expect("the config field is described as a setting")
+        .value_json_schema
+        .expect("every setting states the schema of its value");
+    let validator =
+        jsonschema::validator_for(&value_json_schema).expect("the value schema stands alone");
+    (value_json_schema, validator)
+}
+
+/// A setting no pin type holds exactly, such as a list of layer placements or an integer of no
+/// stated size, states its config field's own schema as the schema of its value.
+///
+/// Mental-revert: taking a setting's value schema from its pin type alone states none for
+/// `layers` and `width`.
+#[test]
+fn a_setting_no_pin_type_holds_states_its_fields_own_schema() {
+    let config_schema = json!({
+        "type": "object",
+        "properties": {
+            "width": { "type": "integer", "minimum": 1, "default": 1920 },
+            "layers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "x": { "type": "integer", "default": 0 },
+                        "opacity": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        },
+        "additionalProperties": false,
+    });
+
+    let (_, layers) = the_value_schema_of_the_setting(config_schema.clone(), "layers");
+    assert!(layers.is_valid(&json!([{ "x": 40, "opacity": 0.5 }])));
+    assert!(!layers.is_valid(&json!([{ "opacity": 2.0 }])));
+    assert!(!layers.is_valid(&json!({ "x": 40 })));
+
+    let (_, width) = the_value_schema_of_the_setting(config_schema, "width");
+    assert!(width.is_valid(&json!(1280)));
+    assert!(!width.is_valid(&json!(0)));
+}
+
+/// A setting whose field refers to the config schema's definitions states a schema that carries
+/// them, so each reference resolves; one that refers to none carries none.
+///
+/// Mental-revert: stating the field's schema without the definitions leaves `#/$defs/Placement`
+/// unresolvable, and no validator builds from it.
+#[test]
+fn a_settings_value_schema_carries_the_definitions_its_field_refers_to() {
+    let config_schema = json!({
+        "type": "object",
+        "$defs": {
+            "Placement": {
+                "type": "object",
+                "properties": { "opacity": { "type": "number", "minimum": 0.0, "maximum": 1.0 } },
+                "required": ["opacity"],
+            },
+        },
+        "properties": {
+            "layers": { "type": "array", "items": { "$ref": "#/$defs/Placement" } },
+            "first": { "$ref": "#/$defs/Placement" },
+            "label": { "type": ["string", "null"] },
+        },
+    });
+
+    let (_, layers) = the_value_schema_of_the_setting(config_schema.clone(), "layers");
+    assert!(layers.is_valid(&json!([{ "opacity": 0.25 }])));
+    assert!(!layers.is_valid(&json!([{ "opacity": 3.0 }])));
+
+    let (_, first) = the_value_schema_of_the_setting(config_schema.clone(), "first");
+    assert!(first.is_valid(&json!({ "opacity": 1.0 })));
+    assert!(!first.is_valid(&json!({})));
+
+    let (label_schema, label) = the_value_schema_of_the_setting(config_schema, "label");
+    assert_eq!(label_schema, json!({ "type": ["string", "null"] }));
+    assert!(label.is_valid(&serde_json::Value::Null));
+}
