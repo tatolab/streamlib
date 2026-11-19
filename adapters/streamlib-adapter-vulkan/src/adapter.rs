@@ -365,14 +365,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .command_buffer_infos(&cmd_infos)
             .build();
 
-        unsafe {
-            self.device
-                .submit_to_queue(queue, &[submit], submit_ctx.fence)
-        }
-        .map_err(|e| AdapterError::BackendRejected {
-            reason: format!("submit_to_queue: {e}"),
-        })?;
-        submit_ctx.the_fence_went_out_with_a_queued_submit();
+        submit_ctx
+            .submit_carrying_the_fence(|fence| unsafe {
+                self.device.submit_to_queue(queue, &[submit], fence)
+            })
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("submit_to_queue: {e}"),
+            })?;
 
         // Block until the GPU has executed the barrier — the next
         // consumer's view assumes the new layout is visible. The wait
@@ -780,7 +779,7 @@ impl AdapterPersistentSubmitContext {
     /// when the prior submit has already drained; after a recording or
     /// submit that failed, nothing is queued and nothing is waited for.
     fn reset_for_recording(&self, device: &vulkanalia::Device) -> Result<(), AdapterError> {
-        if self.the_fence_will_signal.load(Ordering::Acquire) {
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
             unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
                 AdapterError::BackendRejected {
                     reason: format!("wait_for_fences (persistent submit fence): {e}"),
@@ -792,7 +791,7 @@ impl AdapterPersistentSubmitContext {
                 reason: format!("reset_fences (persistent submit fence): {e}"),
             }
         })?;
-        self.the_fence_will_signal.store(false, Ordering::Release);
+        self.the_fence_will_signal.store(false, Ordering::Relaxed);
         unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
             .map_err(|e| AdapterError::BackendRejected {
                 reason: format!("reset_command_pool (persistent submit pool): {e}"),
@@ -800,16 +799,21 @@ impl AdapterPersistentSubmitContext {
         Ok(())
     }
 
-    /// Record that a submit carrying the fence queued, so the next reset
-    /// waits for it.
-    fn the_fence_went_out_with_a_queued_submit(&self) {
-        self.the_fence_will_signal.store(true, Ordering::Release);
+    /// Run `submit` with the fence as its completion signal, and once it
+    /// has queued, have the next reset and the teardown wait for it.
+    fn submit_carrying_the_fence<E>(
+        &self,
+        submit: impl FnOnce(vk::Fence) -> Result<(), E>,
+    ) -> Result<(), E> {
+        submit(self.fence)?;
+        self.the_fence_will_signal.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// Tear down the pool + fence. Waits on the fence first to drain
-    /// any pending GPU work so destruction is safe.
+    /// Tear down the pool and fence, first waiting for a queued submit to
+    /// drain.
     fn destroy(self, device: &vulkanalia::Device) {
-        if self.the_fence_will_signal.load(Ordering::Acquire) {
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
             let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
         }
         unsafe {

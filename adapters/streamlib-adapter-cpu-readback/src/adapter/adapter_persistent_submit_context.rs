@@ -29,7 +29,7 @@ use vulkanalia::vk;
 pub(super) struct AdapterPersistentSubmitContext {
     pool: vk::CommandPool,
     pub(super) cmd: vk::CommandBuffer,
-    pub(super) fence: vk::Fence,
+    fence: vk::Fence,
     /// Whether the fence is signaled or a queued batch will signal it.
     /// False from the reset until a submit carrying the fence queues, so a
     /// recording or submit that failed in between leaves nothing to wait
@@ -94,7 +94,7 @@ impl AdapterPersistentSubmitContext {
         &self,
         device: &vulkanalia::Device,
     ) -> Result<(), AdapterError> {
-        if self.the_fence_will_signal.load(Ordering::Acquire) {
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
             unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
                 AdapterError::BackendRejected {
                     reason: format!("wait_for_fences (persistent submit fence): {e}"),
@@ -106,7 +106,7 @@ impl AdapterPersistentSubmitContext {
                 reason: format!("reset_fences (persistent submit fence): {e}"),
             }
         })?;
-        self.the_fence_will_signal.store(false, Ordering::Release);
+        self.the_fence_will_signal.store(false, Ordering::Relaxed);
         unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
             .map_err(|e| AdapterError::BackendRejected {
                 reason: format!("reset_command_pool (persistent submit pool): {e}"),
@@ -114,18 +114,21 @@ impl AdapterPersistentSubmitContext {
         Ok(())
     }
 
-    /// Record that a submit carrying the fence queued, so the next reset
-    /// waits for it.
-    pub(super) fn the_fence_went_out_with_a_queued_submit(&self) {
-        self.the_fence_will_signal.store(true, Ordering::Release);
+    /// Run `submit` with the fence as its completion signal, and once it
+    /// has queued, have the next reset and the teardown wait for it.
+    pub(super) fn submit_carrying_the_fence<E>(
+        &self,
+        submit: impl FnOnce(vk::Fence) -> Result<(), E>,
+    ) -> Result<(), E> {
+        submit(self.fence)?;
+        self.the_fence_will_signal.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// Tear down the pool + fence. Caller must guarantee the fence is
-    /// signaled (no GPU work pending) — `Drop` paths satisfy this by
-    /// either waiting on the fence first or only destroying after a
-    /// known-completed submit.
+    /// Tear down the pool and fence, first waiting for a queued submit to
+    /// drain.
     pub(super) fn destroy(self, device: &vulkanalia::Device) {
-        if self.the_fence_will_signal.load(Ordering::Acquire) {
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
             let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
         }
         unsafe {

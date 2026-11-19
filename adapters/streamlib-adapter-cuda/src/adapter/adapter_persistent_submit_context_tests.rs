@@ -42,5 +42,4 @@ fn a_reset_whose_submit_never_queued_leaves_the_next_reset_and_teardown_free_to_
         .recv_timeout(A_WAIT_THAT_RETURNS)
         .expect("the next reset or the teardown waited on a fence nothing will signal")
         .expect("the next reset goes ahead");
-    drop(gpu);
 }
