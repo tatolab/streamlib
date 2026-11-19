@@ -52,8 +52,12 @@ mod resource_and_prompt_tests;
 #[derive(Clone)]
 pub(crate) struct ControlPlaneMcpDispatchStubRuntime {
     exported_graph: Arc<Mutex<Value>>,
-    recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
+    pub(crate) recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
     armed_add_node_refusal: crate::control_plane_stub_support::ArmedAddNodeRefusal,
+    armed_refusal_of_each_edit_the_documents_hold_first:
+        crate::control_plane_stub_support::ArmedRefusalOfEachEditTheDocumentsHoldFirst,
+    pub(crate) recorded_edits_held_not_live:
+        crate::control_plane_stub_support::RecordedEditsHeldNotLive,
     add_node_answers_after: Option<Duration>,
 }
 
@@ -63,6 +67,8 @@ impl ControlPlaneMcpDispatchStubRuntime {
             exported_graph: Arc::new(Mutex::new(json!({ "nodes": [], "links": [] }))),
             recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
             armed_add_node_refusal: Arc::new(Mutex::new(None)),
+            armed_refusal_of_each_edit_the_documents_hold_first: Arc::new(Mutex::new(None)),
+            recorded_edits_held_not_live: Arc::new(Mutex::new(Vec::new())),
             add_node_answers_after: None,
         }
     }
@@ -87,6 +93,17 @@ impl ControlPlaneMcpDispatchStubRuntime {
         }
     }
 
+    /// A stub refusing with `refusal` each edit a running stream takes only once the project's
+    /// graph documents hold it, standing in for a running graph that cannot take it.
+    pub(crate) fn refusing_each_edit_the_documents_hold_first(refusal: &str) -> Self {
+        Self {
+            armed_refusal_of_each_edit_the_documents_hold_first: Arc::new(Mutex::new(Some(
+                refusal.to_owned(),
+            ))),
+            ..Self::new()
+        }
+    }
+
     /// A stub whose `add_node` answers only once `answers_after` has
     /// passed, so it is the request still in flight.
     pub(crate) fn with_add_node_answering_after(answers_after: Duration) -> Self {
@@ -101,6 +118,9 @@ impl RuntimeOperations for ControlPlaneMcpDispatchStubRuntime {
     fn to_json_async(&self) -> BoxFuture<'_, Result<Value>> {
         let exported_graph = self.exported_graph.lock().clone();
         Box::pin(async move { Ok(exported_graph) })
+    }
+    fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<Value>> {
+        self.to_json_async()
     }
     crate::control_plane_stub_support::every_reserved_slot_reader_is_unreachable!("tool");
     crate::control_plane_stub_support::graph_mutation_ops_record_the_call!();

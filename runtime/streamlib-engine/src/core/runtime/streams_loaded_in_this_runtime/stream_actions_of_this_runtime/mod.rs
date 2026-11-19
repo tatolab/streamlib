@@ -361,6 +361,19 @@ fn the_graph_document_of_the_stream_at(
     Ok((project_file, stream_document))
 }
 
+/// The graph document of the stream at `location` as its project holds it on disk now, as the
+/// JSON a reconcile of its live graph takes, or why it does not read.
+pub(in crate::core::runtime) fn the_graph_document_json_of_the_stream_at(
+    location: &StreamLocation,
+) -> std::result::Result<serde_json::Value, String> {
+    let (_, stream_document) = the_graph_document_of_the_stream_at(location)?;
+    let bytes = stream_document
+        .bytes
+        .as_ref()
+        .map_err(|why| format!("its graph document does not read: {why}"))?;
+    serde_json::from_slice(bytes).map_err(|why| format!("its graph document is not JSON: {why}"))
+}
+
 /// The name the stream at `location` is shown under, read from its graph document; its
 /// `stream_id` while the document does not read.
 fn the_display_name_of_the_stream_at(location: &StreamLocation, stream_id: &str) -> String {
@@ -809,6 +822,7 @@ mod stream_action_queue;
 mod stream_records;
 mod streams_to_read_or_edit;
 
+pub(in crate::core::runtime) use recorded_stream_reload::the_graph_the_document_of_the_stream_at_holds;
 pub use streams_to_read_or_edit::StreamsToReadOrEdit;
 
 #[cfg(test)]

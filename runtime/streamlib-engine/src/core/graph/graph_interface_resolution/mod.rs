@@ -208,6 +208,7 @@ impl GraphInterfaceNodeAsDrawn {
             inputs_waiting_for_a_value: Vec::new(),
             components,
             fragment: None,
+            live: None,
         }
     }
 }

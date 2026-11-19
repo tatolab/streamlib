@@ -37,7 +37,9 @@ use crate::core::runtime::{
     TeardownProgressNoteOfOneStream,
 };
 use crate::core::{Error, Result};
+use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticOnTheWire;
 
+mod edits_its_document_holds_not_live;
 mod input_values_set_live;
 mod live_graph_edits;
 mod live_input_values_at_load_and_stop;
@@ -144,6 +146,9 @@ pub struct LoadedStreamInThisRuntime {
     display_name: RwLock<String>,
     /// The project and stream asset the stream is.
     stream_location: StreamLocation,
+    /// Each edit its graph document holds that its running graph did not take, as the
+    /// diagnostic at the part it changes, until the stream is brought to its document.
+    edits_its_document_holds_not_live: Mutex<Vec<DiagnosticOnTheWire>>,
 }
 
 /// What a loaded stream is keyed by and shown as: its id, its display name,
@@ -325,6 +330,7 @@ impl LoadedStreamInThisRuntime {
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
             is_held_stopped: AtomicBool::new(false),
+            edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -490,7 +496,23 @@ impl LoadedStreamInThisRuntime {
             .scope_reading(|graph| graph.traversal().v(()).iter().count())
     }
 
+    /// This stream's running graph as drawn, the graph every edit and check reads.
     pub fn to_json(&self) -> Result<serde_json::Value> {
+        serde_json::to_value(self.the_running_graph_rendered())
+            .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+    }
+
+    /// This stream's graph as `graph` answers it: its running graph, or, while its graph
+    /// document holds edits the running graph did not take, the document's graph over it.
+    pub fn the_graph_as_answered(&self) -> Result<serde_json::Value> {
+        let mut graph_response = self.the_running_graph_rendered();
+        self.render_the_document_over_the_live_graph_while_edits_are_not_live(&mut graph_response);
+        serde_json::to_value(graph_response)
+            .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+    }
+
+    /// This stream's running graph, rendered as `graph` answers it.
+    fn the_running_graph_rendered(&self) -> crate::core::json_schema::GraphResponse {
         #[cfg(any(test, feature = "test-support"))]
         crate::core::runtime::graph_renders_and_commits_counted_for_a_test::count_a_graph_render_of(
             self.loaded_stream_identity(),
@@ -542,8 +564,7 @@ impl LoadedStreamInThisRuntime {
             &mut graph_response.nodes,
             value_of_each_graph_input,
         );
-        serde_json::to_value(graph_response)
-            .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+        graph_response
     }
 
     /// Render, under each stateful function node's `function_node_state`

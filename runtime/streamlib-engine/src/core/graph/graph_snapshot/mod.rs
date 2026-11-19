@@ -171,6 +171,7 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "ports",
         "inputs_waiting_for_a_value",
         "components",
+        "live",
     ],
 };
 
@@ -191,6 +192,7 @@ const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "free_conversion",
         "warnings",
         "components",
+        "live",
     ],
 };
 
