@@ -47,9 +47,12 @@ pub use graph_readiness::ObservableGraphReadiness;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
     ALinkConnected, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
+    refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse,
     refuse_a_link_its_pin_types_or_families_refuse,
-    refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit, the_ends_a_link_is_judged_by,
-    the_verdict_of_a_link_between_declared_ports, the_verdict_on_a_link_between_typed_ends,
+    refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
+    refuse_the_names_and_codec_the_links_through_a_convert_node_refuse,
+    the_ends_a_link_is_judged_by, the_verdict_of_a_link_between_declared_ports,
+    the_verdict_on_a_link_between_typed_ends,
 };
 pub(crate) use pin_type_resolution::the_pin_a_port_resolves_to;
 pub(crate) use port_family_link_checks::{

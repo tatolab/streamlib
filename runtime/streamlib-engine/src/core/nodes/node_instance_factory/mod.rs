@@ -448,6 +448,25 @@ impl NodeInstanceFactory {
         )
     }
 
+    /// Register `descriptor`, stating a conversion whose output follows a setting, with
+    /// `constructor`, `pick`, and a config check that takes any config.
+    #[cfg(test)]
+    pub(crate) fn register_a_conversion_picking_for_a_test(
+        &self,
+        descriptor: NodeDescriptor,
+        constructor: DynamicNodeConstructorFn,
+        pick: PinConversionOutputPick,
+    ) -> Result<()> {
+        self.register_with_constructor(
+            descriptor,
+            HostCompiledRustTypeRegistration {
+                constructor,
+                config_taken_check: Box::new(|_, _, _| Ok(())),
+            },
+            Some(pick),
+        )
+    }
+
     /// Record a built-in that left the runtime for a module, so a graph naming
     /// it is refused naming the module's node type and the distribution to
     /// install.

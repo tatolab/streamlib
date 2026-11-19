@@ -411,6 +411,58 @@ async fn a_tensor_to_texture_holding_no_format_is_judged_by_the_format_it_writes
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
+/// A `TensorToTexture` wired into an input that takes only `rgba8_unorm` keeps writing it: a
+/// `set_node_config` choosing `bgra8_unorm` is refused naming the wired link, and the document
+/// and the running node keep the format they held; one keeping `rgba8_unorm` is taken.
+///
+/// Mental-revert: checking a config update only by the families of the links out of the node
+/// takes `bgra8_unorm`, since its output states one Texture whatever it holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tensor_to_texture_config_choosing_a_format_its_wired_link_refuses_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": stream_asset, "as": "by_hand",
+                  "type": "tatolab.stream:TensorToTexture" },
+                { "operation": "connect", "stream": stream_asset,
+                  "source": { "node": "by_hand", "port": "image" },
+                  "target": { "node": MODEL_NODE_UUID, "port": "rgba_video" } },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the node writes rgba8_unorm: {refusal:?}"));
+    let saved_before = project.the_graph_document_of("main");
+    let by_hand = the_inserted_node_in(&saved_before)["id"].clone();
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "set_node_config",
+            json!({ "stream": stream_asset, "node": by_hand,
+                    "config": { "format": "bgra8_unorm" }, "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("the wired input takes only rgba8_unorm");
+    assert!(
+        refusal.runtime_words.contains("rgba_video"),
+        "the refusal names the wired link: {refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "set_node_config",
+            json!({ "stream": stream_asset, "node": by_hand,
+                    "config": { "format": "rgba8_unorm" }, "author": an_agent_named("alice") }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("rgba8_unorm is what the input takes: {refusal:?}"));
+}
+
 /// `check_link` answers `connects_through_convert_node` with the node `connect` would place, its
 /// ports, their types and the settings it would hold, and changes nothing.
 ///

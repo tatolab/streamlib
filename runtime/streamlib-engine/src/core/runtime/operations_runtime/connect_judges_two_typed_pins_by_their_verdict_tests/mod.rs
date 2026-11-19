@@ -27,6 +27,7 @@ use crate::core::graph::{
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, Result};
 
+mod convert_node_held_settings_tests;
 mod node_types_port_tests;
 mod texture_formats_tests;
 
@@ -51,6 +52,10 @@ const TEXTURE_PASSTHROUGH: &str = "VerdictCheckTexturePassthrough";
 const RGBA_TEXTURE_SINK: &str = "VerdictCheckRgbaTextureSink";
 const ANY_TEXTURE_SINK: &str = "VerdictCheckAnyTextureSink";
 const UNTYPED_RGBA_PICTURE_SINK: &str = "VerdictCheckUntypedRgbaPictureSink";
+const DELISLE_SOURCE: &str = "VerdictCheckDelisleSource";
+const DELISLE_TO_NEWTON_NAMING_IMAGE: &str = "VerdictCheckDelisleToNewtonNamingImage";
+const NEWTON_SINK_NEEDING_IMAGE: &str = "VerdictCheckNewtonSinkNeedingImage";
+const NEWTON_SINK_NEEDING_DEPTH: &str = "VerdictCheckNewtonSinkNeedingDepth";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -298,6 +303,41 @@ fn register_the_verdict_fixture_node_types() {
             vec![a_texture_port("video", &[])],
             Vec::new(),
         ));
+        register(a_node_type(
+            class_path(DELISLE_SOURCE),
+            Vec::new(),
+            vec![a_typed_port("temperature", temperature("Delisle"))],
+        ));
+        register_with_a_constructor(
+            a_node_type(
+                NodeClassImportPath::of_built_in_node(DELISLE_TO_NEWTON_NAMING_IMAGE),
+                vec![a_typed_port("delisle", temperature("Delisle"))],
+                vec![PortDescriptor {
+                    family: PortFamilyDeclaration {
+                        names: Some(OutputPortDeclaredNames::Stated(vec!["image".to_owned()])),
+                        ..of_records()
+                    },
+                    ..a_typed_port("newton", temperature("Newton"))
+                }],
+            )
+            .stating_a_conversion(),
+        );
+        for (sink, required) in [
+            (NEWTON_SINK_NEEDING_IMAGE, "image"),
+            (NEWTON_SINK_NEEDING_DEPTH, "depth"),
+        ] {
+            register(a_node_type(
+                class_path(sink),
+                vec![PortDescriptor {
+                    family: PortFamilyDeclaration {
+                        requires: vec![required.to_owned()],
+                        ..of_records()
+                    },
+                    ..a_typed_port("temperature", temperature("Newton"))
+                }],
+                Vec::new(),
+            ));
+        }
         register(
             a_node_type(
                 NodeClassImportPath::of_built_in_node(DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS),
@@ -765,5 +805,49 @@ fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing
         celsius_into_fahrenheit.1,
     )
     .expect_err("connect itself never places a convert node");
+    assert_eq!(the_links_in(&compiler), 0);
+}
+
+/// A link a built-in conversion bridges answers its convert node only when each of the two
+/// links through it carries the names the end it feeds requires, as connect judges each once
+/// the node is made: the conversion's output states `image`, so an input requiring `image` is
+/// fed through it, and one requiring `depth` is refused naming the missing name.
+///
+/// Mental-revert: judging the two links through the convert node by their islands alone answers
+/// the node for the input requiring `depth`, which the transaction's own connect then refuses.
+#[test]
+fn a_convert_node_is_answered_only_when_both_its_links_carry_the_names_required() {
+    register_the_verdict_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let delisle_source = a_node_of(&compiler, class_path(DELISLE_SOURCE));
+    let needing_image = a_node_of(&compiler, class_path(NEWTON_SINK_NEEDING_IMAGE));
+    let needing_depth = a_node_of(&compiler, class_path(NEWTON_SINK_NEEDING_DEPTH));
+
+    let verdict = the_verdict_connect_takes_on_a_link(
+        &compiler,
+        OutputLinkPortRef::new(delisle_source.clone(), "temperature"),
+        InputLinkPortRef::new(needing_image, "temperature"),
+    )
+    .expect("the conversion's output states the `image` the input requires")
+    .expect("two typed ends have a verdict");
+    let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome else {
+        panic!("a built-in conversion bridges the ends: {verdict:?}");
+    };
+    assert_eq!(
+        convert_node.conversion.node_type,
+        NodeClassImportPath::of_built_in_node(DELISLE_TO_NEWTON_NAMING_IMAGE)
+    );
+
+    match the_verdict_connect_takes_on_a_link(
+        &compiler,
+        OutputLinkPortRef::new(delisle_source, "temperature"),
+        InputLinkPortRef::new(needing_depth, "temperature"),
+    ) {
+        Err(Error::InvalidLink(words)) => {
+            assert!(words.contains("requires [\"depth\"]"), "{words}");
+            assert!(words.contains(DELISLE_TO_NEWTON_NAMING_IMAGE), "{words}");
+        }
+        other => panic!("the link out of the convert node lacks `depth`: {other:?}"),
+    }
     assert_eq!(the_links_in(&compiler), 0);
 }
