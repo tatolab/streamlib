@@ -69,7 +69,7 @@ class ReportsTheLevelsItReads:
         for port in ("green", "spot"):
             block = ctx.inputs.read(port)
             if block is not None:
-                self.latest[port] = float(numpy.from_dlpack(block)[0][0])
+                self.latest[port] = float(numpy.from_dlpack(block).reshape(-1)[0])
         if not self.reported and len(self.latest) == 2:
             self.reported = True
             log.info("MARKER:COMBINED_LEVELS_READ " + json.dumps(self.latest))
