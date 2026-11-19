@@ -133,7 +133,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "extension_sdk_not_found" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -4503,8 +4503,8 @@ export interface ProjectCodeCheckResult {
    */
   findings: Array<ProjectCodeCheckFinding>;
   /**
-   * Each file a check finished, with the hash of the bytes it checked. A file a check did
-   * not finish is not listed.
+   * Each file a check finished, once, with the hash of the bytes it checked. A file no check
+   * finished is not listed.
    */
   files_checked: Array<ProjectFileChecked>;
 }
@@ -4541,7 +4541,7 @@ export interface ProjectCodeCheckRun {
  * One check of a project's code. The set grows: a check a client does not know is still
  * answered with its state and its findings.
  */
-export type ProjectCodeCheckKind = "python_node_declarations" | "extension_manifest";
+export type ProjectCodeCheckKind = "python_node_declarations" | "extension_manifest" | "extension_types" | "extension_lint";
 
 /**
  * How one check ended. The set grows: a state a client does not know reads as `not_checked`.
@@ -7580,7 +7580,7 @@ export interface ControlOperations {
   /**
    * Check a project's code on disk without running a stream, answering each finding as data.
    *
-   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Two checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers a built-in type's default control, which only the Studio's own module may register, an `error` coded `default_control_not_the_modules_to_register`, and a `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`; when that listing is refused, the node bodies are not judged and the check answers `not_checked` with the listing's refusal. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
+   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers a built-in type's default control, which only the Studio's own module may register, an `error` coded `default_control_not_the_modules_to_register`, and a `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`; when that listing is refused, the node bodies are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` a `warning` coded `not_written_in_ts`. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
    *
    * Since contract version 3, experimental.
    */
@@ -7843,7 +7843,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 17;
+export declare const CONTROL_CONTRACT_REVISION: 18;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

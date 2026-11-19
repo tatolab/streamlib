@@ -40,6 +40,8 @@ pub(crate) struct EntryRunInTheProjectsInterpreter {
     pub(crate) ran_past_its_bound: bool,
     /// What it wrote on standard output, up to its bound; all of it when it was killed.
     pub(crate) standard_output: Vec<u8>,
+    /// It exited on its own, with a status of success.
+    pub(crate) exited_successfully: bool,
     /// Its exit status as words.
     pub(crate) exit_status_rendered: String,
     /// The tail of its standard error, as a refusal quotes it.
@@ -113,6 +115,8 @@ pub(crate) fn run_an_entry_in_the_projects_interpreter(
         .unwrap_or_default();
     Ok(EntryRunInTheProjectsInterpreter {
         ran_past_its_bound: run_exit == StreamInterpreterExitAwaited::BoundElapsed,
+        exited_successfully: run_exit == StreamInterpreterExitAwaited::Exited
+            && exit_status.is_some_and(|exit_status| exit_status.success()),
         standard_output,
         exit_status_rendered: exit_status
             .map(|exit_status| exit_status.to_string())

@@ -24,6 +24,12 @@ pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_sour
     ImportedProjectPythonSources, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
     list_a_projects_node_types_and_graph_generators_from_source,
 };
+pub use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::{
+    EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE, ExtensionCodeCheck, ExtensionCodeCheckKind,
+    ExtensionCodeCheckRun, ExtensionCodeCheckers, ExtensionCodeCheckersHeld, ExtensionCodeFinding,
+    ExtensionCodeFindingSeverity, ExtensionCodeNotChecked, ExtensionCodeNotCheckedCode,
+    ExtensionFileChecked,
+};
 pub use crate::core::compiler::compiler_ops::python_node_declarations_checked_in_the_projects_interpreter::{
     PYTHON_NODE_DECLARATION_CHECK_ENTRY_MODULE, PythonModuleChecked, PythonNodeDeclarationCheck,
     PythonNodeDeclarationCheckNotFinished, PythonNodeDeclarationFinding,

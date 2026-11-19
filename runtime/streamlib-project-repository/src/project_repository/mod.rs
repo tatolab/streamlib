@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::content_sha256::content_sha256_of;
 use crate::core_project_import::every_import_a_project_resolves;
 use crate::project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, DIRECTORIES_A_PROJECT_SCAN_SKIPS, GRAPH_DOCUMENT_FILE_SUFFIX,
@@ -19,9 +20,8 @@ use crate::project_asset::{
     read_every_asset_sidecar,
 };
 use crate::project_asset_file_bytes::{
-    AssetFileBytesRecorded, PROJECT_UPLOADS_DIRECTORY, content_sha256_of,
-    copy_the_file_into_the_uploads_hashing_it, is_a_sha256_digest,
-    the_bytes_recorded_of_the_file_at, the_upload_file_of,
+    AssetFileBytesRecorded, PROJECT_UPLOADS_DIRECTORY, copy_the_file_into_the_uploads_hashing_it,
+    is_a_sha256_digest, the_bytes_recorded_of_the_file_at, the_upload_file_of,
 };
 use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,

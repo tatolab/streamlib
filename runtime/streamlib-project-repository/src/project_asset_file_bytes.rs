@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::content_sha256::lowercase_hex;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
@@ -98,24 +99,16 @@ fn hash_while_copying(
     })
 }
 
-/// The SHA-256 of `bytes`, lowercase hex, as a sidecar records it.
-pub fn content_sha256_of(bytes: &[u8]) -> String {
-    lowercase_hex(&Sha256::digest(bytes))
-}
-
 /// Whether `content_sha256` reads as a SHA-256 digest: 64 hexadecimal digits, so it names one
 /// upload and no path beside it.
 pub(crate) fn is_a_sha256_digest(content_sha256: &str) -> bool {
     content_sha256.len() == 64 && content_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn lowercase_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content_sha256::content_sha256_of;
 
     #[test]
     fn a_copy_into_the_uploads_holds_the_bytes_and_records_their_sha256_and_length() {

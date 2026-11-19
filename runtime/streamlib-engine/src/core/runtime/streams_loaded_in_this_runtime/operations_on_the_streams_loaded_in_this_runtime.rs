@@ -11,6 +11,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::core::NodeDescriptor;
+use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::ExtensionCodeCheck;
 use crate::core::context::StreamClockReading;
 use crate::core::error::Result;
 use crate::core::nodes::InstalledModuleOfANodeType;
@@ -202,6 +203,13 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         &self,
         history: Arc<dyn crate::core::runtime::ProjectHistoryRecordingFirstPartyPackageMoves>,
     );
+
+    /// [`Runner::check_a_projects_extension_code`].
+    fn check_a_projects_extension_code(
+        &self,
+        project_directory: &Path,
+        paths: Option<&[String]>,
+    ) -> ExtensionCodeCheck;
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
@@ -418,5 +426,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         history: Arc<dyn crate::core::runtime::ProjectHistoryRecordingFirstPartyPackageMoves>,
     ) {
         Runner::record_first_party_package_moves_in(self, history)
+    }
+
+    fn check_a_projects_extension_code(
+        &self,
+        project_directory: &Path,
+        paths: Option<&[String]>,
+    ) -> ExtensionCodeCheck {
+        Runner::check_a_projects_extension_code(self, project_directory, paths)
     }
 }
