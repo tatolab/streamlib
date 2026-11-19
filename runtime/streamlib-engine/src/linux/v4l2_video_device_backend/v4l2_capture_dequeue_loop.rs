@@ -5,11 +5,9 @@
 //! converts it into a pooled pixel buffer, gives the driver its buffer back,
 //! and hands the frame to the node.
 
-use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use v4l::FourCC;
-use v4l::io::traits::CaptureStream;
 
 use crate::core::color::{H273ColorVui, ResolvedColorInfo};
 use crate::core::context::capture_and_playback_devices::captured_video_frame_to_pooled_rgba_conversion_stage::{
@@ -23,10 +21,15 @@ use crate::core::context::{
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{PixelBuffer, PublishedPixelBufferFrameId, SourceLayoutInfo, StorageBuffer};
 
+use super::v4l2_capture_buffer_queue::{
+    NextFilledV4l2Buffer, V4l2DeviceCaptureBufferQueue, requeue_a_read_v4l2_buffer,
+    wait_for_the_next_filled_v4l2_buffer,
+};
+use super::v4l2_driver_buffers_mapped_for_reading::V4l2DriverBuffersMappedForReading;
+
 /// What the dequeue loop reads each frame from, converts it on, and hands it
 /// to.
 pub(super) struct V4l2CaptureDequeueLoopInputs<'a> {
-    pub(super) device_fd: RawFd,
     pub(super) is_capturing: &'a AtomicBool,
     pub(super) hand_off: &'a CapturedVideoFrameHandOff,
     pub(super) camera_name: &'a str,
@@ -37,7 +40,11 @@ pub(super) struct V4l2CaptureDequeueLoopInputs<'a> {
     pub(super) conversion_stage: &'a mut CapturedVideoFrameToPooledRgbaConversionStage,
     pub(super) input_storage_buffers: &'a [OneOffAcquisitionCountedForItsNode<StorageBuffer>],
     pub(super) input_mapped_ptrs: [*mut u8; 2],
-    pub(super) use_dmabuf: bool,
+    /// The driver's buffers, mapped for the MMAP path to copy each frame
+    /// out of; `None` on the DMA-BUF path, which converts straight out of
+    /// the driver's buffers.
+    pub(super) mapped_buffers_the_mmap_path_copies_from:
+        Option<&'a V4l2DriverBuffersMappedForReading>,
     pub(super) dmabuf_imported_buffers: &'a [StorageBuffer],
     pub(super) input_byte_size: usize,
     pub(super) src_layout: SourceLayoutInfo,
@@ -48,12 +55,11 @@ pub(super) struct V4l2CaptureDequeueLoopInputs<'a> {
 /// Dequeue, convert, requeue and deliver frames until the capture stops or
 /// the device fails.
 pub(super) fn run_the_v4l2_dequeue_loop(
-    stream: &mut v4l::io::mmap::Stream,
+    capture_buffer_queue: &mut V4l2DeviceCaptureBufferQueue,
     dequeue_loop_inputs: V4l2CaptureDequeueLoopInputs<'_>,
     record_that_capture_ended_on_its_own: &dyn Fn(String),
 ) {
     let V4l2CaptureDequeueLoopInputs {
-        device_fd,
         is_capturing,
         hand_off,
         camera_name,
@@ -64,7 +70,7 @@ pub(super) fn run_the_v4l2_dequeue_loop(
         conversion_stage,
         input_storage_buffers,
         input_mapped_ptrs,
-        use_dmabuf,
+        mapped_buffers_the_mmap_path_copies_from,
         dmabuf_imported_buffers,
         input_byte_size,
         src_layout,
@@ -72,108 +78,49 @@ pub(super) fn run_the_v4l2_dequeue_loop(
         cached_color,
     } = dequeue_loop_inputs;
 
+    let use_dmabuf = mapped_buffers_the_mmap_path_copies_from.is_none();
     let mut ping_pong_index: usize = 0;
     let mut delivery_tally = CapturedVideoFrameDeliveryTally::default();
 
     while is_capturing.load(Ordering::Acquire) {
-        // ---- Step 1: Acquire frame and select input SSBO ----
-        let mut v4l2_requeue_buf: Option<v4l::v4l_sys::v4l2_buffer> = None;
-        let frame_sequence: u32;
-        let input_ssbo_index: usize;
-        let capture_timestamp_ns: i64;
-
-        if use_dmabuf {
-            unsafe {
-                let mut pollfd = libc::pollfd {
-                    fd: device_fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                let poll_result = libc::poll(&mut pollfd, 1, 1000);
-                if poll_result == 0 {
-                    continue;
-                }
-                if poll_result < 0 {
+        let filled_buffer =
+            match wait_for_the_next_filled_v4l2_buffer(capture_buffer_queue, is_capturing) {
+                NextFilledV4l2Buffer::Filled(filled_buffer) => filled_buffer,
+                NextFilledV4l2Buffer::CaptureStopped => break,
+                NextFilledV4l2Buffer::DeviceFailed(reason) => {
                     if is_capturing.load(Ordering::Acquire) {
-                        let poll_error = std::io::Error::last_os_error();
-                        tracing::error!(camera = camera_name, "V4L2 poll error");
-                        record_that_capture_ended_on_its_own(format!(
-                            "polling the device failed: {poll_error}"
-                        ));
-                    }
-                    break;
-                }
-
-                let mut v4l2_buf: v4l::v4l_sys::v4l2_buffer = std::mem::zeroed();
-                v4l2_buf.type_ = v4l::buffer::Type::VideoCapture as u32;
-                v4l2_buf.memory = v4l::memory::Memory::Mmap as u32;
-
-                if libc::ioctl(
-                    device_fd,
-                    v4l::v4l2::vidioc::VIDIOC_DQBUF as libc::c_ulong,
-                    &mut v4l2_buf,
-                ) != 0
-                {
-                    if is_capturing.load(Ordering::Acquire) {
-                        tracing::error!(camera = camera_name, "DQBUF failed");
-                    }
-                    continue;
-                }
-
-                capture_timestamp_ns = capture_instant_resolver.resolve_capture_timestamp_ns(
-                    v4l2_buffer_capture_stamp(
-                        v4l2_buf.flags,
-                        v4l2_buf.timestamp.tv_sec,
-                        v4l2_buf.timestamp.tv_usec,
-                    ),
-                    MediaClock::now().as_nanos() as i64,
-                );
-                input_ssbo_index = v4l2_buf.index as usize;
-                frame_sequence = v4l2_buf.sequence;
-                v4l2_requeue_buf = Some(v4l2_buf);
-            }
-        } else {
-            // MMAP path: stream.next() issues VIDIOC_QBUF + VIDIOC_STREAMON
-            // on its first call, then blocks on VIDIOC_DQBUF with the poll
-            // timeout applied in start_delivering_to(). Do NOT poll the fd before
-            // stream.next() — strict-conformance drivers (v4l2loopback) only
-            // signal POLLIN after STREAMON, so an earlier poll hangs.
-            let (buf, meta) = match stream.next() {
-                Ok(frame) => frame,
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
-                Err(e) => {
-                    if is_capturing.load(Ordering::Acquire) {
-                        tracing::error!(camera = camera_name, error = %e, "V4L2 stream error");
-                        record_that_capture_ended_on_its_own(format!(
-                            "the device's stream failed: {e}"
-                        ));
+                        tracing::error!(camera = camera_name, %reason, "V4L2 capture failed");
+                        record_that_capture_ended_on_its_own(reason);
                     }
                     break;
                 }
             };
-            if !is_capturing.load(Ordering::Acquire) {
-                break;
+        let capture_timestamp_ns = capture_instant_resolver.resolve_capture_timestamp_ns(
+            v4l2_buffer_capture_stamp(
+                filled_buffer.flags,
+                filled_buffer.timestamp.tv_sec,
+                filled_buffer.timestamp.tv_usec,
+            ),
+            MediaClock::now().as_nanos() as i64,
+        );
+        let frame_sequence = filled_buffer.sequence;
+        let input_ssbo_index = match mapped_buffers_the_mmap_path_copies_from {
+            None => filled_buffer.index as usize,
+            Some(mapped_buffers) => {
+                let frame_bytes = mapped_buffers.bytes_of_a_dequeued_buffer(filled_buffer.index);
+                let copy_len = frame_bytes.len().min(input_byte_size);
+                // SAFETY: each input storage buffer's mapping is at least
+                // `input_byte_size` long, and `copy_len` is no longer.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        frame_bytes.as_ptr(),
+                        input_mapped_ptrs[ping_pong_index],
+                        copy_len,
+                    );
+                }
+                ping_pong_index
             }
-            capture_timestamp_ns = capture_instant_resolver.resolve_capture_timestamp_ns(
-                v4l2_buffer_capture_stamp(
-                    meta.flags.bits(),
-                    meta.timestamp.sec,
-                    meta.timestamp.usec,
-                ),
-                MediaClock::now().as_nanos() as i64,
-            );
-            frame_sequence = meta.sequence;
-            input_ssbo_index = ping_pong_index;
-
-            let copy_len = buf.len().min(input_byte_size);
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    buf.as_ptr(),
-                    input_mapped_ptrs[input_ssbo_index],
-                    copy_len,
-                );
-            }
-        }
+        };
 
         let input_buffer = if use_dmabuf {
             &dmabuf_imported_buffers[input_ssbo_index]
@@ -190,9 +137,9 @@ pub(super) fn run_the_v4l2_dequeue_loop(
         );
 
         // The V4L2 buffer goes back to the driver on success and failure
-        // alike — a skipped requeue starves the DMA-BUF queue after
+        // alike — a skipped requeue starves the queue after
         // V4L2_BUFFER_COUNT drops.
-        requeue_a_v4l2_buffer_to_the_driver(device_fd, v4l2_requeue_buf);
+        requeue_a_read_v4l2_buffer(capture_buffer_queue, camera_name, filled_buffer);
 
         let (published_pixel_buffer_frame_id, pooled_buffer) = match frame_result {
             Ok(frame_surfaces) => frame_surfaces,
@@ -222,30 +169,6 @@ pub(super) fn run_the_v4l2_dequeue_loop(
 
         if !use_dmabuf {
             ping_pong_index = 1 - ping_pong_index;
-        }
-    }
-}
-
-/// Give a dequeued buffer back to the driver, on the DMA-BUF path; the MMAP
-/// path has none to give back.
-fn requeue_a_v4l2_buffer_to_the_driver(device_fd: RawFd, buf: Option<v4l::v4l_sys::v4l2_buffer>) {
-    if let Some(mut v4l2_buf) = buf {
-        let result = unsafe {
-            libc::ioctl(
-                device_fd,
-                v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
-                &mut v4l2_buf,
-            )
-        };
-        if result != 0 {
-            // Each failed requeue permanently removes one buffer from the
-            // driver queue; after V4L2_BUFFER_COUNT of them the DMA-BUF
-            // path starves silently.
-            tracing::error!(
-                buffer_index = v4l2_buf.index,
-                errno = std::io::Error::last_os_error().raw_os_error(),
-                "VIDIOC_QBUF requeue failed — one capture buffer lost"
-            );
         }
     }
 }
