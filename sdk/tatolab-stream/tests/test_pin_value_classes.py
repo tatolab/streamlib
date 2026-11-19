@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Color, a Vector, a Rectangle and a Transform: their fields are their stored form's keys, in the order they pack."""
+"""A Color, a Vector, a Rectangle, a Transform and an Asset: their fields are their stored form's keys, in the order they pack."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from tatolab.stream import Color, Rectangle, Transform, Vector2, Vector3, Vector4
+from tatolab.stream import Asset, Color, Rectangle, Transform, Vector2, Vector3, Vector4
 from tatolab.stream._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 
@@ -97,3 +97,28 @@ def test_a_value_is_frozen() -> None:
 def test_each_value_class_has_its_own_value_type() -> None:
     value_types = [value_class.value_type for value_class in PIN_VALUE_CLASSES]
     assert value_types == ["color", "vector2", "vector3", "vector4", "rectangle", "transform"]
+
+
+ASSET_UUID = "0eaf9ee2-0f73-4154-a3f6-a99c261b850d"
+PROJECT_UUID = "5f0c3b1e-27a4-4bd3-9b51-6f0d5bd0b7a2"
+
+
+def test_an_asset_is_stored_as_the_object_a_saved_document_holds() -> None:
+    assert Asset(ASSET_UUID).stored_value() == {"asset": ASSET_UUID}
+    assert Asset(ASSET_UUID, PROJECT_UUID).stored_value() == {"asset": ASSET_UUID, "from": PROJECT_UUID}
+    assert Asset.from_stored_value({"asset": ASSET_UUID, "from": PROJECT_UUID}) == Asset(
+        ASSET_UUID, PROJECT_UUID
+    )
+
+
+def test_an_asset_holds_its_uuid_in_the_lowercase_hyphenated_form() -> None:
+    assert Asset(ASSET_UUID.upper()).asset == ASSET_UUID
+
+
+@pytest.mark.parametrize(
+    "stored_value",
+    [ASSET_UUID, {"asset": ASSET_UUID, "kind": "image"}, {"from": PROJECT_UUID}, {"asset": "not a uuid"}],
+)
+def test_an_asset_is_built_only_from_exactly_its_stored_form(stored_value: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        Asset.from_stored_value(stored_value)

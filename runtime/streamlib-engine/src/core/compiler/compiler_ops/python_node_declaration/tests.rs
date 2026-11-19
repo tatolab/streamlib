@@ -933,3 +933,21 @@ fn a_typed_pins_default_is_a_stored_value_of_the_type_it_declares() {
         "got {refusal}"
     );
 }
+
+#[test]
+fn a_pin_type_no_port_may_declare_is_refused_naming_the_port() {
+    let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+        "name": "frames", "family": {"family": "records"}, "description": "",
+        "pin_declaration": {
+            "pin_type": {"kind": "is", "pin_type": {
+                "type": "list_of", "element_type": {"type": "list_of", "element_type": {"type": "float"}},
+            }},
+            "flow": "value",
+        },
+        "pin_default": [],
+    }])));
+    assert!(
+        refusal.contains("\"frames\"") && refusal.contains("a List of a List"),
+        "got {refusal}"
+    );
+}

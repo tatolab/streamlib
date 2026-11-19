@@ -11,7 +11,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 use streamlib::sdk::descriptors::{PinType, VectorComponentCount};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
@@ -22,8 +22,10 @@ use streamlib::sdk::iceoryx2::{
 };
 
 use streamlib::sdk::pin_value_packing::{
-    PackedPinValueRef, the_channel_values_a_control_message_carries,
-    the_channel_values_a_pin_type_reads,
+    PackedPinValue, PackedPinValueRef, pack_pin_value,
+    the_channel_values_a_control_message_carries, the_channel_values_a_pin_type_reads,
+    the_records_message_of_a_stored_value, the_stored_value_a_records_message_carries,
+    unpack_pin_value,
 };
 
 use crate::python_bag_conversion::{records_message_dict_of, records_message_payload_of};
@@ -139,11 +141,25 @@ impl FunctionNodeValue {
         Ok(Self::Number(value.extract::<f64>()?))
     }
 
+    /// This output value as the island hands it to the port it feeds: a
+    /// record of a String, a Menu, an Asset or a List, for `stored_value_of`
+    /// its pin type, packed as that type travels.
     fn as_the_island_output_of(
         &self,
         node_id: &str,
         output_index: usize,
+        stored_value_of: Option<&PinType>,
     ) -> Result<FunctionNodeIslandOutputValue> {
+        if let (Self::Record(record), Some(pin_type)) = (self, stored_value_of) {
+            return Python::attach(|python| {
+                the_stored_value_a_record_carries_packed(
+                    record.bind(python),
+                    pin_type,
+                    &format!("function node `{node_id}`'s output {output_index}"),
+                )
+                .map(FunctionNodeIslandOutputValue::Packed)
+            });
+        }
         Ok(match self {
             Self::Number(number) => FunctionNodeIslandOutputValue::ControlValue(vec![*number]),
             Self::Parts(parts) => FunctionNodeIslandOutputValue::ControlValue(parts.clone()),
@@ -283,6 +299,10 @@ enum HowAnInputReadsALinkFromOutsideItsIsland {
     Parts(PinType),
     /// As the dict a Records message carries.
     Record,
+    /// As the record `{"value": <stored JSON form>}` of a value of the pin type, which a
+    /// String, a Menu, an Asset and a List travel as within an island, read off the message its
+    /// type packs as.
+    StoredValue(PinType),
     /// As the message itself, handed on unread: nothing at an evaluation no new
     /// message arrived before.
     MessageHandedOnUnread,
@@ -359,6 +379,51 @@ fn the_parts_a_message_carries(
     })
 }
 
+/// The Records message payload `{"value": <stored JSON form>}` of the value of
+/// `pin_type` `message` carries, read as `pin_type` packs it.
+fn the_record_of_a_stored_value_a_message_carries(
+    message: &MessageReadFromInputPort,
+    pin_type: &PinType,
+    node_id: &str,
+    reader_input_port: &str,
+) -> Result<Vec<u8>> {
+    unpack_pin_value(
+        pin_type,
+        PackedPinValueRef {
+            payload_descriptor: &message.payload_descriptor,
+            payload: message.payload.bytes(),
+        },
+    )
+    .and_then(|stored_value| the_records_message_of_a_stored_value(pin_type, &stored_value))
+    .map(|record| record.payload)
+    .map_err(|refusal| {
+        Error::Runtime(format!(
+            "function node `{node_id}` reads a {pin_type} off the link it reads at \
+             {reader_input_port:?}, and {refusal}"
+        ))
+    })
+}
+
+/// The record `record`, `{"value": <stored JSON form>}` as an island carries a
+/// value of `pin_type`, packed as `pin_type` travels on a link.
+fn the_stored_value_a_record_carries_packed(
+    record: &Bound<'_, PyAny>,
+    pin_type: &PinType,
+    what_it_is: &str,
+) -> Result<PackedPinValue> {
+    let payload = records_message_payload_of(what_it_is, record, &[])
+        .map_err(|refusal| Error::Runtime(refusal.to_string()))?;
+    the_stored_value_a_records_message_carries(
+        pin_type,
+        PackedPinValueRef {
+            payload_descriptor: &DataChannelPayloadDescriptor::records_message(),
+            payload: &payload,
+        },
+    )
+    .and_then(|stored_value| pack_pin_value(pin_type, &stored_value, 0))
+    .map_err(|refusal| Error::Runtime(format!("{what_it_is} is a {pin_type}, and {refusal}")))
+}
+
 /// The number a control message carries: the first sample of its first channel.
 fn the_control_value_a_message_carries(
     message: &MessageReadFromInputPort,
@@ -402,9 +467,10 @@ fn the_newest_message_read_from(
 /// take `None`, and the inputs and outputs that carry a message handed on
 /// unread or may carry nothing.
 ///
-/// Wire contract with the helper bootstrap: a dict of these five keys, the
-/// first `[(input_index, reader_input_port, value_type)]`, the rest input or
-/// output indices.
+/// Wire contract with the helper bootstrap: a dict of these seven keys, the
+/// first `[(input_index, reader_input_port, value_type)]`, the last two
+/// `[(index, pin_type_as_json)]` of each String, Menu, Asset or List input and
+/// output, the rest input or output indices.
 #[derive(Debug, Default, FromPyObject)]
 pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
     #[pyo3(item)]
@@ -417,6 +483,34 @@ pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
     outputs_carrying_an_unread_message: Vec<usize>,
     #[pyo3(item)]
     outputs_that_may_hand_out_nothing: Vec<usize>,
+    #[pyo3(item)]
+    inputs_carrying_a_stored_value: Vec<(usize, String)>,
+    #[pyo3(item)]
+    outputs_carrying_a_stored_value: Vec<(usize, String)>,
+}
+
+impl HowAFunctionNodeCarriesValuesBeyondNumbers {
+    /// The pin type of the String, Menu, Asset or List input `input_index` carries, or of
+    /// output `output_index` when `of_an_output`; `None` for a value of any other type.
+    fn the_pin_type_of_a_stored_value(
+        &self,
+        index: usize,
+        of_an_output: bool,
+    ) -> std::result::Result<Option<PinType>, String> {
+        let carried = if of_an_output {
+            &self.outputs_carrying_a_stored_value
+        } else {
+            &self.inputs_carrying_a_stored_value
+        };
+        carried
+            .iter()
+            .find(|(carried_index, _)| *carried_index == index)
+            .map(|(_, pin_type)| {
+                serde_json::from_str::<PinType>(pin_type)
+                    .map_err(|refusal| format!("the pin type {pin_type} does not read: {refusal}"))
+            })
+            .transpose()
+    }
 }
 
 /// How an island reads values beyond numbers: what each of its nodes carries,
@@ -538,6 +632,25 @@ impl FunctionNodeIslandEvaluation {
                             &function_node.node_id,
                             reader_input_port,
                         )?);
+                        self.values_last_read_off_links_from_outside_islands
+                            .lock()
+                            .insert(reader_input_port.clone(), value_read_last.duplicated());
+                    }
+                    (
+                        Some(message),
+                        HowAnInputReadsALinkFromOutsideItsIsland::StoredValue(pin_type),
+                    ) => {
+                        let record = the_record_of_a_stored_value_a_message_carries(
+                            &message,
+                            pin_type,
+                            &function_node.node_id,
+                            reader_input_port,
+                        )?;
+                        *value_read_last = Python::attach(|python| {
+                            records_message_dict_of(python, reader_input_port, &record)
+                                .map(|record| FunctionNodeValue::Record(record.unbind()))
+                                .map_err(|refusal| Error::Runtime(refusal.to_string()))
+                        })?;
                         self.values_last_read_off_links_from_outside_islands
                             .lock()
                             .insert(reader_input_port.clone(), value_read_last.duplicated());
@@ -909,6 +1022,70 @@ pub(crate) fn read_the_parts_at_an_input_port<'py>(
                 .and_then(|parts| PyTuple::new(python, parts))
         })
         .transpose()
+}
+
+/// The record `{"value": <stored JSON form>}` of the String, Menu, Asset or
+/// List `input_port` holds for this read, a value of `pin_type`, given as JSON,
+/// read off the message that type packs as and checked as a set value is, any
+/// other message refused by name; `None` when no message arrived since the
+/// last read.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, node_id, input_port, pin_type))]
+pub(crate) fn read_the_stored_value_at_an_input_port<'py>(
+    python: Python<'py>,
+    link_data_access: &PythonNodeLinkDataAccess,
+    node_id: &str,
+    input_port: &str,
+    pin_type: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let pin_type = the_pin_type_given_as_json(pin_type)?;
+    link_data_access
+        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
+        .map(|message| {
+            the_record_of_a_stored_value_a_message_carries(&message, &pin_type, node_id, input_port)
+                .map_err(|refusal| PyValueError::new_err(refusal.to_string()))
+                .and_then(|record| records_message_dict_of(python, input_port, &record))
+        })
+        .transpose()
+}
+
+/// Write `record`, `{"value": <stored JSON form>}` of a String, a Menu, an
+/// Asset or a List of `pin_type`, given as JSON, on `output_port` as that type
+/// packs: a Records message, or an Array frame for a List of numbers or values
+/// of parts.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, output_port, pin_type, record))]
+pub(crate) fn write_the_stored_value_on_an_output_port(
+    python: Python<'_>,
+    link_data_access: &PythonNodeLinkDataAccess,
+    output_port: &str,
+    pin_type: &str,
+    record: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let pin_type = the_pin_type_given_as_json(pin_type)?;
+    let PackedPinValue {
+        payload_descriptor,
+        payload,
+    } = the_stored_value_a_record_carries_packed(
+        record,
+        &pin_type,
+        &format!("output {output_port:?}"),
+    )
+    .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+    link_data_access.write_described_by(
+        python,
+        output_port,
+        PyBytes::new(python, &payload).as_any(),
+        None,
+        true,
+        |_| Ok(payload_descriptor),
+    )
+}
+
+fn the_pin_type_given_as_json(pin_type: &str) -> PyResult<PinType> {
+    serde_json::from_str(pin_type).map_err(|refusal| {
+        PyValueError::new_err(format!("the pin type {pin_type} does not read: {refusal}"))
+    })
 }
 
 /// Write `message` on `output_port` exactly as it arrived, its descriptor,

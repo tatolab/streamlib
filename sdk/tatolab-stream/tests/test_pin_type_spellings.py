@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import builtins
 from collections import Counter
+from typing import Literal
 
 import pytest
 
@@ -51,6 +52,16 @@ A_VALUE_OF_EACH_SPELLING: dict[str, object] = {
     "Vector4": tatolab.stream.Vector4(0.0, 0.0, 0.0, 0.0),
     "Rectangle": tatolab.stream.Rectangle(0.0, 0.0, 1.0, 1.0),
     "Transform": tatolab.stream.Transform.identity(),
+    "str": "",
+    "Literal": "sine",
+    "Asset": tatolab.stream.Asset("0eaf9ee2-0f73-4154-a3f6-a99c261b850d"),
+    "list": [0.25, 0.5],
+}
+
+# The type written for each spelling that names a family of types rather than one.
+A_TYPE_OF_EACH_GENERIC_SPELLING: dict[str, object] = {
+    "Literal": Literal["sine", "square"],
+    "list": list[float],
 }
 
 # The exact sizes a single pin refuses: each types only a List or Tensor element.
@@ -63,8 +74,10 @@ WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES = ("Int64", "UInt64")
 def test_each_spelling_the_typed_grammar_reads_resolves_and_names_its_pin_type(
     spelling: PinTypeSpelling,
 ) -> None:
-    written_type = getattr(builtins, spelling.written_form, None) or getattr(
-        tatolab.stream, spelling.written_form
+    written_type = (
+        A_TYPE_OF_EACH_GENERIC_SPELLING.get(spelling.written_form)
+        or getattr(builtins, spelling.written_form, None)
+        or getattr(tatolab.stream, spelling.written_form)
     )
     if spelling.written_form in WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES:
         with pytest.raises(NodeDeclarationRefusal):
