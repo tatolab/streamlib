@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The operation checking a project's code on disk without running a stream: its Python node
-//! declarations and its views' manifests.
+//! declarations, and its views' manifests and node UI manifest.
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use streamlib::sdk::runtime::{
     PythonNodeDeclarationCheck, PythonNodeDeclarationFinding, PythonNodeDeclarationFindingSeverity,
@@ -10,12 +13,14 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_control_contract::CheckProjectCodeRequest;
 use streamlib_project_repository::{
-    ViewManifestsChecked, check_a_projects_view_manifests, is_the_manifest_of_a_projects_own_view,
+    NodeUiManifestToCheck, ViewManifestsChecked, check_a_projects_view_manifests,
+    is_a_projects_own_node_ui_manifest, is_the_manifest_of_a_projects_own_view,
+    the_findings_of_a_node_ui_manifest, the_node_ui_manifest_a_check_reads,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire, ProjectCodeCheckFinding,
-    ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun, ProjectCodeCheckSeverity,
-    ProjectCodeCheckState, ProjectFileChecked, ProjectFilePlaceOnTheWire,
+    ControlOperationRefusalCode, NodeTypeSourceOrigin, ProjectActionRefusalOnTheWire,
+    ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,
+    ProjectCodeCheckSeverity, ProjectCodeCheckState, ProjectFileChecked, ProjectFilePlaceOnTheWire,
 };
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
@@ -31,7 +36,7 @@ impl ControlOperationDispatcher {
         }: CheckProjectCodeRequest,
     ) -> Result<ProjectCodeCheckResult, ControlOperationRefusal> {
         let paths_read = paths.clone();
-        let (project_directory, view_manifests_checked) = self
+        let (project_directory, view_manifests_checked, node_ui_manifest) = self
             .a_project_repository_call_off_the_async_runtime(
                 CHECK_PROJECT_CODE,
                 project_directory,
@@ -42,14 +47,28 @@ impl ControlOperationDispatcher {
                     let project_directory = project_repository.project_directory().to_path_buf();
                     let view_manifests_checked =
                         check_a_projects_view_manifests(&project_directory, paths_read.as_deref())?;
-                    Ok((project_directory, view_manifests_checked))
+                    let node_ui_manifest = the_node_ui_manifest_a_check_reads(
+                        &project_directory,
+                        paths_read.as_deref(),
+                    );
+                    Ok((project_directory, view_manifests_checked, node_ui_manifest))
                 },
             )
             .await?;
+        let node_ui_manifest_checked = match node_ui_manifest {
+            Some(to_check) => Some(
+                self.the_node_ui_manifest_checked(to_check, project_directory.clone())
+                    .await,
+            ),
+            None => None,
+        };
         let module_paths: Option<Vec<String>> = paths.map(|paths| {
             paths
                 .into_iter()
-                .filter(|path| !is_the_manifest_of_a_projects_own_view(path))
+                .filter(|path| {
+                    !is_the_manifest_of_a_projects_own_view(path)
+                        && !is_a_projects_own_node_ui_manifest(path)
+                })
                 .collect()
         });
         let declaration_check = tokio::task::spawn_blocking(move || {
@@ -62,18 +81,75 @@ impl ControlOperationDispatcher {
         Ok(the_answer_of_the_checks(
             declaration_check,
             view_manifests_checked,
+            node_ui_manifest_checked,
         ))
+    }
+
+    /// What the `extension_manifest` check finds in the project's own node UI manifest
+    /// `to_check`: its node bodies judged against the node types the project's own code declares,
+    /// listed only when it registers one.
+    async fn the_node_ui_manifest_checked(
+        &self,
+        to_check: NodeUiManifestToCheck,
+        project_directory: PathBuf,
+    ) -> NodeUiManifestChecked {
+        let node_types_the_project_brings = if to_check.registers_a_node_body() {
+            Some(
+                self.the_node_types_the_project_offers_read_from_source(
+                    CHECK_PROJECT_CODE,
+                    project_directory,
+                )
+                .await
+                .map(|listing| {
+                    listing
+                        .sources
+                        .into_iter()
+                        .filter(|source| source.origin == NodeTypeSourceOrigin::Project)
+                        .flat_map(|source| source.node_types)
+                        .map(|read| read.node_type)
+                        .collect::<BTreeSet<String>>()
+                }),
+            )
+        } else {
+            None
+        };
+        let (node_types, node_bodies_not_judged_because) = match node_types_the_project_brings {
+            Some(Ok(node_types)) => (Some(node_types), None),
+            Some(Err(refused)) => (
+                None,
+                Some(refused.into_the_refusal_on_the_wire(CHECK_PROJECT_CODE)),
+            ),
+            None => (None, None),
+        };
+        NodeUiManifestChecked {
+            findings: the_findings_of_a_node_ui_manifest(&to_check, node_types.as_ref()),
+            file_checked: to_check.file_checked,
+            node_bodies_not_judged_because,
+        }
     }
 }
 
-/// The answer of a `python_node_declarations` run that ended as `declaration_check` did and an
-/// `extension_manifest` run that ended as `view_manifests_checked` did.
+/// What the `extension_manifest` check found in the project's own node UI manifest.
+#[derive(Debug)]
+struct NodeUiManifestChecked {
+    findings: Vec<ProjectCodeCheckFinding>,
+    file_checked: Option<ProjectFileChecked>,
+    /// Why its node bodies were not judged: the refusal of the node type listing they are
+    /// judged against.
+    node_bodies_not_judged_because: Option<ProjectActionRefusalOnTheWire>,
+}
+
+/// The answer of a `python_node_declarations` run that ended as `declaration_check` did, and an
+/// `extension_manifest` run over the views as `view_manifests_checked` and over the node UI
+/// manifest as `node_ui_manifest_checked`, `None` when the project has none or `paths` leaves it
+/// out.
 fn the_answer_of_the_checks(
     declaration_check: PythonNodeDeclarationCheck,
     view_manifests_checked: ViewManifestsChecked,
+    node_ui_manifest_checked: Option<NodeUiManifestChecked>,
 ) -> ProjectCodeCheckResult {
     let ViewManifestsChecked {
-        run: view_manifests_run,
+        run: mut extension_manifest_run,
         findings: view_manifest_findings,
         files_checked: view_manifests_read,
     } = view_manifests_checked;
@@ -81,8 +157,27 @@ fn the_answer_of_the_checks(
         the_run_of_the_declaration_check(declaration_check);
     findings.extend(view_manifest_findings);
     files_checked.extend(view_manifests_read);
+    if let Some(NodeUiManifestChecked {
+        findings: node_ui_manifest_findings,
+        file_checked,
+        node_bodies_not_judged_because,
+    }) = node_ui_manifest_checked
+    {
+        if node_ui_manifest_findings
+            .iter()
+            .any(|finding| finding.severity == ProjectCodeCheckSeverity::Error)
+        {
+            extension_manifest_run.state = ProjectCodeCheckState::Failed;
+        }
+        if let Some(refusal) = node_bodies_not_judged_because {
+            extension_manifest_run.state = ProjectCodeCheckState::NotChecked;
+            extension_manifest_run.not_checked_because = Some(refusal);
+        }
+        findings.extend(node_ui_manifest_findings);
+        files_checked.extend(file_checked);
+    }
     ProjectCodeCheckResult::of(
-        vec![declarations_run, view_manifests_run],
+        vec![declarations_run, extension_manifest_run],
         findings,
         files_checked,
     )

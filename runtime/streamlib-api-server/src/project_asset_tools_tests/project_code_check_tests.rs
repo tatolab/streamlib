@@ -192,3 +192,131 @@ async fn a_path_that_is_no_file_of_the_project_is_refused_naming_it() {
         Some("nodes/missing.py".to_owned())
     );
 }
+
+#[tokio::test]
+async fn a_node_ui_manifest_that_registers_floats_default_control_fails_the_check_naming_the_entry()
+{
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    the_projects_interpreter_prints(
+        &served.project_directory(),
+        &[r#"{"modules":[],"checked_with":["tatolab-stream 1.0"]}"#],
+    );
+    let node_ui_folder = served.project_directory().join("node_ui");
+    std::fs::create_dir_all(&node_ui_folder).unwrap();
+    std::fs::write(
+        node_ui_folder.join("tatolab_node_ui.json"),
+        r#"{"contract": "1.1", "controls": [
+            {"type": "float", "control": "knob", "script": "knob.ts"},
+            {"type": "float", "script": "float_number.ts"}]}"#,
+    )
+    .unwrap();
+
+    let checked = served.answered("check_project_code", json!({})).await;
+
+    assert_eq!(checked["verdict"], "failed", "{checked}");
+    assert_eq!(
+        checked["checks"][1],
+        json!({ "check": "extension_manifest", "state": "failed" })
+    );
+    let [finding] = checked["findings"].as_array().unwrap().as_slice() else {
+        panic!("one finding: {checked}");
+    };
+    assert_eq!(
+        finding["finding_code"],
+        "default_control_not_the_modules_to_register"
+    );
+    assert_eq!(finding["severity"], "error");
+    assert_eq!(finding["path"], "node_ui/tatolab_node_ui.json");
+    let words = finding["words"].as_str().unwrap();
+    assert!(
+        words.contains("`controls[1]`")
+            && words.contains("`float`")
+            && words.contains("only the Studio's own module may register it"),
+        "{words}"
+    );
+    assert_eq!(
+        checked["files_checked"][0]["path"],
+        "node_ui/tatolab_node_ui.json"
+    );
+}
+
+#[tokio::test]
+async fn a_node_body_whose_node_types_do_not_list_is_not_judged_and_the_check_is_not_finished() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    the_projects_interpreter_prints(
+        &served.project_directory(),
+        &[r#"{"modules":[],"checked_with":["tatolab-stream 1.0"]}"#],
+    );
+    let node_ui_folder = served.project_directory().join("node_ui");
+    std::fs::create_dir_all(&node_ui_folder).unwrap();
+    std::fs::write(
+        node_ui_folder.join("tatolab_node_ui.json"),
+        r#"{"contract": "1.1",
+            "node_bodies": [{"node_type": "crossfade:Crossfade", "script": "crossfade.ts"}]}"#,
+    )
+    .unwrap();
+
+    let checked = served
+        .answered(
+            "check_project_code",
+            json!({ "paths": ["node_ui/tatolab_node_ui.json"] }),
+        )
+        .await;
+
+    assert_eq!(checked["verdict"], "not_fully_checked", "{checked}");
+    let run = &checked["checks"][1];
+    assert_eq!(run["check"], "extension_manifest");
+    assert_eq!(run["state"], "not_checked");
+    assert!(
+        run["not_checked_because"]["runtime_words"].is_string(),
+        "{run}"
+    );
+    assert_eq!(checked["findings"], json!([]), "{checked}");
+}
+
+#[tokio::test]
+async fn a_node_body_for_a_node_type_the_projects_own_code_does_not_declare_fails_the_check() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let interpreter = served.project_directory().join(".venv/bin/python");
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    std::fs::write(
+        &interpreter,
+        r#"#!/bin/sh
+cat > /dev/null
+case "$*" in
+  *_project_node_type_listing_entry*) printf '%s\n' '{"sources":[{"source":"project","node_types":[{"type":"crossfade:Crossfade","kind":"process","description":"","category":null,"inputs":[],"outputs":[],"path":"crossfade.py","line":3}],"graph_generators":[],"unreadable_modules":[]}]}' ;;
+  *) printf '%s\n' '{"modules":[],"checked_with":["tatolab-stream 1.0"]}' ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let node_ui_folder = served.project_directory().join("node_ui");
+    std::fs::create_dir_all(&node_ui_folder).unwrap();
+    std::fs::write(
+        node_ui_folder.join("tatolab_node_ui.json"),
+        r#"{"contract": "1.1", "node_bodies": [
+            {"node_type": "crossfade:Crossfade", "script": "crossfade.ts"},
+            {"node_type": "elsewhere:Mixer", "script": "mixer.ts"}]}"#,
+    )
+    .unwrap();
+
+    let checked = served.answered("check_project_code", json!({})).await;
+
+    assert_eq!(checked["verdict"], "failed", "{checked}");
+    let [finding] = checked["findings"].as_array().unwrap().as_slice() else {
+        panic!("one finding: {checked}");
+    };
+    assert_eq!(
+        finding["finding_code"],
+        "node_body_not_the_modules_to_register"
+    );
+    assert_eq!(finding["node_type"], "elsewhere:Mixer");
+    assert!(
+        finding["words"]
+            .as_str()
+            .unwrap()
+            .contains("`node_bodies[1]`"),
+        "{finding}"
+    );
+}

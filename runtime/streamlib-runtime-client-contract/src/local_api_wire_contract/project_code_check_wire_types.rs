@@ -80,7 +80,9 @@ pub enum ProjectCodeCheckKind {
     PythonNodeDeclarations,
     /// Each `tatolab_view.json` of the project's own views, read as the runtime reads it when
     /// the view opens: each one that does not open, and each port still declared by the older
-    /// `family` field, with the `pin_type` to write.
+    /// `family` field, with the `pin_type` to write. And the project's own
+    /// `node_ui/tatolab_node_ui.json`: one that does not read, and each entry that registers what
+    /// only another module may.
     ExtensionManifest,
 }
 

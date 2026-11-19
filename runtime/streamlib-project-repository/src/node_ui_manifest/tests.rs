@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use serde_json::json;
+use streamlib_node_schema::pin_type::BuiltInPinTypeName;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    NodeUiManifestControl, NodeUiManifestNodeBody,
+};
 
 use super::*;
 

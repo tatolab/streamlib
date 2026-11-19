@@ -302,6 +302,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("list_project_views", params, callOptions);
   }
 
+  list_project_node_ui_elements(params, callOptions) {
+    return this.call("list_project_node_ui_elements", params, callOptions);
+  }
+
   write_studio_view_output(params, callOptions) {
     return this.call("write_studio_view_output", params, callOptions);
   }
