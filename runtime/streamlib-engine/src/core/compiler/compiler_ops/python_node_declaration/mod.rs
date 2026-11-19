@@ -5,9 +5,9 @@ use super::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
-    NodeClassShortName, NodeDescriptor, NodeKind, NodeRuntime, NodeScheduling, PinDeclaration,
-    PortDescriptor, PortFamilyDeclaration, PortFamilyDeclarationDirection,
-    refuse_audio_window_beside_a_skipping_delivery_profile,
+    NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, NodeRuntime, NodeScheduling,
+    NodeValueLifetime, PinDeclaration, PortDescriptor, PortFamilyDeclaration,
+    PortFamilyDeclarationDirection, refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
@@ -36,6 +36,8 @@ const DESCRIBED_SHADER_SOURCE_KEY: &str = "shader_source";
 const DESCRIBED_SHADER_SIGNATURE_KEY: &str = "shader_signature";
 const DESCRIBED_CONVERSION_KEY: &str = "conversion";
 const DESCRIBED_PIN_DECLARATION_KEY: &str = "pin_declaration";
+const DESCRIBED_INPUT_MODE_KEY: &str = "input_mode";
+const DESCRIBED_LIFETIME_KEY: &str = "lifetime";
 
 /// Everything the engine needs to register one Python node type and run its
 /// nodes.
@@ -441,6 +443,20 @@ fn read_port_descriptors(
             let pin_default = read_pin_default(pin_default, &port, direction)?;
             port = port.with_pin_default(pin_default);
         }
+        if let Some(input_mode) = declaration
+            .get(DESCRIBED_INPUT_MODE_KEY)
+            .filter(|declared| !declared.is_null())
+        {
+            let input_mode = read_input_mode(input_mode, &port, direction)?;
+            port = port.with_input_mode(input_mode);
+        }
+        if let Some(lifetime) = declaration
+            .get(DESCRIBED_LIFETIME_KEY)
+            .filter(|declared| !declared.is_null())
+        {
+            let lifetime = read_value_lifetime(lifetime, &port, direction)?;
+            port = port.with_lifetime(lifetime);
+        }
         if matches!(direction, PortDirection::Input)
             && port.delivery_profile.is_none()
             && port.declared_pin().is_none()
@@ -493,6 +509,56 @@ fn read_pin_declaration(
         ));
     }
     Ok(pin_declaration)
+}
+
+/// Read how a typed input takes its value, as its author states it: a value input, which declares
+/// its pin, may take only a wire or be a setting; an output takes no mode.
+fn read_input_mode(
+    input_mode: &serde_json::Value,
+    port: &PortDescriptor,
+    direction: PortDirection,
+) -> std::result::Result<NodeInputMode, String> {
+    if matches!(direction, PortDirection::Output) {
+        return Err(format!(
+            "output port {:?} declares an {DESCRIBED_INPUT_MODE_KEY}, and only an input takes a \
+             wire or a value",
+            port.name
+        ));
+    }
+    if port.declared_pin().is_none() {
+        return Err(format!(
+            "input port {:?} declares an {DESCRIBED_INPUT_MODE_KEY} and no pin type; only a typed \
+             input states how it takes its value",
+            port.name
+        ));
+    }
+    serde_json::from_value::<NodeInputMode>(input_mode.clone()).map_err(|refusal| {
+        format!(
+            "input port {:?}: {DESCRIBED_INPUT_MODE_KEY} {refusal}",
+            port.name
+        )
+    })
+}
+
+/// Read how long a typed input's value lasts, as its author states it; an output holds no value.
+fn read_value_lifetime(
+    lifetime: &serde_json::Value,
+    port: &PortDescriptor,
+    direction: PortDirection,
+) -> std::result::Result<NodeValueLifetime, String> {
+    if matches!(direction, PortDirection::Output) || port.declared_pin().is_none() {
+        return Err(format!(
+            "port {:?} declares a {DESCRIBED_LIFETIME_KEY}, and only a typed input holds a value \
+             that lasts",
+            port.name
+        ));
+    }
+    serde_json::from_value::<NodeValueLifetime>(lifetime.clone()).map_err(|refusal| {
+        format!(
+            "input port {:?}: {DESCRIBED_LIFETIME_KEY} {refusal}",
+            port.name
+        )
+    })
 }
 
 /// Read the value an input port reads while nothing is linked into it: on a port whose author
@@ -786,3 +852,5 @@ mod ports_typed_by_a_signature;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typed_input_mode_and_lifetime_tests;

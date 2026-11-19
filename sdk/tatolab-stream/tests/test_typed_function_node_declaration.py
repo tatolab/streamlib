@@ -312,10 +312,6 @@ def Configured(x: float = 0.0, config: Smoothed = Smoothed()) -> float:
     return x
 
 
-class Mixer:
-    pass
-
-
 def test_a_value_input_with_no_default_is_refused_with_its_fix() -> None:
     refusal = refusal_of(Blur)
     assert refusal.finding_code == "value_input_has_no_default"
@@ -397,11 +393,6 @@ def test_several_outputs_a_bundle_and_a_config_are_refused_until_they_are_read()
 def test_a_refusal_is_a_type_error_so_a_load_reports_it_as_one() -> None:
     with pytest.raises(TypeError):
         node(Blur)
-
-
-def test_bare_node_on_a_class_is_refused_pointing_at_the_class_grammar() -> None:
-    with pytest.raises(TypeError, match="`@node.process`"):
-        node(Mixer)  # pyright: ignore[reportArgumentType]
 
 
 @node

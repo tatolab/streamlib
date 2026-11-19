@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The `@node.process` grammar — execution mode and ports, declared in code.
+"""The `@node` grammar of every node kind, and the `@node.process` grammar of a class's execution mode and ports.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
 a working node. `@node.process` validates the declaration and stamps it on the class as
@@ -28,6 +28,7 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
+from ._class_node_declaration import read_class_node_ports
 from ._function_node_declaration import FunctionNode, declare_function_node
 from ._node_meta_declaration import (
     hold_node_meta_for_the_kind_decorator,
@@ -282,6 +283,14 @@ def _audio_window_declaration(
 
 
 NodeClassUnderDeclaration = TypeVar("NodeClassUnderDeclaration", bound=type)
+
+# What a class node's keyword arguments are when none is written.
+_CLASS_NODE_KEYWORD_DEFAULTS: "dict[str, Any]" = {
+    "execution": None,
+    "interval_ms": 0,
+    "scheduling": None,
+    "paced_by_real_time": False,
+}
 _NodeUnderDeclaration = TypeVar("_NodeUnderDeclaration")
 
 
@@ -291,44 +300,93 @@ class NodeDeclarationDecorator:
     __slots__ = ()
 
     @overload
+    def __call__(self, node: NodeClassUnderDeclaration, /) -> NodeClassUnderDeclaration: ...
+
+    @overload
     def __call__(
-        self, node_function: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]", /
+        self, node: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]", /
     ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
 
     @overload
-    def __call__(self, node_function: None = None, /, **keyword_arguments: object) -> NoReturn: ...
+    def __call__(
+        self,
+        node: None = None,
+        /,
+        *,
+        execution: Optional[str] = None,
+        interval_ms: int = 0,
+        scheduling: Optional[str] = None,
+        paced_by_real_time: bool = False,
+    ) -> "Callable[[NodeClassUnderDeclaration], NodeClassUnderDeclaration]": ...
 
     def __call__(
-        self, node_function: "Optional[Callable[..., Any]]" = None, /, **keyword_arguments: object
-    ) -> "FunctionNode[..., Any]":
-        """Declare a function as a function node whose pins each state their pin type.
+        self,
+        node: "Optional[type | Callable[..., Any]]" = None,
+        /,
+        *,
+        execution: Optional[str] = None,
+        interval_ms: int = 0,
+        scheduling: Optional[str] = None,
+        paced_by_real_time: bool = False,
+    ) -> Any:
+        """Declare a function or a class as a node whose pins each state their pin type.
 
-        Each plain parameter is an input, `Annotated[float, NumberRange(minimum=0.0,
-        maximum=1.0), NumberUnit("Hz"), PinMeaning("frequency")] = 440.0`: its type is the
-        pin type, the objects beside it are what the pin states besides, and its default is
-        the value the input holds until one is set or linked. `T | None = None` is an input
-        that may be unset and reads `None`. The return annotation is the output `result`.
-        `Time`, `State[...]` and `Stateful[...]` are read as under `@node.function`, and what
-        describes the node is `@node.meta`. A mistake is refused at decoration as a
+        On a function, each plain parameter is an input, `Annotated[float,
+        NumberRange(minimum=0.0, maximum=1.0), NumberUnit("Hz"), PinMeaning("frequency")] =
+        440.0`: its type is the pin type, the objects beside it are what the pin states
+        besides, and its default is the value the input holds until one is set or linked.
+        `T | None = None` is an input that may be unset and reads `None`. The return
+        annotation is the output `result`. `Time`, `State[...]` and `Stateful[...]` are read
+        as under `@node.function`. A function takes `@node` bare.
+
+        On a class, each value input is an annotated field with its default, `radius: float =
+        4.0`, each Stream or Trigger input `video: InputPin[Texture]`, and each output
+        `result: OutputPin[Texture]`. `SettingOnly()` beside a field's type makes it a setting
+        read at setup, `WireOnly()` one that takes only a wire, and `InputValueLifetime(...)`
+        states how long its value lasts; `StreamDelivery(...)` inside an `InputPin` states how
+        it reads its messages. `__init__` takes no parameters, and state the node keeps is
+        `_private` or a `ClassVar`. A class takes `@node` bare or with `execution`,
+        `interval_ms`, `scheduling` and `paced_by_real_time`, as `@node.process` does.
+
+        What describes the node is `@node.meta`. A mistake is refused at decoration as a
         `NodeDeclarationRefusal`, and a pin type the runtime does not carry yet is refused by
-        name. A class keeps `@node.process` until class nodes read pin types.
+        name.
         """
-        if node_function is None or keyword_arguments:
-            raise TypeError(
-                "bare `@node` takes the function it declares and no arguments. A class with "
-                "`setup()` / `process()` and ports is `@node.process`, bare or with its "
-                "keyword arguments (`execution`, `interval_ms`, `scheduling`, "
-                "`paced_by_real_time`)."
+        class_keywords = {
+            "execution": execution,
+            "interval_ms": interval_ms,
+            "scheduling": scheduling,
+            "paced_by_real_time": paced_by_real_time,
+        }
+
+        def apply_to_class(class_under_decoration: NodeClassUnderDeclaration) -> NodeClassUnderDeclaration:
+            if not isinstance(class_under_decoration, type):
+                raise TypeError(
+                    f"`@node(...)` with keyword arguments declares a class node, and "
+                    f"{getattr(class_under_decoration, '__name__', class_under_decoration)!r} is "
+                    f"not a class. A function takes `@node` bare."
+                )
+            input_ports, output_ports = read_class_node_ports(class_under_decoration)
+            return _stamp_a_class_node(
+                class_under_decoration,
+                input_ports=input_ports,
+                output_ports=output_ports,
+                config_class=None,
+                **class_keywords,  # pyright: ignore[reportArgumentType]
             )
-        if isinstance(node_function, type):
+
+        if node is None:
+            return apply_to_class
+        if isinstance(node, type):
+            return apply_to_class(node)
+        if class_keywords != _CLASS_NODE_KEYWORD_DEFAULTS:
             raise TypeError(
-                f"bare `@node` declares a function node, and {node_function.__name__} is a "
-                f"class. A class with `setup()` / `process()` and ports is `@node.process`, "
-                f"bare or with its keyword arguments (`execution`, `interval_ms`, "
-                f"`scheduling`, `paced_by_real_time`)."
+                "`execution`, `interval_ms`, `scheduling` and `paced_by_real_time` declare how a "
+                "class node runs, and a function node runs inside the read of each node it "
+                "feeds. A function takes `@node` bare."
             )
         return declare_function_node(
-            node_function,
+            node,
             declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
             reads_pin_types=True,
         )
@@ -522,7 +580,7 @@ class NodeDeclarationDecorator:
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports, `@node.shader` for a Slang function over Images. `@node.meta` declares what describes it."""
+"""Declares a node by its kind: bare `@node` for a function or a class whose pins each state their pin type, `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports, `@node.shader` for a Slang function over Images. `@node.meta` declares what describes it."""
 
 
 def _declare_node(
@@ -533,9 +591,33 @@ def _declare_node(
     scheduling: Optional[str],
     paced_by_real_time: bool,
 ) -> NodeClassUnderDeclaration:
-    declared_meta = take_node_meta_held_for_the_kind_decorator(node_class)
     input_ports, output_ports = _collect_declared_ports(node_class)
-    config_class = _config_class_named_by_the_init_annotation(node_class)
+    return _stamp_a_class_node(
+        node_class,
+        input_ports=input_ports,
+        output_ports=output_ports,
+        config_class=_config_class_named_by_the_init_annotation(node_class),
+        execution=execution,
+        interval_ms=interval_ms,
+        scheduling=scheduling,
+        paced_by_real_time=paced_by_real_time,
+    )
+
+
+def _stamp_a_class_node(
+    node_class: NodeClassUnderDeclaration,
+    *,
+    input_ports: "list[dict[str, Any]]",
+    output_ports: "list[dict[str, Any]]",
+    config_class: "Optional[type]",
+    execution: Optional[str],
+    interval_ms: int,
+    scheduling: Optional[str],
+    paced_by_real_time: bool,
+) -> NodeClassUnderDeclaration:
+    """Stamp `node_class` as a class node of `input_ports` and `output_ports`, which runs in a
+    process of its own, under whichever grammar read its ports."""
+    declared_meta = take_node_meta_held_for_the_kind_decorator(node_class)
 
     setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)
     setattr(node_class, NODE_DECLARATION_KIND_STAMP, PROCESS_NODE_KIND)

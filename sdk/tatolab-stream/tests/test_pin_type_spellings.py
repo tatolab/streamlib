@@ -28,8 +28,12 @@ def test_the_spellings_are_exactly_the_written_forms_of_the_contracts_rows() -> 
 
 
 SPELLINGS_THE_TYPED_GRAMMAR_READS = [
-    spelling for spelling in PIN_TYPE_SPELLINGS if spelling.not_read_yet_because is None
+    spelling
+    for spelling in PIN_TYPE_SPELLINGS
+    if spelling.not_read_yet_because is None and not spelling.only_a_pin_carries
 ]
+
+SPELLINGS_ONLY_A_PIN_CARRIES = [spelling for spelling in PIN_TYPE_SPELLINGS if spelling.only_a_pin_carries]
 
 # A value of each spelling the typed grammar reads, for an input's default.
 A_VALUE_OF_EACH_SPELLING: dict[str, object] = {
@@ -107,6 +111,28 @@ def test_every_spelling_the_typed_grammar_reads_has_a_value_here() -> None:
     assert sorted(A_VALUE_OF_EACH_SPELLING) == sorted(
         spelling.written_form for spelling in SPELLINGS_THE_TYPED_GRAMMAR_READS
     )
+
+
+@pytest.mark.parametrize(
+    "spelling", SPELLINGS_ONLY_A_PIN_CARRIES, ids=lambda spelling: spelling.written_form
+)
+def test_each_spelling_only_a_pin_carries_names_its_pin_type_on_a_pin_and_is_refused_as_a_value(
+    spelling: PinTypeSpelling,
+) -> None:
+    written_type = getattr(tatolab.stream, spelling.written_form)
+
+    declared = read_pin_declaration("Probe", "value", written_type, direction="input", form="pin")
+    with pytest.raises(NodeDeclarationRefusal) as as_a_field:
+        read_pin_declaration("Probe", "value", written_type, direction="input", form="field")
+    with pytest.raises(NodeDeclarationRefusal) as as_a_parameter:
+        read_pin_declaration("Probe", "value", written_type, direction="input")
+
+    declared_pin_type = declared.declaration["pin_type"]
+    assert declared_pin_type["kind"] == "is"
+    assert declared_pin_type["pin_type"]["type"] == spelling.pin_type_name
+    assert as_a_field.value.finding_code == "field_typed_as_a_stream"
+    assert f"InputPin[{spelling.written_form}]" in str(as_a_field.value)
+    assert as_a_parameter.value.finding_code == "pin_type_not_read_yet"
 
 
 def test_each_value_class_declares_the_pin_type_its_contract_row_names() -> None:

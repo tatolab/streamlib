@@ -25,10 +25,15 @@ from ._contract_pin_types import (
     PinAnnotationName,
     PinAnnotations,
     PinDeclarationOnTheWire,
+    PinFlow,
     PinType,
     PinTypeDescription,
 )
 from ._description import Description
+from ._input_declaration_annotations import (
+    INPUT_DECLARATION_ANNOTATION_CLASSES,
+    StreamDelivery,
+)
 from ._number_range import NumberRange
 from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
 from ._pin_types import (
@@ -36,6 +41,7 @@ from ._pin_types import (
     INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS,
     PIN_TYPE_SPELLINGS,
     PIN_VALUE_CLASSES,
+    STREAM_PIN_TYPE_CLASSES,
     ExactNumberSize,
     Asset,
     PinValueOfParts,
@@ -48,11 +54,19 @@ __all__ = [
     "NodeDeclarationFindingCode",
     "NodeDeclarationRefusal",
     "PinDirection",
+    "PinForm",
+    "family_a_pin_travels_on",
+    "family_declaration_of_a_typed_output",
     "read_pin_declaration",
 ]
 
 type PinDirection = Literal["input", "output"]
 """Which side of its node a pin sits on."""
+
+type PinForm = Literal["function", "field", "pin"]
+"""How a pin is written: `function`, a function or shader node's parameter or return, which
+holds a value; `field`, a class node's annotated field, a value input; `pin`, a class node's
+`InputPin[...]` or `OutputPin[...]`, which streams or fires."""
 
 type NodeDeclarationFindingCode = Literal[
     "pin_has_no_type",
@@ -70,6 +84,13 @@ type NodeDeclarationFindingCode = Literal[
     "pin_default_outside_its_range",
     "parameter_not_a_pin",
     "return_not_read_yet",
+    "field_typed_as_a_stream",
+    "pin_flow_not_taken",
+    "attribute_not_a_pin",
+    "pin_has_a_value",
+    "init_takes_parameters",
+    "class_takes_a_config",
+    "class_declares_a_retired_port",
 ]
 """What a refused declaration got wrong, as the declaration check's finding names it."""
 
@@ -121,7 +142,8 @@ class DeclaredPin:
 
     default_value: object
     """An input's default in its stored JSON form, `None` for an input that may be unset, and
-    `NO_DEFAULT` on an output."""
+    `NO_DEFAULT` on an output and on a class node's `InputPin`, which reads what its wire
+    carries."""
 
 
 _PIN_TYPE_DESCRIPTION_BY_NAME: Final[dict[BuiltInPinTypeName, PinTypeDescription]] = {
@@ -158,24 +180,28 @@ def read_pin_declaration(
     *,
     default: object = NO_DEFAULT,
     direction: PinDirection,
+    form: PinForm = "function",
 ) -> DeclaredPin:
     """Read the pin `pin_name` of the node `node` from its annotation and default.
 
     `annotation` is the pin's whole annotation, `Annotated[...]` and `T | None` included, with
-    any `Description` still on it. `default` is `NO_DEFAULT` for an input that states none and
-    always for an output.
+    any `Description` still on it; for a class node's pin, the type inside `InputPin[...]` or
+    `OutputPin[...]`. `default` is `NO_DEFAULT` for an input that states none and always for an
+    output and a pin. `form` is how the pin is written, which decides its flow and the types
+    it takes.
     """
-    reading = _PinReading(node, pin_name, direction)
+    reading = _PinReading(node, pin_name, direction, form)
     return reading.read(annotation, default)
 
 
 class _PinReading:
     """One pin's annotation and default, read once."""
 
-    def __init__(self, node: str, pin_name: str, direction: PinDirection) -> None:
+    def __init__(self, node: str, pin_name: str, direction: PinDirection, form: PinForm) -> None:
         self._node = node
         self._pin_name = pin_name
         self._direction = direction
+        self._form = form
 
     @property
     def _pin_named(self) -> str:
@@ -194,7 +220,7 @@ class _PinReading:
         annotations = self._annotations_among(metadata, row)
         declaration: PinDeclarationOnTheWire = {
             "pin_type": {"kind": "is", "pin_type": pin_type},
-            "flow": row.flows[0],
+            "flow": self._flow_of(row),
         }
         if annotations:
             declaration["annotations"] = annotations
@@ -202,8 +228,27 @@ class _PinReading:
             return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
         if optional:
             declaration["may_be_unset"] = True
+        if self._form == "pin":
+            return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
         default_value = self._default_value(default, pin_type, row, annotations, optional)
         return DeclaredPin(declaration, optional=optional, default_value=default_value)
+
+    def _flow_of(self, row: PinTypeDescription) -> PinFlow:
+        """How the pin reads its messages: a field's value, an `InputPin`'s stream or event, else
+        its type's first flow."""
+        if self._form == "function" or self._direction == "output":
+            return row.flows[0]
+        if self._form == "field":
+            return "value"
+        flow: PinFlow = "trigger" if row.flows == ("trigger",) else "stream"
+        if flow not in row.flows:
+            raise self._refusal(
+                f"{self._pin_named} is an `InputPin` of a {row.label}, which does not stream. "
+                f"To fix: declare it as a field with its default, "
+                f"`{self._pin_name}: {row.python_forms[0]} = ...`.",
+                "pin_flow_not_taken",
+            )
+        return flow
 
     def _written_type_metadata_and_optional(
         self, annotation: object
@@ -248,6 +293,8 @@ class _PinReading:
         written_form = self._written_form_of(written_type, exact_size)
         spelling = pin_type_spelling_written_as(written_form)
         row = _PIN_TYPE_DESCRIPTION_BY_NAME[spelling.pin_type_name]
+        if spelling.only_a_pin_carries and (self._form != "pin" or as_an_element):
+            raise self._refusal_of_a_type_only_a_pin_carries(row, as_an_element=as_an_element)
         if spelling.not_read_yet_because is not None:
             typed_as = (
                 f"{_name_of(written_type)}, a dataclass, so"
@@ -279,6 +326,32 @@ class _PinReading:
         if exact_size.size in INTEGER_BOUNDS_OF_EACH_SIZE:
             return {"type": "integer", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
         return {"type": "float", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
+
+    def _refusal_of_a_type_only_a_pin_carries(
+        self, row: PinTypeDescription, *, as_an_element: bool
+    ) -> NodeDeclarationRefusal:
+        if as_an_element:
+            return self._refusal(
+                f"{self._pin_named} is a List of {row.label}, which holds no stored value, and a "
+                f"List element is a small type, {_written_forms_a_list_element_takes()}. To fix: "
+                f"type its elements as one of them.",
+                "list_element_not_taken",
+            )
+        if self._form == "field":
+            return self._refusal(
+                f"{self._pin_named} is a field typed `{row.python_forms[0]}`, a {row.label}, "
+                f"which holds no stored value, so only a pin carries it. To fix: "
+                f"`{self._pin_name}: InputPin[{row.python_forms[0]}]`.",
+                "field_typed_as_a_stream",
+            )
+        return self._refusal(
+            f"{self._pin_named} is typed `{row.python_forms[0]}`, a {row.label}, which a "
+            f"function under bare `@node` does not take: it holds no stored value, so only a "
+            f"class node's pin carries it. To fix: keep this node on `@node.function`, or "
+            f"declare a class node with "
+            f"`{self._pin_name}: InputPin[{row.python_forms[0]}]`.",
+            "pin_type_not_read_yet",
+        )
 
     def _menu_pin_type_of(self, written_type: object) -> PinType:
         option_names = typing.get_args(written_type)
@@ -359,20 +432,31 @@ class _PinReading:
             return "Literal"
         if written_type is list or typing.get_origin(written_type) is list:
             return "list"
-        if _is_a_value_class_of_parts(written_type) or written_type is Asset:
-            return written_type.__name__
+        if (
+            _is_a_value_class_of_parts(written_type)
+            or written_type is Asset
+            or written_type in STREAM_PIN_TYPE_CLASSES
+        ):
+            return written_type.__name__  # pyright: ignore[reportAttributeAccessIssue]
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
         )
         if typed_spelling is not None and getattr(written_type, "__module__", "").startswith(
             "tatolab.stream"
         ):
+            if self._form == "function":
+                raise self._refusal(
+                    f"{self._pin_named} is typed {_name_of(written_type)}, a read type of a "
+                    f"port family, and a pin under bare `@node` is typed by its pin type, "
+                    f"`{typed_spelling}`, which a function does not take yet. To fix: keep "
+                    f"this node on `@node.function` until it does.",
+                    "pin_type_not_read_yet",
+                )
             raise self._refusal(
                 f"{self._pin_named} is typed {_name_of(written_type)}, a read type of a port "
-                f"family, and a pin under bare `@node` is typed by its pin type, "
-                f"`{typed_spelling}`, which the typed grammar does not read yet. To fix: keep "
-                f"this node on `@node.function` until it does.",
-                "pin_type_not_read_yet",
+                f"family, and a class node's pin is typed by its pin type. To fix: type it "
+                f"`{typed_spelling}`.",
+                "pin_type_unknown",
             )
         if isinstance(written_type, type) and dataclasses.is_dataclass(written_type):
             return "dataclass"
@@ -396,6 +480,8 @@ class _PinReading:
         for entry in metadata:
             if isinstance(entry, (ExactNumberSize, Description)):
                 continue
+            if isinstance(entry, INPUT_DECLARATION_ANNOTATION_CLASSES):
+                raise self._refusal_of_an_input_declaration_annotation(entry)
             annotation_name = _ANNOTATION_NAME_OF_EACH_CLASS.get(type(entry))
             if annotation_name is None:
                 raise self._refusal(
@@ -419,6 +505,19 @@ class _PinReading:
                 )
             annotations[annotation_name] = _annotation_on_the_wire(entry)
         return annotations
+
+    def _refusal_of_an_input_declaration_annotation(self, entry: object) -> NodeDeclarationRefusal:
+        """The refusal of `entry`, an annotation saying how a class node's input is served, on a
+        pin that does not take it."""
+        if isinstance(entry, StreamDelivery):
+            takes_it = "a class node's Stream input takes, inside `InputPin[Annotated[T, ...]]`"
+        else:
+            takes_it = "a class node's field takes"
+        return self._refusal(
+            f"{self._pin_named} carries `{entry!r}`, which only {takes_it}. To fix: drop it, or "
+            f"declare the input that way.",
+            "pin_annotation_not_taken",
+        )
 
     def _default_value(
         self,
@@ -596,6 +695,7 @@ def _spellings_read_today() -> str:
         f"`{spelling.written_form}`"
         for spelling in PIN_TYPE_SPELLINGS
         if spelling.not_read_yet_because is None
+        and not spelling.only_a_pin_carries
         and spelling.written_form not in _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES
     ]
     return ", ".join(read_today)
@@ -609,3 +709,57 @@ def _name_of(annotation: object) -> str:
     if isinstance(annotation, type):
         return f"`{annotation.__name__}`"
     return f"`{annotation!r}`"
+
+
+def family_a_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
+    """The port family whose message a typed pin's value travels as.
+
+    A number, a Boolean and a value of parts travel as a control message on Channels, and a
+    List of them as an Array frame; a String, a Menu, an Asset, a Trigger and any other List as
+    a Records message. A Texture travels as an Image frame, Audio as a Channels block, a Tensor
+    as an Array frame and encoded media as Packets.
+    """
+    pin_type = _the_one_pin_type_declared(declaration)
+    if pin_type["type"] == "list_of":
+        return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
+    if pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE:
+        return "channels"
+    return _FAMILY_OF_EACH_STREAM_PIN_TYPE.get(pin_type["type"], "records")
+
+
+def family_declaration_of_a_typed_output(port_name: str, declaration: PinDeclarationOnTheWire) -> dict[str, Any]:
+    """The family declaration of the output `port_name` a typed pin declares: a value on Channels
+    names one channel per part, or the port itself for a number, each a 64-bit float."""
+    family = family_a_pin_travels_on(declaration)
+    family_declaration: dict[str, Any] = {"family": family}
+    pin_type = _the_one_pin_type_declared(declaration)
+    if family == "channels" and pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE:
+        value_class = next(
+            (value_class for value_class in PIN_VALUE_CLASSES if value_class.pin_type == pin_type),
+            None,
+        )
+        channel_names = [port_name] if value_class is None else list(value_class.part_names())
+        family_declaration.update({"names": {"stated": channel_names}, "dtype": "f64"})
+    return family_declaration
+
+
+def _the_one_pin_type_declared(declaration: PinDeclarationOnTheWire) -> PinType:
+    declared_pin_type = declaration["pin_type"]
+    assert declared_pin_type["kind"] == "is", "a typed pin declares exactly one type"
+    return declared_pin_type["pin_type"]
+
+
+# The pin types whose value travels as a control message, its parts one on each channel.
+_TYPES_OF_A_CONTROL_MESSAGE: Final[frozenset[str]] = frozenset(
+    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
+)
+
+# The family each pin type that holds no stored value travels on.
+_FAMILY_OF_EACH_STREAM_PIN_TYPE: Final[dict[str, str]] = {
+    "texture": "image",
+    "audio": "channels",
+    "tensor": "array",
+    "encoded_video": "packets",
+    "encoded_audio": "packets",
+    "trigger": "records",
+}

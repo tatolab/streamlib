@@ -4,7 +4,7 @@
 """Read the node types and graph generators a module declares from its source, never running it.
 
 A module is parsed with `ast` and its decorators are matched against the names it imports
-from `tatolab.stream`: `@node.process` classes, `@node.function`, bare `@node` and
+from `tatolab.stream`: `@node.process` and bare `@node` classes, `@node.function`, bare `@node` and
 `@node.shader` functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
 node's `@node.meta` beside its kind decorator. A
 port is listed where the declaration states it in source; one whose family is computed at
@@ -63,6 +63,21 @@ _PORT_FAMILY_BY_ANNOTATED_TYPE = {
     "ArrayFrame": "array",
     "ChannelsBlock": "channels",
     "PacketsUnit": "packets",
+    "Texture": "image",
+    "Audio": "channels",
+    "Tensor": "array",
+    "EncodedVideo": "packets",
+    "EncodedAudio": "packets",
+    "Trigger": "records",
+    "str": "records",
+    "Asset": "records",
+    "Literal": "records",
+    "Color": "channels",
+    "Vector2": "channels",
+    "Vector3": "channels",
+    "Vector4": "channels",
+    "Rectangle": "channels",
+    "Transform": "channels",
 }
 
 _NODE_META_KEYS = ("category", "description")
@@ -72,6 +87,9 @@ _FUNCTION_NODE_NON_PIN_ANNOTATIONS = ("Time", "State")
 _FUNCTION_NODE_CONFIG_PARAMETER = "config"
 _STATEFUL_RETURN = "Stateful"
 _OPTIONAL_ANNOTATION = "Optional"
+_INPUT_PIN_ANNOTATION = "InputPin"
+_OUTPUT_PIN_ANNOTATION = "OutputPin"
+_CLASS_VARIABLE_ANNOTATION = "ClassVar"
 _ANNOTATED_ANNOTATION = "Annotated"
 _UNREAD_MESSAGE_ANNOTATION = "UnreadMessage"
 _SINGLE_OUTPUT_PORT_NAME = "result"
@@ -177,6 +195,8 @@ class _ModuleDeclarationReading:
                 qualname = f"{qualname_prefix}{statement.name}"
                 if self._decorated_with(statement, PROCESS_NODE_DECORATOR) is not None:
                     self.node_types.append(self._process_node_type(statement, qualname))
+                elif self._decorated_with(statement, TYPED_NODE_DECORATOR) is not None:
+                    self.node_types.append(self._typed_class_node_type(statement, qualname))
                 self._read_statements(
                     statement.body, qualname_prefix=f"{qualname}.", at_module_scope=False
                 )
@@ -249,6 +269,35 @@ class _ModuleDeclarationReading:
             declaration=node_class,
             inputs=inputs,
             outputs=outputs,
+        )
+
+    def _typed_class_node_type(self, node_class: ast.ClassDef, qualname: str) -> dict[str, Any]:
+        """A class under bare `@node`: each public annotated attribute a field, an `InputPin`
+        or an `OutputPin`, in the order written; `_private` and `ClassVar` ones are state."""
+        inputs: list[dict[str, Any]] = []
+        outputs: list[dict[str, Any]] = []
+        for statement in node_class.body:
+            if not isinstance(statement, ast.AnnAssign) or not isinstance(statement.target, ast.Name):
+                continue
+            attribute_name = statement.target.id
+            pin_form, type_annotation = _class_node_pin_form_and_its_type(statement.annotation)
+            if attribute_name.startswith("_") or pin_form == _CLASS_VARIABLE_ANNOTATION:
+                continue
+            port: dict[str, Any] = {
+                "name": _port_name_as_cast(attribute_name),
+                "family": _function_port_family(type_annotation),
+                "description": self._described_text_of(statement.annotation)
+                or self._described_text_of(type_annotation),
+                "annotation": ast.unparse(statement.annotation),
+            }
+            if pin_form == _OUTPUT_PIN_ANNOTATION:
+                outputs.append(port)
+                continue
+            if pin_form is None and statement.value is not None:
+                port.update(_default_as_listed(statement.value, literal_key="pin_default"))
+            inputs.append(port)
+        return self._node_type(
+            qualname, "process", declaration=node_class, inputs=inputs, outputs=outputs
         )
 
     def _declared_port(self, attribute_name: str, port_declaration: ast.Call) -> dict[str, Any]:
@@ -593,3 +642,23 @@ def _function_port_family(annotation: Optional[ast.expr]) -> Optional[str]:
     if type_name is None:
         return None
     return _PORT_FAMILY_BY_ANNOTATED_TYPE.get(type_name)
+
+
+def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:
+    """The form a class node's attribute annotation writes, `InputPin`, `OutputPin` or `ClassVar`,
+    and the type inside it; `None` and the annotation itself for a field."""
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            return _class_node_pin_form_and_its_type(ast.parse(annotation.value, mode="eval").body)
+        except SyntaxError:
+            return None, annotation
+    written = annotation
+    if isinstance(written, ast.Subscript) and _annotated_type_name(written) == _ANNOTATED_ANNOTATION:
+        arguments = _subscript_arguments(written)
+        if arguments:
+            written = arguments[0]
+    form = _annotated_type_name(written)
+    if form in (_INPUT_PIN_ANNOTATION, _OUTPUT_PIN_ANNOTATION, _CLASS_VARIABLE_ANNOTATION):
+        arguments = _subscript_arguments(written) if isinstance(written, ast.Subscript) else []
+        return form, arguments[0] if arguments else written
+    return None, annotation

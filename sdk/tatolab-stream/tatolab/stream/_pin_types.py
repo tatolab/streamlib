@@ -12,7 +12,9 @@ The exact sizes are `Annotated` aliases of `int` and `float`, so a value of one 
 number in Python. A Color, a Vector, a Rectangle and a Transform are frozen value classes whose
 fields are the keys of the type's stored JSON form, in the order the type packs its parts on a
 link. An Asset is a frozen value class of the asset's UUID and, for an asset of an import, that
-import's project UUID.
+import's project UUID. A Texture, an Audio, a Tensor, an Encoded video, an Encoded audio and a
+Trigger hold no stored value: each is a class that only names its type, which a class node's
+`InputPin[...]` or `OutputPin[...]` carries.
 """
 
 from __future__ import annotations
@@ -29,11 +31,18 @@ from ._contract_pin_types import BuiltInPinTypeName, FloatSize, IntegerSize, Pin
 __all__ = [
     "PIN_TYPE_SPELLINGS",
     "PIN_VALUE_CLASSES",
+    "STREAM_PIN_TYPE_CLASSES",
     "Asset",
+    "Audio",
     "Color",
+    "EncodedAudio",
+    "EncodedVideo",
     "PinValueOfParts",
     "Rectangle",
+    "Tensor",
+    "Texture",
     "Transform",
+    "Trigger",
     "Vector2",
     "Vector3",
     "Vector4",
@@ -404,6 +413,71 @@ def _a_uuid(value: object, field: str) -> str:
         raise ValueError(f"Asset.{field} is a UUID, and was given {value!r}") from None
 
 
+class _StreamPinType:
+    """A pin type that holds no stored value, named in an annotation and never constructed."""
+
+    __slots__ = ()
+
+    def __init__(self) -> None:
+        raise TypeError(
+            f"`{type(self).__name__}` names a pin type and holds no value, so it is never "
+            f"constructed. Write it as a class node's pin, `InputPin[{type(self).__name__}]`."
+        )
+
+
+@final
+class Texture(_StreamPinType):
+    """A GPU picture, in one of the pixel formats it states."""
+
+    __slots__ = ()
+
+
+@final
+class Audio(_StreamPinType):
+    """A stream of audio samples."""
+
+    __slots__ = ()
+
+
+@final
+class Tensor(_StreamPinType):
+    """An array of numbers with a shape."""
+
+    __slots__ = ()
+
+
+@final
+class EncodedVideo(_StreamPinType):
+    """Encoded video, one access unit per message."""
+
+    __slots__ = ()
+
+
+@final
+class EncodedAudio(_StreamPinType):
+    """Encoded audio, one packet per message."""
+
+    __slots__ = ()
+
+
+@final
+class Trigger(_StreamPinType):
+    """An event with no payload; its message's timestamp is the event."""
+
+    __slots__ = ()
+
+
+STREAM_PIN_TYPE_CLASSES: Final[tuple[type, ...]] = (
+    Texture,
+    Audio,
+    Tensor,
+    EncodedVideo,
+    EncodedAudio,
+    Trigger,
+)
+"""Each class that names a pin type holding no stored value, which only a pin carries."""
+
+
 PIN_VALUE_CLASSES: Final[tuple[type[PinValueOfParts], ...]] = (
     Color,
     Vector2,
@@ -429,15 +503,14 @@ class PinTypeSpelling:
     """Why the typed grammar does not read it yet, as the end of a sentence that begins
     "it is not read yet because"; `None` when it is read."""
 
+    only_a_pin_carries: bool = False
+    """Whether it holds no stored value, so a class node's `InputPin[...]` or `OutputPin[...]`
+    carries it and no field or function parameter does."""
 
-_STREAM_TYPE_NOT_SPELLED = (
-    "a function under bare `@node` does not take a stream type yet; `@node.function` takes "
-    "it by its read type"
-)
+
 _BUNDLE_NOT_CARRIED = "a bundle pin is not carried yet"
 _NAMED_TYPE_NOT_CARRIED = "a named pin type is not carried yet"
 _SETTING_TYPE_NOT_TAKEN = "a function node takes no setting yet"
-_TRIGGER_NOT_CARRIED = "a function under bare `@node` does not take a Trigger yet"
 
 PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("bool", "boolean"),
@@ -461,13 +534,13 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("Vector4", "vector"),
     PinTypeSpelling("Rectangle", "rectangle"),
     PinTypeSpelling("Transform", "transform"),
-    PinTypeSpelling("Texture", "texture", _STREAM_TYPE_NOT_SPELLED),
-    PinTypeSpelling("Audio", "audio", _STREAM_TYPE_NOT_SPELLED),
-    PinTypeSpelling("EncodedVideo", "encoded_video", _STREAM_TYPE_NOT_SPELLED),
-    PinTypeSpelling("EncodedAudio", "encoded_audio", _STREAM_TYPE_NOT_SPELLED),
-    PinTypeSpelling("Tensor", "tensor", _STREAM_TYPE_NOT_SPELLED),
+    PinTypeSpelling("Texture", "texture", only_a_pin_carries=True),
+    PinTypeSpelling("Audio", "audio", only_a_pin_carries=True),
+    PinTypeSpelling("EncodedVideo", "encoded_video", only_a_pin_carries=True),
+    PinTypeSpelling("EncodedAudio", "encoded_audio", only_a_pin_carries=True),
+    PinTypeSpelling("Tensor", "tensor", only_a_pin_carries=True),
     PinTypeSpelling("Asset", "asset"),
-    PinTypeSpelling("Trigger", "trigger", _TRIGGER_NOT_CARRIED),
+    PinTypeSpelling("Trigger", "trigger", only_a_pin_carries=True),
     PinTypeSpelling("list", "list_of"),
     PinTypeSpelling("dataclass", "bundle", _BUNDLE_NOT_CARRIED),
     PinTypeSpelling("named_pin_type", "named", _NAMED_TYPE_NOT_CARRIED),

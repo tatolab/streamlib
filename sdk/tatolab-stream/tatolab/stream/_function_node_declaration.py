@@ -39,7 +39,13 @@ from ._node_config_schema import (
     json_schema_for_a_node_declaring_no_config,
 )
 from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
-from ._pin_declaration import NO_DEFAULT, NodeDeclarationRefusal, read_pin_declaration
+from ._pin_declaration import (
+    NO_DEFAULT,
+    NodeDeclarationRefusal,
+    family_a_pin_travels_on,
+    family_declaration_of_a_typed_output,
+    read_pin_declaration,
+)
 from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 __all__ = [
@@ -455,7 +461,7 @@ class _FunctionNodeSignatureReading:
             {
                 "name": port_name,
                 "description": port_description,
-                "family": {"family": _family_a_pin_travels_on(declared.declaration)},
+                "family": {"family": family_a_pin_travels_on(declared.declaration)},
                 "pin_declaration": declared.declaration,
                 "pin_default": declared.default_value,
             }
@@ -625,16 +631,10 @@ class _FunctionNodeSignatureReading:
         declared = read_pin_declaration(
             self._function_name, _SINGLE_OUTPUT_NAME, output_annotation, direction="output"
         )
-        value_class = _the_value_class_of_parts_a_pin_declares(declared.declaration)
-        family = _family_a_pin_travels_on(declared.declaration)
-        family_declaration: "dict[str, Any]" = {"family": family}
-        if family == "channels":
-            channel_names = [port_name] if value_class is None else list(value_class.part_names())
-            family_declaration.update({"names": {"stated": channel_names}, "dtype": "f64"})
         output_port = {
             "name": port_name,
             "description": port_description or "",
-            "family": family_declaration,
+            "family": family_declaration_of_a_typed_output(port_name, declared.declaration),
             "pin_declaration": declared.declaration,
         }
         signature_output = {
@@ -728,24 +728,6 @@ def _the_pin_type_a_pin_declares(declaration: PinDeclarationOnTheWire) -> "dict[
     declared_pin_type = declaration["pin_type"]
     assert declared_pin_type["kind"] == "is", "a function node's pin is exactly one type"
     return dict(declared_pin_type["pin_type"])
-
-
-def _family_a_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
-    """The port family whose message a typed pin's value travels as.
-
-    A number, a Boolean and a value of parts travel as a control message on Channels; a List of
-    them as an Array frame; a String, a Menu, an Asset and any other List as a Records message.
-    """
-    pin_type = _the_pin_type_a_pin_declares(declaration)
-    if pin_type["type"] == "list_of":
-        return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
-    return "channels" if pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
-
-
-# The pin types whose value travels as a control message, its parts one on each channel.
-_TYPES_OF_A_CONTROL_MESSAGE = frozenset(
-    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
-)
 
 
 def _signature_value_type_of(declaration: PinDeclarationOnTheWire) -> str:
