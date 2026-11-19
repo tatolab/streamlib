@@ -54,7 +54,6 @@
 1 no-inline-test-module packages/test-fixtures/src/test_fixture_node_configs.rs
 1 no-inline-test-module runtime/streamlib-api-server/src/asset_media_facts_reads.rs
 1 no-inline-test-module runtime/streamlib-api-server/src/first_party_package_moves_recorded_in_the_open_projects.rs
-2 no-inline-test-module runtime/streamlib-api-server/src/handlers.rs
 1 no-inline-test-module runtime/streamlib-api-server/src/local_api_socket.rs
 1 no-inline-test-module runtime/streamlib-api-server/src/loopback_http_listener.rs
 1 no-inline-test-module runtime/streamlib-api-server/src/mcp_project_change_feed.rs
