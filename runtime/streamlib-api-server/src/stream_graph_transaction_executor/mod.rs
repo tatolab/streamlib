@@ -163,8 +163,9 @@ enum WhyALinkIsJudgedByNodeTypes {
 }
 
 /// Refuse `link`, drawn at `level_as_drawn`, before anything is written, as the stream's own
-/// level refuses a link made live, when its two typed ends, judged by the node types of that
-/// level as the running stream `stream_operations` resolves them, do not connect as they are:
+/// level refuses a link made live, when its two typed ends, judged by the ports the node types
+/// of that level state as the running stream `stream_operations` resolves them, and not by the
+/// settings any of those nodes holds, do not connect as they are:
 /// one only a convert node bridges, which `connect` does not place there `because`, and any
 /// their pin types refuse. A link either end of which is untyped, or no node of the level, is
 /// left to the stream to judge as it takes the edit.

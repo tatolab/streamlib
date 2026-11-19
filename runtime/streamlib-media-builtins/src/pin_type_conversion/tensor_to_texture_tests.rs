@@ -171,3 +171,36 @@ fn the_format_picked_for_an_input_is_the_first_it_takes_that_one_tensor_holds() 
     assert_eq!(picked_for(&texture_of(&[TexturePixelFormat::Nv12])), None);
     assert_eq!(picked_for(&PinType::Tensor {}), None);
 }
+
+/// A `TensorToTexture` writes a Texture of the `format` it holds, or of `rgba8_unorm` when it
+/// holds none; a `format` no one tensor holds, or one that is no name, gives no type.
+///
+/// Mental-revert: reading the output as it states itself, a Texture of no format, gives that
+/// whatever the node holds.
+#[test]
+fn the_texture_written_is_of_the_format_the_node_holds() {
+    use streamlib::sdk::descriptors::{PinType, TexturePixelFormat};
+    use streamlib::sdk::serde_json::{Map, Value, json};
+    let held =
+        |value: Value| -> Map<String, Value> { value.as_object().cloned().expect("an object") };
+    let texture_of = |format: TexturePixelFormat| PinType::Texture {
+        pixel_formats: vec![format],
+    };
+
+    assert_eq!(
+        the_texture_written_under_the_settings(&Map::new()),
+        Some(texture_of(TexturePixelFormat::Rgba8Unorm))
+    );
+    assert_eq!(
+        the_texture_written_under_the_settings(&held(json!({ "format": "bgra8_unorm" }))),
+        Some(texture_of(TexturePixelFormat::Bgra8Unorm))
+    );
+    assert_eq!(
+        the_texture_written_under_the_settings(&held(json!({ "format": "nv12" }))),
+        None
+    );
+    assert_eq!(
+        the_texture_written_under_the_settings(&held(json!({ "format": 3 }))),
+        None
+    );
+}

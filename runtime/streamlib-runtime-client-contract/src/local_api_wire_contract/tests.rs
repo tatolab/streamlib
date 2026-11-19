@@ -556,3 +556,28 @@ fn each_node_kind_and_language_is_named_as_it_is_written() {
         assert_eq!(serde_json::to_value(language).unwrap(), language.name());
     }
 }
+
+/// A node a newer runtime inserted for a reason this client does not know still reads as
+/// inserted, its node type kept, the reason read as `for_another_reason`.
+///
+/// Mental-revert: a reason read only among the ones this client knows fails the flattened
+/// `inserted`, which then reads as absent, the node as one an operation added.
+#[test]
+fn a_node_inserted_for_a_reason_this_client_does_not_know_still_reads_as_inserted() {
+    let added: GraphTransactionAddedNode = serde_json::from_value(serde_json::json!({
+        "stream": "main-1a2b3c",
+        "node": "7f3e2d1c-0000-4000-8000-000000000001",
+        "name": "splitbundle",
+        "node_type": "tatolab.stream:SplitBundle",
+        "inserted_because": "splits_a_bundle",
+    }))
+    .unwrap();
+
+    assert_eq!(
+        added.inserted,
+        Some(InsertedNodeOnTheWire {
+            node_type: "tatolab.stream:SplitBundle".to_owned(),
+            inserted_because: GraphTransactionNodeInsertedBecause::ForAnotherReason,
+        })
+    );
+}

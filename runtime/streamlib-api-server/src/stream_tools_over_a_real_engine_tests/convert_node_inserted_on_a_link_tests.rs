@@ -331,6 +331,43 @@ async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_pla
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
+/// A `TensorToTexture` placed by hand with no `format` writes `rgba8_unorm`, so a link from it
+/// into an input that takes only `bgra8_unorm` is refused by its pin types and nothing is
+/// written.
+///
+/// Mental-revert: judging its output as it states itself, a Texture of no format, connects the
+/// link with a warning that the output states no format.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tensor_to_texture_holding_no_format_is_judged_by_the_format_it_writes() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let saved_before = project.the_graph_document_of("main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": stream_asset, "as": "by_hand",
+                  "type": "tatolab.stream:TensorToTexture" },
+                { "operation": "connect", "stream": stream_asset,
+                  "source": { "node": "by_hand", "port": "image" },
+                  "target": { "node": MODEL_NODE_UUID, "port": "bgra_video" } },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("the node writes rgba8_unorm, which the input does not take");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+}
+
 /// `check_link` answers `connects_through_convert_node` with the node `connect` would place, its
 /// ports, their types and the settings it would hold, and changes nothing.
 ///

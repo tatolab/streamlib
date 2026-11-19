@@ -65,8 +65,8 @@ pub enum GraphTransactionNodeInsertedBecause {
     ConvertsPinTypes,
     /// The link closes a loop of function nodes, which this `PreviousValue` node breaks.
     ClosesALoop,
-    /// A reason this client does not know, which a newer runtime gives; this runtime never
-    /// sends it.
+    /// A reason this client does not know, which a newer runtime gave: in its answer, or in a
+    /// transaction it kept that an older runtime answers from history.
     // `#[serde(other)]` holds only on the last variant, so a new reason goes above this one.
     #[serde(other)]
     ForAnotherReason,
