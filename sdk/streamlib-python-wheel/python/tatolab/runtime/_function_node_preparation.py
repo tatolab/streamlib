@@ -114,7 +114,7 @@ def function_node_run_as_python_in_its_reader(
         function_node, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
     )
     body: Callable[..., Any] = function_node.__wrapped__
-    annotations = typing.get_type_hints(body)
+    annotations = typing.get_type_hints(body, localns=_type_parameters_of(body))
     for each_port in (*function_signature["inputs"], *function_signature["outputs"]):
         if each_port["value_type"] not in _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES:
             raise FunctionNodeDoesNotCompile(
@@ -208,3 +208,12 @@ def config_values_of_one_function_node(
                 f"no default"
             )
     return config_values
+
+
+def _type_parameters_of(body: Callable[..., Any]) -> "dict[str, Any]":
+    """The type parameters a body declares, by name, which Python 3.12 does not read a string
+    annotation of the body with."""
+    return {
+        type_parameter.__name__: type_parameter
+        for type_parameter in getattr(body, "__type_params__", ())
+    }
