@@ -70,7 +70,7 @@ impl ControlOperationDispatcher {
                     state: listed_stream_state_on_the_wire(listing.state),
                     node_count: listing.node_count,
                     failed_because: listing.failed_because,
-                    condition: listing.condition,
+                    condition: Some(listing.condition),
                     capture_devices_whose_access_was_never_asked_for: listing
                         .capture_devices_whose_access_was_never_asked_for
                         .into_iter()

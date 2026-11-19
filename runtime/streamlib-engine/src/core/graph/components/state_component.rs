@@ -129,6 +129,14 @@ impl ObservableNodeState {
         place: &DiagnosticPlaceOnTheWire,
     ) -> (NodeHealthOnTheWire, Vec<DiagnosticOnTheWire>) {
         let diagnostic = |kind, words: String| DiagnosticOnTheWire::of(kind, place.clone(), words);
+        // The reasons are read before the state: a failure clears them as it moves the node to
+        // `Error`, so a failure landing between the reads is seen as `Error`, never as healthy.
+        let raising = self
+            .why_process_is_raising()
+            .map(|words| diagnostic(DiagnosticKindOnTheWire::NodeRaising, words));
+        let not_ready = self
+            .why_the_node_is_not_ready()
+            .map(|words| diagnostic(DiagnosticKindOnTheWire::NodeNotReady, words));
         if self.current() == NodeState::Error {
             let kind = if self.held_as_a_placeholder.load(Ordering::Acquire) {
                 DiagnosticKindOnTheWire::NodeTypeNotDescribed
@@ -140,12 +148,6 @@ impl ObservableNodeState {
                 .unwrap_or_else(|| "it failed, and gave no reason".to_owned());
             return (NodeHealthOnTheWire::Failed, vec![diagnostic(kind, words)]);
         }
-        let raising = self
-            .why_process_is_raising()
-            .map(|words| diagnostic(DiagnosticKindOnTheWire::NodeRaising, words));
-        let not_ready = self
-            .why_the_node_is_not_ready()
-            .map(|words| diagnostic(DiagnosticKindOnTheWire::NodeNotReady, words));
         let health = if raising.is_some() {
             NodeHealthOnTheWire::Raising
         } else if not_ready.is_some() {

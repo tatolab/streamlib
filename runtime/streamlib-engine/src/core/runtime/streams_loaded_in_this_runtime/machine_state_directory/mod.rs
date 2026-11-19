@@ -166,13 +166,14 @@ impl StreamRecord {
         self.fail_as(failure.kind, failure.words);
     }
 
-    /// Whether the stream plays, as its record says while it is not loaded: paused, stopped
-    /// when stopped, closed or failed, else playing, and played again once it loads.
+    /// Whether the stream plays, as its record says while it is not loaded: stopped when
+    /// stopped, closed or failed, whatever its pause; else paused; else playing, and played again
+    /// once it loads.
     pub fn playback(&self) -> StreamPlaybackOnTheWire {
-        if self.paused {
-            StreamPlaybackOnTheWire::Paused
-        } else if self.stopped || self.closed || self.is_failed() {
+        if self.stopped || self.closed || self.is_failed() {
             StreamPlaybackOnTheWire::Stopped
+        } else if self.paused {
+            StreamPlaybackOnTheWire::Paused
         } else {
             StreamPlaybackOnTheWire::Playing
         }

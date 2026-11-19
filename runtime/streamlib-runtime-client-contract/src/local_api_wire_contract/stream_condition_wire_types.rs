@@ -42,9 +42,6 @@ impl StreamConditionOnTheWire {
 #[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
 #[serde(rename_all = "snake_case")]
 pub enum StreamLoadOnTheWire {
-    /// Not loaded: its project is closed, or it was never loaded or did not load. `graph` reads
-    /// it from its saved document.
-    NotLoaded,
     /// A stream action of its project loads it, or loads it again.
     Loading,
     /// Loaded: its graph is held in the runtime to read and edit, whatever its playback and
@@ -52,6 +49,11 @@ pub enum StreamLoadOnTheWire {
     Loaded,
     /// A stream action of its project unloads it.
     Unloading,
+    /// Not loaded: its project is closed, or it was never loaded or did not load. `graph` reads
+    /// it from its saved document.
+    // `#[serde(other)]` holds only on the last variant, so a new value goes above this one.
+    #[serde(other)]
+    NotLoaded,
 }
 
 /// Whether a stream plays. The set grows: a value a client does not know reads as `stopped`.
@@ -60,8 +62,6 @@ pub enum StreamLoadOnTheWire {
 #[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
 #[serde(rename_all = "snake_case")]
 pub enum StreamPlaybackOnTheWire {
-    /// Stopped: its nodes run nothing until `start_playback`.
-    Stopped,
     /// A stream action of its project starts its playback.
     Starting,
     /// Playing; or recorded playing, and played again once it loads at the runtime's start.
@@ -70,6 +70,10 @@ pub enum StreamPlaybackOnTheWire {
     Paused,
     /// A stream action of its project stops its playback.
     Stopping,
+    /// Stopped: its nodes run nothing until `start_playback`.
+    // `#[serde(other)]` holds only on the last variant, so a new value goes above this one.
+    #[serde(other)]
+    Stopped,
 }
 
 /// Whether a stream is healthy. The set grows: a value a client does not know reads as
@@ -81,9 +85,11 @@ pub enum StreamPlaybackOnTheWire {
 pub enum StreamHealthOnTheWire {
     /// Nothing is wrong with it.
     Healthy,
-    /// It plays, but a node of it fails, keeps raising or is not ready.
+    /// A node of it failed, keeps raising or is not ready, whatever its playback.
     Degraded,
     /// It cannot play until the recovery its diagnostic names is made.
+    // `#[serde(other)]` holds only on the last variant, so a new value goes above this one.
+    #[serde(other)]
     Failed,
 }
 
@@ -101,6 +107,8 @@ pub enum NodeHealthOnTheWire {
     /// It runs, and its `process()` or function body keeps raising.
     Raising,
     /// It failed, or runs nothing.
+    // `#[serde(other)]` holds only on the last variant, so a new value goes above this one.
+    #[serde(other)]
     Failed,
 }
 
@@ -135,8 +143,8 @@ impl DiagnosticOnTheWire {
     }
 }
 
-/// What a problem is. The set grows: a kind a client does not know is shown by its `words` and
-/// recovered by its `recovery`.
+/// What a problem is. The set grows: a kind a client does not know reads as `other`, shown by
+/// its `words` and recovered by its `recovery`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
@@ -163,6 +171,11 @@ pub enum DiagnosticKindOnTheWire {
     NodeRaising,
     /// A running node says it is not ready yet.
     NodeNotReady,
+    /// A problem of a kind this client does not know; the runtime never sends it. Its `words`
+    /// say what it is, and its `recovery` what recovers from it.
+    // `#[serde(other)]` holds only on the last variant, so a new kind goes above this one.
+    #[serde(other)]
+    Other,
 }
 
 impl DiagnosticKindOnTheWire {
@@ -177,7 +190,9 @@ impl DiagnosticKindOnTheWire {
                 DiagnosticRecoveryOnTheWire::RestartThePlayback
             }
             Self::LinkRefused => DiagnosticRecoveryOnTheWire::FixTheLink,
-            Self::KeepsCrashingTheRuntime => DiagnosticRecoveryOnTheWire::RetryTheLoad,
+            Self::KeepsCrashingTheRuntime | Self::Other => {
+                DiagnosticRecoveryOnTheWire::RetryTheLoad
+            }
             Self::RecordedByAnEarlierRuntime => DiagnosticRecoveryOnTheWire::RemoveTheStream,
             Self::NodeNotReady => DiagnosticRecoveryOnTheWire::WaitForTheNode,
         }
@@ -191,8 +206,6 @@ impl DiagnosticKindOnTheWire {
 #[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticRecoveryOnTheWire {
-    /// Load the stream again with `reload_project`, or play it, which retries it.
-    RetryTheLoad,
     /// Fix the code the words name; a saved node file reloads it, and `reload_project` retries
     /// the stream.
     FixTheCode,
@@ -202,10 +215,16 @@ pub enum DiagnosticRecoveryOnTheWire {
     FixTheLink,
     /// Stop the stream's playback and start it again.
     RestartThePlayback,
-    /// Remove the stream with `remove_project`; this runtime never loads it.
+    /// Forget the stream with `remove_project` of the project directory its record names; this
+    /// runtime never loads it. A record that names no project directory is not reached that way.
     RemoveTheStream,
     /// Nothing: the node reports itself ready once it is.
     WaitForTheNode,
+    /// Load the stream again with `reload_project` of its project; a stream whose graph is
+    /// loaded is retried by `start_playback` too.
+    // `#[serde(other)]` holds only on the last variant, so a new recovery goes above this one.
+    #[serde(other)]
+    RetryTheLoad,
 }
 
 /// Where a problem applies.

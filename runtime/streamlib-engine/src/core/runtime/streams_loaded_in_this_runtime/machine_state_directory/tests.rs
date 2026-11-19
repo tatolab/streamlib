@@ -182,6 +182,13 @@ fn a_record_answers_its_playback_paused_stopped_or_playing_and_stopped_while_fai
     record.paused = false;
     record.fail_as(StreamFailureKind::StartRefused, "refused".to_owned());
     assert_eq!(record.playback(), StreamPlaybackOnTheWire::Stopped);
+    record.paused = true;
+    assert_eq!(
+        record.playback(),
+        StreamPlaybackOnTheWire::Stopped,
+        "a failed record is stopped whatever its pause"
+    );
+    record.paused = false;
     record.mark_running_resetting_its_crash_count();
     assert_eq!(record.failure(), None);
     record.mark_open_with_its_playback_stopped();

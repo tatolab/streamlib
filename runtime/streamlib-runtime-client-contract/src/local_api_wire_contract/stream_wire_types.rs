@@ -62,8 +62,10 @@ pub struct ListStreamsToolResultStream {
     /// playback and health apart.
     pub state: ListedStreamState,
     /// Whether its graph is loaded, whether it plays and whether it is healthy, apart, with
-    /// each diagnostic behind its health.
-    pub condition: StreamConditionOnTheWire,
+    /// each diagnostic behind its health. Every runtime of contract revision 9 or later answers
+    /// it; absent from an earlier runtime's listing.
+    #[serde(default)]
+    pub condition: Option<StreamConditionOnTheWire>,
     /// How many nodes its loaded graph holds; `null` when it is not loaded.
     pub node_count: Option<usize>,
     /// Why it is failed; `null` when it is not. `condition.diagnostics` types it.
