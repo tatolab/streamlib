@@ -354,23 +354,30 @@ type PinFlow = Literal["value", "stream", "trigger"]
 """How a pin's messages are read."""
 
 
-class PinDeclarationOnTheWire(TypedDict):
-    """What a port declares about what it carries."""
-
-    pin_type: DeclaredPinType
-    """The type it carries, or how that type is found."""
-
-    flow: PinFlow
-    """How its messages are read."""
-
-    annotations: NotRequired[PinAnnotations]
-    """What it states besides its type, none of which decides a link."""
-
-    former_names: NotRequired[list[str]]
-    """Names the port had before, each of which still finds it."""
-
-    may_be_unset: NotRequired[bool]
-    """Whether an input may hold no value and read as nothing."""
+type BuiltInPinTypeName = Literal[
+    "boolean",
+    "integer",
+    "float",
+    "string",
+    "menu",
+    "color",
+    "vector",
+    "rectangle",
+    "transform",
+    "texture",
+    "audio",
+    "encoded_video",
+    "encoded_audio",
+    "tensor",
+    "asset",
+    "trigger",
+    "list_of",
+    "bundle",
+    "named",
+    "node_reference",
+    "pin_type_choice",
+]
+"""The name of a built-in pin type: the `type` tag of its pin type."""
 
 
 class IsDeclaredPinType(TypedDict):
@@ -544,30 +551,23 @@ class PinProjectAssetAnnotation(TypedDict):
     """The media an asset must hold one of; empty, any asset of the project."""
 
 
-type BuiltInPinTypeName = Literal[
-    "boolean",
-    "integer",
-    "float",
-    "string",
-    "menu",
-    "color",
-    "vector",
-    "rectangle",
-    "transform",
-    "texture",
-    "audio",
-    "encoded_video",
-    "encoded_audio",
-    "tensor",
-    "asset",
-    "trigger",
-    "list_of",
-    "bundle",
-    "named",
-    "node_reference",
-    "pin_type_choice",
-]
-"""The name of a built-in pin type: the `type` tag of its pin type."""
+class PinDeclarationOnTheWire(TypedDict):
+    """What a port declares about what it carries."""
+
+    pin_type: DeclaredPinType
+    """The type it carries, or how that type is found."""
+
+    flow: PinFlow
+    """How its messages are read."""
+
+    annotations: NotRequired[PinAnnotations]
+    """What it states besides its type, none of which decides a link."""
+
+    former_names: NotRequired[list[str]]
+    """Names the port had before, each of which still finds it."""
+
+    may_be_unset: NotRequired[bool]
+    """Whether an input may hold no value and read as nothing."""
 
 
 type PinValueComponentName = Literal[

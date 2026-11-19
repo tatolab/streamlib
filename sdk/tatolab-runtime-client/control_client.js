@@ -278,6 +278,18 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("list_project_node_types", params, callOptions);
   }
 
+  list_pin_types(params, callOptions) {
+    return this.call("list_pin_types", params, callOptions);
+  }
+
+  list_node_types(params, callOptions) {
+    return this.call("list_node_types", params, callOptions);
+  }
+
+  describe_node_types(params, callOptions) {
+    return this.call("describe_node_types", params, callOptions);
+  }
+
   list_project_views(params, callOptions) {
     return this.call("list_project_views", params, callOptions);
   }

@@ -15,28 +15,30 @@ use crate::control_operation_requests::{
     CheckLinkCandidatesRequest, CheckLinkRequest, CloseViewerRequest,
     CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest, CreateProjectRequest,
     CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest, DescribeAssetRequest,
-    DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest, GraphRequest,
-    ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest, ListAssetsRequest,
-    ListDependenciesRequest, ListProjectFilesRequest, ListProjectNodeTypesRequest,
-    ListProjectViewsRequest, ListSamplesRequest, ListStreamsRequest, LogsRequest,
-    OneLinkGraphEditRequest, OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest,
-    OneStreamActionRequest, OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest,
-    RefreshFragmentsRequest, RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest,
-    RemoveNoteRequest, RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest,
-    SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
-    SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
-    SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
-    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
-    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
-    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
-    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
-    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    DescribeNodeTypesRequest, DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest,
+    GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest,
+    ListAssetsRequest, ListDependenciesRequest, ListNodeTypesRequest, ListPinTypesRequest,
+    ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectViewsRequest,
+    ListSamplesRequest, ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest,
+    OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
+    OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest,
+    RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest,
+    RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
+    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
+    SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
+    SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
+    SetStudioFieldsRequest, SubscribeInputValueChangesRequest, SubscribeProjectChangesRequest,
+    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
+    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
+    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
+    WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 
 mod assets_and_streams;
 mod dependencies;
 mod discovery_and_subscriptions;
 mod graph_edits;
+mod node_types;
 mod playback_and_stream_actions;
 mod project_files_and_views;
 mod project_lifecycle;
@@ -60,6 +62,7 @@ pub use graph_edits::{
     RenameNode, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue,
     SetNoteFields, SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
 };
+pub use node_types::{DescribeNodeTypes, ListNodeTypes, ListPinTypes};
 pub use playback_and_stream_actions::{
     CancelStreamAction, DescribeStreamAction, PausePlayback, ResumePlayback, SetStreamClockScale,
     StartPlayback, StopPlayback,
@@ -78,7 +81,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 11;
+pub const CONTROL_CONTRACT_REVISION: u32 = 12;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -161,6 +164,9 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<CreateNodeFile>(),
     ControlOperationDeclaration::of::<WriteProjectFile>(),
     ControlOperationDeclaration::of::<ListProjectNodeTypes>(),
+    ControlOperationDeclaration::of::<ListPinTypes>(),
+    ControlOperationDeclaration::of::<ListNodeTypes>(),
+    ControlOperationDeclaration::of::<DescribeNodeTypes>(),
     ControlOperationDeclaration::of::<ListProjectViews>(),
     ControlOperationDeclaration::of::<WriteStudioViewOutput>(),
     ControlOperationDeclaration::of::<WriteGraphInput>(),
@@ -316,6 +322,12 @@ pub enum ControlOperationCall {
     WriteProjectFile(WriteProjectFileRequest),
     /// A `list_project_node_types` call.
     ListProjectNodeTypes(ListProjectNodeTypesRequest),
+    /// A `list_pin_types` call.
+    ListPinTypes(ListPinTypesRequest),
+    /// A `list_node_types` call.
+    ListNodeTypes(ListNodeTypesRequest),
+    /// A `describe_node_types` call.
+    DescribeNodeTypes(DescribeNodeTypesRequest),
     /// A `list_project_views` call.
     ListProjectViews(ListProjectViewsRequest),
     /// A `write_studio_view_output` call.
@@ -576,6 +588,15 @@ impl ControlOperationCall {
             ListProjectNodeTypes::METHOD_NAME => {
                 the_request_of::<ListProjectNodeTypes>(params).map(Self::ListProjectNodeTypes)
             }
+            ListPinTypes::METHOD_NAME => {
+                the_request_of::<ListPinTypes>(params).map(Self::ListPinTypes)
+            }
+            ListNodeTypes::METHOD_NAME => {
+                the_request_of::<ListNodeTypes>(params).map(Self::ListNodeTypes)
+            }
+            DescribeNodeTypes::METHOD_NAME => {
+                the_request_of::<DescribeNodeTypes>(params).map(Self::DescribeNodeTypes)
+            }
             ListProjectViews::METHOD_NAME => {
                 the_request_of::<ListProjectViews>(params).map(Self::ListProjectViews)
             }
@@ -684,6 +705,9 @@ impl ControlOperationCall {
             Self::CreateNodeFile(_) => CreateNodeFile::METHOD_NAME,
             Self::WriteProjectFile(_) => WriteProjectFile::METHOD_NAME,
             Self::ListProjectNodeTypes(_) => ListProjectNodeTypes::METHOD_NAME,
+            Self::ListPinTypes(_) => ListPinTypes::METHOD_NAME,
+            Self::ListNodeTypes(_) => ListNodeTypes::METHOD_NAME,
+            Self::DescribeNodeTypes(_) => DescribeNodeTypes::METHOD_NAME,
             Self::ListProjectViews(_) => ListProjectViews::METHOD_NAME,
             Self::WriteStudioViewOutput(_) => WriteStudioViewOutput::METHOD_NAME,
             Self::WriteGraphInput(_) => WriteGraphInput::METHOD_NAME,

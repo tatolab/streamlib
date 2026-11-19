@@ -1,7 +1,7 @@
 {
   "script": "build_a_graph",
   "task": {
-    "statement": "On the one stream the runtime holds, add a test pattern source and a clamp in one edit; ask, before placing one, which of an alpha-over compositor's back layer input and the clamp's number input a link from the source's video output fits, and read that only the compositor's does; add a node of the node type that fits; check a link from the source's video output into the clamp's number input and read why it would be refused; check the link from the source's video output to the compositor's back layer input and read that it connects; make that link; read the graph back to see the nodes and the link; then undo the three edits and read the graph back to see them gone.",
+    "statement": "On the one stream the runtime holds, list the node types its project offers; add a test pattern source and a clamp in one edit; describe the clamp's inputs; ask, before placing one, which of an alpha-over compositor's back layer input and the clamp's number input a link from the source's video output fits, and read that only the compositor's does; add a node of the node type that fits; check a link from the source's video output into the clamp's number input and read why it would be refused; check the link from the source's video output to the compositor's back layer input and read that it connects; make that link; read the graph back to see the nodes and the link; then undo the three edits and read the graph back to see them gone.",
     "givens": {
       "source_node_type": "tatolab.testpattern:TestPatternSource",
       "source_label": "source",
@@ -23,6 +23,16 @@
       "expect": [
         { "at": "/streams", "has_length": 1 },
         { "at": "/streams/0/state", "equals": "running" }
+      ]
+    },
+    {
+      "name": "node_types",
+      "tool": "list_node_types",
+      "arguments": {
+        "project_directory": { "$read": { "step": "streams", "pointer": "/streams/0/location/project_directory" } }
+      },
+      "expect": [
+        { "at": "/sources", "holds_an_item_where": { "/source": "built_in" } }
       ]
     },
     {
@@ -50,6 +60,19 @@
         { "at": "/added_nodes", "has_length": 2 },
         { "at": "/added_nodes/0/as", "equals": { "$given": "source_label" } },
         { "at": "/added_nodes/1/as", "equals": { "$given": "clamp_label" } }
+      ]
+    },
+    {
+      "name": "clamp_described",
+      "tool": "describe_node_types",
+      "arguments": {
+        "project_directory": { "$read": { "step": "streams", "pointer": "/streams/0/location/project_directory" } },
+        "node_types": [{ "$given": "clamp_node_type" }]
+      },
+      "expect": [
+        { "at": "/node_types", "has_length": 1 },
+        { "at": "/node_types/0/node_type", "equals": { "$given": "clamp_node_type" } },
+        { "at": "/node_types/0/inputs", "holds_an_item_where": { "/name": { "$given": "clamp_input" } } }
       ]
     },
     {

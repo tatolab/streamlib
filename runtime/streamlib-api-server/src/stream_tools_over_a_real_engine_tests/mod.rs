@@ -55,6 +55,7 @@ mod input_value_set_live_tests;
 mod input_value_set_tests;
 mod link_candidates_checked_before_one_is_made_tests;
 mod link_checked_before_it_is_made_tests;
+mod node_type_reads_tests;
 mod played_project_end_to_end_tests;
 mod project_create_open_and_cancel_tests;
 mod project_log_tests;

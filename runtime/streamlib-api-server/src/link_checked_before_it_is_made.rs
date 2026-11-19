@@ -5,6 +5,7 @@
 //! graph by the engine's own judgement of a connect, and made nowhere; and that one judgement of
 //! a link on a running graph, which `check_link_candidates` makes of each candidate.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -81,6 +82,9 @@ impl LinkNotCheckedYet {
 pub(crate) struct TheRunningGraphLinksAreCheckedOn {
     stream_id: String,
     stream_operations: Arc<dyn RuntimeOperations>,
+    /// The directory of the stream's project, where the runtime lists one: a refusal of a port
+    /// a node does not have suggests the ports its type has, as the project describes them.
+    project_directory: Option<PathBuf>,
     rendered_graph: Value,
     rendered: StreamGraphOnTheWire,
 }
@@ -125,6 +129,11 @@ impl ControlOperationDispatcher {
                     runtime_words,
                 ))
             })?;
+        let project_directory = listings
+            .iter()
+            .find(|listing| listing.stream_id == stream_id)
+            .and_then(|listing| listing.stream_location.as_ref())
+            .map(|location| location.project_directory.clone());
         let stream_operations = self
             .operations_on_the_loaded_streams
             .runtime_operations_of_the_stream_a_call_names(&stream_id)
@@ -142,6 +151,7 @@ impl ControlOperationDispatcher {
         Ok(TheRunningGraphLinksAreCheckedOn {
             stream_id,
             stream_operations,
+            project_directory,
             rendered_graph,
             rendered,
         })
@@ -254,16 +264,25 @@ impl TheRunningGraphLinksAreCheckedOn {
 
     /// What `connect` would answer for the link from `source` to `target`: read as a
     /// transaction's `connect` reads it, then judged by the engine's own judgement of a live
-    /// connect.
+    /// connect. A refusal of a port a node does not have suggests the ports of the node's type,
+    /// where the stream's project is listed.
     pub(crate) fn check(
         &self,
         source: &StreamGraphActionLinkEnd,
         target: &StreamGraphActionLinkEnd,
     ) -> Result<LinkCheckResult, LinkNotCheckedYet> {
-        let refused_as_connect_refuses = |refusal: GraphRequestRefusal| {
+        let refused_on_the_running_stream = |refusal: GraphRequestRefusal| {
+            let refusal = GraphTransactionRefusal::of_a_connect(source, target, refusal);
             LinkCheckResult::of_a_link_connect_refuses(
-                GraphTransactionRefusal::of_a_connect(source, target, refusal)
-                    .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
+                match &self.project_directory {
+                    Some(project_directory) => refusal
+                        .suggesting_the_ports_of_the_node_type_it_names(
+                            project_directory,
+                            &self.rendered_graph,
+                        ),
+                    None => refusal,
+                }
+                .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
             )
         };
         let operation = match the_operation_a_connect_asks_of_the_running_stream(
@@ -273,7 +292,7 @@ impl TheRunningGraphLinksAreCheckedOn {
             self.stream_operations.as_ref(),
         ) {
             Ok(operation) => operation,
-            Err(refusal) => return Ok(refused_as_connect_refuses(refusal)),
+            Err(refusal) => return Ok(refused_on_the_running_stream(refusal)),
         };
         let StreamGraphOperation::Connect { link } = operation else {
             return Err(LinkNotCheckedYet::ClosesALoopOfFunctionNodes);
@@ -281,7 +300,7 @@ impl TheRunningGraphLinksAreCheckedOn {
         the_check_of_what_a_live_connect_makes(
             self.stream_operations
                 .what_a_live_connect_makes_of_the_link(&link),
-            refused_as_connect_refuses,
+            refused_on_the_running_stream,
         )
     }
 

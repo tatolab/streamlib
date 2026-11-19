@@ -94,17 +94,32 @@ impl PinType {
 
 /// An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "contract-json-schema",
+    derive(schemars_1::JsonSchema),
+    schemars(crate = "schemars_1")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PinAnnotationName {
+    /// The lowest and highest number it holds.
     Range,
+    /// The step a control moves a number by.
     Step,
+    /// The unit a number is in.
     Unit,
+    /// What its value stands for.
     Meaning,
+    /// The control that edits or shows it.
     Control,
+    /// The frame rate a Texture output's stream has.
     FrameRate,
+    /// The sample rate an Audio output's stream has.
     SampleRate,
+    /// The sample type an Audio output's stream has.
     SampleType,
+    /// Where a Tensor output's values live.
     Residency,
+    /// That a String holds the UUID of one of the project's assets.
     ProjectAsset,
 }
 
@@ -345,8 +360,65 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
     }
 }
 
+impl BuiltInPinTypeName {
+    /// How a node declares a pin of this type where the type is built from another, a List of
+    /// an element or a bundle of members; `None` for every type a name alone declares.
+    pub fn how_to_declare(self) -> Option<&'static str> {
+        match self {
+            Self::ListOf => Some(
+                "Annotate the pin `list[<element>]` in a Python declaration, as `list[float]`; \
+                 its pin type is `{\"type\": \"list_of\", \"element_type\": <element's pin \
+                 type>}`. Each element is of the one type it names.",
+            ),
+            Self::Bundle => Some(
+                "Annotate the pin with a `@dataclass` whose fields are the members, each \
+                 annotated with its own pin type and given a default where it may be left out; \
+                 its pin type is `{\"type\": \"bundle\", \"members\": [...]}`. The class \
+                 names nothing: a port of it is described member by member, and any two \
+                 bundles with the same members connect.",
+            ),
+            Self::Boolean
+            | Self::Integer
+            | Self::Float
+            | Self::String
+            | Self::Menu
+            | Self::Color
+            | Self::Vector
+            | Self::Rectangle
+            | Self::Transform
+            | Self::Texture
+            | Self::Audio
+            | Self::EncodedVideo
+            | Self::EncodedAudio
+            | Self::Tensor
+            | Self::Asset
+            | Self::Trigger
+            | Self::Named
+            | Self::NodeReference
+            | Self::PinTypeChoice => None,
+        }
+    }
+}
+
 #[cfg(feature = "contract-json-schema")]
 impl BuiltInPinTypeName {
+    /// The JSON Schema of the type's stored value, reading on its own outside the contract:
+    /// every type it names written in place, and a type that names itself, as a pin type
+    /// does, under the schema's own `$defs`; `None` for a type that stores no value.
+    pub fn value_json_schema_on_its_own(self) -> Option<serde_json::Value> {
+        let mut generator = schemars_1::generate::SchemaSettings::draft2020_12()
+            .with(|settings| settings.inline_subschemas = true)
+            .into_generator();
+        let mut schema = self.value_json_schema(&mut generator)?.to_value();
+        let definitions = generator.take_definitions(true);
+        if !definitions.is_empty()
+            && let Some(schema) = schema.as_object_mut()
+        {
+            schema.insert("$defs".to_owned(), serde_json::Value::Object(definitions));
+        }
+        Some(schema)
+    }
+
     /// The JSON Schema of the type's stored value, its named types added to `generator`'s
     /// definitions; `None` for a type that stores no value.
     pub fn value_json_schema(

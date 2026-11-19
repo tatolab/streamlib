@@ -192,6 +192,33 @@ class ContractBackedAgentSession:
                 "capture_devices_whose_access_was_never_asked_for": [],
                 "action": None, "step": None,
             }]})
+        if operation == "list_node_types":
+            assert arguments["project_directory"] == self.project_directory, arguments
+            return self.checked_against_the_result_schema(operation, {
+                "project_directory": self.project_directory, "project": str(uuid.uuid4()),
+                "project_name": "app",
+                "sources": [{
+                    "source": "built_in",
+                    "node_types": [{
+                        "node_type": node["type"], "documentation": "", "category": None,
+                        "kind": "process", "described_from": "built_in",
+                    } for node in self.nodes],
+                    "graph_generators": [], "unreadable_modules": [],
+                }],
+            })
+        if operation == "describe_node_types":
+            assert arguments["project_directory"] == self.project_directory, arguments
+            return self.checked_against_the_result_schema(operation, {"node_types": [{
+                "node_type": node_type, "source": "project", "described_from": "interpreter",
+                "documentation": "", "category": None, "kind": "function",
+                "inputs": [{
+                    "name": "x", "documentation": "",
+                    "pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value",
+                    "mode": "wire_or_value", "default_value": 0.0, "lifetime": "kept",
+                    "value_json_schema": {"type": "number"},
+                }],
+                "outputs": [],
+            } for node_type in arguments["node_types"]]})
         if operation in ("transact", "add_node"):
             requested = arguments["operations"] if operation == "transact" else [
                 {**arguments, "operation": "add_node"}
@@ -312,6 +339,11 @@ def build_a_graph_document() -> "dict[str, Any]":
     return a_json_object(path.read_text(encoding="utf-8"))
 
 
+def the_step_named(document: "dict[str, Any]", name: str) -> "dict[str, Any]":
+    [step] = [step for step in document["steps"] if step["name"] == name]
+    return step
+
+
 def played(script: AgentLoopScript, session: ContractBackedAgentSession) -> "dict[str, Any]":
     return asyncio.run(play_agent_loop_script(session, script))
 
@@ -347,13 +379,15 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
     called = [name for name, _ in session.tool_calls]
     assert called[:2] == ["list_operation_groups", "describe_operations"]
     assert session.tool_calls[1][1] == {
-        "operations": ["list_streams", "transact", "check_link_candidates", "check_link", "graph",
-                       "undo"]
+        "operations": [
+            "list_streams", "list_node_types", "transact", "describe_node_types",
+            "check_link_candidates", "check_link", "graph", "undo",
+        ]
     }
     assert called[2:] == [
-        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, "transact",
-        CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME, "transact", "graph",
-        "undo", "undo", "undo", "graph",
+        "list_streams", "list_node_types", "transact", "describe_node_types",
+        CALL_OPERATION_TOOL_NAME, "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
+        "transact", "graph", "undo", "undo", "undo", "graph",
     ]
     checked = [arguments["operation"] for name, arguments in session.tool_calls
                if name == CALL_OPERATION_TOOL_NAME]
@@ -402,7 +436,7 @@ def test_an_operation_describe_operations_left_out_fails_the_run() -> None:
 
 def test_a_literal_neither_given_nor_declared_by_the_schema_fails_the_run() -> None:
     document = build_a_graph_document()
-    document["steps"][1]["arguments"]["operations"][0]["type"] = "tatolab.testpattern:TestPatternSource"
+    the_step_named(document, "edit")["arguments"]["operations"][0]["type"] = "tatolab.testpattern:TestPatternSource"
 
     with pytest.raises(AgentLoopScriptRunFailed, match="neither a given"):
         played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))
@@ -410,7 +444,7 @@ def test_a_literal_neither_given_nor_declared_by_the_schema_fails_the_run() -> N
 
 def test_a_literal_the_schema_declares_at_its_own_position_is_allowed() -> None:
     document = build_a_graph_document()
-    document["steps"][1]["arguments"]["mode"] = "commit"
+    the_step_named(document, "edit")["arguments"]["mode"] = "commit"
     session = ContractBackedAgentSession(the_committed_control_contract())
 
     played(agent_loop_script_from(document), session)
@@ -422,7 +456,7 @@ def test_a_literal_the_schema_declares_at_its_own_position_is_allowed() -> None:
 def test_a_literal_the_schema_declares_only_at_another_position_fails_the_run() -> None:
     document = build_a_graph_document()
     # `live` is a constant of `transact`'s `mode`, not of a node's `as`, where it is valid too.
-    document["steps"][1]["arguments"]["operations"][0]["as"] = "live"
+    the_step_named(document, "edit")["arguments"]["operations"][0]["as"] = "live"
 
     with pytest.raises(AgentLoopScriptRunFailed, match="at `/operations/0/as`"):
         played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))
@@ -430,7 +464,7 @@ def test_a_literal_the_schema_declares_only_at_another_position_fails_the_run() 
 
 def test_arguments_the_params_schema_refuses_fail_the_run() -> None:
     document = build_a_graph_document()
-    document["steps"][1]["arguments"]["operations"][0]["colour"] = {"$given": "source_label"}
+    the_step_named(document, "edit")["arguments"]["operations"][0]["colour"] = {"$given": "source_label"}
 
     with pytest.raises(AgentLoopScriptRunFailed, match="params schema"):
         played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))

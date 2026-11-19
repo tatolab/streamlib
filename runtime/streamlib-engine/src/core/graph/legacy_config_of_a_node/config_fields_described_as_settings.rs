@@ -11,8 +11,8 @@ use serde_json::Value;
 
 use super::{the_description_of, the_properties_of_a_config_schema};
 use crate::core::descriptors::{
-    IntegerSize, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinProjectAssetAnnotation,
-    PinType,
+    IntegerSize, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinNumberRange,
+    PinProjectAssetAnnotation, PinType,
 };
 use crate::core::error::{Error, Result};
 use crate::core::nodes::is_a_natively_compiled_node_type;
@@ -35,7 +35,7 @@ pub(crate) struct ConfigFieldDescribedAsASetting {
     /// may be null, or states a type no pin type holds exactly.
     pub(crate) pin_type: Option<PinType>,
     /// What the schema states of the field besides its type: on a String holding a project
-    /// asset's UUID, the assets it is picked from.
+    /// asset's UUID, the assets it is picked from; on a number, the range it holds.
     pub(crate) annotations: PinAnnotations,
 }
 
@@ -62,6 +62,12 @@ pub(crate) fn the_config_fields_described_as_settings(
                     .as_ref()
                     .filter(|pin_type| matches!(pin_type, PinType::String {}))
                     .and_then(|_| the_project_asset_annotation_of(&field_schema)),
+                range: pin_type
+                    .as_ref()
+                    .filter(|pin_type| {
+                        matches!(pin_type, PinType::Integer { .. } | PinType::Float { .. })
+                    })
+                    .and_then(|_| the_number_range_of(&field_schema)),
                 ..PinAnnotations::default()
             };
             ConfigFieldDescribedAsASetting {
@@ -79,6 +85,16 @@ pub(crate) fn the_config_fields_described_as_settings(
             }
         })
         .collect()
+}
+
+/// The range a number field's schema holds it within, by its `minimum` and `maximum`; `None`
+/// when it states neither.
+fn the_number_range_of(field_schema: &Value) -> Option<PinNumberRange> {
+    let range = PinNumberRange {
+        minimum: field_schema.get("minimum").and_then(Value::as_f64),
+        maximum: field_schema.get("maximum").and_then(Value::as_f64),
+    };
+    (range.minimum.is_some() || range.maximum.is_some()).then_some(range)
 }
 
 /// The config fields a node of `node_type`, whose config schema is `config_schema`, can expose
