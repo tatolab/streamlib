@@ -19,7 +19,6 @@ use common::{
     call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_location_of_the_stream,
     the_mode_of, the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
-use streamlib::sdk::runtime::StreamRecord;
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
 /// returns on Linux.
@@ -142,10 +141,8 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
             false,
         ),
     ];
-    let parked = StreamRecord {
-        closed: true,
-        ..parked
-    };
+    let mut parked = parked;
+    parked.closed = true;
     for record in [&front, &parked, &orphan] {
         stream_records.write(record).unwrap();
         assert!(
@@ -290,11 +287,11 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
     assert_eq!(listed_streams.len(), 4, "{listed}");
     assert_eq!(
         listing_of(&front.stream_id),
-        serde_json::json!({"stream": front.stream_id, "display_name": "front", "location": location_of("front"), "state": "stopped", "node_count": 1, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
+        serde_json::json!({"stream": front.stream_id, "display_name": "front", "location": location_of("front"), "state": "stopped", "condition": {"load": "loaded", "playback": "stopped", "health": "healthy", "diagnostics": []}, "node_count": 1, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
     );
     assert_eq!(
         listing_of(&parked.stream_id),
-        serde_json::json!({"stream": parked.stream_id, "display_name": "parked", "location": location_of("parked"), "state": "closed", "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
+        serde_json::json!({"stream": parked.stream_id, "display_name": "parked", "location": location_of("parked"), "state": "closed", "condition": {"load": "not_loaded", "playback": "stopped", "health": "healthy", "diagnostics": []}, "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
     );
     let orphan_listing = listing_of(&orphan.stream_id);
     assert_eq!(orphan_listing["state"], "failed", "{listed}");
