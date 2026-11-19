@@ -648,8 +648,9 @@ fn a_native_function_node_type_of_records() -> NodeClassImportPath {
     switch_type
 }
 
-/// A recorded stream whose document feeds a function node island into a node in the app process
-/// opens stopped with that link shown failed for why, and plays every other node and link.
+/// A recorded stream whose document feeds a function node island into a view of its project,
+/// which runs in the app process and which the function node pool does not evaluate, opens
+/// stopped with that link shown failed for why, and plays every other node and link.
 ///
 /// Mental-revert: refusing the saved link at the load fails the stream's open, and connecting it
 /// fails the stream at its start.
@@ -668,14 +669,24 @@ fn a_recorded_stream_whose_document_feeds_an_island_into_the_app_process_opens_a
             "type": a_native_function_node_type_of_records().as_str(),
             "config": {},
         }));
+    document["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "0c6f3d2e-9b1a-4e7d-8f2c-5a4b3c2d1e0f",
+            "name": "program",
+            "type": format!("{TEST_PROJECT_NAME}:program"),
+            "config": {},
+        }));
     document["links"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({
             "source": {"node": "switch", "port": "result"},
-            "target": {"node": "sink", "port": "in2"},
+            "target": {"node": "program", "port": "in1"},
         }));
     let project = ProjectWithGraphDocuments::holding(document);
+    crate::core::test_support::a_view_reading_records_in(project.path(), "program");
     let camera = project.stream_id_of("camera");
     a_project_opened_on(&runner, &project);
 

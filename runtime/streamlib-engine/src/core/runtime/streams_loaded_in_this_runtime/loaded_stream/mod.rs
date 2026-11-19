@@ -134,8 +134,10 @@ pub struct LoadedStreamInThisRuntime {
     one_start_or_stop_at_a_time: Mutex<()>,
     /// Held across each change of an input's value, live or saved, from its check to its
     /// announcement, so the values each helper and island holds, the live values `graph`
-    /// renders and the order the changes are announced in all end on the last change made.
-    one_input_value_change_at_a_time: Mutex<()>,
+    /// renders and the order the changes are announced in all end on the last change made; a
+    /// connect holds it while it judges and makes its link, so a type choice a set puts back
+    /// never meets a link made under the choice it replaced.
+    pub(in crate::core::runtime) one_input_value_change_at_a_time: Arc<Mutex<()>>,
     /// Set by the one request that starts this stream's shutdown thread.
     shutdown_thread_started: AtomicBool,
     /// The step barrier while a stepped stream runs.
@@ -347,7 +349,7 @@ impl LoadedStreamInThisRuntime {
             _graph_change_listener: graph_change_listener,
             teardown_watchdog_budget,
             one_start_or_stop_at_a_time: Mutex::new(()),
-            one_input_value_change_at_a_time: Mutex::new(()),
+            one_input_value_change_at_a_time: Arc::default(),
             shutdown_thread_started: AtomicBool::new(false),
             step_coordinator: Mutex::new(None),
             end_claimed: AtomicBool::new(false),

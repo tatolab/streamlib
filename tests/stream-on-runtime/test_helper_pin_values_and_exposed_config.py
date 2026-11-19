@@ -431,6 +431,9 @@ def test_a_typed_node_built_with_input_values_starts_with_them_and_reopens_with_
 
     first_run = tatolabd.stream_runs[-1]
     assert first_run.stop_the_stream() == 0
+    project_directory = first_run.await_loaded()["project_directory"]
+    queued_close = local_api.call_tool("close_project", {"project_directory": project_directory})
+    assert local_api.stream_action_once_ended(queued_close["action"])["state"] == "done"
     reopened_at = time.monotonic_ns()
     tatolabd.run_stream(
         TatolabRunOfAProject(

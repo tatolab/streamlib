@@ -34,11 +34,15 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 mod graph_edits_in_one_commit;
 mod live_graph_change_committed;
+#[cfg(test)]
+mod live_graph_change_committed_tests;
 use live_graph_change_committed::{
     commit_live_graph_change, commit_the_graph_edits_held_for_one_commit,
 };
 mod link_disconnected;
 pub(in crate::core::runtime) use link_disconnected::disconnect_impl;
+mod input_value_changes_a_connect_waits_for;
+pub(super) use input_value_changes_a_connect_waits_for::InputValueChangesAConnectWaitsFor;
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
 mod reactive_reader_rule_of_an_edit;
@@ -59,8 +63,9 @@ use reactive_reader_rule_of_an_edit::{ARemoval, the_reader_rule_is_left_to_the_c
 type LiveCommitContext = Option<Arc<RuntimeContext>>;
 
 /// What every graph change on one stream works through: the stream's
-/// compiler, the context it compiles against right away, if any, and the
-/// stream whose topic it publishes on.
+/// compiler, the context it compiles against right away, if any, the
+/// stream whose topic it publishes on, and the input value changes a
+/// connect waits for while it makes its link.
 pub(super) struct LiveGraphChangeOnOneStream {
     compiler: Arc<Compiler>,
     live: LiveCommitContext,
@@ -68,6 +73,7 @@ pub(super) struct LiveGraphChangeOnOneStream {
     /// The graph edits held for one commit this change joins, which keep its events until
     /// they close.
     held_for_one_commit: Option<Arc<GraphEditsHeldForOneCommit>>,
+    one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor,
 }
 
 /// Announce `event`, which names `of_the_link` when it is about one, on `stream`'s topic, or
@@ -164,6 +170,7 @@ pub(super) async fn add_node_impl(
         live,
         stream,
         held_for_one_commit,
+        ..
     } = live_graph_change;
     let emit_will_add = |id: &NodeRunId| {
         announce_or_hold(
@@ -343,6 +350,7 @@ pub(super) async fn remove_node_impl(
         live,
         stream,
         held_for_one_commit,
+        ..
     } = live_graph_change;
     compiler.scope(|graph, tx| {
         mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)
@@ -407,6 +415,9 @@ impl LoadedStreamInThisRuntime {
             live: self.live_commit_context(),
             stream: self.loaded_stream_identity().clone(),
             held_for_one_commit: GraphEditsHeldForOneCommit::the_ones_this_task_holds(),
+            one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor::TheStreamsOne(
+                Arc::clone(&self.one_input_value_change_at_a_time),
+            ),
         }
     }
 

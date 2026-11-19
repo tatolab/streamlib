@@ -24,6 +24,7 @@ pub(in crate::core::runtime) async fn disconnect_impl(
         live,
         stream,
         held_for_one_commit,
+        ..
     } = live_graph_change;
     let (from_port, to_port) = take_the_link_out_with_the_next_commit(&compiler, &link_id)?;
     commit_live_graph_change(&compiler, live).await?;

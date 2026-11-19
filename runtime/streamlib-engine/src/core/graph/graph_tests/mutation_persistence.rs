@@ -172,3 +172,43 @@ fn a_node_dropped_after_its_replacement_leaves_the_replacements_live_values() {
     assert!(graph.drop_the_node(&replacement, WhyTheNodeLeaves::Removed));
     assert_eq!(graph.live_input_values().value_of(node_uuid, "in1"), None);
 }
+
+/// A replacement under the UUID of a node dropped after it, whose input of the same name takes
+/// other values than the leaving node's did, reads no value set live on the one before.
+///
+/// Mental-revert: keeping every value of an input the replacement names hands it a value set
+/// under the declaration it replaced.
+#[test]
+fn a_replacement_whose_input_takes_other_values_inherits_none_set_on_the_node_before() {
+    use crate::core::descriptors::NodeValueLifetime;
+    use crate::core::graph::WhyTheNodeLeaves;
+    use crate::core::test_support::add_mock_input_only;
+
+    ensure_test_mocks_registered();
+    let mut graph = Graph::new();
+    let leaving: crate::core::graph::NodeRunId = add_mock_input_only(&mut graph).as_str().into();
+    let replacement: crate::core::graph::NodeRunId =
+        add_mock_input_only(&mut graph).as_str().into();
+    let node_uuid = graph.traversal().v(&leaving).first().unwrap().node_uuid;
+    {
+        let replaced = graph.traversal_mut();
+        let node = replaced.v(&replacement).first_mut().unwrap();
+        node.node_uuid = node_uuid;
+        let in1 = node
+            .ports
+            .inputs
+            .iter_mut()
+            .find(|input| input.name == "in1")
+            .unwrap();
+        in1.may_be_unset = !in1.may_be_unset;
+    }
+    graph.live_input_values().set(
+        node_uuid,
+        "in1",
+        Some(serde_json::json!(2)),
+        NodeValueLifetime::Reset,
+    );
+
+    assert!(graph.drop_the_node(&leaving, WhyTheNodeLeaves::Removed));
+    assert_eq!(graph.live_input_values().value_of(node_uuid, "in1"), None);
+}

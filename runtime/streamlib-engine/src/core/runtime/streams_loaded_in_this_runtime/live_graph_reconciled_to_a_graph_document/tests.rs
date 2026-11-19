@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::runtime::a_project_on_disk_for_a_test::{
-    options_loading_a_stream_of_the_test_project_at,
+    THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST, options_loading_a_stream_of_the_test_project_at,
     options_loading_a_stream_of_the_test_project_in,
 };
 use serde_json::json;
@@ -839,17 +839,24 @@ fn a_document_feeding_an_island_into_the_app_process(switch_type: &str, linked: 
     document["nodes"].as_array_mut().unwrap().push(json!({
         "id": NODE_C, "name": "switch", "type": switch_type, "config": {},
     }));
+    document["nodes"].as_array_mut().unwrap().push(json!({
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "name": "view",
+        "type": format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:program"),
+        "config": {},
+    }));
     if linked {
         document["links"].as_array_mut().unwrap().push(json!({
             "source": { "node": "switch", "port": "result" },
-            "target": { "node": "program", "port": "in2" },
+            "target": { "node": "view", "port": "in1" },
         }));
     }
     document
 }
 
-/// A saved document holding a link the engine cannot wire, a function node island into a node
-/// in the app process, reconciles with that link set aside, shown failed on the link and made
+/// A saved document holding a link the engine cannot wire, a function node island into a view of
+/// the project, which runs in the app process and which the function node pool does not
+/// evaluate, reconciles with that link set aside, shown failed on the link and made
 /// nowhere, and the stream plays every other node and link; an edit keeps the link set aside,
 /// and taking it out of the document takes it off the graph.
 ///
@@ -860,6 +867,7 @@ fn a_document_feeding_an_island_into_the_app_process(switch_type: &str, linked: 
 fn a_saved_link_the_engine_cannot_wire_is_set_aside_and_the_stream_plays_without_it() {
     ensure_test_mocks_registered();
     let project_directory = tempfile::tempdir().expect("a project directory");
+    crate::core::test_support::a_view_reading_records_in(project_directory.path(), "program");
     let runner = Runner::new().expect("Runner::new");
     let stream = a_stream_loaded_from(
         &runner,

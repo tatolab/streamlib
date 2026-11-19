@@ -26,8 +26,10 @@ use crate::core::nodes::HowANodeOfADescribedTypeRuns;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::runtime::{GraphEditBatch, LoadedStreamInThisRuntime, Runner, RuntimeOperations};
+use crate::core::runtime::a_project_on_disk_for_a_test::THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST;
 use crate::core::test_support::{
-    MockInputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+    a_temporary_directory_at_owner_only_mode, a_view_reading_records_in,
+    ensure_test_mocks_registered,
 };
 
 // Each type is named as a native one is, so a load resolves it as this stream registers it,
@@ -916,7 +918,7 @@ fn a_batch_swapping_a_source_an_island_reads_at_the_pools_cap_is_taken() {
     let _ = the_link_out_of(&stream, "spare");
 }
 
-/// A saved graph holding a link from a function node into a node in the app process loads as
+/// A saved graph holding a link from a function node into a view, in the app process, loads as
 /// the stream's graph with that link shown in `graph`, failed with why, so the person sees it
 /// and removes it; a disconnect of it leaves the graph without it.
 ///
@@ -924,13 +926,14 @@ fn a_batch_swapping_a_source_an_island_reads_at_the_pools_cap_is_taken() {
 /// drawing it leaves the person nothing to see or remove.
 #[test]
 fn a_saved_graphs_island_into_the_app_process_is_shown_failed_and_removed_by_a_disconnect() {
-    let (_runner, stream, _project) = a_stopped_stream_resolving_a_reactive_reader();
+    let (_runner, stream, project) = a_stopped_stream_resolving_a_reactive_reader();
     let async_runtime = an_async_runtime();
-    let program_type = MockInputOnlyNode::node_class_import_path();
+    a_view_reading_records_in(project.path(), "program");
+    let view_reader = format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:program");
     load(
         &stream,
         a_document_of(
-            &[("switch", SWITCH), ("program", program_type.as_str())],
+            &[("switch", SWITCH), ("program", &view_reader)],
             &[(("switch", "result"), ("program", "in1"))],
         ),
     );

@@ -61,7 +61,7 @@ use crate::iceoryx2::Iceoryx2Node;
 
 mod commit_of_the_logged_operations;
 mod transaction_held_for_one_commit;
-pub(crate) use commit_of_the_logged_operations::ACommitFailed;
+pub(crate) use commit_of_the_logged_operations::{ACommitFailed, WhatTheHeldCommitFound};
 
 pub(crate) struct Compiler {
     // Graph ownership (moved from Runtime)

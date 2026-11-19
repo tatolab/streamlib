@@ -26,20 +26,32 @@ enum TheHoldForOneCommit {
     Released,
 }
 
+/// What a commit asked to release the transaction's hold for one commit found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WhatTheHeldCommitFound {
+    /// The hold, released as it compiled every operation logged.
+    TheHold,
+    /// No hold: a stop took the edits back first, as the stream's shutdown was forced, so it
+    /// compiled nothing.
+    TheHoldTakenBack,
+}
+
 impl Compiler {
     /// Flush transaction. Callable from any thread - compile() is dispatched to main thread.
     pub(crate) fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
         self.commit_saying_how_far_it_got(runtime_ctx, TheHoldForOneCommit::Kept)
+            .map(|_| ())
             .map_err(|failed| failed.refusal)
     }
 
     /// Release the transaction's hold for one commit and compile every operation logged, in
     /// the one step a commit holds its turn for, so no other commit takes them first; a failure
-    /// says whether it came after the compile changed what runs.
+    /// says whether it came after the compile changed what runs. One that finds the hold taken
+    /// back compiles nothing and says so.
     pub(crate) fn commit_releasing_the_hold_for_one_commit(
         &self,
         runtime_ctx: &Arc<RuntimeContext>,
-    ) -> std::result::Result<(), ACommitFailed> {
+    ) -> std::result::Result<WhatTheHeldCommitFound, ACommitFailed> {
         self.commit_saying_how_far_it_got(runtime_ctx, TheHoldForOneCommit::Released)
     }
 
@@ -48,7 +60,7 @@ impl Compiler {
         &self,
         runtime_ctx: &Arc<RuntimeContext>,
         the_hold: TheHoldForOneCommit,
-    ) -> std::result::Result<(), ACommitFailed> {
+    ) -> std::result::Result<WhatTheHeldCommitFound, ACommitFailed> {
         #[cfg(any(test, feature = "test-support"))]
         crate::core::runtime::graph_renders_and_commits_counted_for_a_test::count_a_commit_begun_of(
             runtime_ctx.loaded_stream_identity(),
@@ -57,7 +69,9 @@ impl Compiler {
         let held_since = match the_hold {
             TheHoldForOneCommit::Kept => *self.transaction_held_for_one_commit.lock(),
             TheHoldForOneCommit::Released => {
-                self.transaction_held_for_one_commit.lock().take();
+                if self.transaction_held_for_one_commit.lock().take().is_none() {
+                    return Ok(WhatTheHeldCommitFound::TheHoldTakenBack);
+                }
                 None
             }
         };
@@ -69,7 +83,7 @@ impl Compiler {
         };
         if operations.is_empty() {
             tracing::info!("[commit] No pending operations");
-            return Ok(());
+            return Ok(WhatTheHeldCommitFound::TheHold);
         }
 
         tracing::debug!(
@@ -84,6 +98,6 @@ impl Compiler {
             &self.abandoned_node_threads,
         );
         self.configs_a_commit_is_applying.lock().clear();
-        compiled
+        compiled.map(|()| WhatTheHeldCommitFound::TheHold)
     }
 }

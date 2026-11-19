@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::LiveCommitContext;
-use crate::core::compiler::{ACommitFailed, Compiler};
+use crate::core::compiler::{ACommitFailed, Compiler, WhatTheHeldCommitFound};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
     NodeRunId, PendingDeletionComponent, WhyTheNodeLeaves,
@@ -47,15 +47,19 @@ async fn compile_on_a_blocking_thread<T: Send + 'static>(
 
 /// Compile the graph edits held for one commit, releasing the compiler's hold in the turn the
 /// commit holds, so no other commit takes them first: on a stream no commit builds, released
-/// and handled as [`commit_live_graph_change`] handles a change there.
+/// and handled as [`commit_live_graph_change`] handles a change there. Either says when it
+/// found the hold taken back, and then compiled nothing.
 pub(super) async fn commit_the_graph_edits_held_for_one_commit(
     compiler: &Arc<Compiler>,
     live: LiveCommitContext,
-) -> std::result::Result<(), ACommitFailed> {
+) -> std::result::Result<WhatTheHeldCommitFound, ACommitFailed> {
     let Some(runtime_ctx) = live else {
-        compiler.release_the_transaction_held_for_one_commit();
+        if !compiler.release_the_transaction_held_for_one_commit() {
+            return Ok(WhatTheHeldCommitFound::TheHoldTakenBack);
+        }
         return commit_live_graph_change(compiler, None)
             .await
+            .map(|()| WhatTheHeldCommitFound::TheHold)
             .map_err(|refusal| ACommitFailed {
                 refusal,
                 after_changing_what_runs: false,

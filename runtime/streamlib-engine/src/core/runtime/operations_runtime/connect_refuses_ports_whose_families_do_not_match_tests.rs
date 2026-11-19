@@ -162,6 +162,7 @@ fn connect_on_this_thread(
                     stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
                 },
                 held_for_one_commit: None,
+                one_input_value_change_at_a_time: Default::default(),
             },
             from,
             to,

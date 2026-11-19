@@ -95,16 +95,21 @@ pub(in crate::core::runtime) async fn connect_impl(
         live,
         stream,
         held_for_one_commit,
+        one_input_value_change_at_a_time,
     } = live_graph_change;
     let (from, to) = compiler.scope(|graph, _tx| the_ends_connect_links(graph, from, to))?;
 
-    let link_id = match apply_a_link(
-        &compiler,
-        from.clone(),
-        to.clone(),
-        a_link_connected,
-        when_the_engine_cannot_wire_it,
-    )? {
+    let applied = {
+        let _no_input_value_changing = one_input_value_change_at_a_time.held_while_a_link_is_made();
+        apply_a_link(
+            &compiler,
+            from.clone(),
+            to.clone(),
+            a_link_connected,
+            when_the_engine_cannot_wire_it,
+        )?
+    };
+    let link_id = match applied {
         ALinkConnectedOrSetAside::Connected(link_id) => link_id,
         set_aside @ ALinkConnectedOrSetAside::SetAside(_) => return Ok(set_aside),
     };

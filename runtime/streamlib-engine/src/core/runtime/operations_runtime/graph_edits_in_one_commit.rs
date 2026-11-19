@@ -16,6 +16,7 @@ use streamlib_project_repository::StreamGraphOperation;
 use tokio::sync::OwnedMutexGuard;
 
 use super::{BoxFuture, LiveGraphChangeOnOneStream, commit_the_graph_edits_held_for_one_commit};
+use crate::core::compiler::WhatTheHeldCommitFound;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::{LinkUniqueId, NodeRunId};
 use crate::core::pubsub::RuntimeEvent;
@@ -234,23 +235,39 @@ impl LoadedStreamInThisRuntime {
         else {
             return Err(self.the_refusal_of_edits_a_forced_stop_took_back(held));
         };
-        if logged.is_empty() {
-            self.compiler.release_the_transaction_held_for_one_commit();
-        } else if let Err(failed) =
-            commit_the_graph_edits_held_for_one_commit(&self.compiler, self.live_commit_context())
-                .await
-        {
-            self.compiler
-                .take_back_what_operations_did_to_the_graph(&logged);
-            self.restore_what_was_drawn_and_drop_the_events(held);
-            return Err(GraphEditBatchRefused {
-                refusal: failed.refusal,
-                taken_back: if failed.after_changing_what_runs {
-                    HowFarARefusedBatchWasTakenBack::AsFarAsNothingBuiltOrWiredHoldsIt
-                } else {
-                    HowFarARefusedBatchWasTakenBack::Whole
-                },
-            });
+        let found = if logged.is_empty() {
+            if self.compiler.release_the_transaction_held_for_one_commit() {
+                WhatTheHeldCommitFound::TheHold
+            } else {
+                WhatTheHeldCommitFound::TheHoldTakenBack
+            }
+        } else {
+            match commit_the_graph_edits_held_for_one_commit(
+                &self.compiler,
+                self.live_commit_context(),
+            )
+            .await
+            {
+                Ok(found) => found,
+                Err(failed) => {
+                    self.compiler
+                        .take_back_what_operations_did_to_the_graph(&logged);
+                    self.restore_what_was_drawn_and_drop_the_events(held);
+                    return Err(GraphEditBatchRefused {
+                        refusal: failed.refusal,
+                        taken_back: if failed.after_changing_what_runs {
+                            HowFarARefusedBatchWasTakenBack::AsFarAsNothingBuiltOrWiredHoldsIt
+                        } else {
+                            HowFarARefusedBatchWasTakenBack::Whole
+                        },
+                    });
+                }
+            }
+        };
+        // A stop that took the edits back as the stream's shutdown was forced, between the
+        // look at the hold above and the commit, leaves nothing made to answer for.
+        if found == WhatTheHeldCommitFound::TheHoldTakenBack {
+            return Err(self.the_refusal_of_edits_a_forced_stop_took_back(held));
         }
         self.announce_each_event_of_what_stands(held);
         Ok(())

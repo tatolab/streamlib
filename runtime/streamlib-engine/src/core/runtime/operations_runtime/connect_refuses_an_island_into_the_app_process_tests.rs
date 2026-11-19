@@ -3,11 +3,13 @@
 
 //! `connect` refuses, on a stream no commit builds, each link the engine cannot wire, in the
 //! words its wiring would refuse it in at play, so the link is never in the graph a stopped
-//! stream saves; a saved graph holding such a link sets it aside, made nowhere, so the graph
-//! opens and plays without it. One test here covers each refusal a commit returns on a fresh
-//! start for a link the graph holds; the refusals a start leaves to one node are covered where
-//! that node is: a function node input no value reaches (`input_port_pin_values`) and shader
-//! nodes reading their own Image in a cycle (`shader_node_island::tests`).
+//! stream saves: among them a link from a function node into a node that runs in the app process
+//! and that the stream's function node pool does not evaluate. A saved graph holding such a link
+//! sets it aside, made nowhere, so the graph opens and plays without it. One test here covers
+//! each refusal a commit returns on a fresh start for a link the graph holds; the refusals a
+//! start leaves to one node are covered where that node is: a function node input no value
+//! reaches (`input_port_pin_values`) and shader nodes reading their own Image in a cycle
+//! (`shader_node_island::tests`).
 
 use std::sync::Arc;
 
@@ -31,7 +33,9 @@ use crate::core::execution::ProcessExecution;
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
 use crate::core::graph::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
-use crate::core::test_support::{MockInputOnlyNode, ensure_test_mocks_registered};
+use crate::core::test_support::{
+    MockInputOnlyNode, a_view_of_a_project_reading_records, ensure_test_mocks_registered,
+};
 
 const FUNCTION_NODE: &str = "app_process_check:switch";
 const HELPER_PROCESS_READER: &str = "app_process_check:meter";
@@ -39,6 +43,7 @@ const HELPER_PROCESS_WINDOWED_READER: &str = "app_process_check:windowed_meter";
 const HELPER_PROCESS_REACTIVE_READER: &str = "app_process_check:reactive_meter";
 const HELPER_PROCESS_SOURCE: &str = "app_process_check:source";
 const HELPER_PROCESS_MANUAL_READER: &str = "app_process_check:manual_meter";
+const VIEW_READER: &str = "app_process_check:program";
 
 fn a_records_port(name: &str) -> PortDescriptor {
     PortDescriptor::new(
@@ -70,8 +75,9 @@ fn a_described_node_type(
     descriptor
 }
 
-/// A compiler of a stopped stream resolving a function node type, `switch`, and a type its node
-/// code runs in a helper process, `meter`, beside the natively compiled mocks.
+/// A compiler of a stopped stream resolving a function node type, `switch`, a type its node code
+/// runs in a helper process, `meter`, and a view of its project, `program`, beside the natively
+/// compiled mocks.
 fn a_stopped_stream_resolving_a_function_node_type() -> Arc<Compiler> {
     ensure_test_mocks_registered();
     let node_types = NodeTypesOneStreamResolves::new();
@@ -137,6 +143,15 @@ fn a_stopped_stream_resolving_a_function_node_type() -> Arc<Compiler> {
         NodeClassImportPath::new(HELPER_PROCESS_MANUAL_READER).unwrap(),
         ProcessExecution::Manual,
     );
+    node_types.replace_the_view_types_this_streams_project_brings(&[
+        a_view_of_a_project_reading_records(VIEW_READER),
+    ]);
+    assert!(
+        node_types.is_a_view_type_of_this_streams_project(
+            &NodeClassImportPath::new(VIEW_READER).unwrap()
+        ),
+        "the fixture's view is a node type"
+    );
     Arc::new(Compiler::new_of_a_stream(
         Arc::new(node_types),
         LiveInputValuesOfAStream::default(),
@@ -159,14 +174,38 @@ fn a_node_of(compiler: &Compiler, node_type: &str) -> NodeRunId {
     })
 }
 
+/// A natively compiled node runs in the app process, which runs no node code, so the stream's
+/// function node pool evaluates the island it reads and `connect` makes the link.
+///
+/// Mental-revert: refusing every natively compiled reader refuses a link the pool carries at
+/// play, and a stream built with one never loads.
 #[test]
-fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
+fn a_function_node_into_a_natively_compiled_node_connects_for_the_pool_to_evaluate() {
     let compiler = a_stopped_stream_resolving_a_function_node_type();
     let switch = a_node_of(&compiler, FUNCTION_NODE);
-    let program = a_node_of(
+    let converter = a_node_of(
         &compiler,
         MockInputOnlyNode::node_class_import_path().as_str(),
     );
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(switch, "result"),
+        InputLinkPortRef::new(converter, "in1"),
+    )
+    .expect("the stream's function node pool evaluates the island");
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A view of the stream's project runs in the app process and the pool does not evaluate an
+/// island it reads, so `connect` refuses the link in the words its wiring would at play.
+///
+/// Mental-revert: without the refusal, a stopped stream saves the link and fails at play.
+#[test]
+fn a_function_node_into_a_view_is_refused_and_never_made() {
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let switch = a_node_of(&compiler, FUNCTION_NODE);
+    let program = a_node_of(&compiler, VIEW_READER);
 
     let refusal = connect_on_this_thread(
         &compiler,
@@ -188,19 +227,16 @@ fn a_function_node_into_a_natively_compiled_node_is_refused_and_never_made() {
     assert_eq!(the_links_in(&compiler), 0);
 }
 
-/// A saved graph holding a link from a function node into a node in the app process opens,
-/// that link set aside with why the engine cannot wire it, so the person can see and remove it
-/// while the stream plays without it.
+/// A saved graph holding a link from a function node into a view opens, that link set aside
+/// with why the engine cannot wire it, so the person can see and remove it while the stream
+/// plays without it.
 ///
 /// Mental-revert: refusing the link on a saved graph's load too fails the whole graph's open.
 #[test]
-fn a_saved_graphs_function_node_into_a_natively_compiled_node_is_set_aside_as_it_opens() {
+fn a_saved_graphs_function_node_into_a_view_is_set_aside_as_it_opens() {
     let compiler = a_stopped_stream_resolving_a_function_node_type();
     let switch = a_node_of(&compiler, FUNCTION_NODE);
-    let program = a_node_of(
-        &compiler,
-        MockInputOnlyNode::node_class_import_path().as_str(),
-    );
+    let program = a_node_of(&compiler, VIEW_READER);
 
     let made = connect_a_link_of_a_saved_graph_on_this_thread(
         &compiler,
@@ -381,7 +417,8 @@ fn a_cycle_of_function_nodes_is_caught_at_the_edit() {
     );
 }
 
-/// An island into a node in the app process is caught at the edit.
+/// An island into a view, a node in the app process the function node pool does not evaluate,
+/// is caught at the edit.
 ///
 /// Mental-revert: leaving this judgement to the commit that builds the stream connects the
 /// saved graph's link here and fails the stream at its start.
@@ -389,10 +426,7 @@ fn a_cycle_of_function_nodes_is_caught_at_the_edit() {
 fn an_island_into_a_node_in_the_app_process_is_caught_at_the_edit() {
     let compiler = a_stopped_stream_resolving_a_function_node_type();
     let switch = a_node_of(&compiler, FUNCTION_NODE);
-    let program = a_node_of(
-        &compiler,
-        MockInputOnlyNode::node_class_import_path().as_str(),
-    );
+    let program = a_node_of(&compiler, VIEW_READER);
     assert_refused_made_now_and_set_aside_from_a_saved_graph(
         &compiler,
         OutputLinkPortRef::new(switch, "result"),

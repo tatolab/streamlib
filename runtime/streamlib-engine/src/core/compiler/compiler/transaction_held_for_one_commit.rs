@@ -55,9 +55,9 @@ impl Compiler {
     }
 
     /// Release the transaction's hold for one commit, for a stream no commit builds, which
-    /// compiles nothing of what was logged under it.
-    pub(crate) fn release_the_transaction_held_for_one_commit(&self) {
-        self.transaction_held_for_one_commit.lock().take();
+    /// compiles nothing of what was logged under it; whether there was a hold to release.
+    pub(crate) fn release_the_transaction_held_for_one_commit(&self) -> bool {
+        self.transaction_held_for_one_commit.lock().take().is_some()
     }
 
     /// Take back every operation the transaction logged under its hold for one commit, and
