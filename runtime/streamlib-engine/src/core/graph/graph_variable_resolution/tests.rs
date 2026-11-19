@@ -540,6 +540,7 @@ fn a_rendered_node(name: &str) -> GraphNodeOutput {
         },
         components: Default::default(),
         input_values: serde_json::Map::new(),
+        live: None,
         pins: serde_json::Map::new(),
         exposed_config_fields: Vec::new(),
         studio: serde_json::Map::new(),

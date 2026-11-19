@@ -243,7 +243,7 @@ async fn exported_live_graph_json(
     stream_operations: &Arc<dyn RuntimeOperations>,
 ) -> Result<serde_json::Value, McpError> {
     stream_operations
-        .to_json_async()
+        .the_graph_as_answered_async()
         .await
         .map_err(|e| McpError::internal_error(format!("graph export failed: {e}"), None))
 }

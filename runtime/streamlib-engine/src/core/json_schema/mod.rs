@@ -535,6 +535,7 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             inputs_waiting_for_a_value: Vec::new(),
             components: the_components_of_a_node_with_its_health(node),
             fragment: None,
+            live: None,
         }
     }
 }
@@ -625,6 +626,23 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
             value_read: None,
+        }
+    }
+}
+
+impl From<&crate::core::graph::GraphNodePorts> for GraphNodePortsOnTheWire {
+    fn from(ports: &crate::core::graph::GraphNodePorts) -> Self {
+        Self {
+            inputs: ports
+                .inputs
+                .iter()
+                .map(GraphNodePortOnTheWire::from)
+                .collect(),
+            outputs: ports
+                .outputs
+                .iter()
+                .map(GraphNodePortOnTheWire::from)
+                .collect(),
         }
     }
 }

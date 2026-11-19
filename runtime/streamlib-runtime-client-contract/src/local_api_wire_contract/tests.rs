@@ -574,6 +574,59 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         "every stream's graph reads as every stream: {read_every:?}"
     );
     assert_eq!(serde_json::to_value(&read_every).unwrap(), every_stream);
+
+    let mut with_an_edit_not_live = one_stream.clone();
+    let mut node_not_live = one_stream["nodes"][0].clone();
+    node_not_live["id"] = serde_json::json!("2d2d2d2d-2d2d-4d2d-8d2d-2d2d2d2d2d2d");
+    node_not_live["name"] = serde_json::json!("second_mixer");
+    node_not_live["live"] = serde_json::json!(false);
+    let mut link_not_live = one_stream["links"][0].clone();
+    link_not_live["target"]["node"] = serde_json::json!("second_mixer");
+    link_not_live["live"] = serde_json::json!(false);
+    with_an_edit_not_live["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(node_not_live);
+    with_an_edit_not_live["links"]
+        .as_array_mut()
+        .unwrap()
+        .push(link_not_live);
+    let read_not_live: GraphToolResult =
+        serde_json::from_value(with_an_edit_not_live.clone()).unwrap();
+    let GraphToolResult::OneStream(graph) = &read_not_live else {
+        panic!("one stream's graph reads as one stream: {read_not_live:?}");
+    };
+    assert_eq!(
+        (graph.nodes[0].live, graph.nodes[1].live),
+        (None, Some(false)),
+        "a part not live yet says so, and a live one says nothing"
+    );
+    assert_eq!(
+        (graph.links[0].live, graph.links[1].live),
+        (None, Some(false))
+    );
+    assert_eq!(
+        serde_json::to_value(&read_not_live).unwrap(),
+        with_an_edit_not_live
+    );
+}
+
+#[test]
+fn an_edit_not_live_is_spelled_as_the_wire_carries_it_and_recovered_by_a_restart() {
+    let diagnostic = DiagnosticOnTheWire::of(
+        DiagnosticKindOnTheWire::EditNotLive,
+        DiagnosticPlaceOnTheWire::Stream,
+        "its graph document holds an edit its running graph did not take".to_owned(),
+    );
+    assert_eq!(
+        serde_json::to_value(&diagnostic).unwrap(),
+        serde_json::json!({
+            "kind": "edit_not_live",
+            "place": { "on": "stream" },
+            "words": "its graph document holds an edit its running graph did not take",
+            "recovery": "restart_the_playback",
+        })
+    );
 }
 
 #[test]

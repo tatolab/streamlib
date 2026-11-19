@@ -289,10 +289,8 @@ impl Runner {
         if record.is_failed() || record.location != stream_asset.stream_location {
             return None;
         }
-        let (_, stream_document) =
-            the_graph_document_of_the_stream_at(&stream_asset.stream_location).ok()?;
-        let graph_document: serde_json::Value =
-            serde_json::from_slice(stream_document.bytes.as_ref().ok()?).ok()?;
+        let graph_document =
+            the_graph_document_json_of_the_stream_at(&stream_asset.stream_location).ok()?;
         if let Err(refusal) = loaded
             .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
                 graph_document,
@@ -305,6 +303,7 @@ impl Runner {
             );
             return None;
         }
+        loaded.forget_the_edits_its_document_holds_not_live();
         if loaded.display_name() != stream_asset.display_name {
             loaded.rename(stream_asset.display_name.clone());
         }

@@ -172,6 +172,11 @@ pub struct GraphNodeOnTheWire {
     /// node is. A spec key, present on a fragment alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragment: Option<GraphFragmentOnTheWire>,
+    /// `false` on a node the stream's graph document holds and its running graph does not hold
+    /// yet, drawn as the document writes it until the stream's playback stops; absent on every
+    /// other node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<bool>,
 }
 
 /// How a node's code runs.
