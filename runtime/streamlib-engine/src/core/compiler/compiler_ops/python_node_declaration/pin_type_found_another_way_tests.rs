@@ -133,3 +133,106 @@ fn a_64_bit_integer_on_a_single_pin_is_refused_with_the_reason() {
         "got {refusal}"
     );
 }
+
+/// A typed function node as bare `@node` describes `def Gate[PinValue](value: PinValue, open:
+/// bool = True) -> PinValue | None`: `value` takes any type on every family, and `result`
+/// follows it, both handed on unread.
+fn a_described_function_node_passing_its_input_on() -> serde_json::Value {
+    serde_json::json!({
+        "import_path": "my_app.pass:Gate",
+        "short_name": "Gate",
+        "description": "passes a value on while open",
+        "kind": "function",
+        "language": "python",
+        "state_fields": [],
+        "runs_as_python": false,
+        "execution": {"mode": "reactive"},
+        "scheduling_priority": "normal",
+        "paced_by_real_time": false,
+        "config_schema": {"type": "object"},
+        "input_ports": [
+            {
+                "name": "value",
+                "description": "",
+                "family": {
+                    "family": "image",
+                    "also_takes_families": ["array", "channels", "packets", "records"],
+                },
+                "pin_declaration": {"pin_type": {"kind": "any"}, "flow": "value"},
+            },
+            {
+                "name": "open",
+                "description": "",
+                "family": {"family": "channels"},
+                "pin_declaration": {
+                    "pin_type": {"kind": "is", "pin_type": {"type": "boolean"}},
+                    "flow": "value",
+                },
+                "pin_default": true,
+            },
+        ],
+        "output_ports": [
+            {
+                "name": "result",
+                "description": "",
+                "family": {"family": "image", "family_follows_input_port": "value"},
+                "pin_declaration": {
+                    "pin_type": {"kind": "same_as_input", "input_port_name": "value"},
+                    "flow": "value",
+                },
+            },
+        ],
+        "function_signature": {
+            "inputs": [
+                {"parameter": "value", "port": "value", "value_type": "unread_message", "optional": false},
+                {
+                    "parameter": "open",
+                    "port": "open",
+                    "value_type": "bool",
+                    "pin_type": {"type": "boolean"},
+                    "optional": false,
+                    "default": true,
+                },
+            ],
+            "outputs": [
+                {"port": "result", "field": null, "value_type": "unread_message", "may_hand_out_nothing": true},
+            ],
+            "state_parameter": null,
+        },
+    })
+}
+
+#[test]
+fn a_function_node_passing_its_input_on_takes_any_type_and_hands_on_the_type_linked_in() {
+    let requested =
+        NodeClassImportPath::new("my_app.pass:Gate").expect("the test path names a class");
+    let declaration = PythonNodeDeclaration::read_from_described_node_type(
+        &a_described_function_node_passing_its_input_on(),
+        &requested,
+    )
+    .expect("a type parameter's input and output read");
+
+    let declared = |port_name: &str| {
+        declaration
+            .descriptor
+            .inputs
+            .iter()
+            .chain(&declaration.descriptor.outputs)
+            .find(|port| port.name == port_name)
+            .and_then(|port| port.declared_pin())
+            .map(|declared| declared.pin_type)
+    };
+    assert_eq!(declared("value"), Some(DeclaredPinType::Any));
+    assert_eq!(
+        declared("result"),
+        Some(DeclaredPinType::SameAsInput {
+            input_port_name: "value".to_owned()
+        })
+    );
+    assert_eq!(
+        declared("open"),
+        Some(DeclaredPinType::Is {
+            pin_type: crate::core::descriptors::PinType::Boolean {}
+        })
+    );
+}
