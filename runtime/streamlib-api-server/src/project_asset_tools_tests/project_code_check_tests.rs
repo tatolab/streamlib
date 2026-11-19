@@ -42,11 +42,14 @@ async fn a_declaration_error_is_answered_with_its_check_place_and_code() {
     assert_eq!(checked["verdict"], "failed");
     assert_eq!(
         checked["checks"],
-        json!([{
-            "check": "python_node_declarations",
-            "state": "failed",
-            "checked_with": ["tatolab-stream 1.0"],
-        }])
+        json!([
+            {
+                "check": "python_node_declarations",
+                "state": "failed",
+                "checked_with": ["tatolab-stream 1.0"],
+            },
+            { "check": "extension_manifest", "state": "passed" },
+        ])
     );
     assert_eq!(
         checked["findings"],
@@ -83,6 +86,49 @@ async fn a_project_whose_interpreter_is_not_made_is_answered_not_fully_checked()
             .unwrap()
             .contains("could not be started"),
         "{run}"
+    );
+}
+
+#[tokio::test]
+async fn a_views_port_declared_by_family_is_a_warning_naming_the_pin_type_and_the_verdict_still_passes()
+ {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    the_projects_interpreter_prints(
+        &served.project_directory(),
+        &[r#"{"modules":[],"checked_with":["tatolab-stream 1.0"]}"#],
+    );
+    let view_folder = served.project_directory().join("views/monitor");
+    std::fs::create_dir_all(&view_folder).unwrap();
+    std::fs::write(
+        view_folder.join("tatolab_view.json"),
+        r#"{"contract": "1.0", "title": "Monitor", "entry": "index.html", "placement": "node",
+            "inputs": [{"name": "picture", "family": "image"}]}"#,
+    )
+    .unwrap();
+
+    let checked = served.answered("check_project_code", json!({})).await;
+
+    assert_eq!(checked["verdict"], "passed", "{checked}");
+    assert_eq!(
+        checked["checks"][1],
+        json!({ "check": "extension_manifest", "state": "passed" })
+    );
+    let finding = &checked["findings"][0];
+    assert_eq!(finding["check"], "extension_manifest");
+    assert_eq!(finding["finding_code"], "port_declared_by_family");
+    assert_eq!(finding["severity"], "warning");
+    assert_eq!(finding["path"], "views/monitor/tatolab_view.json");
+    assert_eq!(finding["port"], "picture");
+    assert!(
+        finding["words"]
+            .as_str()
+            .unwrap()
+            .contains(r#"write `"pin_type": {"type": "texture"}`"#),
+        "{finding}"
+    );
+    assert_eq!(
+        checked["files_checked"][0]["path"],
+        "views/monitor/tatolab_view.json"
     );
 }
 

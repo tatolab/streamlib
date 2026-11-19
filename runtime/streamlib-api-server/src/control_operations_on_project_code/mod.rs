@@ -1,13 +1,15 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The operation checking a project's code on disk without running a stream.
+//! The operation checking a project's code on disk without running a stream: its Python node
+//! declarations and its views' manifests.
 
 use streamlib::sdk::runtime::{
     PythonNodeDeclarationCheck, PythonNodeDeclarationFinding, PythonNodeDeclarationFindingSeverity,
     check_a_projects_python_node_declarations,
 };
 use streamlib_control_contract::CheckProjectCodeRequest;
+use streamlib_project_repository::{ViewManifestsChecked, check_a_projects_view_manifests};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, ProjectActionRefusalOnTheWire, ProjectCodeCheckFinding,
     ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun, ProjectCodeCheckSeverity,
@@ -27,7 +29,7 @@ impl ControlOperationDispatcher {
         }: CheckProjectCodeRequest,
     ) -> Result<ProjectCodeCheckResult, ControlOperationRefusal> {
         let paths_read = paths.clone();
-        let project_directory = self
+        let (project_directory, view_manifests_checked) = self
             .a_project_repository_call_off_the_async_runtime(
                 CHECK_PROJECT_CODE,
                 project_directory,
@@ -35,7 +37,10 @@ impl ControlOperationDispatcher {
                     for path in paths_read.iter().flatten() {
                         project_repository.read_project_file(path)?;
                     }
-                    Ok(project_repository.project_directory().to_path_buf())
+                    let project_directory = project_repository.project_directory().to_path_buf();
+                    let view_manifests_checked =
+                        check_a_projects_view_manifests(&project_directory, paths_read.as_deref())?;
+                    Ok((project_directory, view_manifests_checked))
                 },
             )
             .await?;
@@ -46,14 +51,44 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "check_project_code failed: the declaration check",
         ))?;
-        Ok(the_answer_of_the_declaration_check(declaration_check))
+        Ok(the_answer_of_the_checks(
+            declaration_check,
+            view_manifests_checked,
+        ))
     }
 }
 
-/// The answer of a `python_node_declarations` run that ended as `declaration_check` did.
-fn the_answer_of_the_declaration_check(
+/// The answer of a `python_node_declarations` run that ended as `declaration_check` did and an
+/// `extension_manifest` run that ended as `view_manifests_checked` did.
+fn the_answer_of_the_checks(
     declaration_check: PythonNodeDeclarationCheck,
+    view_manifests_checked: ViewManifestsChecked,
 ) -> ProjectCodeCheckResult {
+    let ViewManifestsChecked {
+        run: view_manifests_run,
+        findings: view_manifest_findings,
+        files_checked: view_manifests_read,
+    } = view_manifests_checked;
+    let (declarations_run, mut findings, mut files_checked) =
+        the_run_of_the_declaration_check(declaration_check);
+    findings.extend(view_manifest_findings);
+    files_checked.extend(view_manifests_read);
+    ProjectCodeCheckResult::of(
+        vec![declarations_run, view_manifests_run],
+        findings,
+        files_checked,
+    )
+}
+
+/// The `python_node_declarations` run that ended as `declaration_check` did, its findings and
+/// the files it finished.
+fn the_run_of_the_declaration_check(
+    declaration_check: PythonNodeDeclarationCheck,
+) -> (
+    ProjectCodeCheckRun,
+    Vec<ProjectCodeCheckFinding>,
+    Vec<ProjectFileChecked>,
+) {
     let check = ProjectCodeCheckKind::PythonNodeDeclarations;
     let mut findings = Vec::new();
     let mut files_checked = Vec::new();
@@ -99,13 +134,13 @@ fn the_answer_of_the_declaration_check(
         }
         None => (ProjectCodeCheckState::Passed, None),
     };
-    ProjectCodeCheckResult::of(
-        vec![ProjectCodeCheckRun {
+    (
+        ProjectCodeCheckRun {
             check,
             state,
             not_checked_because,
             checked_with: declaration_check.checked_with,
-        }],
+        },
         findings,
         files_checked,
     )

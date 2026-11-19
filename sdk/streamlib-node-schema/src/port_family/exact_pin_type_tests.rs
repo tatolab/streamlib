@@ -114,3 +114,27 @@ fn a_port_declares_the_pin_its_author_states_else_a_texture_for_a_picture_and_el
         Some(stated)
     );
 }
+
+#[test]
+fn each_family_lists_the_built_in_types_its_messages_carry() {
+    use crate::pin_type::BuiltInPinTypeName::{
+        Asset, Audio, Boolean, Color, EncodedAudio, EncodedVideo, Float, Integer, Menu, Rectangle,
+        String, Tensor, Texture, Transform, Trigger, Vector,
+    };
+    assert_eq!(PortFamily::Image.the_pin_types_it_carries(), [Texture]);
+    assert_eq!(PortFamily::Array.the_pin_types_it_carries(), [Tensor]);
+    assert_eq!(
+        PortFamily::Packets.the_pin_types_it_carries(),
+        [EncodedVideo, EncodedAudio]
+    );
+    assert_eq!(
+        PortFamily::Channels.the_pin_types_it_carries(),
+        [
+            Boolean, Integer, Float, Color, Vector, Rectangle, Transform, Audio
+        ]
+    );
+    assert_eq!(
+        PortFamily::Records.the_pin_types_it_carries(),
+        [String, Menu, Asset, Trigger]
+    );
+}

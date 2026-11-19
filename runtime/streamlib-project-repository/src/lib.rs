@@ -40,6 +40,8 @@ mod stream_graph_fragment_fold;
 mod stream_graph_placed_stream_level;
 mod stream_graph_studio_contract;
 mod tatolab_view_manifest;
+#[cfg(feature = "history")]
+mod view_manifest_check;
 
 pub use canonical_project_json::canonical_project_json_bytes;
 pub use core_project_import::{
@@ -177,3 +179,5 @@ pub use tatolab_view_manifest::{
     TatolabViewDeclaredPort, TatolabViewManifest, TatolabViewPlacement, VIEW_CONTRACT_READ_MAJOR,
     VIEW_CONTRACT_READ_MINOR, a_panel_writes, read_tatolab_view_manifest,
 };
+#[cfg(feature = "history")]
+pub use view_manifest_check::{ViewManifestsChecked, check_a_projects_view_manifests};

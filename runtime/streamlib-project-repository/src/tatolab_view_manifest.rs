@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `tatolab_view.json`, view contract 1.0, read as the view SDK's Zod schema
+//! `tatolab_view.json`, view contract 1.1, read as the view SDK's Zod schema
 //! (`tatolabViewManifestSchema` in tatolab-app's `tato-app-view-sdk`) reads it. That schema is the
 //! contract; `view-contract/tatolab_view_contract_examples.json` holds both to the same answers.
 
@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use streamlib_node_schema::PortFamily;
+use streamlib_node_schema::pin_type::PinType;
 
 use crate::manifest_fields::{
     a_value_never_written_as_null, is_a_contract_version,
@@ -21,7 +22,9 @@ use crate::project_views::TATOLAB_VIEW_MANIFEST_FILE_NAME;
 /// The view contract this runtime reads: a manifest for a later minor, or another major, does not open.
 pub const VIEW_CONTRACT_READ_MAJOR: u64 = 1;
 /// The highest minor of [`VIEW_CONTRACT_READ_MAJOR`] this runtime reads.
-pub const VIEW_CONTRACT_READ_MINOR: u64 = 0;
+pub const VIEW_CONTRACT_READ_MINOR: u64 = 1;
+/// The first minor of [`VIEW_CONTRACT_READ_MAJOR`] in which a declared port names its `pin_type`.
+const VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE: u64 = 1;
 
 /// The families of the outputs a panel writes: each value of one is set on the view node's input
 /// of the output's name, and published on the output.
@@ -91,19 +94,83 @@ impl TatolabViewPlacement {
     }
 }
 
-/// An input or output a `node` view declares.
+/// An input or output a `node` view declares, by its pin type, or by the older `family` alone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "TatolabViewDeclaredPortAsWritten")]
 pub struct TatolabViewDeclaredPort {
     /// The port's name: lower-case letters, digits and underscores.
     pub name: String,
-    /// The one family the port carries.
+    /// The one family the port carries: the one its pin type's messages belong to, when it
+    /// names one.
     pub family: PortFamily,
+    /// The pin type the port carries; `None` on a port declared by `family` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_type: Option<PinType>,
     /// What the port carries.
     #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub description: Option<String>,
     /// The lowest and highest value an Array port carries, lowest first.
     #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub range: Option<[f64; 2]>,
+}
+
+/// A declared port as `tatolab_view.json` writes it: its `pin_type`, its `family`, or both
+/// where they agree.
+#[derive(Deserialize)]
+struct TatolabViewDeclaredPortAsWritten {
+    name: String,
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
+    family: Option<PortFamily>,
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
+    pin_type: Option<PinType>,
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
+    description: Option<String>,
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
+    range: Option<[f64; 2]>,
+}
+
+impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
+    type Error = String;
+
+    fn try_from(port: TatolabViewDeclaredPortAsWritten) -> Result<Self, String> {
+        let family = match (&port.pin_type, port.family) {
+            (None, None) => {
+                return Err(
+                    "a port names the `pin_type` it carries, or the older `family`".to_owned(),
+                );
+            }
+            (None, Some(family)) => family,
+            (Some(pin_type), stated_family) => {
+                pin_type
+                    .validate()
+                    .map_err(|why| format!("`pin_type`: {why}"))?;
+                let Some(carried) = PortFamily::carrying(pin_type) else {
+                    return Err(format!(
+                        "`pin_type`: a {pin_type} rides no message a view's port reads or \
+                         writes; a view declares a port of a type a link carries"
+                    ));
+                };
+                if let Some(stated) = stated_family
+                    && stated != carried
+                {
+                    return Err(format!(
+                        "`family` is `{}`, and a {pin_type} is carried as `{}`; drop `family`, \
+                         which the `pin_type` sets",
+                        stated.wire_name(),
+                        carried.wire_name()
+                    ));
+                }
+                carried
+            }
+        };
+        Ok(Self {
+            name: port.name,
+            family,
+            pin_type: port.pin_type,
+            description: port.description,
+            range: port.range,
+        })
+    }
 }
 
 /// The files a view takes, by extension.
@@ -144,7 +211,7 @@ struct TatolabViewManifestIssue {
     why: String,
 }
 
-/// `manifest_json`, a view's `tatolab_view.json` as parsed, read against view contract 1.0, or
+/// `manifest_json`, a view's `tatolab_view.json` as parsed, read against view contract 1.1, or
 /// every way it falls short, each as "`field`: why.", as the view SDK words them.
 pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewManifest, String> {
     let mut manifest: TatolabViewManifest = serde_path_to_error::deserialize(manifest_json.clone())
@@ -222,6 +289,16 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
                     &format!("`{}` is named twice", port.name),
                 );
             }
+            if port.pin_type.is_some() && !names_a_minor_with_a_ports_pin_type(&manifest.contract) {
+                issue(
+                    format!("{direction}[{index}].pin_type"),
+                    &format!(
+                        "a port's `pin_type` is view contract \
+                         {VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}; \
+                         write `\"contract\": \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"
+                    ),
+                );
+            }
             if let Some([lowest, highest]) = port.range {
                 if lowest >= highest {
                     issue(
@@ -295,6 +372,15 @@ fn is_a_contract_version_this_runtime_reads(contract: &str) -> bool {
         contract,
         VIEW_CONTRACT_READ_MAJOR,
         VIEW_CONTRACT_READ_MINOR,
+    )
+}
+
+/// Whether `contract`, a version this runtime reads, is one in which a port names its `pin_type`.
+fn names_a_minor_with_a_ports_pin_type(contract: &str) -> bool {
+    !is_a_contract_version_of_major_up_to_minor(
+        contract,
+        VIEW_CONTRACT_READ_MAJOR,
+        VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE - 1,
     )
 }
 
