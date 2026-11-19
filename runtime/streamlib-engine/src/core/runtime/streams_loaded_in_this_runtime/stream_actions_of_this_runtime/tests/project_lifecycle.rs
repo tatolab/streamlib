@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::descriptors::NodeDescriptor;
+use streamlib_project_repository::{PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME};
+use crate::core::runtime::streams_loaded_in_this_runtime::operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 
 /// A project directory holding only a venv, so a create writes every scaffold file.
 fn a_directory_holding_only_a_venv() -> ProjectWithGraphDocuments {
@@ -799,6 +802,88 @@ fn a_stream_of_a_closed_project_is_held_from_its_document_alone() {
     drop(streams);
     assert!(runner.ids_of_the_loaded_streams().is_empty());
     assert_eq!(runner.list_streams()[0].state, StreamListingState::Closed);
+}
+
+#[test]
+#[serial]
+fn the_node_catalog_of_a_stream_of_a_closed_project_lists_the_native_types_reading_none_of_its_node_code()
+ {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+    let meter_view_folder = project
+        .project_directory
+        .join(PROJECT_VIEWS_DIRECTORY)
+        .join("meter");
+    std::fs::create_dir_all(&meter_view_folder).unwrap();
+    std::fs::write(
+        meter_view_folder.join(TATOLAB_VIEW_MANIFEST_FILE_NAME),
+        serde_json::to_vec(&serde_json::json!({
+            "contract": "1.0", "title": "Meter", "entry": "index.html", "placement": "node",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let camera = project.stream_id_of("camera");
+    a_project_opened_on(&runner, &project);
+    let catalog_while_loaded = runner
+        .node_catalog_of_the_stream_a_call_names(&camera)
+        .expect("a loaded stream's catalog answers");
+    let queued = runner
+        .close_project(project.path())
+        .expect("a close of an open project is queued");
+    the_stream_action_once_finished(&runner, &queued.action_id);
+
+    let catalog_while_closed = runner
+        .node_catalog_of_the_stream_a_call_names(&camera)
+        .expect("a stream of a closed project still answers its node catalog");
+
+    let types_of = |catalog: &[NodeDescriptor]| -> BTreeSet<String> {
+        catalog
+            .iter()
+            .map(|descriptor| descriptor.node_class_import_path.as_str().to_owned())
+            .collect()
+    };
+    let types_while_closed = types_of(&catalog_while_closed);
+    assert!(
+        types_while_closed.contains(MockOutputOnlyNode::Node::node_class_import_path().as_str()),
+        "the native type of the stream's node is listed"
+    );
+    assert!(
+        types_while_closed.contains(&format!("{TEST_PROJECT_NAME}:meter")),
+        "the view the stream's project brings is listed"
+    );
+    // Other tests may register native types meanwhile, so the catalog read later holds at least
+    // every type of the one read while the stream was loaded.
+    assert!(
+        types_of(&catalog_while_loaded).is_subset(&types_while_closed),
+        "the closed stream lists every type it listed while loaded"
+    );
+    assert!(
+        runner.ids_of_the_loaded_streams().is_empty(),
+        "reading the catalog leaves the stream unloaded"
+    );
+    assert_eq!(runner.list_streams()[0].state, StreamListingState::Closed);
+}
+
+#[test]
+#[serial]
+fn the_node_catalog_of_a_stream_this_runtime_does_not_hold_is_refused_naming_it() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+
+    let refusal = runner
+        .node_catalog_of_the_stream_a_call_names("nowhere")
+        .err()
+        .expect("a stream this runtime does not hold is refused");
+
+    assert!(matches!(refusal, Error::NotFound(_)), "{refusal}");
+    assert!(
+        refusal
+            .to_string()
+            .contains("no stream with the id `nowhere`"),
+        "{refusal}"
+    );
 }
 
 #[test]

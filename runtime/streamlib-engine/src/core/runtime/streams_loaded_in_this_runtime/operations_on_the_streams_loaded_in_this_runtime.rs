@@ -54,9 +54,13 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_id: &str,
     ) -> Result<LoadedStreamIdentity>;
 
-    /// The node types the loaded stream `stream_id` names resolves — the
-    /// native ones, then the ones described in its own interpreter — with the
-    /// same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
+    /// The node types the stream `stream_id` names resolves: a loaded stream's
+    /// native ones, the views its project brings and the ones described in its
+    /// own interpreter; a stream this runtime lists and has not loaded, held
+    /// from its graph document alone, the native ones and the views its project
+    /// brings, as none of its node code is read. Refused with
+    /// [`Error::NotFound`](crate::core::error::Error::NotFound) naming the
+    /// loaded and the recorded streams for a stream this runtime does not hold.
     fn node_catalog_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
@@ -229,8 +233,8 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         &self,
         stream_id: &str,
     ) -> Result<Vec<NodeDescriptor>> {
-        self.loaded_stream_of_the_id(stream_id)
-            .map(|stream| stream.node_types_this_stream_resolves().node_catalog())
+        self.the_streams_to_read_or_edit(&[stream_id.to_owned()])?
+            .node_catalog_of(stream_id)
     }
 
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(

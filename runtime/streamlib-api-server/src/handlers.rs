@@ -157,8 +157,8 @@ pub(crate) async fn health() -> &'static str {
 }
 
 /// What a route answers when the stream it was asked about cannot be named:
-/// `404` for one not loaded — the refusal names the loaded streams — `400` for
-/// a name that casts to nothing, and `500` for anything else.
+/// `404` for one the route cannot resolve — the refusal names the streams it
+/// could — `400` for a name that casts to nothing, and `500` for anything else.
 fn stream_resolution_refusal_response(refusal: &Error) -> Response {
     let status = match refusal {
         Error::NotFound(_) => StatusCode::NOT_FOUND,
@@ -180,8 +180,8 @@ fn stream_operations_or_refusal(
         .map_err(|refusal| Box::new(stream_resolution_refusal_response(&refusal)))
 }
 
-/// What `GET /api/registry` answers: one stream's node catalog, or the native
-/// types and each loaded stream's own.
+/// What `GET /api/registry` answers: one stream's node catalog, loaded or not, or
+/// the native types and each loaded stream's own.
 #[derive(Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub(crate) enum NodeTypesOfOneStreamOrOfEveryStream {
@@ -371,11 +371,11 @@ async fn the_stream_graph_with_its_condition(
     path = "/api/registry",
     tag = "registry",
     params(
-        ("stream" = Option<String>, Query, description = "The loaded stream whose node catalog to list, by its stream id; absent lists the native types and each loaded stream's own")
+        ("stream" = Option<String>, Query, description = "The stream whose node catalog to list, by its stream id, loaded or listed and not loaded; absent lists the native types and each loaded stream's own")
     ),
     responses(
-        (status = 200, description = "With `stream`, the node types that stream can add: the natively compiled ones, then the ones described in its own interpreter. Without, `{nodes, streams}`: the native types, then each loaded stream's described types under that stream", body = NodeTypesOfOneStreamOrOfEveryStream),
-        (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse)
+        (status = 200, description = "With `stream`, the node types that stream can add: the natively compiled ones, the views its project brings, then, for a loaded stream, the ones described in its own interpreter; a stream listed and not loaded reads none of its node code. Without, `{nodes, streams}`: the native types, then each loaded stream's described types under that stream", body = NodeTypesOfOneStreamOrOfEveryStream),
+        (status = 404, description = "This runtime holds no stream of that id; the error names the loaded and the recorded streams", body = ErrorResponse)
     )
 )]
 pub(crate) async fn get_registry(
@@ -388,15 +388,23 @@ pub(crate) async fn get_registry(
         ))
         .into_response();
     };
-    match state
-        .operations_on_the_loaded_streams
-        .node_catalog_of_the_stream_a_call_names(&stream)
-    {
-        Ok(node_catalog) => Json(NodeTypesOfOneStreamOrOfEveryStream::OneStream(
+    // Off the async runtime: a stream not loaded is held from its graph document, which waits
+    // for any stream action under way.
+    let operations_on_the_loaded_streams = Arc::clone(&state.operations_on_the_loaded_streams);
+    let node_catalog = tokio::task::spawn_blocking(move || {
+        operations_on_the_loaded_streams.node_catalog_of_the_stream_a_call_names(&stream)
+    })
+    .await;
+    match node_catalog {
+        Ok(Ok(node_catalog)) => Json(NodeTypesOfOneStreamOrOfEveryStream::OneStream(
             node_catalog_response(&node_catalog),
         ))
         .into_response(),
-        Err(refusal) => stream_resolution_refusal_response(&refusal),
+        Ok(Err(refusal)) => stream_resolution_refusal_response(&refusal),
+        Err(not_finished) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("the node catalog read did not finish: {not_finished}"),
+        ),
     }
 }
 
@@ -922,73 +930,4 @@ pub(crate) mod router_surface_tests {
 }
 
 #[cfg(test)]
-mod control_plane_request_trace_level_tests {
-    //! The log level a routine control-plane request speaks at.
-    //!
-    //! At the engine's default `info` filter a node's control plane adds
-    //! nothing to the app's own log. The trace is levelled, not deleted, so
-    //! `RUST_LOG=tower_http=debug` brings all three records back.
-
-    use super::router_surface_tests::control_plane_router_over_a_stub_runtime;
-    use super::*;
-    use crate::control_plane_stub_support::CapturedTracingTargets;
-    use axum::body::Body;
-    use axum::http::Request;
-    use serial_test::serial;
-    use tower::ServiceExt;
-
-    fn serve_one_graph_request() {
-        let request_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("a current-thread runtime builds");
-        request_runtime.block_on(async {
-            let response = control_plane_router_over_a_stub_runtime()
-                .oneshot(
-                    Request::builder()
-                        .uri("/api/graph")
-                        .body(Body::empty())
-                        .expect("the graph request builds"),
-                )
-                .await
-                .expect("the router answers");
-            assert_eq!(response.status(), StatusCode::OK);
-        });
-    }
-
-    fn tower_http_trace_targets_under(env_filter_directives: &str) -> Vec<&'static str> {
-        CapturedTracingTargets::captured_from_the_second_of_two_runs(
-            env_filter_directives,
-            serve_one_graph_request,
-        )
-        .into_iter()
-        .filter(|target| target.starts_with("tower_http"))
-        .collect()
-    }
-
-    #[test]
-    #[serial]
-    fn a_routine_request_says_nothing_at_the_default_info_filter() {
-        let targets = tower_http_trace_targets_under("info");
-        assert!(
-            targets.is_empty(),
-            "a request must be silent at the engine's default filter, got: {targets:?}"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn the_same_request_traces_all_three_hooks_under_tower_http_debug() {
-        let targets = tower_http_trace_targets_under("info,tower_http=debug");
-        for hook in [
-            "tower_http::trace::make_span",
-            "tower_http::trace::on_request",
-            "tower_http::trace::on_response",
-        ] {
-            assert!(
-                targets.contains(&hook),
-                "asking for the request trace must yield {hook}, got: {targets:?}"
-            );
-        }
-    }
-}
+mod control_plane_request_trace_level_tests;

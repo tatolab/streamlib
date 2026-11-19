@@ -7,6 +7,7 @@
 
 use super::recorded_stream_reload::the_graph_the_document_of_the_stream_at_holds;
 use super::*;
+use crate::core::descriptors::NodeDescriptor;
 use crate::core::runtime::RuntimeOperations;
 use crate::core::runtime::runtime::tear_down_a_stream_that_never_entered_the_table;
 use parking_lot::MutexGuard;
@@ -18,6 +19,7 @@ use parking_lot::MutexGuard;
 /// made through it is in the document.
 pub struct StreamsToReadOrEdit<'runner> {
     runtime_operations_of_each_stream: HashMap<String, Arc<dyn RuntimeOperations>>,
+    each_stream_of_this_runtime: HashMap<String, Arc<LoadedStreamInThisRuntime>>,
     held_from_their_documents_alone: Vec<StreamHeldFromItsDocumentAlone>,
     no_stream_action_while_any_is_held: Option<MutexGuard<'runner, ()>>,
 }
@@ -29,6 +31,7 @@ impl StreamsToReadOrEdit<'_> {
     ) -> Self {
         Self {
             runtime_operations_of_each_stream,
+            each_stream_of_this_runtime: HashMap::new(),
             held_from_their_documents_alone: Vec::new(),
             no_stream_action_while_any_is_held: None,
         }
@@ -46,11 +49,38 @@ impl StreamsToReadOrEdit<'_> {
                 ))
             })
     }
+
+    /// The node types the stream `stream_id` resolves: a loaded stream's as it is loaded, and,
+    /// for one held from its graph document alone, the native ones and the views its project
+    /// brings, as none of its node code is read. Refused for a stream these were not asked for.
+    pub(in crate::core::runtime) fn node_catalog_of(
+        &self,
+        stream_id: &str,
+    ) -> Result<Vec<NodeDescriptor>> {
+        self.each_stream_of_this_runtime
+            .get(stream_id)
+            .map(|stream| stream.node_types_this_stream_resolves().node_catalog())
+            .ok_or_else(|| {
+                Error::Runtime(format!(
+                    "the stream `{stream_id}` is not among the streams asked for to read or edit"
+                ))
+            })
+    }
+
+    fn hold(&mut self, stream_id: &str, stream: Arc<LoadedStreamInThisRuntime>) {
+        self.runtime_operations_of_each_stream.insert(
+            stream_id.to_owned(),
+            Arc::clone(&stream) as Arc<dyn RuntimeOperations>,
+        );
+        self.each_stream_of_this_runtime
+            .insert(stream_id.to_owned(), stream);
+    }
 }
 
 impl Drop for StreamsToReadOrEdit<'_> {
     fn drop(&mut self) {
         self.runtime_operations_of_each_stream.clear();
+        self.each_stream_of_this_runtime.clear();
         for held in self.held_from_their_documents_alone.drain(..) {
             tear_down_a_stream_that_never_entered_the_table(&held.stream);
         }
@@ -75,15 +105,16 @@ impl Runner {
         &self,
         stream_ids: &[String],
     ) -> Result<StreamsToReadOrEdit<'_>> {
-        let each_loaded: Option<HashMap<String, Arc<dyn RuntimeOperations>>> = stream_ids
+        let each_loaded: Option<Vec<Arc<LoadedStreamInThisRuntime>>> = stream_ids
             .iter()
-            .map(|stream_id| {
-                self.loaded_stream_of_the_id_when_loaded(stream_id)
-                    .map(|loaded| (stream_id.clone(), loaded as Arc<dyn RuntimeOperations>))
-            })
+            .map(|stream_id| self.loaded_stream_of_the_id_when_loaded(stream_id))
             .collect();
         if let Some(each_loaded) = each_loaded {
-            return Ok(StreamsToReadOrEdit::of_streams_each_loaded(each_loaded));
+            let mut streams = StreamsToReadOrEdit::of_streams_each_loaded(HashMap::new());
+            for (stream_id, loaded) in stream_ids.iter().zip(each_loaded) {
+                streams.hold(stream_id, loaded);
+            }
+            return Ok(streams);
         }
         // One of them is not loaded: resolve every one of them while no stream action runs, so
         // none is loaded or unloaded between its lookup and the edits made through it.
@@ -97,19 +128,16 @@ impl Runner {
             {
                 continue;
             }
-            let stream_operations: Arc<dyn RuntimeOperations> =
-                match self.loaded_stream_of_the_id_when_loaded(stream_id) {
-                    Some(loaded) => loaded,
-                    None => {
-                        let held = self.the_stream_held_from_its_document_alone(stream_id)?;
-                        let stream_operations = Arc::clone(&held.stream);
-                        streams.held_from_their_documents_alone.push(held);
-                        stream_operations
-                    }
-                };
-            streams
-                .runtime_operations_of_each_stream
-                .insert(stream_id.clone(), stream_operations);
+            let stream = match self.loaded_stream_of_the_id_when_loaded(stream_id) {
+                Some(loaded) => loaded,
+                None => {
+                    let held = self.the_stream_held_from_its_document_alone(stream_id)?;
+                    let stream = Arc::clone(&held.stream);
+                    streams.held_from_their_documents_alone.push(held);
+                    stream
+                }
+            };
+            streams.hold(stream_id, stream);
         }
         Ok(streams)
     }
