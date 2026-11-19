@@ -61,7 +61,7 @@ pub(in crate::core::runtime) async fn connect_impl(
     });
 
     let link_id = {
-        let _no_input_value_changing = one_input_value_change_at_a_time.lock();
+        let _no_input_value_changing = one_input_value_change_at_a_time.held_while_a_link_is_made();
         apply_a_link(&compiler, from.clone(), to.clone(), a_link_connected)?
     };
 

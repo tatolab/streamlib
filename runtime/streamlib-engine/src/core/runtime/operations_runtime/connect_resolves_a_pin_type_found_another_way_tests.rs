@@ -12,7 +12,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::{
-    ALinkConnected, LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link,
+    ALinkConnected, InputValueChangesAConnectWaitsFor, LiveGraphChangeOnOneStream, connect_impl,
+    the_verdict_connect_takes_on_a_link,
 };
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
@@ -263,7 +264,9 @@ fn connect_holding_input_value_changes_by(
                     stream_id: "main".to_string(),
                     stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
                 },
-                one_input_value_change_at_a_time,
+                one_input_value_change_at_a_time: InputValueChangesAConnectWaitsFor::TheStreamsOne(
+                    one_input_value_change_at_a_time,
+                ),
             },
             OutputLinkPortRef::new(from.clone(), output),
             InputLinkPortRef::new(to.clone(), "value"),
