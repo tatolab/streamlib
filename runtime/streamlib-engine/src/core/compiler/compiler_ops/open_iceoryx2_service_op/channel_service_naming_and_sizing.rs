@@ -49,8 +49,9 @@ pub(super) fn notify_service_name_for(dest_proc_id: &NodeRunId) -> String {
 }
 
 /// Every `connect()` link carrying from `source` — the links of the one channel
-/// that source publishes to, since a channel keys on its source.
-fn every_link_carrying_from<'a>(
+/// that source publishes to, since a channel keys on its source — those pending
+/// deletion among them.
+fn every_link_held_carrying_from<'a>(
     graph: &'a Graph,
     source: &'a OutputLinkPortRef,
 ) -> impl Iterator<Item = &'a Link> + use<'a> {
@@ -59,6 +60,15 @@ fn every_link_carrying_from<'a>(
         .e(())
         .iter()
         .filter(move |link| link.source() == source)
+}
+
+/// Every `connect()` link carrying from `source` that stands, which the channel
+/// counts once what is pending deletion leaves.
+fn every_link_carrying_from<'a>(
+    graph: &'a Graph,
+    source: &'a OutputLinkPortRef,
+) -> impl Iterator<Item = &'a Link> + use<'a> {
+    every_link_held_carrying_from(graph, source).filter(move |link| graph.stands(link))
 }
 
 /// How many destinations the channel `source` publishes to feeds: the
@@ -166,6 +176,7 @@ fn the_inbound_links_a_destination_holds_once_wired(
         .v(dest_proc_id)
         .in_e()
         .iter()
+        .filter(|link| graph.stands(link))
         .map(|link| {
             if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
                 && !needs_the_function_node_pool(graph, &link.id)
@@ -185,7 +196,7 @@ fn the_inbound_links_the_function_node_pool_holds_once_wired(graph: &Graph) -> u
         .traversal()
         .e(())
         .iter()
-        .filter(|link| needs_the_function_node_pool(graph, &link.id))
+        .filter(|link| graph.stands(link) && needs_the_function_node_pool(graph, &link.id))
         .map(|link| the_links_an_island_link_reads_from_outside_any_island(graph, &link.id).len())
         .sum()
 }
@@ -288,7 +299,7 @@ fn creation_depth_of_the_live_channel(
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
 ) -> Result<Option<usize>> {
-    let held_open_by_a_link = every_link_carrying_from(graph, source).find_map(|link| {
+    let held_open_by_a_link = every_link_held_carrying_from(graph, source).find_map(|link| {
         link.get::<Iceoryx2ServicesHeldOpenForLinkComponent>()
             .or_else(|| {
                 link.get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
@@ -407,7 +418,7 @@ pub(super) fn refuse_a_second_inbound_link_into_a_windowed_port(
         .in_e()
         .iter()
         .filter(|link| link.to_port().port_name() == dest_port)
-        .filter(|link| link_still_counts_toward_its_ports(link))
+        .filter(|link| graph.stands(link) && link_still_counts_toward_its_ports(link))
         .map(|link| link.id.to_string())
         .find(|inbound| inbound != link_id.as_str());
     let Some(first) = already_inbound else {

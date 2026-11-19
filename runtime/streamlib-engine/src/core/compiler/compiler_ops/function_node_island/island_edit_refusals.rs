@@ -3,7 +3,7 @@
 
 //! Refusing, before a commit changes anything, an edit an island cannot take.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value as JsonValue;
 
@@ -12,8 +12,8 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link,
-    LinkUniqueId, OutOfProcessLinkWiringComponent, OutputLinkPortRef, PendingDeletionComponent,
+    Graph, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link, LinkUniqueId,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
@@ -186,6 +186,7 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(
         }
         for downstream_link in graph.traversal().e(()).iter() {
             if !is_another_link(downstream_link, held_as)
+                || !graph.stands(downstream_link)
                 || downstream_link.source().node_run_id() != following_id
             {
                 continue;
@@ -218,6 +219,7 @@ fn refuse_a_second_link_into_a_port_an_island_feeds(
         .iter()
         .filter(|other_link| {
             is_another_link(other_link, held_as)
+                && graph.stands(other_link)
                 && other_link.to_port().node_run_id() == to.node_run_id()
                 && other_link.to_port().port_name() == to.port_name()
         })
@@ -348,19 +350,33 @@ pub(crate) fn the_island_links_into_a_reactive_reader_only_islands_feed(
     let links: Vec<&Link> = graph.traversal().e(()).iter().collect();
     let links_leaving: Vec<LinkUniqueId> = links
         .iter()
-        .filter(|link| leaves_with_what_is_pending_deletion(graph, link))
+        .filter(|link| !graph.stands(link))
         .map(|link| link.id.clone())
         .collect();
-    links.into_iter().filter_map(move |link| {
+    let leaving: HashSet<&str> = links_leaving.iter().map(LinkUniqueId::as_str).collect();
+    let links_standing: Vec<&Link> = links
+        .into_iter()
+        .filter(|link| !leaving.contains(link.id.as_str()))
+        .collect();
+    let mut stranded_by_reader: HashMap<NodeRunId, bool> = HashMap::new();
+    links_standing.into_iter().filter_map(move |link| {
         let reader_id = link.to_port().node_run_id();
-        let strands_its_reader = !links_leaving.contains(&link.id)
-            && runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
-            && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
-            && if links_leaving.is_empty() {
-                is_a_reactive_reader_only_islands_feed(graph, reader_id)
-            } else {
-                is_reactive_and_left_fed_only_by_islands(graph, reader_id, &links_leaving)
-            };
+        let strands_its_reader =
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
+                && *stranded_by_reader
+                    .entry(reader_id.clone())
+                    .or_insert_with(|| {
+                        if links_leaving.is_empty() {
+                            is_a_reactive_reader_only_islands_feed(graph, reader_id)
+                        } else {
+                            is_reactive_and_left_fed_only_by_islands(
+                                graph,
+                                reader_id,
+                                &links_leaving,
+                            )
+                        }
+                    });
         strands_its_reader.then(|| {
             (
                 link.id.clone(),
@@ -368,20 +384,6 @@ pub(crate) fn the_island_links_into_a_reactive_reader_only_islands_feed(
             )
         })
     })
-}
-
-/// Whether `link` leaves `graph` with what is pending deletion: itself, or a node it joins.
-fn leaves_with_what_is_pending_deletion(graph: &Graph, link: &Link) -> bool {
-    let is_pending_deletion = |node_run_id: &NodeRunId| {
-        graph
-            .traversal()
-            .v(node_run_id)
-            .first()
-            .is_some_and(|node| node.has::<PendingDeletionComponent>())
-    };
-    link.has::<PendingDeletionComponent>()
-        || is_pending_deletion(link.source().node_run_id())
-        || is_pending_deletion(link.to_port().node_run_id())
 }
 
 /// Whether `reader_id` runs reactively and only function node islands feed it, so no source

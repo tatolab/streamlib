@@ -59,7 +59,9 @@ use crate::core::nodes::{NodeState, NodeTypesOneStreamResolves};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
+mod commit_of_the_logged_operations;
 mod transaction_held_for_one_commit;
+pub(crate) use commit_of_the_logged_operations::ACommitFailed;
 
 pub(crate) struct Compiler {
     // Graph ownership (moved from Runtime)
@@ -157,41 +159,6 @@ impl Compiler {
         self.transaction.lock().clone()
     }
 
-    /// Flush transaction. Callable from any thread - compile() is dispatched to main thread.
-    #[tracing::instrument(name = "compiler.commit", skip_all)]
-    pub(crate) fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
-        #[cfg(any(test, feature = "test-support"))]
-        crate::core::runtime::graph_renders_and_commits_counted_for_a_test::count_a_commit_begun_of(
-            runtime_ctx.loaded_stream_identity(),
-        );
-        let _one_commit_at_a_time = self.one_commit_at_a_time.lock();
-        let held_since = *self.transaction_held_for_one_commit.lock();
-        let operations = match held_since {
-            Some(logged_before) => {
-                self.take_the_config_updates_logged_under_the_hold(logged_before)
-            }
-            None => self.take_the_logged_operations_to_compile(),
-        };
-        if operations.is_empty() {
-            tracing::info!("[commit] No pending operations");
-            return Ok(());
-        }
-
-        tracing::debug!(
-            "[commit] Processing {} pending operations (batched)",
-            operations.len()
-        );
-
-        let compiled = Self::compile(
-            Arc::clone(&self.graph),
-            operations,
-            runtime_ctx,
-            &self.abandoned_node_threads,
-        );
-        self.configs_a_commit_is_applying.lock().clear();
-        compiled
-    }
-
     /// Take every operation logged, for a commit to compile, recording in the same step the
     /// config each config update taken hands its node, which a config built before the commit
     /// applies it builds on.
@@ -215,7 +182,7 @@ impl Compiler {
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
         abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), ACommitFailed> {
         let readers_awaiting_a_promotion: Vec<NodeRunId> = operations
             .iter()
             .filter_map(|operation| match operation {
@@ -250,7 +217,10 @@ impl Compiler {
                 }
             }
         }
-        compiled
+        compiled.map_err(|refusal| ACommitFailed {
+            refusal,
+            after_changing_what_runs: result.began_changing_what_runs,
+        })
     }
 
     /// Compile `operations` against `graph_arc`, counting what it did into
@@ -331,6 +301,7 @@ impl Compiler {
         // Publish compile start event
         the_stream_the_compile_belongs_to
             .publish_on_this_streams_topic(RuntimeEvent::CompilerWillCompile);
+        result.began_changing_what_runs = true;
 
         let abandoned_in_this_compile: Vec<NodeDisplayNameAndId> = if !plan
             .links_to_remove

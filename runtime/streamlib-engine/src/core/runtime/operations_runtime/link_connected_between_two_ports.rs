@@ -103,7 +103,7 @@ pub(in crate::core::runtime) async fn connect_impl(
     };
     announce_or_hold(
         &stream,
-        &held_for_one_commit,
+        held_for_one_commit.as_deref(),
         Some(&link_id),
         RuntimeEvent::RuntimeWillConnect {
             from: from.clone(),
@@ -115,7 +115,7 @@ pub(in crate::core::runtime) async fn connect_impl(
 
     announce_or_hold(
         &stream,
-        &held_for_one_commit,
+        held_for_one_commit.as_deref(),
         Some(&link_id),
         RuntimeEvent::RuntimeDidConnect {
             link_id: link_id.to_string(),
@@ -125,7 +125,7 @@ pub(in crate::core::runtime) async fn connect_impl(
     );
     announce_or_hold(
         &stream,
-        &held_for_one_commit,
+        held_for_one_commit.as_deref(),
         None,
         RuntimeEvent::GraphDidChange,
     );

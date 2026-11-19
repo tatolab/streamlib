@@ -136,6 +136,7 @@ impl LoadedStreamInThisRuntime {
         graph_state_at_the_start: GraphState,
     ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
+        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("started")?;
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
         if self.this_streams_shutdown_escalation().is_requested() {
             return Err(Error::Runtime(format!(
@@ -256,6 +257,7 @@ impl LoadedStreamInThisRuntime {
 
     #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop(&self) -> Result<()> {
+        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("stopped")?;
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
         self.stop_holding_the_start_or_stop_lock().0
     }
@@ -355,6 +357,7 @@ impl LoadedStreamInThisRuntime {
     /// saved value again.
     #[tracing::instrument(name = "stream.stop_playback", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop_playback_keeping_the_graph(&self) -> Result<()> {
+        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("stopped")?;
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
         let (stopped, inputs_reset) = self.with_no_other_input_value_change(|| {
             let inputs_reset = self.forget_every_live_value_reset_at_the_stop();
@@ -378,35 +381,40 @@ impl LoadedStreamInThisRuntime {
         let (teardown_outcome, nodes_of_the_graph, links_of_the_graph) =
             self.stop_holding_the_start_or_stop_lock();
 
-        let mut node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> =
-            HashMap::with_capacity(nodes_of_the_graph.len());
-        for node in nodes_of_the_graph {
-            let spec = NodeSpec::new(node.node_type, node.config)
-                .with_display_name(node.display_name)
-                .with_pins_and_studio_fields(node.pins, node.studio)
-                .with_exposed_config_fields(node.exposed_config_fields)
-                .with_node_uuid(node.node_uuid);
-            let put_back = self.add_node_of_a_validated_graph_load(spec)?;
-            node_run_id_of_each_node_uuid.insert(node.node_uuid, put_back.node_run_id);
-        }
-        let node_of = |node_uuid: &Uuid| -> Result<NodeRunId> {
-            node_run_id_of_each_node_uuid
-                .get(node_uuid)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::GraphError(format!("the held graph holds no node {node_uuid}"))
-                })
-        };
-        for LiveLinkAsGiven {
-            link_as_given: link,
-            ..
-        } in links_of_the_graph
-        {
-            self.connect(
-                OutputLinkPortRef::new(node_of(&link.source_node)?, &link.source_port),
-                InputLinkPortRef::new(node_of(&link.target_node)?, &link.target_port),
-            )?;
-        }
+        // In one commit on this thread: the stop holds the stream's one writer, so an edit
+        // that waited for it would wait for itself.
+        self.in_one_commit_on_this_thread(|| {
+            let mut node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> =
+                HashMap::with_capacity(nodes_of_the_graph.len());
+            for node in nodes_of_the_graph {
+                let spec = NodeSpec::new(node.node_type, node.config)
+                    .with_display_name(node.display_name)
+                    .with_pins_and_studio_fields(node.pins, node.studio)
+                    .with_exposed_config_fields(node.exposed_config_fields)
+                    .with_node_uuid(node.node_uuid);
+                let put_back = self.add_node_of_a_validated_graph_load(spec)?;
+                node_run_id_of_each_node_uuid.insert(node.node_uuid, put_back.node_run_id);
+            }
+            let node_of = |node_uuid: &Uuid| -> Result<NodeRunId> {
+                node_run_id_of_each_node_uuid
+                    .get(node_uuid)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::GraphError(format!("the held graph holds no node {node_uuid}"))
+                    })
+            };
+            for LiveLinkAsGiven {
+                link_as_given: link,
+                ..
+            } in links_of_the_graph
+            {
+                self.connect(
+                    OutputLinkPortRef::new(node_of(&link.source_node)?, &link.source_port),
+                    InputLinkPortRef::new(node_of(&link.target_node)?, &link.target_port),
+                )?;
+            }
+            Ok(())
+        })?;
         let node_names_the_graph_only_nodes_hold = graph_only_nodes_as_drawn.node_names_cast();
         self.compiler.scope(|this_streams_graph, _tx| {
             this_streams_graph
@@ -610,6 +618,7 @@ impl LoadedStreamInThisRuntime {
 
     pub fn resume(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
+        let _no_graph_edits_open = self.hold_the_one_writer_for_a_lifecycle_change("resumed")?;
         *self.status.lock() = RuntimeStatus::Starting;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResuming);
 

@@ -14,8 +14,8 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    ALinkConnected, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeRunId,
-    PendingDeletionComponent, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
+    ALinkConnected, LinkUniqueId, NodeRunId,
+    WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
     the_default_name_a_new_node_takes,
 };
 use crate::core::pubsub::RuntimeEvent;
@@ -130,11 +130,8 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::Disconnect { link } => {
                 match self.the_link_held_between(&link)? {
                     Some(link_id) => self.disconnect_async(link_id).await?,
-                    None if self.holds_the_link_set_aside(&link) => {
-                        if let Some(link) = Self::the_link_by_node_uuid(&link) {
-                            self.forget_the_link_set_aside(&link);
-                        }
-                    }
+                    None if Self::the_link_by_node_uuid(&link)
+                        .is_some_and(|link| self.forget_the_link_set_aside(&link)) => {}
                     None if disconnects_a_port_by_a_name_it_had => {}
                     None => {
                         return Err(Error::GraphError(format!(
@@ -453,32 +450,23 @@ impl LoadedStreamInThisRuntime {
     }
 
     fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {
-        self.compiler.scope(|graph, _tx| {
-            let nodes: Vec<_> = graph
-                .traversal()
-                .v(())
-                .iter()
-                .filter(|held| !held.has::<PendingDeletionComponent>())
+        self.compiler.scope_reading(|graph| {
+            let standing = || graph.traversal().v(()).iter().filter(|held| held.stands());
+            if let Some(held) = standing().find(|held| held.node_uuid == node) {
+                return Ok(held.id.clone());
+            }
+            let held: Vec<String> = standing()
+                .map(|held| format!("{} `{}`", held.node_uuid, held.display_name))
                 .collect();
-            nodes
-                .iter()
-                .find(|held| held.node_uuid == node)
-                .map(|held| held.id.clone())
-                .ok_or_else(|| {
-                    let held: Vec<String> = nodes
-                        .iter()
-                        .map(|held| format!("{} `{}`", held.node_uuid, held.display_name))
-                        .collect();
-                    Error::GraphError(format!(
-                        "stream `{}` holds no node {node}. It holds: {}",
-                        self.stream_id(),
-                        if held.is_empty() {
-                            "no node".to_string()
-                        } else {
-                            held.join(", ")
-                        }
-                    ))
-                })
+            Err(Error::GraphError(format!(
+                "stream `{}` holds no node {node}. It holds: {}",
+                self.stream_id(),
+                if held.is_empty() {
+                    "no node".to_string()
+                } else {
+                    held.join(", ")
+                }
+            )))
         })
     }
 
@@ -555,28 +543,18 @@ impl LoadedStreamInThisRuntime {
         ))
     }
 
-    /// Whether this stream holds `link`, each node by its UUID, set aside: drawn, and made
-    /// nowhere, since its validation or the engine refused it.
-    fn holds_the_link_set_aside(&self, link: &StreamGraphDocumentLink) -> bool {
-        Self::the_link_by_node_uuid(link)
-            .is_some_and(|link| self.the_links_set_aside_by_node_uuid().contains(&link))
-    }
-
     /// `link` with each end its node's UUID and each port name cast; `None` when a name does
     /// not cast.
     fn the_link_by_node_uuid(
         link: &StreamGraphDocumentLink,
     ) -> Option<RunningLinkBetweenTwoNodesByUuid> {
-        Some(RunningLinkBetweenTwoNodesByUuid {
-            source_node: link.source.node,
-            source_port: cast_exposed_name_to_url_safe(&link.source.port)
-                .ok()?
-                .into_owned(),
-            target_node: link.target.node,
-            target_port: cast_exposed_name_to_url_safe(&link.target.port)
-                .ok()?
-                .into_owned(),
-        })
+        RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
+            link.source.node,
+            &link.source.port,
+            link.target.node,
+            &link.target.port,
+        )
+        .ok()
     }
 
     /// The live link `link` names by its ends; `None` when the live graph holds none, and
@@ -596,7 +574,7 @@ impl LoadedStreamInThisRuntime {
                 .out_e()
                 .iter()
                 .find(|held| {
-                    !held.has::<PendingDeletionComponent>()
+                    graph.stands(held)
                         && held.source.port_name() == source_port
                         && *held.target.node_run_id() == target
                         && held.target.port_name() == target_port

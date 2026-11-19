@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -24,8 +23,7 @@ use crate::core::graph::input_values::{
 };
 use crate::core::graph::{
     ALinkConnected, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
-    NodeInstanceComponent, NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves,
-    node_named_or_refused,
+    NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
@@ -35,6 +33,10 @@ use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 mod graph_edits_in_one_commit;
+mod live_graph_change_committed;
+use live_graph_change_committed::{
+    commit_live_graph_change, commit_the_graph_edits_held_for_one_commit,
+};
 mod link_disconnected;
 pub(in crate::core::runtime) use link_disconnected::disconnect_impl;
 mod link_connected_between_two_ports;
@@ -71,7 +73,7 @@ pub(super) struct LiveGraphChangeOnOneStream {
 /// keep it with `held_for_one_commit` until those edits close.
 fn announce_or_hold(
     stream: &LoadedStreamIdentity,
-    held_for_one_commit: &Option<Arc<GraphEditsHeldForOneCommit>>,
+    held_for_one_commit: Option<&GraphEditsHeldForOneCommit>,
     of_the_link: Option<&LinkUniqueId>,
     event: RuntimeEvent,
 ) {
@@ -91,84 +93,6 @@ pub(crate) fn mark_this_thread_as_a_node_execution_thread() {
 
 fn this_thread_may_commit_inline() -> bool {
     !IS_A_NODE_EXECUTION_THREAD.with(|marker| marker.get())
-}
-
-async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitContext) -> Result<()> {
-    let Some(runtime_ctx) = live else {
-        if !compiler.the_transaction_is_held_for_one_commit() {
-            take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler);
-        }
-        hand_each_config_update_to_its_node_now_no_commit_builds(compiler);
-        return Ok(());
-    };
-    let compiler = Arc::clone(compiler);
-    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
-        compiler.commit(&runtime_ctx)
-    }))
-    .await
-    .map_err(|join_failure| {
-        Error::Runtime(format!(
-            "the graph change's compile task did not finish: {join_failure}"
-        ))
-    })?
-}
-
-/// On a stream no commit builds, a stopped one or one not started, take each node and link
-/// pending deletion out of the graph now, with every operation logged for it: the graph it holds
-/// to read and edit then shows the removal, and the UUID and name it held are free again.
-fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &Compiler) {
-    compiler.scope(|this_streams_graph, tx| {
-        let links_pending_deletion: HashSet<LinkUniqueId> = this_streams_graph
-            .traversal()
-            .e(())
-            .iter()
-            .filter(|link| link.has::<PendingDeletionComponent>())
-            .map(|link| link.id.clone())
-            .collect();
-        let nodes_pending_deletion: HashSet<NodeRunId> = this_streams_graph
-            .traversal()
-            .v(())
-            .iter()
-            .filter(|node| {
-                node.has::<PendingDeletionComponent>() && !node.has::<NodeInstanceComponent>()
-            })
-            .map(|node| node.id.clone())
-            .collect();
-        tx.retract_every_operation_naming(&nodes_pending_deletion, &links_pending_deletion);
-        for link_id in &links_pending_deletion {
-            this_streams_graph.traversal_mut().e(link_id).drop();
-        }
-        for node_run_id in &nodes_pending_deletion {
-            if !this_streams_graph.drop_the_node(node_run_id, WhyTheNodeLeaves::Removed) {
-                tracing::warn!("`{node_run_id}`, pending deletion, was not dropped from the graph");
-            }
-        }
-    });
-}
-
-/// On a stream no commit builds, a stopped one or one not started, hand each config update
-/// logged for a node no instance runs to that node now: the graph it holds to read and edit then
-/// shows the config, and the node is built from it at the next start.
-fn hand_each_config_update_to_its_node_now_no_commit_builds(compiler: &Compiler) {
-    compiler.scope(|this_streams_graph, tx| {
-        let nodes_no_instance_runs: HashSet<NodeRunId> = this_streams_graph
-            .traversal()
-            .v(())
-            .iter()
-            .filter(|node| !node.has::<NodeInstanceComponent>())
-            .map(|node| node.id.clone())
-            .collect();
-        for (node_run_id, config_to_apply) in tx.take_each_config_update_of(&nodes_no_instance_runs)
-        {
-            if let Some(node) = this_streams_graph
-                .traversal_mut()
-                .v(&node_run_id)
-                .first_mut()
-            {
-                node.set_config(config_to_apply);
-            }
-        }
-    });
 }
 
 /// Whether an added node's config references are checked against the graph it joins.
@@ -243,7 +167,7 @@ pub(super) async fn add_node_impl(
     let emit_will_add = |id: &NodeRunId| {
         announce_or_hold(
             &stream,
-            &held_for_one_commit,
+            held_for_one_commit.as_deref(),
             None,
             RuntimeEvent::RuntimeWillAddNode {
                 node_run_id: id.clone(),
@@ -254,7 +178,7 @@ pub(super) async fn add_node_impl(
     let emit_did_add = |id: &NodeRunId| {
         announce_or_hold(
             &stream,
-            &held_for_one_commit,
+            held_for_one_commit.as_deref(),
             None,
             RuntimeEvent::RuntimeDidAddNode {
                 node_run_id: id.clone(),
@@ -363,7 +287,7 @@ pub(super) async fn add_node_impl(
 
     announce_or_hold(
         &stream,
-        &held_for_one_commit,
+        held_for_one_commit.as_deref(),
         None,
         RuntimeEvent::GraphDidChange,
     );
@@ -430,28 +354,17 @@ pub(super) async fn remove_node_impl(
         return removal_outcome;
     }
 
-    announce_or_hold(
-        &stream,
-        &held_for_one_commit,
-        None,
+    for event in [
         RuntimeEvent::RuntimeWillRemoveNode {
             node_run_id: node_run_id.clone(),
         },
-    );
-    announce_or_hold(
-        &stream,
-        &held_for_one_commit,
-        None,
         RuntimeEvent::RuntimeDidRemoveNode {
             node_run_id: node_run_id.clone(),
         },
-    );
-    announce_or_hold(
-        &stream,
-        &held_for_one_commit,
-        None,
         RuntimeEvent::GraphDidChange,
-    );
+    ] {
+        announce_or_hold(&stream, held_for_one_commit.as_deref(), None, event);
+    }
 
     removal_outcome
 }
@@ -945,8 +858,8 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.in_one_commit_from_synchronous_code(move |change| disconnect_impl(change, link_id))
     }
 
-    fn open_a_graph_edit_batch(self: Arc<Self>) -> Box<dyn GraphEditBatch> {
-        Box::new(self.open_a_graph_edit_batch_of_this_stream())
+    fn open_a_graph_edit_batch(self: Arc<Self>) -> Result<Box<dyn GraphEditBatch>> {
+        Ok(Box::new(self.open_a_graph_edit_batch_of_this_stream()?))
     }
 
     fn request_this_streams_shutdown(&self, reason: &str) -> Result<()> {

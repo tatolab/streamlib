@@ -75,7 +75,8 @@ pub(crate) use node_interpreters::open_descriptor_soft_limit::{
     the_open_descriptor_limit,
 };
 pub use operations::{
-    BoxFuture, GraphEditBatch, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
+    BoxFuture, GraphEditBatch, GraphEditBatchRefused, HowFarARefusedBatchWasTakenBack,
+    NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
 };
 pub use projects_and_their_venv::project_first_party_packages_moved_to_the_runtime_version::ProjectHistoryRecordingFirstPartyPackageMoves;
 pub use projects_and_their_venv::project_venv_sync_progress::{

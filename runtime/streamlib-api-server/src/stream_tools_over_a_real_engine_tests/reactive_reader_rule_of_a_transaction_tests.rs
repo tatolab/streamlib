@@ -258,3 +258,59 @@ async fn the_undo_and_the_redo_of_a_transaction_taking_out_a_reader_and_what_fee
         Vec::<String>::new()
     );
 }
+
+/// A transaction swapping which island feeds a reader's port, the old island's link out first,
+/// is taken: the link leaving no longer counts toward the port an island feeds.
+///
+/// Mental-revert: counting the link pending deletion refuses the new island's link as a second
+/// link into a port an island feeds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transaction_swapping_the_island_feeding_a_port_is_taken() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let (stream_id, project) = a_stream_resolving_a_reactive_reader(&engine);
+    add_a_reader_fed_by_a_source_and_an_island(&engine, &project).await;
+    let stream = project.stream_asset_of("main");
+    engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({
+                "author": an_agent_named("alice"),
+                "operations": [
+                    { "operation": "add_node", "stream": stream, "type": SWITCH_TYPE,
+                      "name": "other_switch" },
+                ],
+            }),
+        )
+        .await
+        .expect("the other island is added");
+    let document = project.the_graph_document_of("main");
+    let uuid_of = |name: &str| the_uuid_of_the_node_named(&document, name);
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({
+                "author": an_agent_named("alice"),
+                "operations": [
+                    { "operation": "disconnect", "stream": stream,
+                      "source": { "node": uuid_of("switch"), "port": "result" },
+                      "target": { "node": uuid_of("reader"), "port": "in1" } },
+                    { "operation": "connect", "stream": stream,
+                      "source": { "node": uuid_of("other_switch"), "port": "result" },
+                      "target": { "node": uuid_of("reader"), "port": "in1" } },
+                ],
+            }),
+        )
+        .await
+        .expect("the swap leaves one link into the port");
+
+    let links = links_by_node_name_in(&engine.the_live_graph_of(&stream_id));
+    assert!(
+        links.iter().any(|link| link.starts_with("other_switch/")),
+        "{links:?}"
+    );
+    assert!(
+        !links.iter().any(|link| link.starts_with("switch/")),
+        "{links:?}"
+    );
+}

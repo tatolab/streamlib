@@ -10,7 +10,7 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     EXPOSED_NAME_MAXIMUM_LENGTH, GraphNode, GraphNodePorts, GraphNodeWithComponents, Link,
     NodeFailureReasonComponent, NodeNotReadyBecauseComponent, NodeRunId, NodeTraversalMut,
-    PendingDeletionComponent, ProcessRaisingBecauseComponent, StateComponent, TraversalSourceMut,
+    ProcessRaisingBecauseComponent, StateComponent, TraversalSourceMut,
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, the_input_ports_of_the_exposed_config_fields,
 };
@@ -74,7 +74,7 @@ impl<'a> TraversalSourceMut<'a> {
             && let Some(holder) = self
                 .graph
                 .node_weights()
-                .find(|node| node.node_uuid == node_uuid && !node.has::<PendingDeletionComponent>())
+                .find(|node| node.node_uuid == node_uuid && node.stands())
         {
             return Err(Error::GraphError(format!(
                 "node `{name}` cannot take the UUID {node_uuid}: node `{}` of the graph holds it",
@@ -201,7 +201,7 @@ fn default_display_name_for(
 /// Whether `node` holds `name`: one pending deletion, which leaves with the commit that takes
 /// it out, holds none.
 fn holds_the_name(node: &GraphNode, name: &str) -> bool {
-    node.display_name == name && !node.has::<PendingDeletionComponent>()
+    node.display_name == name && node.stands()
 }
 
 /// `requested_name` cast, or [`Error::NodeNameTaken`] when a node in `graph`

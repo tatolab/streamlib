@@ -105,10 +105,11 @@ impl LoadedStreamInThisRuntime {
         &self,
     ) -> Result<()> {
         self.compiler.scope_reading(|graph| {
-            match the_island_links_into_a_reactive_reader_only_islands_feed(graph).next() {
-                Some((_, why_the_engine_cannot_wire_it)) => Err(why_the_engine_cannot_wire_it),
-                None => Ok(()),
-            }
+            the_island_links_into_a_reactive_reader_only_islands_feed(graph)
+                .next()
+                .map_or(Ok(()), |(_, why_the_engine_cannot_wire_it)| {
+                    Err(why_the_engine_cannot_wire_it)
+                })
         })
     }
 }

@@ -4,8 +4,6 @@
 //! A link disconnected: marked pending deletion, its removal logged for the next commit, and
 //! announced, or held with the graph edits held for one commit.
 
-use std::sync::Arc;
-
 use super::{
     GraphEditsHeldForOneCommit, LiveGraphChangeOnOneStream, announce_or_hold,
     commit_live_graph_change,
@@ -31,7 +29,7 @@ pub(in crate::core::runtime) async fn disconnect_impl(
     commit_live_graph_change(&compiler, live).await?;
     announce_or_hold_a_disconnect(
         &stream,
-        &held_for_one_commit,
+        held_for_one_commit.as_deref(),
         &link_id,
         &from_port,
         &to_port,
@@ -64,7 +62,7 @@ fn take_the_link_out_with_the_next_commit(
 /// from `from_port` to `to_port`.
 fn announce_or_hold_a_disconnect(
     stream: &LoadedStreamIdentity,
-    held_for_one_commit: &Option<Arc<GraphEditsHeldForOneCommit>>,
+    held_for_one_commit: Option<&GraphEditsHeldForOneCommit>,
     link_id: &LinkUniqueId,
     from_port: &OutputLinkPortRef,
     to_port: &InputLinkPortRef,
@@ -98,17 +96,17 @@ impl LoadedStreamInThisRuntime {
         &self,
         link_id: &LinkUniqueId,
     ) -> Result<()> {
-        let held_for_one_commit = GraphEditsHeldForOneCommit::the_ones_this_task_holds();
-        if held_for_one_commit.is_none() {
+        let Some(held_for_one_commit) = GraphEditsHeldForOneCommit::the_ones_this_task_holds()
+        else {
             return Err(Error::Runtime(format!(
                 "link `{link_id}` is disconnected within graph edits held for one commit, and \
                  none are held"
             )));
-        }
+        };
         let (from_port, to_port) = take_the_link_out_with_the_next_commit(&self.compiler, link_id)?;
         announce_or_hold_a_disconnect(
             self.loaded_stream_identity(),
-            &held_for_one_commit,
+            Some(&held_for_one_commit),
             link_id,
             &from_port,
             &to_port,

@@ -213,7 +213,9 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn open_a_graph_edit_batch(
             self: ::std::sync::Arc<Self>,
-        ) -> ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch> {
+        ) -> ::streamlib::sdk::error::Result<
+            ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch>,
+        > {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
         fn add_node(

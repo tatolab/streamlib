@@ -48,6 +48,7 @@ mod collapsed_selection_and_placed_stream_tests;
 mod graph_action_feed_and_subscription_tests;
 mod graph_answer_read_through_the_contract_tests;
 mod graph_edit_transaction_and_undo_tests;
+mod graph_edits_of_a_playing_stream_tests;
 mod graph_generator_fragment_tests;
 mod imported_and_nested_stream_fragment_tests;
 mod input_value_lifetime_tests;

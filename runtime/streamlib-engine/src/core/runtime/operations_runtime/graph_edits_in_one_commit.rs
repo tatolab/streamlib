@@ -13,14 +13,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
 use streamlib_project_repository::StreamGraphOperation;
 
-use super::{BoxFuture, LiveGraphChangeOnOneStream, commit_live_graph_change};
-use crate::core::Result;
-use crate::core::compiler::PendingOperation;
+use tokio::sync::OwnedMutexGuard;
+
+use super::{BoxFuture, LiveGraphChangeOnOneStream, commit_the_graph_edits_held_for_one_commit};
+use crate::core::graph::LinkUniqueId;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
-use crate::core::graph::{GraphEdgeWithComponents, LinkUniqueId, PendingDeletionComponent};
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
-use crate::core::runtime::operations::GraphEditBatch;
+use crate::core::runtime::operations::{
+    GraphEditBatch, GraphEditBatchRefused, HowFarARefusedBatchWasTakenBack,
+};
+use crate::core::{Error, Result};
 
 tokio::task_local! {
     static THE_GRAPH_EDITS_THIS_TASK_HOLDS: Arc<GraphEditsHeldForOneCommit>;
@@ -94,7 +97,8 @@ impl LoadedStreamInThisRuntime {
         {
             Ok(made) => {
                 self.close_the_graph_edits_held_for_one_commit(&held)
-                    .await?;
+                    .await
+                    .map_err(|refused| refused.refusal)?;
                 Ok(made)
             }
             Err(refusal) => {
@@ -105,7 +109,7 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Run `edit` on the engine's runtime from synchronous code, joined to `held`.
-    pub(in crate::core::runtime) fn block_on_holding<T: Send + 'static>(
+    fn block_on_holding<T: Send + 'static>(
         &self,
         held: &Arc<GraphEditsHeldForOneCommit>,
         edit: impl Future<Output = Result<T>> + Send + 'static,
@@ -117,9 +121,7 @@ impl LoadedStreamInThisRuntime {
 
     /// Hold this stream's compiler transaction, so the edits logged from now are compiled in
     /// one commit, and answer what the edits keep until they close.
-    pub(in crate::core::runtime) fn hold_the_graph_edits_for_one_commit(
-        &self,
-    ) -> Arc<GraphEditsHeldForOneCommit> {
+    fn hold_the_graph_edits_for_one_commit(&self) -> Arc<GraphEditsHeldForOneCommit> {
         self.compiler.hold_the_transaction_for_one_commit();
         Arc::new(GraphEditsHeldForOneCommit {
             events_held: Mutex::new(Vec::new()),
@@ -154,12 +156,13 @@ impl LoadedStreamInThisRuntime {
     /// holds the stream's one writer, or no other writer reaches the stream yet.
     pub(in crate::core::runtime) fn in_one_commit_on_this_thread<T>(
         &self,
-        edit: impl FnOnce(&Arc<GraphEditsHeldForOneCommit>) -> Result<T>,
+        edit: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
         let held = self.hold_the_graph_edits_for_one_commit();
-        match THE_GRAPH_EDITS_THIS_TASK_HOLDS.sync_scope(Arc::clone(&held), || edit(&held)) {
+        match THE_GRAPH_EDITS_THIS_TASK_HOLDS.sync_scope(Arc::clone(&held), edit) {
             Ok(made) => {
-                self.close_the_graph_edits_held_for_one_commit_from_synchronous_code(&held)?;
+                self.close_the_graph_edits_held_for_one_commit_from_synchronous_code(&held)
+                    .map_err(|refused| refused.refusal)?;
                 Ok(made)
             }
             Err(refusal) => {
@@ -171,66 +174,68 @@ impl LoadedStreamInThisRuntime {
 
     /// Close `held`: refuse the graph it leaves when a reactive reader is left fed only by
     /// islands, compile every edit in one commit, then announce each event of what stands. A
-    /// refusal takes the edits back as far as nothing built or wired holds them.
-    pub(in crate::core::runtime) async fn close_the_graph_edits_held_for_one_commit(
+    /// refusal takes the edits back as far as nothing built or wired holds them, and says
+    /// whether that is all of them.
+    async fn close_the_graph_edits_held_for_one_commit(
         &self,
         held: &GraphEditsHeldForOneCommit,
-    ) -> Result<()> {
-        let logged = self.release_the_graph_edits_held_for_one_commit(held)?;
-        let committed = if logged.is_empty() {
-            Ok(())
-        } else {
-            commit_live_graph_change(&self.compiler, self.live_commit_context()).await
-        };
-        self.announce_the_graph_edits_one_commit_made(held, &logged, committed)
+    ) -> std::result::Result<(), GraphEditBatchRefused> {
+        if let Err(refusal) = self.refuse_a_reactive_reader_only_islands_feed() {
+            self.take_back_the_graph_edits_held_for_one_commit(held);
+            return Err(GraphEditBatchRefused {
+                refusal,
+                taken_back: HowFarARefusedBatchWasTakenBack::Whole,
+            });
+        }
+        let logged = self
+            .compiler
+            .the_operations_logged_under_the_hold_for_one_commit();
+        if logged.is_empty() {
+            self.compiler.release_the_transaction_held_for_one_commit();
+        } else if let Err(failed) =
+            commit_the_graph_edits_held_for_one_commit(&self.compiler, self.live_commit_context())
+                .await
+        {
+            self.compiler
+                .take_back_what_operations_did_to_the_graph(&logged);
+            self.restore_what_was_drawn_and_drop_the_events(held);
+            return Err(GraphEditBatchRefused {
+                refusal: failed.refusal,
+                taken_back: if failed.after_changing_what_runs {
+                    HowFarARefusedBatchWasTakenBack::AsFarAsNothingBuiltOrWiredHoldsIt
+                } else {
+                    HowFarARefusedBatchWasTakenBack::Whole
+                },
+            });
+        }
+        self.announce_each_event_of_what_stands(held);
+        Ok(())
     }
 
     /// Close `held` from synchronous code, as `close_the_graph_edits_held_for_one_commit` does.
-    pub(in crate::core::runtime) fn close_the_graph_edits_held_for_one_commit_from_synchronous_code(
+    fn close_the_graph_edits_held_for_one_commit_from_synchronous_code(
         &self,
-        held: &GraphEditsHeldForOneCommit,
-    ) -> Result<()> {
-        let logged = self.release_the_graph_edits_held_for_one_commit(held)?;
-        let compiler = Arc::clone(&self.compiler);
-        let live = self.live_commit_context();
-        let committed = if logged.is_empty() {
-            Ok(())
-        } else {
+        held: &Arc<GraphEditsHeldForOneCommit>,
+    ) -> std::result::Result<(), GraphEditBatchRefused> {
+        let closed = self.this_stream_held_for_a_task().and_then(|stream| {
+            let held = Arc::clone(held);
             self.block_on_the_engines_tokio_runtime(async move {
-                commit_live_graph_change(&compiler, live).await
+                Ok(stream
+                    .close_the_graph_edits_held_for_one_commit(&held)
+                    .await)
             })
-        };
-        self.announce_the_graph_edits_one_commit_made(held, &logged, committed)
-    }
-
-    /// Release `held`'s hold on the compiler transaction and answer the edits logged under it,
-    /// or take them back when they leave a reactive reader fed only by islands.
-    fn release_the_graph_edits_held_for_one_commit(
-        &self,
-        held: &GraphEditsHeldForOneCommit,
-    ) -> Result<Vec<PendingOperation>> {
-        if let Err(refusal) = self.refuse_a_reactive_reader_only_islands_feed() {
+        });
+        closed.unwrap_or_else(|refusal| {
             self.take_back_the_graph_edits_held_for_one_commit(held);
-            return Err(refusal);
-        }
-        Ok(self.compiler.release_the_transaction_held_for_one_commit())
+            Err(GraphEditBatchRefused {
+                refusal,
+                taken_back: HowFarARefusedBatchWasTakenBack::Whole,
+            })
+        })
     }
 
-    /// Announce each event `held` kept of what stands once `committed` compiled the edits
-    /// `logged`, or take those edits back when the commit refused them.
-    fn announce_the_graph_edits_one_commit_made(
-        &self,
-        held: &GraphEditsHeldForOneCommit,
-        logged: &[PendingOperation],
-        committed: Result<()>,
-    ) -> Result<()> {
-        if let Err(refusal) = committed {
-            self.compiler
-                .take_back_what_operations_did_to_the_graph(logged);
-            *self.graph_only_nodes_as_drawn.lock() = held.drawn_before.clone();
-            held.events_held.lock().clear();
-            return Err(refusal);
-        }
+    /// Announce each event `held` kept of what stands once its edits compiled.
+    fn announce_each_event_of_what_stands(&self, held: &GraphEditsHeldForOneCommit) {
         let events_held = std::mem::take(&mut *held.events_held.lock());
         let links_connected_within: HashSet<LinkUniqueId> = events_held
             .iter()
@@ -243,7 +248,7 @@ impl LoadedStreamInThisRuntime {
                     .traversal()
                     .e(link_id)
                     .first()
-                    .is_some_and(|link| !link.has::<PendingDeletionComponent>())
+                    .is_some_and(|link| graph.stands(link))
             })
         };
         for (of_the_link, event) in events_held {
@@ -259,35 +264,78 @@ impl LoadedStreamInThisRuntime {
         if held.the_graph_changed.load(Ordering::SeqCst) {
             self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         }
-        Ok(())
     }
 
     /// Take `held` back: each edit logged under the hold, as far as nothing built or wired
     /// holds it, and the stream as drawn before it; announce none of its events.
-    pub(in crate::core::runtime) fn take_back_the_graph_edits_held_for_one_commit(
-        &self,
-        held: &GraphEditsHeldForOneCommit,
-    ) {
+    fn take_back_the_graph_edits_held_for_one_commit(&self, held: &GraphEditsHeldForOneCommit) {
         self.compiler
             .take_back_the_transaction_held_for_one_commit();
+        self.restore_what_was_drawn_and_drop_the_events(held);
+    }
+
+    /// Put the stream as drawn back as it was before `held`, and drop each event it kept.
+    fn restore_what_was_drawn_and_drop_the_events(&self, held: &GraphEditsHeldForOneCommit) {
         *self.graph_only_nodes_as_drawn.lock() = held.drawn_before.clone();
         held.events_held.lock().clear();
     }
 
+    /// Hold this stream's one writer of the graph from synchronous code: at once when no
+    /// writer holds it, or else once the writer that does lets go, waited for on the engine's
+    /// runtime.
+    ///
+    /// # Panics
+    ///
+    /// When it waits from inside an asynchronous task, as every other synchronous entry point
+    /// that waits on the engine's runtime does.
+    fn hold_the_one_writer_from_synchronous_code(&self) -> Result<OwnedMutexGuard<()>> {
+        let one_writer = Arc::clone(&self.one_writer_of_the_graph_at_a_time);
+        if let Ok(held) = Arc::clone(&one_writer).try_lock_owned() {
+            return Ok(held);
+        }
+        self.block_on_the_engines_tokio_runtime(async move { Ok(one_writer.lock_owned().await) })
+    }
+
+    /// Hold this stream's one writer of the graph for `change`, a start, a stop or a resume, so
+    /// it waits for a batch of graph edits open on another thread to close or be taken back;
+    /// refused on the thread that holds the batch, or inside graph edits held for one commit,
+    /// which would wait for themselves.
+    pub(in crate::core::runtime) fn hold_the_one_writer_for_a_lifecycle_change(
+        &self,
+        change: &str,
+    ) -> Result<OwnedMutexGuard<()>> {
+        let this_thread_holds_a_batch =
+            *self.thread_holding_a_graph_edit_batch.lock() == Some(std::thread::current().id());
+        if this_thread_holds_a_batch
+            || GraphEditsHeldForOneCommit::the_ones_this_task_holds().is_some()
+        {
+            return Err(Error::Runtime(format!(
+                "the stream `{}` was not {change}: its caller holds graph edits of it open, and \
+                 {change} waits for them to close. To fix: close the batch of graph edits first",
+                self.stream_id()
+            )));
+        }
+        self.hold_the_one_writer_from_synchronous_code()
+    }
+
     /// Open a batch of graph edits on this stream for one writer, once no other writer's are
     /// open on it: held for one commit until it closes, and taken back when it is dropped open.
+    ///
+    /// # Panics
+    ///
+    /// When it waits for another writer from inside an asynchronous task.
     pub(in crate::core::runtime) fn open_a_graph_edit_batch_of_this_stream(
         self: Arc<Self>,
-    ) -> GraphEditBatchOfALoadedStream {
-        let no_other_writer =
-            Arc::clone(&self.one_writer_of_the_graph_at_a_time).blocking_lock_owned();
+    ) -> Result<GraphEditBatchOfALoadedStream> {
+        let no_other_writer = self.hold_the_one_writer_from_synchronous_code()?;
+        *self.thread_holding_a_graph_edit_batch.lock() = Some(std::thread::current().id());
         let held = self.hold_the_graph_edits_for_one_commit();
-        GraphEditBatchOfALoadedStream {
+        Ok(GraphEditBatchOfALoadedStream {
             stream: self,
             held,
             _no_other_writer: no_other_writer,
             open: true,
-        }
+        })
     }
 }
 
@@ -297,7 +345,7 @@ impl LoadedStreamInThisRuntime {
 pub(crate) struct GraphEditBatchOfALoadedStream {
     stream: Arc<LoadedStreamInThisRuntime>,
     held: Arc<GraphEditsHeldForOneCommit>,
-    _no_other_writer: tokio::sync::OwnedMutexGuard<()>,
+    _no_other_writer: OwnedMutexGuard<()>,
     open: bool,
 }
 
@@ -315,8 +363,9 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
         )
     }
 
-    fn close(mut self: Box<Self>) -> Result<()> {
+    fn close(mut self: Box<Self>) -> std::result::Result<(), GraphEditBatchRefused> {
         self.open = false;
+        *self.stream.thread_holding_a_graph_edit_batch.lock() = None;
         self.stream
             .close_the_graph_edits_held_for_one_commit_from_synchronous_code(&self.held)
     }
@@ -325,6 +374,7 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
 impl Drop for GraphEditBatchOfALoadedStream {
     fn drop(&mut self) {
         if self.open {
+            *self.stream.thread_holding_a_graph_edit_batch.lock() = None;
             self.stream
                 .take_back_the_graph_edits_held_for_one_commit(&self.held);
         }

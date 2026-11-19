@@ -151,10 +151,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         }
         fn open_a_graph_edit_batch(
             self: ::std::sync::Arc<Self>,
-        ) -> ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch> {
-            ::std::boxed::Box::new(
+        ) -> ::streamlib::sdk::error::Result<
+            ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch>,
+        > {
+            Ok(::std::boxed::Box::new(
                 $crate::control_plane_stub_support::GraphEditsOfAStubAppliedOneByOne(self),
-            )
+            ))
         }
         fn hold_an_edit_its_document_holds_not_live(
             &self,
@@ -279,7 +281,9 @@ impl<Stub: ::streamlib::sdk::runtime::RuntimeOperations + 'static>
         self.0.apply_a_stream_graph_operation_live(graph_operation)
     }
 
-    fn close(self: ::std::boxed::Box<Self>) -> ::streamlib::sdk::error::Result<()> {
+    fn close(
+        self: ::std::boxed::Box<Self>,
+    ) -> ::std::result::Result<(), ::streamlib::sdk::runtime::GraphEditBatchRefused> {
         Ok(())
     }
 }

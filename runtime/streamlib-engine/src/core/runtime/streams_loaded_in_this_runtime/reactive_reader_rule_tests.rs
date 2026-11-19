@@ -372,6 +372,7 @@ fn a_document_node(name: &str, node_type: &str) -> StreamGraphDocumentNode {
 
 fn a_graph_edit_batch_of(stream: &Arc<LoadedStreamInThisRuntime>) -> Box<dyn GraphEditBatch> {
     <LoadedStreamInThisRuntime as RuntimeOperations>::open_a_graph_edit_batch(Arc::clone(stream))
+        .expect("the batch opens")
 }
 
 /// A batch of graph edits taking out a source, its island and their reader is judged by the
@@ -446,7 +447,7 @@ fn two_overlapping_writers_on_one_stream_are_judged_apart() {
                         link: a_document_link(("switch", "result"), ("reader", "in1")),
                     },
                 ))
-                .and_then(|_| second.close())
+                .and_then(|_| second.close().map_err(|refused| refused.refusal))
                 .map(|()| opened_once_the_first_closed)
         })
     };
@@ -796,4 +797,55 @@ fn a_load_listing_island_links_before_their_sources_sets_aside_the_links_past_th
             "{why}"
         );
     }
+}
+
+/// A batch swapping which island feeds a reader's port, the old island's link out first, is
+/// taken: the link leaving no longer counts toward the port an island feeds.
+///
+/// Mental-revert: counting the link pending deletion refuses the new island's link as a second
+/// link into a port an island feeds.
+#[test]
+fn a_batch_swapping_the_island_feeding_a_port_is_taken() {
+    let (_runner, stream, _project) = a_stopped_stream_resolving_a_reactive_reader();
+    let async_runtime = an_async_runtime();
+    load(
+        &stream,
+        a_document_of(
+            &[
+                ("source", SOURCE),
+                ("switch", SWITCH),
+                ("other_switch", SWITCH),
+                ("reader", REACTIVE_READER),
+            ],
+            &[
+                (("source", "out"), ("reader", "in2")),
+                (("switch", "result"), ("reader", "in1")),
+            ],
+        ),
+    );
+
+    let batch = a_graph_edit_batch_of(&stream);
+    for operation in [
+        StreamGraphOperation::Disconnect {
+            link: a_document_link(("switch", "result"), ("reader", "in1")),
+        },
+        StreamGraphOperation::Connect {
+            link: a_document_link(("other_switch", "result"), ("reader", "in1")),
+        },
+    ] {
+        async_runtime
+            .block_on(batch.apply_a_stream_graph_operation_live(operation))
+            .expect("the swap leaves one link into the port");
+    }
+    batch.close().expect("the swap closes");
+
+    assert_eq!(the_live_links(&stream), 2);
+    let other_switch = stream.the_node_named("other_switch").unwrap().node_run_id;
+    let reader = stream.the_node_named("reader").unwrap().node_run_id;
+    let link_into_the_port = stream.compiler.scope_reading(|graph| {
+        graph
+            .link_into(&reader, "in1")
+            .map(|link| link.source().node_run_id().clone())
+    });
+    assert_eq!(link_into_the_port, Some(other_switch));
 }

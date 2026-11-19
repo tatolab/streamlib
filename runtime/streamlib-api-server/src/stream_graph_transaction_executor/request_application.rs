@@ -40,7 +40,11 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         let mut former_port_names_moved: Vec<ProjectOperation> = Vec::new();
-        for stream_id in &stream_ids_in_order {
+        // Every batch opens before any edit is applied, in the order of the stream ids, so two
+        // transactions editing the same streams never each wait on a batch the other holds.
+        let mut stream_ids_a_batch_opens_on = stream_ids_in_order.clone();
+        stream_ids_a_batch_opens_on.sort();
+        for stream_id in &stream_ids_a_batch_opens_on {
             let stream_operations = match &streams_to_edit {
                 Some(streams_to_edit) => streams_to_edit.runtime_operations_of(stream_id),
                 None => self
@@ -82,15 +86,8 @@ impl StreamGraphTransactionExecutor<'_> {
             };
             streams.insert(
                 stream_id.clone(),
-                StreamATransactionEdits {
-                    graph_edit_batch: Some(
-                        Arc::clone(&stream_operations).open_a_graph_edit_batch(),
-                    ),
-                    its_graph_edits_were_taken_back: false,
-                    stream_operations,
-                    stream_location,
-                    staged_graph,
-                },
+                StreamATransactionEdits::new(stream_operations, stream_location, staged_graph)
+                    .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             );
         }
 
@@ -439,10 +436,9 @@ impl StreamGraphTransactionExecutor<'_> {
             };
             let graph_edit_batch = streams
                 .get(stream_id)
-                .and_then(|stream| stream.graph_edit_batch.as_deref())
-                .ok_or_else(|| {
-                    format!("stream `{stream_id}` holds no batch of graph edits open to apply to")
-                })?;
+                .ok_or_else(|| format!("stream `{stream_id}` holds no batch of graph edits"))?
+                .open_graph_edit_batch()
+                .map_err(|refusal| format!("stream `{stream_id}`: {refusal}"))?;
             let applied = self
                 .async_runtime
                 .block_on(graph_edit_batch.apply_a_stream_graph_operation_live(edit_as_drawn))?;

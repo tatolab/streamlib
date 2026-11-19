@@ -13,10 +13,7 @@ use super::input_values_set_live::{
     hand_back_each, hand_each_island_again_or_put_the_values_back, is_held_on_the_graph,
 };
 use crate::core::compiler::PendingOperation;
-use crate::core::compiler::compiler_ops::function_node_island::{
-    runs_inside_the_read_of_each_node_it_feeds,
-    the_island_links_into_a_reactive_reader_only_islands_feed,
-};
+use crate::core::compiler::compiler_ops::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
@@ -401,7 +398,7 @@ impl LoadedStreamInThisRuntime {
         lend_directory: Option<&Path>,
     ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
-        self.in_one_commit_on_this_thread(|_| {
+        self.in_one_commit_on_this_thread(|| {
             self.load_graph_snapshot_within_the_graph_edits_held(graph, lend_directory)
         })
     }
@@ -522,14 +519,9 @@ impl LoadedStreamInThisRuntime {
                 }
             }
         }
-        // The rule a reader that runs reactively sets is judged once every link is made, so the
-        // order the graph lists its links in never sets one aside.
-        let island_links_the_engine_cannot_wire: Vec<(LinkUniqueId, Error)> =
-            self.compiler.scope_reading(|graph| {
-                the_island_links_into_a_reactive_reader_only_islands_feed(graph).collect()
-            });
         links_the_engine_cannot_wire.extend(self.set_aside_each_link_the_engine_cannot_wire(
-            island_links_the_engine_cannot_wire,
+            Vec::new(),
+            &std::collections::HashSet::new(),
             |link_id| {
                 drawn_link_of_each_link_made
                     .get(link_id)

@@ -120,6 +120,10 @@ pub struct LoadedStreamInThisRuntime {
     /// Held by the one writer whose graph edits are open on this stream, from the moment they
     /// open until they close, so two writers' edits never interleave in one commit.
     pub(in crate::core::runtime) one_writer_of_the_graph_at_a_time: Arc<tokio::sync::Mutex<()>>,
+    /// The thread that opened the batch of graph edits open on this stream, if one is, which a
+    /// start, a stop or a resume on it would wait for itself on.
+    pub(in crate::core::runtime) thread_holding_a_graph_edit_batch:
+        Mutex<Option<std::thread::ThreadId>>,
     /// Whether its playback is stopped and its graph held to read and edit, until its next
     /// start.
     is_held_stopped: AtomicBool,
@@ -333,6 +337,7 @@ impl LoadedStreamInThisRuntime {
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
             one_writer_of_the_graph_at_a_time: Arc::new(tokio::sync::Mutex::new(())),
+            thread_holding_a_graph_edit_batch: Mutex::new(None),
             is_held_stopped: AtomicBool::new(false),
             edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             engine_resources_shared_by_every_stream,

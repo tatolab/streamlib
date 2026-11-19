@@ -15,7 +15,11 @@ impl Compiler {
     /// Hold the transaction for one commit: until it is released, a commit asked for compiles
     /// nothing, so every operation logged meanwhile is compiled in one commit, judged together
     /// by the graph they leave.
+    ///
+    /// Held in the turn a commit holds, so a commit in flight either took what was logged
+    /// before the hold or takes nothing logged under it.
     pub(crate) fn hold_the_transaction_for_one_commit(&self) {
+        let _one_commit_at_a_time = self.one_commit_at_a_time.lock();
         *self.transaction_held_for_one_commit.lock() = Some(self.transaction.lock().len());
     }
 
@@ -25,15 +29,28 @@ impl Compiler {
         self.transaction_held_for_one_commit.lock().is_some()
     }
 
-    /// Release the transaction [`Self::hold_the_transaction_for_one_commit`] held, answering the
-    /// operations logged under the hold, for the commit that follows to compile.
-    pub(crate) fn release_the_transaction_held_for_one_commit(&self) -> Vec<PendingOperation> {
-        let logged_before = self.transaction_held_for_one_commit.lock().take();
+    /// The operations the transaction logged under its hold for one commit, which the commit
+    /// that releases it compiles.
+    pub(crate) fn the_operations_logged_under_the_hold_for_one_commit(
+        &self,
+    ) -> Vec<PendingOperation> {
+        let logged_before = *self.transaction_held_for_one_commit.lock();
+        debug_assert!(
+            logged_before.is_some(),
+            "the operations logged under a hold are read while it is held"
+        );
         let transaction = self.transaction.lock();
         transaction[logged_before
             .unwrap_or(transaction.len())
             .min(transaction.len())..]
             .to_vec()
+    }
+
+    /// Release the transaction's hold for one commit, for a stream no commit builds, which
+    /// compiles nothing of what was logged under it.
+    pub(crate) fn release_the_transaction_held_for_one_commit(&self) {
+        let released = self.transaction_held_for_one_commit.lock().take();
+        debug_assert!(released.is_some(), "a hold is released once");
     }
 
     /// Take back every operation the transaction logged under its hold for one commit, and
@@ -46,15 +63,14 @@ impl Compiler {
         let logged_under_the_hold: Vec<PendingOperation> = {
             let mut transaction = self.transaction.lock();
             let logged_before = logged_before.min(transaction.len());
-            let (taken_back, kept): (Vec<_>, Vec<_>) =
-                transaction.drain(logged_before..).partition(|operation| {
+            transaction
+                .extract_if(logged_before.., |operation| {
                     !matches!(
                         operation,
                         PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed { .. }
                     )
-                });
-            transaction.extend(kept);
-            taken_back
+                })
+                .collect()
         };
         self.take_back_what_operations_did_to_the_graph(&logged_under_the_hold);
     }
@@ -71,10 +87,8 @@ impl Compiler {
             match operation {
                 PendingOperation::AddLink(link_id) => {
                     let unwired = graph.traversal().e(link_id).first().is_some_and(|link| {
-                        !link.has::<LinkStateComponent>()
-                            || link
-                                .get::<LinkStateComponent>()
-                                .is_some_and(|state| state.0 != LinkState::Wired)
+                        link.get::<LinkStateComponent>()
+                            .is_none_or(|state| state.0 != LinkState::Wired)
                     });
                     if unwired {
                         graph.traversal_mut().e(link_id).drop();
@@ -131,10 +145,11 @@ impl Compiler {
     ) -> Vec<PendingOperation> {
         let mut transaction = self.transaction.lock();
         let logged_before = logged_before.min(transaction.len());
-        let (config_updates, the_rest): (Vec<_>, Vec<_>) = transaction
-            .drain(logged_before..)
-            .partition(|operation| matches!(operation, PendingOperation::UpdateNodeConfig { .. }));
-        transaction.extend(the_rest);
+        let config_updates: Vec<PendingOperation> = transaction
+            .extract_if(logged_before.., |operation| {
+                matches!(operation, PendingOperation::UpdateNodeConfig { .. })
+            })
+            .collect();
         let mut configs_a_commit_is_applying = self.configs_a_commit_is_applying.lock();
         for operation in &config_updates {
             if let PendingOperation::UpdateNodeConfig {
