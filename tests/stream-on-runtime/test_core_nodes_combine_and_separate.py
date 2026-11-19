@@ -56,7 +56,7 @@ def SpotAsOneNumber(spot: Vector2 = Vector2(0.0, 0.0)) -> float:
 
 
 @node.meta(description="Reports the green and the spot it reads, once both have arrived.")
-@node.process
+@node.process(execution="continuous", interval_ms=20)
 class ReportsTheLevelsItReads:
     green = Input(Channels, delivery="newest")
     spot = Input(Channels, delivery="newest")
