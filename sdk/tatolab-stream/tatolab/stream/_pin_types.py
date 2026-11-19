@@ -9,18 +9,31 @@ from its contract row fails a test. A row the typed grammar does not read yet sa
 a declaration that uses it is refused by name with that reason.
 
 The exact sizes are `Annotated` aliases of `int` and `float`, so a value of one is a plain
-number in Python.
+number in Python. A Color, a Vector, a Rectangle and a Transform are frozen value classes whose
+fields are the keys of the type's stored JSON form, in the order the type packs its parts on a
+link.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Final, Optional, final
+from typing import Annotated, Any, ClassVar, Final, Optional, Self, final
 
-from ._contract_pin_types import BuiltInPinTypeName, FloatSize, IntegerSize
+from ._contract_pin_types import BuiltInPinTypeName, FloatSize, IntegerSize, PinType
 
 __all__ = [
     "PIN_TYPE_SPELLINGS",
+    "PIN_VALUE_CLASSES",
+    "Color",
+    "PinValueOfParts",
+    "Rectangle",
+    "Transform",
+    "Vector2",
+    "Vector3",
+    "Vector4",
     "Float32",
     "Float64",
     "Int8",
@@ -116,6 +129,234 @@ INTEGER_BOUNDS_OF_EACH_SIZE: Final[dict[IntegerSize, tuple[int, int]]] = {
 INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS: Final[frozenset[IntegerSize]] = frozenset({"int64", "uint64"})
 
 
+class PinValueOfParts:
+    """A value of a pin type that travels as its parts, one number on each channel of a control message.
+
+    Each field is a number, a key of the type's stored JSON form; an `int` is held as a `float`,
+    and `bool`, `NaN` and infinity are refused. Nothing is clamped, so a Color number outside 0
+    to 1 is kept as given.
+    """
+
+    __slots__ = ()
+
+    pin_type: ClassVar[PinType]
+    """The built-in pin type a pin typed with this class declares."""
+
+    value_type: ClassVar[str]
+    """The name a function node's signature gives a value of this class, which the runtime
+    reads it by."""
+
+    def __post_init__(self) -> None:
+        for field in dataclasses.fields(self):  # pyright: ignore[reportArgumentType]
+            object.__setattr__(
+                self, field.name, _a_finite_number(getattr(self, field.name), type(self), field.name)
+            )
+        self._refuse_what_its_type_does_not_take()
+
+    def _refuse_what_its_type_does_not_take(self) -> None:
+        """Refuse a value its type does not take beyond its numbers; every one is taken here."""
+
+    @classmethod
+    def part_names(cls) -> tuple[str, ...]:
+        """The name of each of its numbers, in the order it packs them: the channel names it travels under."""
+        return tuple(field.name for field in dataclasses.fields(cls))  # pyright: ignore[reportArgumentType]
+
+    @property
+    def parts(self) -> tuple[float, ...]:
+        """Its numbers in the order it packs them on a link, which is its fields' order."""
+        return tuple(getattr(self, field.name) for field in dataclasses.fields(self))  # pyright: ignore[reportArgumentType]
+
+    @classmethod
+    def from_parts(cls, parts: Iterable[float]) -> Self:
+        """The value whose numbers, in the order it packs them, are `parts`."""
+        parts = tuple(parts)
+        field_names = [field.name for field in dataclasses.fields(cls)]  # pyright: ignore[reportArgumentType]
+        if len(parts) != len(field_names):
+            raise ValueError(
+                f"a {cls.__name__} is {len(field_names)} numbers, "
+                f"{', '.join(field_names)}, and {len(parts)} were given"
+            )
+        return cls(*parts)
+
+    def stored_value(self) -> Any:
+        """Its stored JSON form, as a document saves it and a client sets it: an object keyed by field."""
+        return {field.name: getattr(self, field.name) for field in dataclasses.fields(self)}  # pyright: ignore[reportArgumentType]
+
+    @classmethod
+    def from_stored_value(cls, stored_value: Any) -> Self:
+        """The value whose stored JSON form is `stored_value`, refused when it is not exactly one."""
+        field_names = [field.name for field in dataclasses.fields(cls)]  # pyright: ignore[reportArgumentType]
+        if not isinstance(stored_value, dict) or sorted(stored_value) != sorted(field_names):  # pyright: ignore[reportUnknownArgumentType]
+            raise ValueError(
+                f"a stored {cls.__name__} is an object of exactly {', '.join(field_names)}, "
+                f"and was {stored_value!r}"
+            )
+        return cls(**stored_value)
+
+
+def _a_finite_number(value: object, value_class: type, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(
+            f"{value_class.__name__}.{field} is a number, and was given {value!r}"
+        )
+    if not math.isfinite(value):
+        raise ValueError(f"{value_class.__name__}.{field} is finite, and was given {value!r}")
+    return float(value)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Color(PinValueOfParts):
+    """A colour: sRGB red, green and blue and alpha, each 0 for none and 1 for full.
+
+    Red, green and blue are what a hex colour holds divided by 255, not linear light, and are
+    not multiplied by alpha. Alpha 1 is opaque.
+    """
+
+    pin_type: ClassVar[PinType] = {"type": "color"}
+    value_type: ClassVar[str] = "color"
+
+    red: float
+    green: float
+    blue: float
+    alpha: float = 1.0
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Vector2(PinValueOfParts):
+    """A Vector of two components."""
+
+    pin_type: ClassVar[PinType] = {"type": "vector", "component_count": "two"}
+    value_type: ClassVar[str] = "vector2"
+
+    x: float
+    y: float
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Vector3(PinValueOfParts):
+    """A Vector of three components."""
+
+    pin_type: ClassVar[PinType] = {"type": "vector", "component_count": "three"}
+    value_type: ClassVar[str] = "vector3"
+
+    x: float
+    y: float
+    z: float
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Vector4(PinValueOfParts):
+    """A Vector of four components."""
+
+    pin_type: ClassVar[PinType] = {"type": "vector", "component_count": "four"}
+    value_type: ClassVar[str] = "vector4"
+
+    x: float
+    y: float
+    z: float
+    w: float
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Rectangle(PinValueOfParts):
+    """A rectangle: its left edge `x`, its top edge `y`, and a `width` and `height` of 0 or more.
+
+    The node says whether the numbers are pixels or a share of the frame.
+    """
+
+    pin_type: ClassVar[PinType] = {"type": "rectangle"}
+    value_type: ClassVar[str] = "rectangle"
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+    def _refuse_what_its_type_does_not_take(self) -> None:
+        for field in ("width", "height"):
+            if getattr(self, field) < 0:
+                raise ValueError(
+                    f"a Rectangle's {field} is 0 or more, and was given {getattr(self, field)!r}"
+                )
+
+
+# The number of numbers a Transform holds: a 4 by 4 matrix.
+_TRANSFORM_NUMBER_COUNT: Final = 16
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Transform(PinValueOfParts):
+    """A 4 by 4 matrix as its 16 numbers, row by row.
+
+    It multiplies a column, so the fourth number of each of the first three rows is the
+    translation. Its stored JSON form is the list of the 16 numbers.
+    """
+
+    pin_type: ClassVar[PinType] = {"type": "transform"}
+    value_type: ClassVar[str] = "transform"
+
+    numbers: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        numbers = tuple(self.numbers)
+        if len(numbers) != _TRANSFORM_NUMBER_COUNT:
+            raise ValueError(
+                f"a Transform is {_TRANSFORM_NUMBER_COUNT} numbers, row by row, and was given "
+                f"{len(numbers)}"
+            )
+        object.__setattr__(
+            self,
+            "numbers",
+            tuple(
+                _a_finite_number(number, Transform, f"numbers[{index}]")
+                for index, number in enumerate(numbers)
+            ),
+        )
+
+    @classmethod
+    def part_names(cls) -> tuple[str, ...]:
+        return tuple(f"row{row}_column{column}" for row in range(1, 5) for column in range(1, 5))
+
+    @classmethod
+    def identity(cls) -> Transform:
+        """The Transform that moves nothing."""
+        return cls(tuple(float(row == column) for row in range(4) for column in range(4)))
+
+    @property
+    def parts(self) -> tuple[float, ...]:
+        return self.numbers
+
+    @classmethod
+    def from_parts(cls, parts: Iterable[float]) -> Transform:
+        return cls(tuple(parts))
+
+    def stored_value(self) -> Any:
+        return list(self.numbers)
+
+    @classmethod
+    def from_stored_value(cls, stored_value: Any) -> Transform:
+        if not isinstance(stored_value, Sequence) or isinstance(stored_value, str):
+            raise ValueError(f"a stored Transform is a list of 16 numbers, and was {stored_value!r}")
+        return cls(tuple(stored_value))  # pyright: ignore[reportUnknownArgumentType]
+
+
+PIN_VALUE_CLASSES: Final[tuple[type[PinValueOfParts], ...]] = (
+    Color,
+    Vector2,
+    Vector3,
+    Vector4,
+    Rectangle,
+    Transform,
+)
+"""Each value class of a pin type that travels as its parts."""
+
+
 @dataclass(frozen=True, slots=True)
 class PinTypeSpelling:
     """One way an author writes a built-in pin type."""
@@ -157,12 +398,12 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("Float64", "float"),
     PinTypeSpelling("str", "string", _VALUES_NOT_CARRIED),
     PinTypeSpelling("Literal", "menu", _VALUES_NOT_CARRIED),
-    PinTypeSpelling("Color", "color", _VALUES_NOT_CARRIED),
-    PinTypeSpelling("Vector2", "vector", _VALUES_NOT_CARRIED),
-    PinTypeSpelling("Vector3", "vector", _VALUES_NOT_CARRIED),
-    PinTypeSpelling("Vector4", "vector", _VALUES_NOT_CARRIED),
-    PinTypeSpelling("Rectangle", "rectangle", _VALUES_NOT_CARRIED),
-    PinTypeSpelling("Transform", "transform", _VALUES_NOT_CARRIED),
+    PinTypeSpelling("Color", "color"),
+    PinTypeSpelling("Vector2", "vector"),
+    PinTypeSpelling("Vector3", "vector"),
+    PinTypeSpelling("Vector4", "vector"),
+    PinTypeSpelling("Rectangle", "rectangle"),
+    PinTypeSpelling("Transform", "transform"),
     PinTypeSpelling("Texture", "texture", _STREAM_TYPE_NOT_SPELLED),
     PinTypeSpelling("Audio", "audio", _STREAM_TYPE_NOT_SPELLED),
     PinTypeSpelling("EncodedVideo", "encoded_video", _STREAM_TYPE_NOT_SPELLED),

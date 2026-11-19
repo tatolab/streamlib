@@ -34,6 +34,7 @@ pub mod machine_global_unique_name;
 pub mod media_clock;
 pub mod nodes;
 pub(crate) mod output_port_stream_facts;
+pub mod pin_value_packing;
 pub mod prelude;
 pub mod pubsub;
 pub mod rhi;

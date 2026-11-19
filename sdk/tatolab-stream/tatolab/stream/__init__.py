@@ -33,6 +33,7 @@ from ._pin_annotations import NumberUnit as NumberUnit
 from ._pin_annotations import PinControl as PinControl
 from ._pin_annotations import PinMeaning as PinMeaning
 from ._pin_declaration import NodeDeclarationRefusal as NodeDeclarationRefusal
+from ._pin_types import Color as Color
 from ._pin_types import Float32 as Float32
 from ._pin_types import Float64 as Float64
 from ._pin_types import Int8 as Int8
@@ -43,6 +44,11 @@ from ._pin_types import UInt8 as UInt8
 from ._pin_types import UInt16 as UInt16
 from ._pin_types import UInt32 as UInt32
 from ._pin_types import UInt64 as UInt64
+from ._pin_types import Rectangle as Rectangle
+from ._pin_types import Transform as Transform
+from ._pin_types import Vector2 as Vector2
+from ._pin_types import Vector3 as Vector3
+from ._pin_types import Vector4 as Vector4
 from ._project_asset_uuid import ProjectAssetMedia as ProjectAssetMedia
 from ._project_asset_uuid import ProjectAssetUuid as ProjectAssetUuid
 from ._built_in_nodes import AudioToTensor as AudioToTensor
@@ -237,6 +243,12 @@ __all__ = [
     "UInt16",
     "UInt32",
     "UInt64",
+    "Color",
+    "Vector2",
+    "Vector3",
+    "Vector4",
+    "Rectangle",
+    "Transform",
     "ProjectAssetMedia",
     "ProjectAssetUuid",
     "ExposedNameCastsToNothingError",

@@ -8,10 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::error::Result;
+use crate::core::pin_value_packing::{PackedPinValue, control_message_of_channel_values};
 use crate::iceoryx2::{InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort};
-use streamlib_ipc_types::{
-    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
-};
+use streamlib_ipc_types::DataChannelPayloadDescriptor;
 
 /// A message one of an island's inputs read off a channel, as it arrived, which
 /// the island hands its reader on unread.
@@ -48,8 +47,9 @@ impl MessageAFunctionNodeIslandHandsOnUnread {
 /// carries.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FunctionNodeIslandOutputValue {
-    /// A number or a bool, carried as a control value.
-    ControlValue(f64),
+    /// A number, a bool, a Color, a Vector, a Rectangle or a Transform, carried as a control
+    /// message: its parts in order, one on each channel.
+    ControlValue(Vec<f64>),
     /// A `dict`, as a Records message's msgpack payload.
     RecordsMessage(Vec<u8>),
     /// A message the island read off a channel and hands on unread.
@@ -129,7 +129,7 @@ impl FunctionNodeIslandEvaluatedAtEachRead for PinValueReadByAnUnlinkedInputPort
         &self,
     ) -> Result<FunctionNodeIslandOutputForOneRead> {
         Ok(FunctionNodeIslandOutputForOneRead {
-            value: FunctionNodeIslandOutputValue::ControlValue(self.pin_value),
+            value: FunctionNodeIslandOutputValue::ControlValue(vec![self.pin_value]),
             evaluated_at_ns: (self.stream_clock_now_ns)(),
         })
     }
@@ -255,10 +255,10 @@ impl InputPortFedByAFunctionNodeIsland {
 
     /// The island's output for this read, or `None` when it hands out nothing:
     /// the output a readiness judgement evaluated while it still stands, or
-    /// else the island evaluated now. A control value is carried as a Channels
-    /// block of one f64 sample on one channel, at rate 0, which states no
-    /// regular rate; a `dict` as a Records message; a message handed on unread
-    /// as it arrived.
+    /// else the island evaluated now. A control value is carried as a control
+    /// message, one f64 sample on each of its channels at rate 0, which states
+    /// no regular rate; a `dict` as a Records message; a message handed on
+    /// unread as it arrived.
     pub(crate) fn read_the_island_output(
         &self,
         a_message_waits_at_a_reader_input_port: bool,
@@ -285,16 +285,16 @@ impl InputPortFedByAFunctionNodeIsland {
                     payload_descriptor: message.payload_descriptor,
                 }));
             }
-            FunctionNodeIslandOutputValue::ControlValue(control_value) => (
-                control_value.to_le_bytes().to_vec(),
-                DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
-                    start_sample: self.reads_answered.fetch_add(1, Ordering::Relaxed),
-                    sample_rate: 0,
-                    channel_count: 1,
-                    samples_per_channel: 1,
-                    sample_type: ChannelsBlockSampleType::F64 as u32,
-                }),
-            ),
+            FunctionNodeIslandOutputValue::ControlValue(channel_values) => {
+                let PackedPinValue {
+                    payload_descriptor,
+                    payload,
+                } = control_message_of_channel_values(
+                    &channel_values,
+                    self.reads_answered.fetch_add(1, Ordering::Relaxed),
+                );
+                (payload, payload_descriptor)
+            }
             FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload) => {
                 self.reads_answered.fetch_add(1, Ordering::Relaxed);
                 (
@@ -315,6 +315,8 @@ impl InputPortFedByAFunctionNodeIsland {
 
 #[cfg(test)]
 mod tests {
+    use streamlib_ipc_types::{ChannelsBlockDescriptorBody, ChannelsBlockSampleType};
+
     use super::*;
 
     struct IslandAnsweringOneValue(FunctionNodeIslandOutputValue);
@@ -345,7 +347,7 @@ mod tests {
     #[test]
     fn a_control_value_is_one_f64_sample_on_one_channel_at_no_regular_rate() {
         let port = InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(
-            IslandAnsweringOneValue(FunctionNodeIslandOutputValue::ControlValue(0.25)),
+            IslandAnsweringOneValue(FunctionNodeIslandOutputValue::ControlValue(vec![0.25])),
         ));
         let message = port.read_the_island_output(false).unwrap().unwrap();
         assert_eq!(message.payload.bytes(), 0.25f64.to_le_bytes());
@@ -368,6 +370,32 @@ mod tests {
             )
             .start_sample,
             1
+        );
+    }
+
+    #[test]
+    fn a_colour_is_one_f64_sample_on_each_of_four_channels_in_its_order() {
+        let port =
+            InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(IslandAnsweringOneValue(
+                FunctionNodeIslandOutputValue::ControlValue(vec![1.0, 0.5, 0.2, 0.75]),
+            )));
+        let message = port.read_the_island_output(false).unwrap().unwrap();
+        assert_eq!(
+            message.payload.bytes(),
+            [1.0f64, 0.5, 0.2, 0.75]
+                .iter()
+                .flat_map(|part| part.to_le_bytes())
+                .collect::<Vec<u8>>()
+        );
+        let block =
+            ChannelsBlockDescriptorBody::from_descriptor_body(&message.payload_descriptor.body);
+        assert_eq!(
+            (
+                block.channel_count,
+                block.samples_per_channel,
+                block.sample_rate
+            ),
+            (4, 1, 0)
         );
     }
 

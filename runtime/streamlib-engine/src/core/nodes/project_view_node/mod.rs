@@ -11,13 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
-use streamlib_ipc_types::{
-    ArrayFrameCpuAttributeToPack, ChannelsBlockDescriptorBody, ChannelsBlockSampleType,
-    DataChannelPayloadDescriptor, array_frame_payload_of_cpu_attributes,
-};
+use streamlib_ipc_types::{ChannelsBlockDescriptorBody, DataChannelPayloadDescriptor};
 use streamlib_project_repository::{
-    FAMILIES_A_PANEL_WRITES, ProjectViewFolderRead, TatolabViewDeclaredPort, TatolabViewPlacement,
-    a_panel_writes,
+    ProjectViewFolderRead, TatolabViewDeclaredPort, TatolabViewPlacement, a_panel_writes,
 };
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -36,18 +32,13 @@ use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode}
 use crate::core::graph::{GraphNode, GraphNodePorts};
 use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
 use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
+pub use crate::core::pin_value_packing::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
+use crate::core::pin_value_packing::{
+    PackedPinValue, the_message_a_value_written_onto_an_output_is,
+};
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
 };
-
-/// The Array attribute a number or a list of numbers written onto an Array output is carried as.
-pub const VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME: &str = "values";
-
-/// The element type an Array attribute written onto a view node's output carries.
-const VIEW_NODE_ARRAY_OUTPUT_DTYPE: &str = "float64";
-
-/// The sample type a Channels block written onto a view node's output carries.
-const VIEW_NODE_CHANNELS_OUTPUT_SAMPLE_TYPE: ChannelsBlockSampleType = ChannelsBlockSampleType::F32;
 
 /// How a link into a view node's input delivers: the node itself reads nothing, a panel reads
 /// the port linked into it through a viewer, so the link never holds its writer back.
@@ -105,16 +96,6 @@ pub(crate) fn the_node_type_of_a_project_view(
         })
         .collect();
     Ok(descriptor)
-}
-
-/// Why a panel never writes an output of `family`, one it does not write.
-fn why_a_panel_never_writes(family: PortFamily) -> String {
-    let [families_listed @ .., last] = FAMILIES_A_PANEL_WRITES.map(PortFamily::declaration_name);
-    format!(
-        "a client writes {} and {last} values, never {}",
-        families_listed.join(", "),
-        family.declaration_name()
-    )
 }
 
 /// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
@@ -382,16 +363,13 @@ impl ValueSourceNode {
             .get(port)
             .copied()
             .unwrap_or(0);
-        let (payload_descriptor, payload) =
-            the_message_a_value_written_onto_an_output_is(family, value, next_start_sample)
-                .map_err(|why| {
-                    the_refusal_of_a_value_an_output_does_not_carry(
-                        &self.node_name,
-                        port,
-                        family,
-                        &why,
-                    )
-                })?;
+        let PackedPinValue {
+            payload_descriptor,
+            payload,
+        } = the_message_a_value_written_onto_an_output_is(family, value, next_start_sample)
+            .map_err(|why| {
+                the_refusal_of_a_value_an_output_does_not_carry(&self.node_name, port, family, &why)
+            })?;
         let channels_start_sample_after = (family == PortFamily::Channels).then(|| {
             let body = ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
             next_start_sample + u64::from(body.samples_per_channel)
@@ -491,195 +469,6 @@ pub(crate) fn the_refusal_of_a_value_an_output_does_not_carry(
     Error::PortError(format!(
         "output `{port}` of node `{node_name}` carries {}, and {why}",
         family.declaration_name()
-    ))
-}
-
-/// The message `value`, written onto an output of `family`, is sent as: a Records output takes
-/// a JSON object; an Array output a number or a list of numbers, nested to any depth, as its
-/// `values` attribute, or an object of such attributes by name; a Channels output a number or a
-/// bool, as one control value, or `{"samples": [[...], ...], "sample_rate"}` channel by channel, starting
-/// at `next_start_sample`. Image and Packets are not written from a panel.
-pub(crate) fn the_message_a_value_written_onto_an_output_is(
-    family: PortFamily,
-    value: &JsonValue,
-    next_start_sample: u64,
-) -> std::result::Result<(DataChannelPayloadDescriptor, Vec<u8>), String> {
-    match family {
-        PortFamily::Records => {
-            if !value.is_object() {
-                return Err("a Records value is a JSON object".to_string());
-            }
-            let payload = rmp_serde::to_vec_named(value)
-                .map_err(|why| format!("the record does not encode: {why}"))?;
-            Ok((DataChannelPayloadDescriptor::records_message(), payload))
-        }
-        PortFamily::Array => the_array_frame_of_a_value(value),
-        PortFamily::Channels => the_channels_block_of_a_value(value, next_start_sample),
-        PortFamily::Image | PortFamily::Packets => Err(why_a_panel_never_writes(family)),
-    }
-}
-
-/// An Array attribute read off a JSON value: its shape, outermost first, and its elements.
-struct ArrayAttributeOfAJsonValue {
-    name: String,
-    shape: Vec<u64>,
-    data: Vec<u8>,
-}
-
-fn the_array_frame_of_a_value(
-    value: &JsonValue,
-) -> std::result::Result<(DataChannelPayloadDescriptor, Vec<u8>), String> {
-    let attributes: Vec<ArrayAttributeOfAJsonValue> = match value {
-        JsonValue::Object(attributes_by_name) if !attributes_by_name.is_empty() => {
-            attributes_by_name
-                .iter()
-                .map(|(name, attribute)| the_array_attribute_of_a_value(name, attribute))
-                .collect::<std::result::Result<_, _>>()?
-        }
-        JsonValue::Object(_) => return Err("an Array value names at least one attribute".into()),
-        _ => vec![the_array_attribute_of_a_value(
-            VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
-            value,
-        )?],
-    };
-    let attributes_to_pack: Vec<ArrayFrameCpuAttributeToPack<'_>> = attributes
-        .iter()
-        .map(|attribute| ArrayFrameCpuAttributeToPack {
-            name: &attribute.name,
-            dtype: VIEW_NODE_ARRAY_OUTPUT_DTYPE,
-            shape: &attribute.shape,
-            data: &attribute.data,
-        })
-        .collect();
-    let (body, payload) = array_frame_payload_of_cpu_attributes(&attributes_to_pack)
-        .map_err(|why| why.to_string())?;
-    Ok((DataChannelPayloadDescriptor::array_frame(body), payload))
-}
-
-fn the_array_attribute_of_a_value(
-    name: &str,
-    value: &JsonValue,
-) -> std::result::Result<ArrayAttributeOfAJsonValue, String> {
-    let mut shape = Vec::new();
-    let mut level = value;
-    while let JsonValue::Array(elements) = level {
-        shape.push(elements.len() as u64);
-        match elements.first() {
-            Some(first) => level = first,
-            None => break,
-        }
-    }
-    let mut elements = Vec::new();
-    the_elements_of_a_value_shaped(value, &shape, &mut elements).map_err(|why| {
-        format!("attribute `{name}` is a number or a list of numbers of one shape: {why}")
-    })?;
-    if shape.is_empty() {
-        shape.push(1);
-    }
-    Ok(ArrayAttributeOfAJsonValue {
-        name: name.to_string(),
-        shape,
-        data: elements
-            .iter()
-            .flat_map(|element: &f64| element.to_le_bytes())
-            .collect(),
-    })
-}
-
-fn the_elements_of_a_value_shaped(
-    value: &JsonValue,
-    shape: &[u64],
-    elements: &mut Vec<f64>,
-) -> std::result::Result<(), String> {
-    match (value, shape.split_first()) {
-        (JsonValue::Number(number), None) => {
-            elements.push(number.as_f64().ok_or("a number is out of range")?);
-            Ok(())
-        }
-        (JsonValue::Array(nested), Some((&length, inner_shape)))
-            if nested.len() as u64 == length =>
-        {
-            nested.iter().try_for_each(|nested| {
-                the_elements_of_a_value_shaped(nested, inner_shape, elements)
-            })
-        }
-        (JsonValue::Array(_), Some(_)) => Err("its lists differ in length".into()),
-        _ => Err(format!("`{value}` is not a number at that depth")),
-    }
-}
-
-fn the_channels_block_of_a_value(
-    value: &JsonValue,
-    start_sample: u64,
-) -> std::result::Result<(DataChannelPayloadDescriptor, Vec<u8>), String> {
-    let (channels, sample_rate) = match value {
-        JsonValue::Number(number) => (
-            vec![vec![number.as_f64().ok_or("the number is out of range")?]],
-            0,
-        ),
-        JsonValue::Bool(control_value) => (vec![vec![f64::from(u8::from(*control_value))]], 0),
-        JsonValue::Object(block) => {
-            let channels = block
-                .get("samples")
-                .and_then(JsonValue::as_array)
-                .ok_or("a Channels block is `{\"samples\": [[...], ...], \"sample_rate\"}`")?
-                .iter()
-                .map(|channel| {
-                    channel
-                        .as_array()
-                        .ok_or("each channel of `samples` is a list of numbers")?
-                        .iter()
-                        .map(|sample| sample.as_f64().ok_or("each sample is a number"))
-                        .collect::<std::result::Result<Vec<f64>, _>>()
-                })
-                .collect::<std::result::Result<Vec<Vec<f64>>, _>>()?;
-            let sample_rate = match block.get("sample_rate") {
-                None => 0,
-                Some(rate) => rate
-                    .as_u64()
-                    .and_then(|rate| u32::try_from(rate).ok())
-                    .ok_or("`sample_rate` is a whole number of samples per second")?,
-            };
-            if let Some(key) = block
-                .keys()
-                .find(|key| !matches!(key.as_str(), "samples" | "sample_rate"))
-            {
-                return Err(format!("a Channels block takes no `{key}`"));
-            }
-            (channels, sample_rate)
-        }
-        _ => {
-            return Err(
-                "a Channels value is a number, a bool or `{\"samples\": [[...], ...], \"sample_rate\"}`"
-                    .to_string(),
-            );
-        }
-    };
-    let samples_per_channel = channels.first().map_or(0, Vec::len);
-    if samples_per_channel == 0
-        || channels
-            .iter()
-            .any(|channel| channel.len() != samples_per_channel)
-    {
-        return Err("every channel holds the same number of samples, at least one".into());
-    }
-    let channel_count = u32::try_from(channels.len()).map_err(|_| "too many channels")?;
-    let samples_per_channel =
-        u32::try_from(samples_per_channel).map_err(|_| "too many samples per channel")?;
-    let payload = channels
-        .iter()
-        .flatten()
-        .flat_map(|sample| (*sample as f32).to_le_bytes())
-        .collect();
-    Ok((
-        DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
-            start_sample,
-            sample_rate,
-            channel_count,
-            samples_per_channel,
-            sample_type: VIEW_NODE_CHANNELS_OUTPUT_SAMPLE_TYPE as u32,
-        }),
-        payload,
     ))
 }
 
