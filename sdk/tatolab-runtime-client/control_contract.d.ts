@@ -133,7 +133,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -4442,6 +4442,148 @@ export interface ProjectFileTransactionToolResult {
 }
 
 /**
+ * `check_project_code`'s params.
+ */
+export interface CheckProjectCodeRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The files to check, each `/`-separated and relative to the project directory, such as `nodes/blur.py`; every module the project's node type listing names when omitted. Refused for a path that is not a file of the project.
+   */
+  paths?: Array<string> | null;
+}
+
+/**
+ * `check_project_code`'s answer, for the bytes on disk when the checks ran.
+ */
+export interface ProjectCodeCheckResult {
+  /**
+   * `failed` when any finding is an `error`; else `not_fully_checked` when any check did not
+   * run to its end; else `passed`. Warnings alone pass.
+   */
+  verdict: ProjectCodeCheckVerdict;
+  /**
+   * Each check run, and how it ended.
+   */
+  checks: Array<ProjectCodeCheckRun>;
+  /**
+   * Every finding of every check, in the order each check found them.
+   */
+  findings: Array<ProjectCodeCheckFinding>;
+  /**
+   * Each file a check finished, with the hash of the bytes it checked. A file a check did
+   * not finish is not listed.
+   */
+  files_checked: Array<ProjectFileChecked>;
+}
+
+/**
+ * What `check_project_code` decided of the code it was asked about.
+ */
+export type ProjectCodeCheckVerdict = "passed" | "failed" | "not_fully_checked";
+
+/**
+ * One check run and how it ended.
+ */
+export interface ProjectCodeCheckRun {
+  /**
+   * The check.
+   */
+  check: ProjectCodeCheckKind;
+  /**
+   * How it ended.
+   */
+  state: ProjectCodeCheckState;
+  /**
+   * Why it did not run to its end, with its code, such as `check_ran_out_of_time` with the
+   * file it was checking as `refused_file`; present only when `state` is `not_checked`.
+   */
+  not_checked_because?: ProjectActionRefusalOnTheWire | null;
+  /**
+   * Each program or package the check ran with, and its version.
+   */
+  checked_with?: Array<string>;
+}
+
+/**
+ * One check of a project's code. The set grows: a check a client does not know is still
+ * answered with its state and its findings.
+ */
+export type ProjectCodeCheckKind = "python_node_declarations";
+
+/**
+ * How one check ended. The set grows: a state a client does not know reads as `not_checked`.
+ */
+export type ProjectCodeCheckState = "passed" | "failed" | "not_checked";
+
+/**
+ * One thing a check found, at its place in a file of the project.
+ */
+export interface ProjectCodeCheckFinding {
+  /**
+   * The check that found it.
+   */
+  check: ProjectCodeCheckKind;
+  /**
+   * What was found, for a caller to branch on: the code the declaration reader refused with,
+   * such as `value_input_has_no_default`, `module_does_not_import` for a module that does not
+   * import, or `declaration_retired` for a node declared in a retired form.
+   */
+  finding_code: string;
+  /**
+   * How much it matters.
+   */
+  severity: ProjectCodeCheckSeverity;
+  /**
+   * What was found, and how to fix it when there is a fix.
+   */
+  words: string;
+  /**
+   * The file, by its path in the project, `/`-separated.
+   */
+  path: string;
+  /**
+   * The line, from 1, when the finding is narrower than the file.
+   */
+  line?: number | null;
+  /**
+   * The column, from 1, when the finding is narrower than the line.
+   */
+  column?: number | null;
+  /**
+   * The node type the finding is about, `<module>:<name>`, when it is about one.
+   */
+  node_type?: string | null;
+  /**
+   * The node type's port the finding is about, as its declaration names it, when it is about
+   * one.
+   */
+  port?: string | null;
+}
+
+/**
+ * How much a finding matters.
+ */
+export type ProjectCodeCheckSeverity = "error" | "warning";
+
+/**
+ * A file a check finished, and the hash of the bytes it checked.
+ */
+export interface ProjectFileChecked {
+  /**
+   * The file, by its path in the project, `/`-separated.
+   */
+  path: string;
+  /**
+   * The SHA-256 of its bytes as the check read them, lowercase hex, as `read_project_file`
+   * answers it.
+   */
+  content_sha256: string;
+}
+
+/**
  * `list_project_node_types`'s params.
  */
 export interface ListProjectNodeTypesRequest {
@@ -6315,6 +6457,15 @@ export interface ControlContractComponents {
   CreateNodeFileToolResult: CreateNodeFileToolResult;
   WriteProjectFileRequest: WriteProjectFileRequest;
   ProjectFileTransactionToolResult: ProjectFileTransactionToolResult;
+  CheckProjectCodeRequest: CheckProjectCodeRequest;
+  ProjectCodeCheckResult: ProjectCodeCheckResult;
+  ProjectCodeCheckVerdict: ProjectCodeCheckVerdict;
+  ProjectCodeCheckRun: ProjectCodeCheckRun;
+  ProjectCodeCheckKind: ProjectCodeCheckKind;
+  ProjectCodeCheckState: ProjectCodeCheckState;
+  ProjectCodeCheckFinding: ProjectCodeCheckFinding;
+  ProjectCodeCheckSeverity: ProjectCodeCheckSeverity;
+  ProjectFileChecked: ProjectFileChecked;
   ListProjectNodeTypesRequest: ListProjectNodeTypesRequest;
   ListProjectNodeTypesToolResult: ListProjectNodeTypesToolResult;
   NodeTypeSourceReadWithoutRunningIt: NodeTypeSourceReadWithoutRunningIt;
@@ -7162,6 +7313,17 @@ export interface ControlOperations {
     result: ProjectFileTransactionToolResult;
   };
   /**
+   * Check a project's code on disk without running a stream, answering each finding as data.
+   *
+   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. The one check today is `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
+   *
+   * Since contract version 3, experimental.
+   */
+  check_project_code: {
+    params: CheckProjectCodeRequest;
+    result: ProjectCodeCheckResult;
+  };
+  /**
    * List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.
    *
    * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.
@@ -7394,7 +7556,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 12;
+export declare const CONTROL_CONTRACT_REVISION: 13;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

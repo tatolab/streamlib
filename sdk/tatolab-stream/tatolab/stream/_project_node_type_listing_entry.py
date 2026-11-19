@@ -32,7 +32,11 @@ from ._node_type_source_reader import (
     read_node_types_and_graph_generators_from_module_sources,
 )
 
-__all__ = ["list_the_node_types_and_graph_generators_of_a_project", "main"]
+__all__ = [
+    "list_the_node_types_and_graph_generators_of_a_project",
+    "main",
+    "project_module_sources",
+]
 
 INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP = "tatolab.nodes"
 
@@ -59,7 +63,7 @@ def list_the_node_types_and_graph_generators_of_a_project(
         {
             "source": PROJECT_SOURCE,
             **read_node_types_and_graph_generators_from_module_sources(
-                _project_module_sources(project_directory)
+                project_module_sources(project_directory)
             ),
         }
     ]
@@ -94,7 +98,8 @@ def _a_node_type_of_an_imports_own_code(folder: str, class_import_path: str) -> 
     return f"{_PROJECT_IMPORTS_DIRECTORY_NAME}/{folder}/{class_import_path}"
 
 
-def _project_module_sources(project_directory: Path) -> Iterator[tuple[str, str, str | OSError]]:
+def project_module_sources(project_directory: Path) -> Iterator[tuple[str, str, str | OSError]]:
+    """Each `(module name, path in the project, source text or why it was not read)` of the project's own code outside `imports/`."""
     for directory, subdirectory_names, file_names in os.walk(project_directory):
         is_the_project_root = Path(directory) == project_directory
         subdirectory_names[:] = sorted(

@@ -35,6 +35,10 @@ const LOCAL_API_MCP_URI_AUTHORITY: &str = "localhost";
 /// Bounds every one-shot verb's tool call and connect: none waits for a stream action to run.
 pub(crate) const ONE_SHOT_VERB_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long `tatolab check` waits for the runtime's answer: past the 60 seconds a check may run
+/// before the runtime kills it and answers what it finished.
+pub(crate) const PROJECT_CODE_CHECK_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// What an MCP request to a runtime's local API came back with instead of a result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalApiMcpToolClientFailureKind {

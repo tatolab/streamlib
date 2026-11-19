@@ -26,6 +26,7 @@ use crate::mcp_stdio_upgrade::tests::upgraded_mcp_stdio_stream;
 
 mod asset_import_and_edit_tests;
 mod asset_media_facts_tests;
+mod project_code_check_tests;
 mod project_file_and_whole_project_operation_tests;
 mod transaction_feed_and_client_identity_tests;
 

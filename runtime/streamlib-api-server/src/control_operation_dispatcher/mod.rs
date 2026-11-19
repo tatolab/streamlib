@@ -41,7 +41,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
     ListSamplesToolResult, ListStreamsToolResult, ListedStreamState, LogsToolResult,
     OpenViewerToolResult, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
-    ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
+    ProjectCodeCheckResult, ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
     ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
     ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
     RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
@@ -158,6 +158,8 @@ pub(crate) enum ControlOperationAnswer {
     CreateNodeFile(CreateNodeFileToolResult),
     /// `write_project_file`'s.
     ProjectFileTransaction(ProjectFileTransactionToolResult),
+    /// `check_project_code`'s.
+    CheckProjectCode(ProjectCodeCheckResult),
     /// `list_project_node_types`'s.
     ListProjectNodeTypes(ListProjectNodeTypesToolResult),
     /// `list_pin_types`'.
@@ -643,6 +645,10 @@ impl ControlOperationDispatcher {
                 .write_project_file(request, request_origin)
                 .await
                 .map(ControlOperationAnswer::ProjectFileTransaction),
+            ControlOperationCall::CheckProjectCode(request) => self
+                .check_project_code(request)
+                .await
+                .map(ControlOperationAnswer::CheckProjectCode),
             ControlOperationCall::ListProjectNodeTypes(request) => self
                 .list_project_node_types(request)
                 .await
