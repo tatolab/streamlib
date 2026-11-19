@@ -9,7 +9,6 @@
 //! none. When the host ends, the runtime starts it again and the tab is
 //! opened again in the new one.
 
-use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
 use std::fs::File;
 #[cfg(target_os = "linux")]
@@ -43,7 +42,8 @@ use tatolab_module_sdk::{
 use crate::page_audio_blocks::{PageAudioStreamTimeline, samples_of_little_endian_f32_bytes};
 use crate::page_audio_silence_watch::PageAudioSilenceWatch;
 use crate::page_data_messages::{
-    events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
+    DataMessagesHeldForTheBrowserHost, events_msgpack_map_of_published_json,
+    page_data_detail_json_of_msgpack_map,
 };
 use crate::page_input_messages::{PageInputAudioBlock, PageInputVideoFrameExtent};
 use crate::painted_page_image_frame::image_frame_payload_descriptor_of_a_painted_page;
@@ -83,10 +83,6 @@ const LONGEST_REOPEN_REFUSAL_BY_A_RUNNING_BROWSER_HOST: Duration = Duration::fro
 const PAGE_INPUT_VIDEO_PIXEL_FORMAT: &str = "rgba32";
 
 const DATA_INPUT_WAIT: Duration = Duration::from_millis(50);
-/// How many `data` messages wait for a restarting browser host before the oldest is dropped.
-const MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 256;
-/// How many bytes of `data` JSON a node holds while the host is away.
-const MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 64 * 1024 * 1024;
 /// How long one send to the host may take before the connection ends.
 const SEND_TO_THE_BROWSER_HOST_BUDGET: Duration = Duration::from_secs(5);
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
@@ -183,10 +179,24 @@ pub struct BrowserPageCounters {
     pub data_messages_refused: AtomicU64,
     pub page_input_video_frames_delivered: AtomicU64,
     pub page_input_audio_blocks_delivered: AtomicU64,
+    /// Of `page_input_audio_blocks_delivered`, those holding a sample that is not zero.
+    pub page_input_audio_blocks_with_sound_delivered: AtomicU64,
     /// Input frames and blocks that never reached the page: unreadable, not
     /// read back, or sent while the browser host was away.
     pub page_input_chunks_refused: AtomicU64,
     pub browser_host_reconnects: AtomicU64,
+}
+
+impl BrowserPageCounters {
+    /// Count one audio input block that reached the page, and whether it held sound.
+    fn count_an_input_audio_block_delivered(&self, carries_sound: bool) {
+        self.page_input_audio_blocks_delivered
+            .fetch_add(1, Ordering::Relaxed);
+        if carries_sound {
+            self.page_input_audio_blocks_with_sound_delivered
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 /// What the tab's two threads share.
@@ -1321,12 +1331,11 @@ fn deliver_what_one_page_input_holds(
                     {
                         *read_back_rgba_pixels = rgba_pixels;
                     }
-                    count_one_page_input_send(
-                        tab,
-                        input_port_name,
-                        outcome,
-                        &tab.counters.page_input_video_frames_delivered,
-                    );
+                    count_one_page_input_send(tab, input_port_name, outcome, || {
+                        tab.counters
+                            .page_input_video_frames_delivered
+                            .fetch_add(1, Ordering::Relaxed);
+                    });
                 }
                 Err(refusal) => count_a_page_input_chunk_that_did_not_reach_the_page(
                     tab,
@@ -1352,6 +1361,7 @@ fn deliver_what_one_page_input_holds(
                     });
                 match block {
                     Ok(block) => {
+                        let carries_sound = block.carries_sound();
                         let outcome = tab.send_to_the_browser_host(
                             &TabProtocolMessageFromNode::DeliverPageInputAudioBlock {
                                 input_port_name: input_port_name.clone(),
@@ -1361,12 +1371,10 @@ fn deliver_what_one_page_input_holds(
                                 interleaved_samples_le_f32: block.interleaved_samples_le_f32,
                             },
                         );
-                        count_one_page_input_send(
-                            tab,
-                            input_port_name,
-                            outcome,
-                            &tab.counters.page_input_audio_blocks_delivered,
-                        );
+                        count_one_page_input_send(tab, input_port_name, outcome, || {
+                            tab.counters
+                                .count_an_input_audio_block_delivered(carries_sound)
+                        });
                     }
                     Err(refusal) => count_a_page_input_chunk_that_did_not_reach_the_page(
                         tab,
@@ -1422,12 +1430,10 @@ fn count_one_page_input_send(
     tab: &BrowserHostTabOfOneNode,
     input_port_name: &str,
     outcome: SendToTheBrowserHostOutcome,
-    delivered: &AtomicU64,
+    count_the_delivery: impl FnOnce(),
 ) {
     match outcome {
-        SendToTheBrowserHostOutcome::Sent => {
-            delivered.fetch_add(1, Ordering::Relaxed);
-        }
+        SendToTheBrowserHostOutcome::Sent => count_the_delivery(),
         SendToTheBrowserHostOutcome::RefusedBeforeWriting(refusal) => {
             count_a_page_input_chunk_that_did_not_reach_the_page(tab, input_port_name, &refusal)
         }
@@ -1459,45 +1465,6 @@ fn count_a_page_input_chunk_that_did_not_reach_the_page(
                  {input_port_name}: {refusal}"
             ),
         );
-    }
-}
-
-/// The newest `data` messages, as page JSON, waiting for the host: at most
-/// [`MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] of them and
-/// [`MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] bytes, the newest
-/// one always kept.
-#[derive(Default)]
-struct DataMessagesHeldForTheBrowserHost {
-    detail_jsons: VecDeque<String>,
-    bytes_held: usize,
-}
-
-impl DataMessagesHeldForTheBrowserHost {
-    /// Hold `detail_json`, dropping the oldest past either bound; returns how
-    /// many were dropped.
-    fn hold_newest(&mut self, detail_json: String) -> usize {
-        self.bytes_held += detail_json.len();
-        self.detail_jsons.push_back(detail_json);
-        let mut dropped = 0;
-        while self.detail_jsons.len() > 1
-            && (self.detail_jsons.len() > MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY
-                || self.bytes_held > MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY)
-        {
-            self.take_oldest();
-            dropped += 1;
-        }
-        dropped
-    }
-
-    fn take_oldest(&mut self) -> Option<String> {
-        let oldest = self.detail_jsons.pop_front()?;
-        self.bytes_held -= oldest.len();
-        Some(oldest)
-    }
-
-    fn put_back_as_oldest(&mut self, detail_json: String) {
-        self.bytes_held += detail_json.len();
-        self.detail_jsons.push_front(detail_json);
     }
 }
 
@@ -1559,27 +1526,6 @@ mod tests {
     }
 
     #[test]
-    fn held_data_drops_the_oldest_past_either_bound_and_keeps_the_newest() {
-        let mut held = DataMessagesHeldForTheBrowserHost::default();
-        for index in 0..MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY {
-            assert_eq!(held.hold_newest(index.to_string()), 0);
-        }
-        assert_eq!(held.hold_newest("newest".to_string()), 1);
-        assert_eq!(held.take_oldest().as_deref(), Some("1"));
-
-        let mut held = DataMessagesHeldForTheBrowserHost::default();
-        let half_the_bytes = "x".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY / 2);
-        assert_eq!(held.hold_newest(half_the_bytes.clone()), 0);
-        assert_eq!(held.hold_newest(half_the_bytes), 0);
-        assert_eq!(held.hold_newest("past the bound".to_string()), 1);
-        let larger_than_the_bound =
-            "y".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY + 1);
-        assert_eq!(held.hold_newest(larger_than_the_bound.clone()), 2);
-        assert_eq!(held.take_oldest(), Some(larger_than_the_bound));
-        assert_eq!(held.bytes_held, 0);
-    }
-
-    #[test]
     fn a_config_cef_can_render_passes() {
         refuse_a_config_cef_cannot_render(&config()).expect("1080p60 renders");
     }
@@ -1626,6 +1572,18 @@ mod tests {
             let refusal = refuse_a_config_cef_cannot_render(&broken).expect_err(named);
             assert!(refusal.contains(named), "{refusal}");
         }
+    }
+
+    #[test]
+    fn an_input_audio_block_with_sound_is_counted_as_delivered_and_as_sounding() {
+        let counters = BrowserPageCounters::default();
+        counters.count_an_input_audio_block_delivered(false);
+        counters.count_an_input_audio_block_delivered(true);
+        counters.count_an_input_audio_block_delivered(false);
+        let delivered = &counters.page_input_audio_blocks_delivered;
+        let with_sound = &counters.page_input_audio_blocks_with_sound_delivered;
+        assert_eq!(delivered.load(Ordering::Relaxed), 3);
+        assert_eq!(with_sound.load(Ordering::Relaxed), 1);
     }
 
     #[test]
