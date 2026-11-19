@@ -24,8 +24,8 @@ pub(crate) use graph_document_refusals_and_link_end_naming::{
     the_ports_of_a_graph_document_node,
 };
 pub use graph_only_nodes_as_drawn::{
-    GraphOnlyNodesAsDrawn, GraphSnapshotWithGraphOnlyNodesResolved,
-    LinkSetAsideByTheGraphsValidation, NodeChangeADrawnLinkBlocks,
+    GraphOnlyNodesAsDrawn, GraphSnapshotWithGraphOnlyNodesResolved, LinkSetAside,
+    NodeChangeADrawnLinkBlocks,
 };
 
 use std::collections::HashMap;
@@ -144,6 +144,7 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     ],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &[
+        "condition",
         "extensions",
         "function_node_pool",
         "machine",
@@ -170,6 +171,7 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "ports",
         "inputs_waiting_for_a_value",
         "components",
+        "live",
     ],
 };
 
@@ -190,6 +192,7 @@ const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "free_conversion",
         "warnings",
         "components",
+        "live",
     ],
 };
 
@@ -467,7 +470,7 @@ impl GraphSnapshot {
                 interface_as_drawn: interface.interface_as_drawn,
                 groups_as_drawn: self.groups.clone(),
                 studio_as_drawn: self.studio.clone(),
-                links_its_validation_set_aside: Vec::new(),
+                links_set_aside: Vec::new(),
             },
             values_the_set_variables_hold: variables.values_the_set_variables_hold,
         })

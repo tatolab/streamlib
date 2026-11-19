@@ -20,6 +20,7 @@ use streamlib_project_repository::{
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
 };
+use streamlib_runtime_client_contract::local_api_wire_contract::LinkCandidateEnd;
 use uuid::Uuid;
 
 /// How `set_node_input_value`'s `node` is described to its caller.
@@ -152,6 +153,54 @@ pub struct CheckLinkRequest {
         description = "The input port the link would carry into: a node's UUID and its input port's name."
     )]
     pub target: StreamGraphActionLinkEnd,
+}
+
+/// `check_link_candidates`'s params: one placed end and the ends of the other direction it is
+/// judged against.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckLinkCandidatesRequest {
+    /// The stream the links would be in.
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    pub stream: GraphEditStream,
+    /// The subgraph the links would be inside; the stream's own level when omitted.
+    #[schemars(
+        description = "The subgraph the links would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused."
+    )]
+    pub level: Option<Vec<Uuid>>,
+    /// The placed end each candidate is judged against.
+    pub from: LinkCandidatesFrom,
+    /// The candidate ends.
+    pub among: LinkCandidatesAmong,
+    /// Whether a candidate `connect` would refuse is listed, with its refusal.
+    #[serde(default)]
+    #[schemars(
+        description = "Whether a candidate `connect` would refuse is listed too, with the refusal it would answer; false or omitted lists only the candidates that connect."
+    )]
+    pub include_refused: bool,
+}
+
+/// The placed end `check_link_candidates` judges each candidate against, by its direction.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum LinkCandidatesFrom {
+    /// An output, each candidate being an input it would carry into.
+    Output(StreamGraphActionLinkEnd),
+    /// An input, each candidate being an output it would carry from.
+    Input(StreamGraphActionLinkEnd),
+}
+
+/// The candidate ends `check_link_candidates` judges, each of the direction other than its
+/// placed end's.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum LinkCandidatesAmong {
+    /// Every port of the other direction of every node at the level.
+    PlacedPorts,
+    /// Every port of the other direction of every node type the stream resolves.
+    NodeTypePorts,
+    /// These ends alone.
+    Ends(Vec<LinkCandidateEnd>),
 }
 
 /// `remove_node`'s params.

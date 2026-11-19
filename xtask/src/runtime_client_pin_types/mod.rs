@@ -27,6 +27,7 @@ const PIN_TYPE_ROOT_COMPONENT_NAMES: &[&str] = &[
     "DeclaredPinType",
     "PinFlow",
     PIN_ANNOTATIONS_COMPONENT_NAME,
+    "PinAnnotationName",
     "PinDeclaration",
 ];
 
@@ -67,9 +68,7 @@ impl<'contract> RuntimeClientPinTypes<'contract> {
             literal_union(self.value_component_names())
         );
         declarations.push_str(
-            "/** An annotation a pin may state: a key of `PinAnnotations`. */\n\
-             export type PinAnnotationName = keyof PinAnnotations;\n\n\
-             /** The value of each built-in type that stores one. A type with no key stores none. */\n\
+            "/** The value of each built-in type that stores one. A type with no key stores none. */\n\
              export interface PinValues {\n",
         );
         for row in &self.rows {

@@ -532,6 +532,7 @@ impl GraphFragmentAsDrawn {
                 links,
                 groups: stored.groups.clone(),
             }),
+            live: None,
         }
     }
 
@@ -780,7 +781,7 @@ fn rendered_with_the_live_keys_of(
 
 /// A node no running node stands for, rendered with its spec keys alone: its input values split
 /// as its type takes them, or for a fragment node as the interface its fragment draws declares.
-fn rendered_as_stored(
+pub(crate) fn rendered_as_stored(
     node: &GraphSnapshotNode,
     node_types: &NodeTypesOneStreamResolves,
 ) -> GraphNodeOutput {
@@ -823,6 +824,7 @@ fn rendered_as_stored(
         inputs_waiting_for_a_value: Vec::new(),
         components: GraphNodeComponentsOnTheWire::default(),
         fragment: None,
+        live: None,
     }
 }
 
@@ -846,7 +848,9 @@ fn cast_of(name: &str) -> Result<String> {
     Ok(cast_exposed_name_to_url_safe(name)?.into_owned())
 }
 
-fn cast_or_as_written(name: &str) -> String {
+/// `name` cast to lowercase URL-safe, as `graph` renders a node's name, or as written when it
+/// does not cast.
+pub(crate) fn cast_or_as_written(name: &str) -> String {
     cast_exposed_name_to_url_safe(name)
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_else(|_| name.to_string())

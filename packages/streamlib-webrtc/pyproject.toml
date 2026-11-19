@@ -84,3 +84,7 @@ reportMissingModuleSource = "none"
 markers = [
     "requires_gpu: needs a real GPU; deselected in CI with -m 'not requires_gpu'",
 ]
+
+# What the Marketplace files this module under.
+[tool.tatolab.catalog]
+category = "I/O & codecs"

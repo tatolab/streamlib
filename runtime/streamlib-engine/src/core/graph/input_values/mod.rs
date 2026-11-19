@@ -107,6 +107,11 @@ pub fn refuse_an_input_value_its_input_does_not_take(
         .input_named(input)
         .filter(|_| !legacy_config.is_a_config_field(input));
     if let Some(port) = the_input_port {
+        if port.is_a_trigger() {
+            return Err(the_refusal_of_a_set_on_a_trigger_input(
+                node.name, input, value,
+            ));
+        }
         let Some(value) = value else {
             return Ok(());
         };
@@ -155,6 +160,34 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             ),
         )
     })
+}
+
+/// Why a set on Trigger input `input` of the node named `node_name` is refused, which holds no
+/// value: a set of `value` takes none, and a set taking a value off has none to save or take off.
+/// Only a live set of no value is taken, and fires the input.
+pub(crate) fn the_refusal_of_a_set_on_a_trigger_input(
+    node_name: &str,
+    input: &str,
+    value: Option<&Value>,
+) -> InputValueRefusal {
+    let to_fire_it = "To fire it: send `set_node_input_value` with no value in a `live` \
+                      transaction of value sets alone, which fires it once";
+    match value.filter(|value| !value.is_null()) {
+        Some(value) => InputValueRefusal::of(
+            InputValueRefusalCode::InputValueNotValid,
+            format!(
+                "the value of input `{input}` of `{node_name}` is {value}, and `{input}` is a \
+                 Trigger, which carries an event and no value. {to_fire_it}"
+            ),
+        ),
+        None => InputValueRefusal::of(
+            InputValueRefusalCode::InputTakesNoValue,
+            format!(
+                "input `{input}` of `{node_name}` is a Trigger, which carries an event and holds \
+                 no value to save. {to_fire_it}"
+            ),
+        ),
+    }
 }
 
 /// Refuse `value` set on `port`, an input port of the node named `node_name` that runs as
@@ -230,7 +263,7 @@ fn refuse_a_value_a_setting_of_a_family_does_not_carry(
     value: &Value,
 ) -> Result<(), InputValueRefusal> {
     let family = port.family.family;
-    crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, value, 0)
+    crate::core::pin_value_packing::the_message_a_value_written_onto_an_output_is(family, value, 0)
         .map(|_| ())
         .map_err(|why| {
             InputValueRefusal::of(

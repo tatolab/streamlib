@@ -6,8 +6,9 @@
 //! the graph, its document and the project's history are left as they were.
 
 use streamlib::sdk::descriptors::{
-    AudioWindowContract, FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeKind,
-    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    AudioWindowContract, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
+    NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor, PortFamily,
+    PortFamilyDeclaration,
 };
 
 use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
@@ -33,7 +34,7 @@ fn a_project_whose_main_stream_holds_a_mixer_and_a_graph_input() -> ProjectWithG
 }
 
 /// The link from `source` to `target`, each `(node, port)`, in `stream`, as `check_link` takes it.
-fn the_link(stream: Value, source: (&str, &str), target: (&str, &str)) -> Value {
+pub(super) fn the_link(stream: Value, source: (&str, &str), target: (&str, &str)) -> Value {
     json!({
         "stream": stream,
         "source": { "node": source.0, "port": source.1 },
@@ -301,22 +302,65 @@ fn a_function_node_type(
     descriptor
 }
 
+/// The `PreviousValue` node type a loop of function nodes closes through: taking a value of any
+/// type into `value`, of the Records or the Channels family, and giving it back on `result` as
+/// the type and family of the link into `value`.
+fn a_previous_value_node_type() -> NodeDescriptor {
+    let any_flow = PinDeclaration::exactly(PinType::Float { exact_size: None });
+    let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
+    value_family.also_takes_families = vec![PortFamily::Channels];
+    let value = PortDescriptor::new(
+        streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT,
+        "",
+        true,
+        value_family,
+    )
+    .with_delivery_profile("newest")
+    .with_pin_declaration(PinDeclaration {
+        pin_type: DeclaredPinType::Any,
+        ..any_flow.clone()
+    });
+    let mut result_family = PortFamilyDeclaration::of_family(PortFamily::Records);
+    result_family.family_follows_input_port =
+        Some(streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT.to_owned());
+    let result = PortDescriptor::new(
+        streamlib_project_repository::PREVIOUS_VALUE_NODE_OUTPUT_PORT,
+        "",
+        true,
+        result_family,
+    )
+    .with_pin_declaration(PinDeclaration {
+        pin_type: DeclaredPinType::SameAsInput {
+            input_port_name: streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT
+                .to_owned(),
+        },
+        ..any_flow
+    });
+    a_function_node_type(
+        streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE,
+        &[],
+        &[],
+    )
+    .with_input(value)
+    .with_output(result)
+}
+
 const LFO_TYPE: &str = "link_check_test:Lfo";
 const WAVE_TYPE: &str = "link_check_test:Wave";
 const MIX_TYPE: &str = "link_check_test:Mix";
 const REMAP_TYPE: &str = "link_check_test:Remap";
 const WINDOWED_TYPE: &str = "link_check_test:Windowed";
-const SECONDS_TYPE: &str = "link_check_test:Seconds";
-const FRAMES_TYPE: &str = "link_check_test:Frames";
+pub(super) const SECONDS_TYPE: &str = "link_check_test:Seconds";
+pub(super) const FRAMES_TYPE: &str = "link_check_test:Frames";
 
 const FIRST_LFO_UUID: &str = "1f1f1f1f-1f1f-4f1f-8f1f-1f1f1f1f1f1f";
 const SECOND_LFO_UUID: &str = "2f2f2f2f-2f2f-4f2f-8f2f-2f2f2f2f2f2f";
 const WAVE_UUID: &str = "9f9f9f9f-9f9f-4f9f-8f9f-9f9f9f9f9f9f";
-const MIX_UUID: &str = "3f3f3f3f-3f3f-4f3f-8f3f-3f3f3f3f3f3f";
-const REMAP_UUID: &str = "4f4f4f4f-4f4f-4f4f-8f4f-4f4f4f4f4f4f";
+pub(super) const MIX_UUID: &str = "3f3f3f3f-3f3f-4f3f-8f3f-3f3f3f3f3f3f";
+pub(super) const REMAP_UUID: &str = "4f4f4f4f-4f4f-4f4f-8f4f-4f4f4f4f4f4f";
 const WINDOWED_UUID: &str = "5f5f5f5f-5f5f-4f5f-8f5f-5f5f5f5f5f5f";
-const SECONDS_UUID: &str = "6f6f6f6f-6f6f-4f6f-8f6f-6f6f6f6f6f6f";
-const FRAMES_UUID: &str = "7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f";
+pub(super) const SECONDS_UUID: &str = "6f6f6f6f-6f6f-4f6f-8f6f-6f6f6f6f6f6f";
+pub(super) const FRAMES_UUID: &str = "7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f";
 
 /// The node type `node_type` whose one port, `port`, is typed `pin_type` and means `meaning`:
 /// an output, or, with `is_an_input`, an input.
@@ -353,24 +397,14 @@ fn a_node_type_with_a_port_meaning(
     }
 }
 
-/// Register each node type the link check tests below place, once per test binary, a
-/// `PreviousValue` node type, which a project's interpreter describes, among them.
-fn register_the_link_check_node_types_once() {
+/// Register each node type the link check tests below place, `PreviousValue` among them as the
+/// function node a stream's node interpreter describes it as, once per test binary.
+pub(super) fn register_the_link_check_node_types_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         for descriptor in [
+            a_previous_value_node_type(),
             a_function_node_type(LFO_TYPE, &[], &[("result", PortFamily::Records)]),
-            a_function_node_type(
-                streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE,
-                &[(
-                    streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT,
-                    None,
-                )],
-                &[(
-                    streamlib_project_repository::PREVIOUS_VALUE_NODE_OUTPUT_PORT,
-                    PortFamily::Records,
-                )],
-            ),
             a_function_node_type(WAVE_TYPE, &[], &[("result", PortFamily::Channels)]),
             a_function_node_type(
                 MIX_TYPE,
@@ -412,7 +446,7 @@ fn register_the_link_check_node_types_once() {
 /// A project whose stream `main` holds two Lfos, a Wave giving Channels, a Mix the first feeds on `a`, a Remap the Mix
 /// feeds, a function node whose `audio` input declares an audio window, a node giving Float
 /// `seconds` and one taking Integer `frames`.
-fn a_project_whose_main_stream_holds_function_nodes() -> ProjectWithGraphDocuments {
+pub(super) fn a_project_whose_main_stream_holds_function_nodes() -> ProjectWithGraphDocuments {
     register_the_link_check_node_types_once();
     let node = |id: &str, name: &str, node_type: &str| json!({ "id": id, "name": name, "type": node_type, "config": {} });
     let link = |source: (&str, &str), target: (&str, &str)| {
@@ -491,7 +525,7 @@ async fn check_link_answers_the_refusal_connect_answers_for_each_link_an_island_
 
 /// A link closing a loop of function nodes no `PreviousValue` node is in, which `connect`
 /// closes through a `PreviousValue` node it adds, is refused unchecked, and the graph is left as
-/// it was.
+/// it was; `connect` then names the node it adds, its type and why.
 ///
 /// Mental-revert: a check judging the drawn link alone would answer what the engine makes of a
 /// link `connect` never makes.
@@ -508,7 +542,7 @@ async fn check_link_refuses_unchecked_a_link_connect_closes_through_a_previous_v
     );
 
     let refusal = engine
-        .the_answer_or_the_refusal_of("check_link", closing_the_loop)
+        .the_answer_or_the_refusal_of("check_link", closing_the_loop.clone())
         .await
         .expect_err("a link connect closes through a PreviousValue node is not checked");
 
@@ -519,6 +553,52 @@ async fn check_link_refuses_unchecked_a_link_connect_closes_through_a_previous_v
         "{refusal:?}"
     );
     assert_eq!(engine.the_live_graph_of(&stream_id)["links"], links_before);
+
+    let closed = engine
+        .the_answer_or_the_refusal_of("connect", connected_by_alice(&closing_the_loop))
+        .await
+        .unwrap_or_else(|refusal| panic!("connect closes the loop: {refusal:?}"));
+    assert_eq!(
+        closed["added_nodes"][0]["node_type"], "tatolab.stream:PreviousValue",
+        "{closed}"
+    );
+    assert_eq!(
+        closed["added_nodes"][0]["inserted_because"], "closes_a_loop",
+        "{closed}"
+    );
+}
+
+/// Each link a transaction connects carries the warnings its verdict gives: a Float `seconds`
+/// read as an Integer `frames` warns that the meanings differ.
+///
+/// Mental-revert: an answer that never judges its links carries no `warnings`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connected_link_carries_the_warnings_its_verdict_gives() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+
+    let connected = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            connected_by_alice(&the_link(
+                json!(project.stream_asset_of("main")),
+                (SECONDS_UUID, "elapsed"),
+                (FRAMES_UUID, "count"),
+            )),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("a Float is read as an Integer: {refusal:?}"));
+
+    assert_eq!(
+        connected["connected_links"][0]["warnings"],
+        json!([{
+            "warning": "meanings_differ",
+            "output_meaning": "seconds",
+            "input_meaning": "frames",
+        }]),
+        "{connected}"
+    );
 }
 
 /// A link closing a loop of function nodes inside a placed stream, which `connect` closes

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pin_type::{NodeInputMode, PinDeclaration, PinFlow};
+use crate::pin_type::{DeclaredPinType, NodeInputMode, PinDeclaration, PinFlow, PinType};
 use crate::{
     AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
     NodeValueLifetime, PortFamilyDeclaration,
@@ -282,6 +282,49 @@ impl NodeDescriptor {
         self
     }
 
+    /// Why a port's type, found through another input of the node type, cannot be found: a
+    /// port following an input the node type does not declare, or whose type is chosen by an
+    /// input that is not a pin type choice; `None` when every such port names one.
+    pub fn refusal_of_a_port_whose_type_no_input_finds(&self) -> Option<String> {
+        let the_input_named =
+            |input_name: &str| self.inputs.iter().find(|input| input.name == input_name);
+        self.inputs.iter().chain(&self.outputs).find_map(|port| {
+            match &port.declared_pin()?.pin_type {
+                DeclaredPinType::SameAsInput { input_port_name } => {
+                    the_input_named(input_port_name).is_none().then(|| {
+                        format!(
+                            "port {:?} takes the type of input {input_port_name:?}, which the node \
+                         does not declare",
+                            port.name
+                        )
+                    })
+                }
+                DeclaredPinType::SetByInput { input_name } => {
+                    let chooses_a_pin_type = the_input_named(input_name)
+                        .and_then(PortDescriptor::declared_pin)
+                        .is_some_and(|declared| {
+                            matches!(
+                                declared.pin_type,
+                                DeclaredPinType::Is {
+                                    pin_type: PinType::PinTypeChoice { .. }
+                                }
+                            )
+                        });
+                    (!chooses_a_pin_type).then(|| {
+                        format!(
+                            "port {:?} takes the type input {input_name:?} chooses, and the \
+                             node declares no input {input_name:?} of a pin type choice",
+                            port.name
+                        )
+                    })
+                }
+                DeclaredPinType::Is { .. }
+                | DeclaredPinType::OneOf { .. }
+                | DeclaredPinType::Any => None,
+            }
+        })
+    }
+
     pub fn with_input(mut self, port: PortDescriptor) -> Self {
         self.inputs.push(port);
         self
@@ -312,9 +355,10 @@ impl NodeDescriptor {
     }
 
     /// This node type with each input that states no delivery profile reading by its pin's
-    /// default. Refuses a port that states a flow its pin type does not take, and a windowed
-    /// input whose default would skip messages, each by name. An input with no pin keeps the
-    /// delivery profile it states, or none.
+    /// default. Refuses a port that states a flow its pin type does not take, a Trigger input
+    /// that states a delivery profile other than `ordered`, and a windowed input whose default
+    /// would skip messages, each by name. An input with no pin keeps the delivery profile it
+    /// states, or none.
     pub fn with_input_deliveries_defaulted_by_pin(mut self) -> Result<Self, String> {
         let node_type = &self.node_class_import_path;
         for port in self.inputs.iter().chain(&self.outputs) {
@@ -326,7 +370,13 @@ impl NodeDescriptor {
             }
         }
         for input in &mut self.inputs {
-            if input.delivery_profile.is_some() {
+            if let Some(stated) = &input.delivery_profile {
+                if let Some(refusal) = input
+                    .declared_pin()
+                    .and_then(|pin| pin.refusal_of_its_stated_delivery_profile(&input.name, stated))
+                {
+                    return Err(format!("`{node_type}`: {refusal}"));
+                }
                 continue;
             }
             let Some(default_delivery_profile) = input

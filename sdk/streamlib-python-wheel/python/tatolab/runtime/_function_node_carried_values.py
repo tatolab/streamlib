@@ -6,26 +6,39 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import typing
 from typing import Any, Callable, Optional
 
-
-
+from tatolab.runtime._function_node_stored_values import STORED_VALUE_TYPES, the_record_an_island_carries
 
 #: The value type a function node signature gives an `UnreadMessage` input or output. Spelled
 #: here, not imported, because the `tatolab-stream` in a project's venv may predate it, and the
 #: string is the wire contract both sides hold.
 UNREAD_MESSAGE_VALUE_TYPE = "unread_message"
 
+#: The value types a function node signature gives a Color, a Vector of each size, a Rectangle
+#: and a Transform, each carried as its parts: a `tuple` of numbers in the order the type packs
+#: them. Spelled here for the reason `UNREAD_MESSAGE_VALUE_TYPE` is: the strings are the wire
+#: contract both sides hold.
+PART_VALUE_TYPES = ("color", "vector2", "vector3", "vector4", "rectangle", "transform")
+
+#: A value an input reads while nothing links into it, as the island carries it: a number as an
+#: f64, a value of parts as the `tuple` of its parts, and a String, a Menu, an Asset or a List
+#: as the record `{"value": <stored JSON form>}` it travels as.
+PinValueCarried = typing.Union[float, "tuple[float, ...]", "dict[str, Any]"]
+
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
 
-# The value types a body run as Python takes and gives: the scalars, a `dict` as Records, and a
-# message it hands on unread.
+# The value types a body run as Python takes and gives: the scalars, a value of parts, a String,
+# a Menu, an Asset, a List, a `dict` as Records, and a message it hands on unread.
 _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = (
     "float",
     "int",
     "bool",
+    *PART_VALUE_TYPES,
+    *STORED_VALUE_TYPES,
     "records",
     UNREAD_MESSAGE_VALUE_TYPE,
 )
@@ -39,18 +52,24 @@ class FunctionNodeDoesNotCompile(Exception):
 
 
 # What a node whose every value is a number, a bool or a dict carries beyond numbers: nothing.
-_NO_VALUES_CARRIED_BEYOND_NUMBERS: "dict[str, list[int]]" = {
+_NO_VALUES_CARRIED_BEYOND_NUMBERS: "dict[str, list[Any]]" = {
     "inputs_that_take_none": [],
     "inputs_carrying_an_unread_message": [],
     "outputs_carrying_an_unread_message": [],
     "outputs_that_may_hand_out_nothing": [],
+    "inputs_carrying_a_stored_value": [],
+    "outputs_carrying_a_stored_value": [],
 }
 
 
 def _how_the_values_of_a_signature_are_carried(
     function_signature: "dict[str, Any]",
-) -> "dict[str, list[int]]":
-    """Which inputs and outputs of `function_signature` take `None`, carry an `UnreadMessage`, or may hand out nothing."""
+) -> "dict[str, list[Any]]":
+    """Which inputs and outputs of `function_signature` take `None`, carry an `UnreadMessage`, or may hand out nothing.
+
+    Each input and output that carries a String, a Menu, an Asset or a List is listed with its
+    pin type as JSON, which the native side packs and reads it by.
+    """
     inputs = function_signature["inputs"]
     outputs = function_signature["outputs"]
     return {
@@ -72,7 +91,17 @@ def _how_the_values_of_a_signature_are_carried(
             for index, each_output in enumerate(outputs)
             if each_output.get("may_hand_out_nothing")
         ],
+        "inputs_carrying_a_stored_value": _each_carrying_a_stored_value(inputs),
+        "outputs_carrying_a_stored_value": _each_carrying_a_stored_value(outputs),
     }
+
+
+def _each_carrying_a_stored_value(ports: "list[dict[str, Any]]") -> "list[tuple[int, str]]":
+    return [
+        (index, json.dumps(each_port["pin_type"]))
+        for index, each_port in enumerate(ports)
+        if each_port["value_type"] in STORED_VALUE_TYPES
+    ]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -81,7 +110,7 @@ class FunctionNodeCompiledToItsEvaluateEntry:
 
     evaluate_entry_address: int
     input_ports: "tuple[str, ...]"
-    pin_defaults_by_input_port: "dict[str, float]"
+    pin_defaults_by_input_port: "dict[str, PinValueCarried]"
     output_ports: "tuple[str, ...]"
     config_fields: "tuple[str, ...]"
     config_field_defaults: "dict[str, float]"
@@ -92,9 +121,11 @@ class FunctionNodeCompiledToItsEvaluateEntry:
     body_loaded_from_numbas_cache: bool
     compiled_wrapper_kept_alive: Any
     input_value_types: "tuple[str, ...]" = ()
-    how_its_values_are_carried: "dict[str, list[int]]" = dataclasses.field(
+    how_its_values_are_carried: "dict[str, list[Any]]" = dataclasses.field(
         default_factory=lambda: dict(_NO_VALUES_CARRIED_BEYOND_NUMBERS)
     )
+    input_pin_types: "tuple[Optional[dict[str, Any]], ...]" = ()
+    output_pin_types: "tuple[Optional[dict[str, Any]], ...]" = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -104,7 +135,7 @@ class FunctionNodeRunAsPythonInItsReader:
     body: Callable[..., Any]
     function_signature: "dict[str, Any]"
     input_ports: "tuple[str, ...]"
-    pin_defaults_by_input_port: "dict[str, float]"
+    pin_defaults_by_input_port: "dict[str, PinValueCarried]"
     output_ports: "tuple[str, ...]"
     ports_carrying_records: "frozenset[str]"
     config_class: Optional[type]
@@ -114,9 +145,11 @@ class FunctionNodeRunAsPythonInItsReader:
     is_stateful: bool
     why_it_does_not_compile: str
     input_value_types: "tuple[str, ...]" = ()
-    how_its_values_are_carried: "dict[str, list[int]]" = dataclasses.field(
+    how_its_values_are_carried: "dict[str, list[Any]]" = dataclasses.field(
         default_factory=lambda: dict(_NO_VALUES_CARRIED_BEYOND_NUMBERS)
     )
+    input_pin_types: "tuple[Optional[dict[str, Any]], ...]" = ()
+    output_pin_types: "tuple[Optional[dict[str, Any]], ...]" = ()
 
 
 FunctionNodeReadyToEvaluate = typing.Union[
@@ -124,14 +157,86 @@ FunctionNodeReadyToEvaluate = typing.Union[
 ]
 
 
-def _pin_defaults_by_input_port(import_path: str, function_signature: "dict[str, Any]") -> "dict[str, float]":
+def _pin_defaults_by_input_port(
+    import_path: str, function_signature: "dict[str, Any]"
+) -> "dict[str, PinValueCarried]":
     return {
-        each_input["port"]: _exactly_as_f64(
-            each_input["default"], f"{import_path}'s input `{each_input['parameter']}` default"
+        each_input["port"]: pin_value_carried(
+            each_input["value_type"],
+            each_input["default"],
+            f"{import_path}'s input `{each_input['parameter']}` default",
+            each_input.get("pin_type"),
         )
         for each_input in function_signature["inputs"]
         if each_input.get("default") is not None
     }
+
+
+
+def pin_value_carried(
+    value_type: str, stored_value: Any, what_it_is: str, pin_type: "Optional[dict[str, Any]]" = None
+) -> PinValueCarried:
+    """`stored_value`, the stored JSON form of a value of `value_type`, as the island carries it.
+
+    A String, a Menu, an Asset or a List is checked against `pin_type`, the one its signature
+    entry states.
+    """
+    if value_type in STORED_VALUE_TYPES:
+        if pin_type is None:
+            raise FunctionNodeDoesNotCompile(
+                f"{what_it_is}: its signature states no pin type for its {value_type} value"
+            )
+        try:
+            return the_record_an_island_carries(pin_type, stored_value, what_it_is)
+        except (TypeError, ValueError) as not_of_its_type:
+            raise FunctionNodeDoesNotCompile(str(not_of_its_type)) from not_of_its_type
+    if value_type in PART_VALUE_TYPES:
+        try:
+            return value_class_of_a_part_value_type(value_type).from_stored_value(stored_value).parts
+        except (TypeError, ValueError) as not_of_its_type:
+            raise FunctionNodeDoesNotCompile(f"{what_it_is}: {not_of_its_type}") from not_of_its_type
+    return _exactly_as_f64(stored_value, what_it_is)
+
+
+# The number of components a Vector of each value type holds.
+_COMPONENTS_OF_EACH_VECTOR_VALUE_TYPE = {"vector2": 2, "vector3": 3, "vector4": 4}
+
+
+def parts_a_value_type_reads(value_type: str, carried: Any) -> Any:
+    """The parts an input of `value_type`, one of `PART_VALUE_TYPES`, reads of what another node
+    of its island handed out, with the free conversion a link allows.
+
+    One number spreads over every component of a Vector, and over the red, green and blue of a
+    Color, opaque. A Vector or a Color into one of another size keeps the components it shares
+    and reads each missing one as 0, a Color's alpha as 1. A Rectangle and a Transform read
+    their parts as they are. Mirrors the reading of a link from outside the island.
+    """
+    if value_type == "color":
+        component_count = 4
+    else:
+        component_count = _COMPONENTS_OF_EACH_VECTOR_VALUE_TYPE.get(value_type)
+        if component_count is None:
+            return carried
+    if isinstance(carried, (int, float)) and not isinstance(carried, bool):
+        number = float(carried)
+        return (number, number, number, 1.0) if value_type == "color" else (number,) * component_count
+    if not isinstance(carried, tuple):
+        return carried
+    missing = (0.0, 0.0, 0.0, 1.0 if value_type == "color" else 0.0)
+    return tuple(
+        carried[index] if index < len(carried) else missing[index] for index in range(component_count)
+    )
+
+
+def value_class_of_a_part_value_type(value_type: str) -> Any:
+    """The `tatolab.stream` value class a function node's signature names `value_type`, one of `PART_VALUE_TYPES`.
+
+    Imported here, not at the top, because the `tatolab-stream` in a project's venv may predate
+    the value classes; only a node that declares one names its value type.
+    """
+    from tatolab.stream._pin_types import PIN_VALUE_CLASSES
+
+    return next(value_class for value_class in PIN_VALUE_CLASSES if value_class.value_type == value_type)
 
 
 def _initial_state_values(

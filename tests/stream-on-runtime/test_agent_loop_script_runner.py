@@ -8,8 +8,11 @@ what the committed `contract.json` says the runtime serves to agents."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
+import hashlib
 import json
+import tomllib
 import uuid
 from pathlib import Path
 from typing import Any
@@ -33,6 +36,14 @@ from runtime_unit_under_test import REPOSITORY_ROOT
 CONTROL_CONTRACT_FILE = REPOSITORY_ROOT / "runtime" / "streamlib-control-contract" / "contract.json"
 COMPONENT_SCHEMA_REFERENCE_PREFIX = "#/components/schemas/"
 BUILD_A_GRAPH_SCRIPT_NAME = "build_a_graph"
+TEXTURE_TO_TENSOR_NODE_TYPE = "tatolab.stream:TextureToTensor"
+#: The runtime's own node types the stand-in catalog lists beside the installed modules' ones.
+BUILT_IN_NODE_TYPES = {"tatolab.stream:TensorToAudio", TEXTURE_TO_TENSOR_NODE_TYPE}
+PACKAGES_DIRECTORY = REPOSITORY_ROOT / "packages"
+INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP = "tatolab.nodes"
+#: A project's own node types live under `nodes/`; the runtime describes one when it is placed.
+PROJECT_NODE_TYPE_PREFIX = "nodes."
+NODE_TYPE_NOT_DESCRIBED_YET = "the node type is not described yet; place a node of it first"
 
 
 def a_json_object(text: str) -> "dict[str, Any]":
@@ -44,6 +55,17 @@ def a_json_object(text: str) -> "dict[str, Any]":
 
 def the_committed_control_contract() -> "dict[str, Any]":
     return a_json_object(CONTROL_CONTRACT_FILE.read_text(encoding="utf-8"))
+
+
+def the_installed_modules_node_types() -> "set[str]":
+    """Every `tatolab.nodes` entry point value this repository's packages declare: the import
+    paths the runtime's node catalog keys an installed module's node types by."""
+    node_types: "set[str]" = set()
+    for pyproject_path in PACKAGES_DIRECTORY.glob("*/pyproject.toml"):
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        entry_points = pyproject.get("project", {}).get("entry-points", {})
+        node_types.update(entry_points.get(INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP, {}).values())
+    return node_types
 
 
 class StandInRefusal(Exception):
@@ -70,6 +92,10 @@ class ContractBackedAgentSession:
     """A stand-in MCP session: its tool list, groups and schemas are the committed contract's,
     and it holds one running stream whose graph `transact` and `undo` edit.
 
+    Its node catalog is the runtime's: the installed modules' node types under the import paths
+    their entry points declare, and each project node type once a node of it is placed. Placing
+    any other type is refused, and asking about one answers it as not checked yet.
+
     The answers it gives are checked against the contract's result schemas, so the script is
     replayed against shapes the runtime declares.
     """
@@ -94,13 +120,22 @@ class ContractBackedAgentSession:
              "type": "tatolab.testpattern:TestPatternSource"}
         ]
         self.links: "list[dict[str, Any]]" = []
-        #: The inputs a link from a picture output connects to; `check_link` refuses any other.
-        self.picture_inputs = {"video_from_upstream"}
+        self.described_node_types = the_installed_modules_node_types() | BUILT_IN_NODE_TYPES | {
+            node["type"] for node in self.nodes
+        }
+        #: The inputs a link from a picture output connects to; `check_link` refuses any other
+        #: but those of `tensor_inputs`.
+        self.picture_inputs = {"layer_0"}
+        #: The Tensor inputs a link from a picture output reaches through a `TextureToTensor`
+        #: node `connect` places between them.
+        self.tensor_inputs = {"array"}
         self.transactions: "list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]" = []
         self.tool_calls: "list[tuple[str, dict[str, Any]]]" = []
         self.refused_operations: "set[str]" = set()
         self.operations_left_undescribed: "set[str]" = set()
         self.undo_reverses_nothing = False
+        #: The project's files by path, as the file operations read and write them.
+        self.project_files: "dict[str, str]" = {}
 
     def a_schema(self, component_reference: Any) -> Any:
         """A contract component reference as a document of its own, with `$defs`."""
@@ -159,6 +194,11 @@ class ContractBackedAgentSession:
                 for name in arguments["operations"]
                 if name not in self.operations_left_undescribed
             ]}
+        if operation in FILE_OPERATIONS:
+            assert arguments["project_directory"] == self.project_directory, arguments
+            return self.checked_against_the_result_schema(
+                operation, self.answered_on_the_project_files(operation, arguments)
+            )
         if operation == "list_streams":
             return self.checked_against_the_result_schema(operation, {"streams": [{
                 "stream": self.stream_id, "display_name": "main",
@@ -168,6 +208,33 @@ class ContractBackedAgentSession:
                 "capture_devices_whose_access_was_never_asked_for": [],
                 "action": None, "step": None,
             }]})
+        if operation == "list_node_types":
+            assert arguments["project_directory"] == self.project_directory, arguments
+            return self.checked_against_the_result_schema(operation, {
+                "project_directory": self.project_directory, "project": str(uuid.uuid4()),
+                "project_name": "app",
+                "sources": [{
+                    "source": "built_in",
+                    "node_types": [{
+                        "node_type": node["type"], "documentation": "", "category": None,
+                        "kind": "process", "described_from": "built_in",
+                    } for node in self.nodes],
+                    "graph_generators": [], "unreadable_modules": [],
+                }],
+            })
+        if operation == "describe_node_types":
+            assert arguments["project_directory"] == self.project_directory, arguments
+            return self.checked_against_the_result_schema(operation, {"node_types": [{
+                "node_type": node_type, "source": "project", "described_from": "interpreter",
+                "documentation": "", "category": None, "kind": "function",
+                "inputs": [{
+                    "name": "x", "documentation": "",
+                    "pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value",
+                    "mode": "wire_or_value", "default_value": 0.0, "lifetime": "kept",
+                    "value_json_schema": {"type": "number"},
+                }],
+                "outputs": [],
+            } for node_type in arguments["node_types"]]})
         if operation in ("transact", "add_node"):
             requested = arguments["operations"] if operation == "transact" else [
                 {**arguments, "operation": "add_node"}
@@ -180,6 +247,15 @@ class ContractBackedAgentSession:
             )
             if arguments["target"]["port"] in self.picture_inputs:
                 return self.checked_against_the_result_schema(operation, {"outcome": "connects"})
+            if arguments["target"]["port"] in self.tensor_inputs:
+                return self.checked_against_the_result_schema(operation, {
+                    "outcome": "connects_through_convert_node",
+                    "convert_node": {
+                        "node_type": TEXTURE_TO_TENSOR_NODE_TYPE,
+                        "input_port": "image", "input_pin_type": {"type": "texture"},
+                        "output_port": "array", "output_pin_type": {"type": "tensor"},
+                    },
+                })
             return self.checked_against_the_result_schema(operation, {
                 "outcome": "refused",
                 "refusal": {
@@ -191,6 +267,33 @@ class ContractBackedAgentSession:
                     },
                     "runtime_words": "a Texture output does not connect to a Float input",
                 },
+            })
+        if operation == "check_link_candidates":
+            assert arguments["stream"] == self.stream_id, arguments
+            self.the_node_of_the_id(arguments["from"]["output"]["node"])
+            ends = arguments["among"]["ends"]
+            not_checked = [
+                {"end": end, "why": NODE_TYPE_NOT_DESCRIBED_YET}
+                for end in ends
+                if end["kind"] == "node_type_port"
+                and end["node_type"] not in self.described_node_types
+            ]
+            candidates = [
+                {"end": end, "check": {"outcome": "connects"}}
+                if end["port"] in self.picture_inputs
+                else {"end": end, "check": {"outcome": "refused", "refusal": {
+                    "refusal_code": "link_pin_types_do_not_connect", "action": "connect",
+                    "runtime_words": "a Texture output does not connect to a Float input",
+                }}}
+                for end in ends
+                if end not in (each["end"] for each in not_checked)
+            ]
+            return self.checked_against_the_result_schema(operation, {
+                "candidates": [
+                    candidate for candidate in candidates
+                    if arguments.get("include_refused") or candidate["check"]["outcome"] != "refused"
+                ],
+                "not_checked": not_checked,
             })
         if operation == "graph":
             assert arguments.get("stream") == self.stream_id, arguments
@@ -209,6 +312,54 @@ class ContractBackedAgentSession:
             })
         raise AssertionError(f"the stand-in session does not answer `{operation}`")
 
+    def answered_on_the_project_files(
+        self, operation: str, arguments: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        """A file operation on the stand-in project, whose declaration check refuses a typed
+        input written with no default, as the declaration reader does: at the line of the
+        decorator above it, where the refusal is raised."""
+        if operation == "check_project_code":
+            paths = arguments.get("paths") or sorted(self.project_files)
+            findings = [
+                {"check": "python_node_declarations", "finding_code": "value_input_has_no_default",
+                 "severity": "error", "words": "`level` has no default. To fix: give it one.",
+                 "path": path, "line": line_number - 1, "node_type": the_node_type_at(path, "Tremolo"),
+                 "port": "level"}
+                for path in paths
+                for line_number, line in enumerate(self.project_files[path].splitlines(), start=1)
+                if "(level: float," in line
+            ]
+            return {
+                "verdict": "failed" if findings else "passed",
+                "checks": [{"check": "python_node_declarations",
+                            "state": "failed" if findings else "passed"}],
+                "findings": findings,
+                "files_checked": [
+                    {"path": path, "content_sha256": sha256_of(self.project_files[path])}
+                    for path in paths
+                ],
+            }
+        path = arguments["path"]
+        if operation == "create_node_file":
+            if path in self.project_files:
+                raise StandInRefusal(f"`{path}` already holds a file")
+            self.project_files[path] = "# the runtime's node template\n"
+            return {"path": path, "node_type": the_node_type_at(path, "Template"),
+                    "transaction": str(uuid.uuid4()), "commit": "c0"}
+        if path not in self.project_files:
+            raise StandInRefusal(f"the project holds no file `{path}`")
+        if operation == "read_project_file":
+            content = self.project_files[path].encode("utf-8")
+            return {"path": path, "byte_len": len(content),
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "content_sha256": sha256_of(self.project_files[path])}
+        expected_sha256 = arguments.get("expected_sha256")
+        if expected_sha256 is not None and expected_sha256 != sha256_of(self.project_files[path]):
+            raise StandInRefusal(f"`{path}` changed since it was read")
+        self.project_files[path] = arguments["content"]
+        return {"path": path, "content_sha256": sha256_of(arguments["content"]),
+                "transaction": str(uuid.uuid4()), "commit": "c1"}
+
     def the_node_of_the_id(self, node_id: str) -> "dict[str, Any]":
         [node] = [node for node in self.nodes if node["id"] == node_id]
         return node
@@ -224,6 +375,10 @@ class ContractBackedAgentSession:
         for each in requested:
             assert each["stream"] == self.stream_id, each
             if each["operation"] == "add_node":
+                if each["type"].startswith(PROJECT_NODE_TYPE_PREFIX):
+                    self.described_node_types.add(each["type"])
+                elif each["type"] not in self.described_node_types:
+                    raise StandInRefusal(f"the node catalog lists no node type `{each['type']}`")
                 node = {"id": str(uuid.uuid4()), "name": each.get("as") or "node",
                         "type": each["type"]}
                 node_by_label[each.get("as") or node["id"]] = node
@@ -235,26 +390,57 @@ class ContractBackedAgentSession:
                     node_by_label.get(each[end]["node"]) or self.the_node_of_the_id(each[end]["node"])
                     for end in ("source", "target")
                 )
-                added_links.append({
-                    "id": str(uuid.uuid4()),
-                    "source": {"node": source["name"], "port": each["source"]["port"]},
-                    "target": {"node": target["name"], "port": each["target"]["port"]},
-                })
-                answer["connected_links"].append({
-                    "stream": self.stream_id,
-                    "source": {"node": source["id"], "port": each["source"]["port"]},
-                    "target": {"node": target["id"], "port": each["target"]["port"]},
-                    "state": "pending",
-                })
+                ends = [((source, each["source"]["port"]), (target, each["target"]["port"]))]
+                if each["target"]["port"] in self.tensor_inputs:
+                    convert_node = {"id": str(uuid.uuid4()), "name": "texturetotensor",
+                                    "type": TEXTURE_TO_TENSOR_NODE_TYPE}
+                    added_nodes.append(convert_node)
+                    answer["added_nodes"].append({
+                        "stream": self.stream_id, "node": convert_node["id"],
+                        "name": convert_node["name"], "node_type": TEXTURE_TO_TENSOR_NODE_TYPE,
+                        "inserted_because": "converts_pin_types",
+                    })
+                    ends = [((source, each["source"]["port"]), (convert_node, "image")),
+                            ((convert_node, "array"), (target, each["target"]["port"]))]
+                for (link_source, source_port), (link_target, target_port) in ends:
+                    added_links.append({
+                        "id": str(uuid.uuid4()),
+                        "source": {"node": link_source["name"], "port": source_port},
+                        "target": {"node": link_target["name"], "port": target_port},
+                    })
+                    answer["connected_links"].append({
+                        "stream": self.stream_id,
+                        "source": {"node": link_source["id"], "port": source_port},
+                        "target": {"node": link_target["id"], "port": target_port},
+                        "state": "pending",
+                    })
         self.nodes += added_nodes
         self.links += added_links
         self.transactions.append((answer["transaction"], added_nodes, added_links))
         return answer
 
 
+#: The project file operations the stand-in session answers on its own files.
+FILE_OPERATIONS = ("create_node_file", "read_project_file", "write_project_file", "check_project_code")
+
+
+def sha256_of(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def the_node_type_at(path: str, name: str) -> str:
+    """The node type a node `name` declared in the module at `path` is named by."""
+    return f"{path.removesuffix('.py').replace('/', '.')}:{name}"
+
+
 def build_a_graph_document() -> "dict[str, Any]":
     [path] = [path for path in every_agent_loop_script_path() if path.stem == BUILD_A_GRAPH_SCRIPT_NAME]
     return a_json_object(path.read_text(encoding="utf-8"))
+
+
+def the_step_named(document: "dict[str, Any]", name: str) -> "dict[str, Any]":
+    [step] = [step for step in document["steps"] if step["name"] == name]
+    return step
 
 
 def played(script: AgentLoopScript, session: ContractBackedAgentSession) -> "dict[str, Any]":
@@ -292,15 +478,20 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
     called = [name for name, _ in session.tool_calls]
     assert called[:2] == ["list_operation_groups", "describe_operations"]
     assert session.tool_calls[1][1] == {
-        "operations": ["list_streams", "transact", "check_link", "graph", "undo"]
+        "operations": [
+            "list_streams", "list_node_types", "transact", "describe_node_types",
+            "check_link_candidates", "check_link", "graph", "undo",
+        ]
     }
     assert called[2:] == [
-        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
-        "transact", "graph", "undo", "undo", "graph",
+        "list_streams", "list_node_types", "transact", "describe_node_types",
+        CALL_OPERATION_TOOL_NAME, "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
+        "transact", "graph", CALL_OPERATION_TOOL_NAME, "transact", "graph", "undo", "graph",
+        "undo", "undo", "undo", "graph",
     ]
     checked = [arguments["operation"] for name, arguments in session.tool_calls
                if name == CALL_OPERATION_TOOL_NAME]
-    assert checked == ["check_link", "check_link"]
+    assert checked == ["check_link_candidates", "check_link", "check_link", "check_link"]
 
 
 def test_an_operation_that_is_not_a_listed_tool_is_called_through_call_operation() -> None:
@@ -345,7 +536,7 @@ def test_an_operation_describe_operations_left_out_fails_the_run() -> None:
 
 def test_a_literal_neither_given_nor_declared_by_the_schema_fails_the_run() -> None:
     document = build_a_graph_document()
-    document["steps"][1]["arguments"]["operations"][0]["type"] = "tatolab.testpattern:TestPatternSource"
+    the_step_named(document, "edit")["arguments"]["operations"][0]["type"] = "tatolab.testpattern:TestPatternSource"
 
     with pytest.raises(AgentLoopScriptRunFailed, match="neither a given"):
         played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))
@@ -353,7 +544,7 @@ def test_a_literal_neither_given_nor_declared_by_the_schema_fails_the_run() -> N
 
 def test_a_literal_the_schema_declares_at_its_own_position_is_allowed() -> None:
     document = build_a_graph_document()
-    document["steps"][1]["arguments"]["mode"] = "commit"
+    the_step_named(document, "edit")["arguments"]["mode"] = "commit"
     session = ContractBackedAgentSession(the_committed_control_contract())
 
     played(agent_loop_script_from(document), session)
@@ -365,7 +556,7 @@ def test_a_literal_the_schema_declares_at_its_own_position_is_allowed() -> None:
 def test_a_literal_the_schema_declares_only_at_another_position_fails_the_run() -> None:
     document = build_a_graph_document()
     # `live` is a constant of `transact`'s `mode`, not of a node's `as`, where it is valid too.
-    document["steps"][1]["arguments"]["operations"][0]["as"] = "live"
+    the_step_named(document, "edit")["arguments"]["operations"][0]["as"] = "live"
 
     with pytest.raises(AgentLoopScriptRunFailed, match="at `/operations/0/as`"):
         played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))
@@ -373,7 +564,7 @@ def test_a_literal_the_schema_declares_only_at_another_position_fails_the_run() 
 
 def test_arguments_the_params_schema_refuses_fail_the_run() -> None:
     document = build_a_graph_document()
-    document["steps"][1]["arguments"]["operations"][0]["colour"] = {"$given": "source_label"}
+    the_step_named(document, "edit")["arguments"]["operations"][0]["colour"] = {"$given": "source_label"}
 
     with pytest.raises(AgentLoopScriptRunFailed, match="params schema"):
         played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))
@@ -393,7 +584,7 @@ def test_an_answer_that_misses_an_expectation_fails_the_run() -> None:
     session = ContractBackedAgentSession(the_committed_control_contract())
     session.undo_reverses_nothing = True
 
-    with pytest.raises(AgentLoopScriptRunFailed, match="graph_after_the_undo.*holds an item where"):
+    with pytest.raises(AgentLoopScriptRunFailed, match="graph_after_the_conversion_is_undone.*holds an item where"):
         played(agent_loop_script_from(build_a_graph_document()), session)
 
 
@@ -407,9 +598,9 @@ def test_a_read_from_a_step_not_yet_answered_is_malformed() -> None:
 
 def test_a_given_the_task_does_not_state_is_malformed() -> None:
     document = copy.deepcopy(build_a_graph_document())
-    del document["task"]["givens"]["sink_input"]
+    del document["task"]["givens"]["compositor_input"]
 
-    with pytest.raises(AgentLoopScriptIsMalformed, match="`sink_input` is not among the task's givens"):
+    with pytest.raises(AgentLoopScriptIsMalformed, match="`compositor_input` is not among the task's givens"):
         agent_loop_script_from(document)
 
 
@@ -421,9 +612,55 @@ def test_an_expectation_of_no_known_kind_is_malformed() -> None:
         agent_loop_script_from(document)
 
 
-def test_a_check_that_refuses_the_link_the_script_makes_fails_the_run() -> None:
+def test_a_check_that_refuses_the_node_type_the_script_places_fails_the_run() -> None:
     session = ContractBackedAgentSession(the_committed_control_contract())
     session.picture_inputs = set()
 
-    with pytest.raises(AgentLoopScriptRunFailed, match="link_checked_into_the_sink.*`/outcome`"):
+    with pytest.raises(AgentLoopScriptRunFailed, match="node_types_the_source_feeds.*`/candidates`"):
         played(agent_loop_script_from(build_a_graph_document()), session)
+
+
+def test_build_a_graph_places_the_node_type_its_ask_answered_after_the_ask() -> None:
+    document = build_a_graph_document()
+    session = ContractBackedAgentSession(the_committed_control_contract())
+
+    played(agent_loop_script_from(document), session)
+
+    [placing_step] = [step for step in document["steps"] if step["name"] == "compositor_placed"]
+    assert placing_step["arguments"]["operations"][0]["type"] == {
+        "$read": {"step": "node_types_the_source_feeds", "pointer": "/candidates/0/end/node_type"}
+    }
+    names = [
+        arguments["operation"] if name == CALL_OPERATION_TOOL_NAME else name
+        for name, arguments in session.tool_calls
+    ]
+    asked_at = names.index("check_link_candidates")
+    placed = next(
+        arguments for name, arguments in session.tool_calls[asked_at:] if name == "transact"
+    )
+    assert placed["operations"][0]["type"] == document["task"]["givens"]["compositor_node_type"]
+
+
+def test_the_compositor_given_is_a_node_type_the_catalog_lists() -> None:
+    assert (
+        build_a_graph_document()["task"]["givens"]["compositor_node_type"]
+        in the_installed_modules_node_types()
+    )
+
+
+def test_a_node_type_the_catalog_does_not_list_is_not_checked_and_fails_the_run() -> None:
+    document = build_a_graph_document()
+    # The import path the catalog keys the compositor by is its entry point's, not its package's.
+    document["task"]["givens"]["compositor_node_type"] = "tatolab.compositor:AlphaOverCompositor"
+    session = ContractBackedAgentSession(the_committed_control_contract())
+
+    with pytest.raises(AgentLoopScriptRunFailed, match="node_types_the_source_feeds.*`/candidates`"):
+        played(agent_loop_script_from(document), session)
+
+
+def test_placing_a_node_type_the_catalog_does_not_list_fails_the_run() -> None:
+    document = build_a_graph_document()
+    document["task"]["givens"]["source_node_type"] = "tatolab.testpattern.source:TestPatternSource"
+
+    with pytest.raises(AgentLoopScriptRunFailed, match="lists no node type"):
+        played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))

@@ -1,18 +1,22 @@
 {
   "script": "build_a_graph",
   "task": {
-    "statement": "On the one stream the runtime holds, add a test pattern source, a frame sink and a clamp in one edit; check a link from the source's video output into the clamp's number input and read why it would be refused; check the link from the source's video output to the sink's input and read that it connects; make that link; read the graph back to see the nodes and the link; then undo both edits and read the graph back to see them gone.",
+    "statement": "On the one stream the runtime holds, list the node types its project offers; add a test pattern source, a clamp and a Tensor-to-audio conversion in one edit; describe the clamp's inputs; ask, before placing one, which of an alpha-over compositor's back layer input and the clamp's number input a link from the source's video output fits, and read that only the compositor's does; add a node of the node type that fits; check a link from the source's video output into the clamp's number input and read why it would be refused; check the link from the source's video output to the compositor's back layer input and read that it connects; make that link; read the graph back to see the nodes and the link; check the link from the source's video output into the conversion's Tensor input and read the convert node it would get; make that link, read the convert node it got under the added nodes and in the graph; undo it and read the graph back to see the convert node gone; then undo the three edits before it and read the graph back to see them gone.",
     "givens": {
       "source_node_type": "tatolab.testpattern:TestPatternSource",
       "source_label": "source",
       "source_config": { "width": 320, "height": 180 },
       "source_output": "video",
-      "sink_node_type": "nodes.frame_sink:FrameSink",
-      "sink_label": "sink",
-      "sink_input": "video_from_upstream",
+      "compositor_node_type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor",
+      "compositor_label": "compositor",
+      "compositor_input": "layer_0",
       "clamp_node_type": "nodes.clamp:Clamp",
       "clamp_label": "clamp",
-      "clamp_input": "x"
+      "clamp_input": "x",
+      "tensor_sink_node_type": "tatolab.stream:TensorToAudio",
+      "tensor_sink_label": "audio_from_tensor",
+      "tensor_sink_input": "array",
+      "convert_node_type": "tatolab.stream:TextureToTensor"
     }
   },
   "steps": [
@@ -23,6 +27,16 @@
       "expect": [
         { "at": "/streams", "has_length": 1 },
         { "at": "/streams/0/state", "equals": "running" }
+      ]
+    },
+    {
+      "name": "node_types",
+      "tool": "list_node_types",
+      "arguments": {
+        "project_directory": { "$read": { "step": "streams", "pointer": "/streams/0/location/project_directory" } }
+      },
+      "expect": [
+        { "at": "/sources", "holds_an_item_where": { "/source": "built_in" } }
       ]
     },
     {
@@ -40,14 +54,14 @@
           {
             "operation": "add_node",
             "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
-            "type": { "$given": "sink_node_type" },
-            "as": { "$given": "sink_label" }
+            "type": { "$given": "clamp_node_type" },
+            "as": { "$given": "clamp_label" }
           },
           {
             "operation": "add_node",
             "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
-            "type": { "$given": "clamp_node_type" },
-            "as": { "$given": "clamp_label" }
+            "type": { "$given": "tensor_sink_node_type" },
+            "as": { "$given": "tensor_sink_label" }
           }
         ]
       },
@@ -55,8 +69,59 @@
         { "at": "/mode", "equals": "commit" },
         { "at": "/added_nodes", "has_length": 3 },
         { "at": "/added_nodes/0/as", "equals": { "$given": "source_label" } },
-        { "at": "/added_nodes/1/as", "equals": { "$given": "sink_label" } },
-        { "at": "/added_nodes/2/as", "equals": { "$given": "clamp_label" } }
+        { "at": "/added_nodes/1/as", "equals": { "$given": "clamp_label" } },
+        { "at": "/added_nodes/2/as", "equals": { "$given": "tensor_sink_label" } }
+      ]
+    },
+    {
+      "name": "clamp_described",
+      "tool": "describe_node_types",
+      "arguments": {
+        "project_directory": { "$read": { "step": "streams", "pointer": "/streams/0/location/project_directory" } },
+        "node_types": [{ "$given": "clamp_node_type" }]
+      },
+      "expect": [
+        { "at": "/node_types", "has_length": 1 },
+        { "at": "/node_types/0/node_type", "equals": { "$given": "clamp_node_type" } },
+        { "at": "/node_types/0/inputs", "holds_an_item_where": { "/name": { "$given": "clamp_input" } } }
+      ]
+    },
+    {
+      "name": "node_types_the_source_feeds",
+      "tool": "check_link_candidates",
+      "arguments": {
+        "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+        "from": { "output": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } } },
+        "among": {
+          "ends": [
+            { "kind": "node_type_port", "node_type": { "$given": "compositor_node_type" }, "port": { "$given": "compositor_input" } },
+            { "kind": "node_type_port", "node_type": { "$given": "clamp_node_type" }, "port": { "$given": "clamp_input" } }
+          ]
+        }
+      },
+      "expect": [
+        { "at": "/candidates", "has_length": 1 },
+        { "at": "/candidates/0/end/node_type", "equals": { "$given": "compositor_node_type" } },
+        { "at": "/candidates/0/check/outcome", "equals": "connects" }
+      ]
+    },
+    {
+      "name": "compositor_placed",
+      "tool": "transact",
+      "arguments": {
+        "operations": [
+          {
+            "operation": "add_node",
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+            "type": { "$read": { "step": "node_types_the_source_feeds", "pointer": "/candidates/0/end/node_type" } },
+            "as": { "$given": "compositor_label" }
+          }
+        ]
+      },
+      "expect": [
+        { "at": "/mode", "equals": "commit" },
+        { "at": "/added_nodes", "has_length": 1 },
+        { "at": "/added_nodes/0/as", "equals": { "$given": "compositor_label" } }
       ]
     },
     {
@@ -65,7 +130,7 @@
       "arguments": {
         "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
         "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
-        "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/2/node" } }, "port": { "$given": "clamp_input" } }
+        "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } }, "port": { "$given": "clamp_input" } }
       },
       "expect": [
         { "at": "/outcome", "equals": "refused" },
@@ -74,12 +139,12 @@
       ]
     },
     {
-      "name": "link_checked_into_the_sink",
+      "name": "link_checked_into_the_compositor",
       "tool": "check_link",
       "arguments": {
         "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
         "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
-        "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } }, "port": { "$given": "sink_input" } }
+        "target": { "node": { "$read": { "step": "compositor_placed", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "compositor_input" } }
       },
       "expect": [
         { "at": "/outcome", "equals": "connects" }
@@ -94,7 +159,7 @@
             "operation": "connect",
             "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
             "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
-            "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } }, "port": { "$given": "sink_input" } }
+            "target": { "node": { "$read": { "step": "compositor_placed", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "compositor_input" } }
           }
         ]
       },
@@ -102,7 +167,7 @@
         { "at": "/mode", "equals": "commit" },
         { "at": "/connected_links", "has_length": 1 },
         { "at": "/connected_links/0/source/node", "equals": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } } },
-        { "at": "/connected_links/0/target/node", "equals": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } } },
+        { "at": "/connected_links/0/target/node", "equals": { "$read": { "step": "compositor_placed", "pointer": "/added_nodes/0/node" } } },
         { "at": "/connected_links/0/state", "is_one_of": ["pending", "wired"] }
       ]
     },
@@ -123,8 +188,8 @@
         {
           "at": "/nodes",
           "holds_an_item_where": {
-            "/id": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } },
-            "/type": { "$given": "sink_node_type" }
+            "/id": { "$read": { "step": "compositor_placed", "pointer": "/added_nodes/0/node" } },
+            "/type": { "$given": "compositor_node_type" }
           }
         },
         {
@@ -132,8 +197,89 @@
           "holds_an_item_where": {
             "/source/node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/name" } },
             "/source/port": { "$given": "source_output" },
-            "/target/node": { "$read": { "step": "edit", "pointer": "/added_nodes/1/name" } },
-            "/target/port": { "$given": "sink_input" }
+            "/target/node": { "$read": { "step": "compositor_placed", "pointer": "/added_nodes/0/name" } },
+            "/target/port": { "$given": "compositor_input" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "link_checked_into_the_conversion",
+      "tool": "check_link",
+      "arguments": {
+        "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+        "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
+        "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/2/node" } }, "port": { "$given": "tensor_sink_input" } }
+      },
+      "expect": [
+        { "at": "/outcome", "equals": "connects_through_convert_node" },
+        { "at": "/convert_node/node_type", "equals": { "$given": "convert_node_type" } }
+      ]
+    },
+    {
+      "name": "converted",
+      "tool": "transact",
+      "arguments": {
+        "operations": [
+          {
+            "operation": "connect",
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+            "source": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/0/node" } }, "port": { "$given": "source_output" } },
+            "target": { "node": { "$read": { "step": "edit", "pointer": "/added_nodes/2/node" } }, "port": { "$given": "tensor_sink_input" } }
+          }
+        ]
+      },
+      "expect": [
+        { "at": "/mode", "equals": "commit" },
+        { "at": "/added_nodes", "has_length": 1 },
+        { "at": "/added_nodes/0/node_type", "equals": { "$given": "convert_node_type" } },
+        { "at": "/added_nodes/0/inserted_because", "equals": "converts_pin_types" },
+        { "at": "/connected_links", "has_length": 2 }
+      ]
+    },
+    {
+      "name": "graph_after_the_conversion",
+      "tool": "graph",
+      "arguments": {
+        "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } }
+      },
+      "expect": [
+        {
+          "at": "/nodes",
+          "holds_an_item_where": {
+            "/id": { "$read": { "step": "converted", "pointer": "/added_nodes/0/node" } },
+            "/type": { "$given": "convert_node_type" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "conversion_undone",
+      "tool": "undo",
+      "arguments": {
+        "project_directory": { "$read": { "step": "streams", "pointer": "/streams/0/location/project_directory" } }
+      },
+      "expect": [
+        { "at": "/undoes", "equals": { "$read": { "step": "converted", "pointer": "/transaction" } } }
+      ]
+    },
+    {
+      "name": "graph_after_the_conversion_is_undone",
+      "tool": "graph",
+      "arguments": {
+        "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } }
+      },
+      "expect": [
+        {
+          "at": "/nodes",
+          "holds_no_item_where": {
+            "/id": { "$read": { "step": "converted", "pointer": "/added_nodes/0/node" } }
+          }
+        },
+        {
+          "at": "/links",
+          "holds_no_item_where": {
+            "/target/node": { "$read": { "step": "edit", "pointer": "/added_nodes/2/name" } }
           }
         }
       ]
@@ -146,6 +292,16 @@
       },
       "expect": [
         { "at": "/undoes", "equals": { "$read": { "step": "connected", "pointer": "/transaction" } } }
+      ]
+    },
+    {
+      "name": "compositor_undone",
+      "tool": "undo",
+      "arguments": {
+        "project_directory": { "$read": { "step": "streams", "pointer": "/streams/0/location/project_directory" } }
+      },
+      "expect": [
+        { "at": "/undoes", "equals": { "$read": { "step": "compositor_placed", "pointer": "/transaction" } } }
       ]
     },
     {
@@ -174,6 +330,12 @@
         {
           "at": "/nodes",
           "holds_no_item_where": {
+            "/id": { "$read": { "step": "compositor_placed", "pointer": "/added_nodes/0/node" } }
+          }
+        },
+        {
+          "at": "/nodes",
+          "holds_no_item_where": {
             "/id": { "$read": { "step": "edit", "pointer": "/added_nodes/1/node" } }
           }
         },
@@ -186,7 +348,7 @@
         {
           "at": "/links",
           "holds_no_item_where": {
-            "/target/node": { "$read": { "step": "edit", "pointer": "/added_nodes/1/name" } }
+            "/target/node": { "$read": { "step": "compositor_placed", "pointer": "/added_nodes/0/name" } }
           }
         }
       ]

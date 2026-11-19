@@ -21,7 +21,9 @@ use streamlib_project_repository::{
     the_sample_project_named,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListSamplesToolResult, ListSamplesToolResultSample,
+    DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire, ListSamplesToolResult,
+    ListSamplesToolResultSample, StreamConditionOnTheWire, StreamLoadOnTheWire,
+    StreamPlaybackOnTheWire,
 };
 use uuid::Uuid;
 
@@ -48,7 +50,7 @@ use crate::core::runtime::runtime::{
 use crate::core::runtime::{
     CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, LoadedStreamInThisRuntime,
     LoadedStreamTag, OptionsForLoadingOneStream, PendingStreamActionKind, Runner, RuntimeStatus,
-    StreamEnvironment, StreamLoadObservingInterrupts, StreamLocation, StreamRecord,
+    StreamEnvironment, StreamFailureKind, StreamLoadObservingInterrupts, StreamLocation, StreamRecord,
     StreamRecordAsRead, StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
     is_the_machines_shutdown_requested,
 };
@@ -61,6 +63,9 @@ use crate::core::graph::graph_snapshot::{
 use crate::core::graph::names_listed_for_a_refusal;
 use crate::core::logging::{ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread};
 use crate::core::{Error, Result};
+use crate::core::runtime::streams_loaded_in_this_runtime::stream_condition::{
+    StreamFailure, the_condition_of_a_stream, the_condition_while_an_action_works_on_it,
+};
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 
 /// How a loaded stream is held: recorded by the runtime, or living as long as
@@ -356,6 +361,19 @@ fn the_graph_document_of_the_stream_at(
     Ok((project_file, stream_document))
 }
 
+/// The graph document of the stream at `location` as its project holds it on disk now, as the
+/// JSON a reconcile of its live graph takes, or why it does not read.
+pub(in crate::core::runtime) fn the_graph_document_json_of_the_stream_at(
+    location: &StreamLocation,
+) -> std::result::Result<serde_json::Value, String> {
+    let (_, stream_document) = the_graph_document_of_the_stream_at(location)?;
+    let bytes = stream_document
+        .bytes
+        .as_ref()
+        .map_err(|why| format!("its graph document does not read: {why}"))?;
+    serde_json::from_slice(bytes).map_err(|why| format!("its graph document is not JSON: {why}"))
+}
+
 /// The name the stream at `location` is shown under, read from its graph document; its
 /// `stream_id` while the document does not read.
 fn the_display_name_of_the_stream_at(location: &StreamLocation, stream_id: &str) -> String {
@@ -515,6 +533,8 @@ pub struct StreamListing {
     pub node_count: Option<usize>,
     /// Why it is failed; `None` when it is not.
     pub failed_because: Option<String>,
+    /// Its load, playback and health apart, with each diagnostic behind its health.
+    pub condition: StreamConditionOnTheWire,
     /// Each capture device a node of the loaded stream refused because nobody
     /// had asked the user for its access; a stop and run of its project asks. Empty
     /// when it is not loaded.
@@ -709,14 +729,15 @@ fn the_same_directory(first: &Path, second: &Path) -> bool {
     }
 }
 
-/// Record the stream `stream_record` records failed with `failed_because`; a record not
-/// written is logged.
+/// Record the stream `stream_record` records failed for `failure`; a record not written is
+/// logged.
 fn record_a_stream_held_from_its_document_failed(
     stream_records: &StreamRecordsInTheStateDirectory,
     stream_record: &mut StreamRecord,
-    failed_because: String,
+    failure: StreamFailure,
 ) -> Result<StreamStateAfterItsRun> {
-    stream_record.failed_because = Some(failed_because.clone());
+    let failed_because = failure.words.clone();
+    stream_record.record_the_failure(failure);
     if let Err(not_written) = stream_records
         .write_the_record_a_load_made(stream_record.clone())
         .map(|written| *stream_record = written)
@@ -801,6 +822,7 @@ mod stream_action_queue;
 mod stream_records;
 mod streams_to_read_or_edit;
 
+pub(in crate::core::runtime) use recorded_stream_reload::the_graph_the_document_of_the_stream_at_holds;
 pub use streams_to_read_or_edit::StreamsToReadOrEdit;
 
 #[cfg(test)]

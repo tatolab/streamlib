@@ -212,6 +212,13 @@ pub enum Error {
         direction: PortDirection,
     },
 
+    #[error("node type `{node_type}` has no {direction} port named '{port_name}'")]
+    NodeTypePortNotFound {
+        node_type: NodeClassImportPath,
+        port_name: String,
+        direction: PortDirection,
+    },
+
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 

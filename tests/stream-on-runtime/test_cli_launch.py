@@ -127,6 +127,7 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
             "stream_asset": stream_asset,
         },
         "state": "running",
+        "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []},
         "node_count": 1,
         "failed_because": None,
         "capture_devices_whose_access_was_never_asked_for": [],
@@ -154,7 +155,12 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
     tatolabd.await_stderr_containing(
         the_stream_stopped_log_line(stream_id), timeout=CLEAN_EXIT_TIMEOUT_SECONDS
     )
-    assert local_api.list_streams() == [{**listed_running, "state": "stopped"}], (
+    listed_stopped = {
+        **listed_running,
+        "state": "stopped",
+        "condition": {**listed_running["condition"], "playback": "stopped"},
+    }
+    assert local_api.list_streams() == [listed_stopped], (
         "`tatolab stop` holds the stream stopped with its graph and records it stopped"
     )
     assert tatolabd.process.poll() is None, "the runtime outlives the stream it unloaded"

@@ -55,7 +55,7 @@ def test_each_node_is_named_by_its_own_import_path_in_the_module():
     graph = run_graph_generator(an_opus_round_trip)
 
     assert set(nodes_by_type(graph)) == {"tatolab.opus:OpusEncoder", "tatolab.opus:OpusDecoder"}
-    assert nodes_by_type(graph)["tatolab.opus:OpusEncoder"]["config"] == {"bitrate_bps": 64_000}
+    assert nodes_by_type(graph)["tatolab.opus:OpusEncoder"]["input_values"] == {"bitrate_bps": 64_000}
 
 
 def test_the_encoders_input_declares_a_window_contract_that_follows_its_sources_channel_count():

@@ -29,9 +29,11 @@ use v4l2_capture_thread::capture_thread_loop;
 
 #[cfg(test)]
 mod tests;
+mod v4l2_capture_buffer_queue;
 mod v4l2_capture_dequeue_loop;
 mod v4l2_capture_gpu_resources;
 mod v4l2_capture_thread;
+mod v4l2_driver_buffers_mapped_for_reading;
 
 /// Number of V4L2 mmap buffers to request.
 const V4L2_BUFFER_COUNT: u32 = 4;
@@ -267,15 +269,12 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
     fn start_delivering_to(&mut self, hand_off: CapturedVideoFrameHandOff) -> Result<()> {
         self.stop_delivering()?;
 
-        let mut stream = v4l::io::mmap::Stream::with_buffers(
+        let stream = v4l::io::mmap::Stream::with_buffers(
             &self.device,
             Type::VideoCapture,
             V4L2_BUFFER_COUNT,
         )
         .map_err(|e| Error::Configuration(format!("Failed to create V4L2 mmap stream: {}", e)))?;
-
-        // Poll timeout so the capture thread can check is_capturing.
-        stream.set_timeout(std::time::Duration::from_secs(1));
 
         let is_capturing = Arc::new(AtomicBool::new(true));
         let is_capturing_in_the_thread = Arc::clone(&is_capturing);

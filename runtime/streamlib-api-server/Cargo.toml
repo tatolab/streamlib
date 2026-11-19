@@ -66,6 +66,8 @@ serde_json = {version = "1.0", features = ["preserve_order"]}
 # The control operation registry: every operation's request and result types and the docs
 # its MCP tool carries.
 streamlib-control-contract = { path = "../streamlib-control-contract" }
+# The built-in pin type rows `list_pin_types` answers, each with its stored value's JSON Schema.
+streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.68.82", features = ["contract-json-schema"] }
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 # The official MCP SDK: the protocol, its Streamable HTTP transport, and the
@@ -93,6 +95,8 @@ toml.workspace = true
 tracing-subscriber.workspace = true
 # The project archive tests zip a project to import it.
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# The convert node tests link through the built-in conversions, as a runtime registers them.
+streamlib-media-builtins = { path = "../streamlib-media-builtins" }
 # The media facts tests import a real PNG.
 image = { version = "0.25", default-features = false, features = ["png"] }
 

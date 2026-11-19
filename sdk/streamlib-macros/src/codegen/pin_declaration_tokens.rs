@@ -82,6 +82,7 @@ fn pin_type_tokens(pin_type: &PinType) -> TokenStream {
         }
         PinType::Audio {} => quote! { #descriptors::PinType::Audio {} },
         PinType::Tensor {} => quote! { #descriptors::PinType::Tensor {} },
+        PinType::Trigger {} => quote! { #descriptors::PinType::Trigger {} },
         other => {
             let refusal = format!(
                 "`pin_type = {:?}` is not a pin type a Rust port declares",

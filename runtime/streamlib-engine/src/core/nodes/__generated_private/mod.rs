@@ -9,7 +9,8 @@ pub use dyn_generated_node::DynGeneratedNode;
 pub use generated_node::GeneratedNode;
 pub(crate) use generated_node::land_the_unlinked_input_values_in_the_input_mailboxes;
 pub(crate) use generated_node_impl::{
-    FunctionNodeCallUnderWayInTheFarSide, FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
+    FiresNotHandedToTheFarSide, FunctionNodeCallUnderWayInTheFarSide,
+    FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
     FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use generated_node_impl::{OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWiringEnvelope};

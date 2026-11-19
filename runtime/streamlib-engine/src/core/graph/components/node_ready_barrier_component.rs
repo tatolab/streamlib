@@ -43,9 +43,13 @@ impl NodeReadyBarrierComponent {
         }
     }
 
-    pub fn wait_for_continue(&mut self) {
-        if let Some(receiver) = self.continue_receiver.take() {
-            let _ = receiver.recv();
+    /// Wait for the compiler's CONTINUE: whether it came, or `false` when the compiler dropped
+    /// its handle instead, abandoning a compile that failed before its wiring completed.
+    #[must_use]
+    pub fn wait_for_continue(&mut self) -> bool {
+        match self.continue_receiver.take() {
+            Some(receiver) => receiver.recv().is_ok(),
+            None => true,
         }
     }
 }

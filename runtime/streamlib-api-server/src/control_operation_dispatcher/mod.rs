@@ -34,15 +34,17 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
     CloseViewerToolResult, ControlOperationRefusalCode, CreateNodeFileToolResult,
     CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
-    DescribeAssetToolResult, DescribeRuntimeToolResult, DescribeStreamActionToolResult,
-    DuplicateProjectToolResult, GraphTransactionToolResult, ImportProjectToolResult,
-    LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult, ListProjectFilesToolResult,
-    ListProjectNodeTypesToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
-    ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
-    PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
-    ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
-    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
-    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
+    DescribeAssetToolResult, DescribeNodeTypesToolResult, DescribeRuntimeToolResult,
+    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
+    ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
+    ListDependenciesToolResult, ListNodeTypesToolResult, ListPinTypesToolResult,
+    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
+    ListSamplesToolResult, ListStreamsToolResult, ListedStreamState, LogsToolResult,
+    OpenViewerToolResult, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
+    ProjectCodeCheckResult, ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
+    ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
+    ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
+    RemoveProjectToolResult, ResumePlaybackToolResult, SetNodeTypeGroupToolResult,
     SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
     UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
@@ -112,6 +114,8 @@ pub(crate) enum ControlOperationAnswer {
     GraphTransaction(GraphTransactionToolResult),
     /// `check_link`'s: what `connect` would answer.
     CheckLink(LinkCheckResult),
+    /// `check_link_candidates`': what `check_link` would answer for each candidate.
+    CheckLinkCandidates(LinkCandidatesCheckResult),
     /// A queued project stream action's: its id and its project.
     ProjectStreamActionQueued(ProjectStreamActionQueuedToolResult),
     /// `remove_project`'s.
@@ -154,8 +158,18 @@ pub(crate) enum ControlOperationAnswer {
     CreateNodeFile(CreateNodeFileToolResult),
     /// `write_project_file`'s.
     ProjectFileTransaction(ProjectFileTransactionToolResult),
+    /// `check_project_code`'s.
+    CheckProjectCode(ProjectCodeCheckResult),
     /// `list_project_node_types`'s.
     ListProjectNodeTypes(ListProjectNodeTypesToolResult),
+    /// `list_pin_types`'.
+    ListPinTypes(ListPinTypesToolResult),
+    /// `list_node_types`'.
+    ListNodeTypes(ListNodeTypesToolResult),
+    /// `describe_node_types`'.
+    DescribeNodeTypes(DescribeNodeTypesToolResult),
+    /// `set_node_type_group`'s.
+    SetNodeTypeGroup(SetNodeTypeGroupToolResult),
     /// `list_project_views`'s.
     ListProjectViews(ListProjectViewsToolResult),
     /// `write_studio_view_output`'s.
@@ -444,6 +458,10 @@ impl ControlOperationDispatcher {
                 .check_link(request)
                 .await
                 .map(ControlOperationAnswer::CheckLink),
+            ControlOperationCall::CheckLinkCandidates(request) => self
+                .check_link_candidates(request)
+                .await
+                .map(ControlOperationAnswer::CheckLinkCandidates),
             ControlOperationCall::ImportGraphGenerator(request) => {
                 self.answer_import_graph_generator(request, request_origin)
                     .await
@@ -629,10 +647,30 @@ impl ControlOperationDispatcher {
                 .write_project_file(request, request_origin)
                 .await
                 .map(ControlOperationAnswer::ProjectFileTransaction),
+            ControlOperationCall::CheckProjectCode(request) => self
+                .check_project_code(request)
+                .await
+                .map(ControlOperationAnswer::CheckProjectCode),
             ControlOperationCall::ListProjectNodeTypes(request) => self
                 .list_project_node_types(request)
                 .await
                 .map(ControlOperationAnswer::ListProjectNodeTypes),
+            ControlOperationCall::ListPinTypes(request) => self
+                .list_pin_types(request)
+                .await
+                .map(ControlOperationAnswer::ListPinTypes),
+            ControlOperationCall::ListNodeTypes(request) => self
+                .list_node_types(request)
+                .await
+                .map(ControlOperationAnswer::ListNodeTypes),
+            ControlOperationCall::DescribeNodeTypes(request) => self
+                .describe_node_types(request)
+                .await
+                .map(ControlOperationAnswer::DescribeNodeTypes),
+            ControlOperationCall::SetNodeTypeGroup(request) => self
+                .set_node_type_group(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::SetNodeTypeGroup),
             ControlOperationCall::ListProjectViews(request) => self
                 .list_project_views(request)
                 .await

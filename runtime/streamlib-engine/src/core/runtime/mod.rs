@@ -24,6 +24,11 @@ pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_sour
     ImportedProjectPythonSources, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
     list_a_projects_node_types_and_graph_generators_from_source,
 };
+pub use crate::core::compiler::compiler_ops::python_node_declarations_checked_in_the_projects_interpreter::{
+    PYTHON_NODE_DECLARATION_CHECK_ENTRY_MODULE, PythonModuleChecked, PythonNodeDeclarationCheck,
+    PythonNodeDeclarationCheckNotFinished, PythonNodeDeclarationFinding,
+    PythonNodeDeclarationFindingSeverity, check_a_projects_python_node_declarations,
+};
 pub use crate::core::compiler::node_thread_shutdown::{
     DescriptionOfTheAbandonedNodeThreads, NodeDisplayNameAndId,
 };
@@ -74,7 +79,11 @@ pub(crate) use node_interpreters::open_descriptor_soft_limit::{
     start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
     the_open_descriptor_limit,
 };
-pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink};
+pub use operations::{
+    ANodeTypesPort, BoxFuture, GraphEditBatch, GraphEditBatchRefused,
+    HowFarARefusedBatchWasTakenBack, NodeInTheGraph, PortOfANodeOfAType, RuntimeOperations,
+    WhatALiveConnectMakesOfALink,
+};
 pub use projects_and_their_venv::project_first_party_packages_moved_to_the_runtime_version::ProjectHistoryRecordingFirstPartyPackageMoves;
 pub use projects_and_their_venv::project_venv_sync_progress::{
     ProjectVenvSyncPackage, ProjectVenvSyncPackageKind, ProjectVenvSyncPackageState,
@@ -94,8 +103,8 @@ pub use streams_loaded_in_this_runtime::loaded_stream::{
 };
 pub use streams_loaded_in_this_runtime::machine_state_directory::{
     PendingStreamActionKind, PendingStreamActionOnTheRecord, STREAM_RECORD_SCHEMA_VERSION,
-    StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure,
-    StreamRecordsInTheStateDirectory,
+    StreamFailureKind, StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime,
+    StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
 };
 pub use streams_loaded_in_this_runtime::operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use streams_loaded_in_this_runtime::output_port_viewer::{

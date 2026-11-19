@@ -9,6 +9,7 @@ use streamlib::sdk::context::{
     NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
     RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
+use streamlib::sdk::descriptors::{PinConversionOutputPicked, PinType, TexturePixelFormat};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, DataChannelPayloadDescriptor,
@@ -90,13 +91,20 @@ impl Default for TensorToTextureConfig {
                    refused and writes nothing. Each Image frame states no colour."
 )]
 pub struct TensorToTexture {
-    image_format: Option<TextureFormat>,
     output_pixel_buffer_pool: Option<NodeOutputPixelBufferPoolOfOneNativeNode>,
+}
+
+impl TensorToTexture::Node {
+    /// The texture format each Image frame states: the one its config names now, so a config
+    /// taken live is written from the next frame, as a link's verdict reads it.
+    pub fn image_format_it_writes(&self) -> Result<TextureFormat> {
+        image_format_of_the_config(&self.config)
+    }
 }
 
 impl ReactiveNode for TensorToTexture::Node {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.image_format = Some(image_format_of_the_config(&self.config)?);
+        self.image_format_it_writes()?;
         let node_run_id_of_this_node = ctx
             .node_run_id()
             .unwrap_or_else(|| "TensorToTexture".to_string());
@@ -108,9 +116,8 @@ impl ReactiveNode for TensorToTexture::Node {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let (Some(image_format), Some(output_pixel_buffer_pool)) =
-            (self.image_format, self.output_pixel_buffer_pool.as_mut())
-        else {
+        let image_format = self.image_format_it_writes()?;
+        let Some(output_pixel_buffer_pool) = self.output_pixel_buffer_pool.as_mut() else {
             return Err(Error::Runtime(
                 "TensorToTexture: process ran before setup".to_string(),
             ));
@@ -142,6 +149,61 @@ impl ReactiveNode for TensorToTexture::Node {
             }
         }
         Ok(())
+    }
+}
+
+/// The `format` a `TensorToTexture` placed to feed an input of `input` holds, and the Texture it
+/// then writes: the first format the input takes that one `[h, w, c]` tensor holds, or the
+/// default `format` for an input that takes any; `None` for an input that takes no such format,
+/// or is no Texture.
+pub fn the_format_picked_for_the_input(input: &PinType) -> Option<PinConversionOutputPicked> {
+    let PinType::Texture { pixel_formats } = input else {
+        return None;
+    };
+    let format = if pixel_formats.is_empty() {
+        default_image_format_wire_name()
+    } else {
+        pixel_formats
+            .iter()
+            .map(|format| format.wire_name())
+            .find(|wire_name| {
+                TextureFormat::from_wire_name(wire_name).is_some_and(|format| {
+                    tensor_element_and_channels_of_one_pixel(format).is_some()
+                })
+            })?
+            .to_string()
+    };
+    let output_pin_type = the_texture_of_the_format(&format);
+    Some(PinConversionOutputPicked {
+        input_values: streamlib::sdk::serde_json::Map::from_iter([(
+            "format".to_string(),
+            format.into(),
+        )]),
+        output_pin_type,
+    })
+}
+
+/// The Texture a `TensorToTexture` holding `held` writes: one of the `format` it holds, or of the
+/// default `format` when it holds none; `None` when it holds a `format` no one `[h, w, c]`
+/// tensor holds.
+pub fn the_texture_written_under_the_settings(
+    held: &streamlib::sdk::serde_json::Map<String, streamlib::sdk::serde_json::Value>,
+) -> Option<PinType> {
+    let format = match held.get("format") {
+        None => default_image_format_wire_name(),
+        Some(format) => format.as_str()?.to_owned(),
+    };
+    TextureFormat::from_wire_name(&format)
+        .filter(|format| tensor_element_and_channels_of_one_pixel(*format).is_some())?;
+    Some(the_texture_of_the_format(&format))
+}
+
+/// A Texture of the one pixel format `format` names by its wire name.
+fn the_texture_of_the_format(format: &str) -> PinType {
+    PinType::Texture {
+        pixel_formats: TexturePixelFormat::from_wire_name(format)
+            .into_iter()
+            .collect(),
     }
 }
 

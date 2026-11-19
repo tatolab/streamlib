@@ -12,7 +12,7 @@ from __future__ import annotations
 import ctypes
 import struct
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -22,7 +22,18 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeDoesNotCompile,
     feed_each_input_port_from_its_function_node_island,
 )
-from tatolab.stream import PreviousValue, State, Stateful, UnreadMessage, node
+from tatolab.stream import (
+    Asset,
+    Color,
+    PreviousValue,
+    Rectangle,
+    State,
+    Stateful,
+    Transform,
+    UnreadMessage,
+    Vector2,
+    node,
+)
 
 from function_node_test_nodes import (
     WeightedSumCountingItsCalls,
@@ -686,3 +697,243 @@ def test_an_unlinked_optional_message_input_takes_none_and_its_island_feeds_its_
         data_plane, [island], {import_path: one_without_a_frame_and_two_with_one}.__getitem__
     )
     assert the_value_read_from(data_plane, "level") == 1.0
+
+
+@node
+def place_a_tint(
+    tint: Color = Color(1.0, 0.5, 0.25),
+    spot: Vector2 = Vector2(0.5, 0.5),
+    area: Rectangle = Rectangle(0.0, 0.0, 1.0, 1.0),
+    move: Transform = Transform.identity(),
+) -> Color:
+    x = move.numbers[0] * spot.x + move.numbers[3]
+    inside = area.x <= x <= area.x + area.width
+    return tint if inside else Color(0.0, 0.0, 0.0, tint.alpha)
+
+
+@node
+def dim_a_tint(tint: Color = Color(0.0, 0.0, 0.0)) -> Color:
+    return Color(tint.red / 2, tint.green / 2, tint.blue / 2, tint.alpha)
+
+
+_FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH = {
+    f"{__name__}:{function_node.__qualname__}": function_node
+    for function_node in (place_a_tint, dim_a_tint)
+}
+
+
+def the_parts_read_from(data_plane: Any, input_port: str, part_count: int) -> "tuple[float, ...]":
+    payload = data_plane.read_from_input_port(input_port)
+    assert payload is not None
+    return struct.unpack(f"<{part_count}d", bytes(payload))
+
+
+def test_a_colour_vector_rectangle_and_transform_set_on_inputs_reach_the_body_as_set():
+    import_path = f"{__name__}:place_a_tint"
+    island = an_island_of_one_node("tint", import_path, None, "place-1")
+    island["nodes"][0]["pins"] = {
+        "tint": {"red": 0.2, "green": 0.4, "blue": 0.6, "alpha": 0.8},
+        "spot": {"x": 0.25, "y": 0.0},
+        "area": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0},
+        "move": [1, 0, 0, 0.5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    }
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["tint"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__
+    )
+    assert fed.ran_compiled_by_node_id == {"place-1": False}, "a value of parts runs as Python"
+    assert the_parts_read_from(data_plane, "tint", 4) == (0.0, 0.0, 0.0, 0.8), (
+        "the spot, moved by 0.5, falls outside an area half the frame wide"
+    )
+    island["nodes"][0]["pins"]["move"] = Transform.identity().stored_value()
+    fed.feed_an_input_port_from_its_island(island)
+    assert the_parts_read_from(data_plane, "tint", 4) == (0.2, 0.4, 0.6, 0.8)
+
+
+def test_an_input_of_parts_with_no_pin_reads_its_declared_default():
+    import_path = f"{__name__}:place_a_tint"
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["tint"], [])
+    feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_one_node("tint", import_path, None, "place-1")],
+        _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__,
+    )
+    assert the_parts_read_from(data_plane, "tint", 4) == (1.0, 0.5, 0.25, 1.0)
+
+
+def test_a_colour_travels_from_one_node_to_the_next_unchanged():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["dimmed"], [])
+    island = {
+        "input_port": "dimmed",
+        "link_id": "L-island",
+        "output": {"node": "dim-1", "port": "result"},
+        "nodes": [
+            {
+                "node": "place-1",
+                "breadcrumb_number": 0,
+                "import_path": f"{__name__}:place_a_tint",
+                "config": None,
+                "links_into": [],
+            },
+            {
+                "node": "dim-1",
+                "breadcrumb_number": 1,
+                "import_path": f"{__name__}:dim_a_tint",
+                "config": None,
+                "links_into": [{"port": "tint", "from": {"node": "place-1", "port": "result"}}],
+            },
+        ],
+    }
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__
+    )
+    assert the_parts_read_from(data_plane, "dimmed", 4) == (0.5, 0.25, 0.125, 1.0)
+
+
+@pytest.mark.parametrize(
+    ("pin", "value", "refused_because"),
+    [
+        ("tint", {"red": 1.0, "green": 0.5, "blue": 0.2}, "exactly red, green, blue, alpha"),
+        ("spot", {"x": 1.0, "y": 2.0, "z": 3.0}, "exactly x, y"),
+        ("area", {"x": 0.0, "y": 0.0, "width": -1.0, "height": 1.0}, "width is 0 or more"),
+        ("move", [1.0, 0.0], "16 numbers"),
+    ],
+)
+def test_a_pin_value_of_parts_of_the_wrong_shape_is_refused_by_name(
+    pin: str, value: Any, refused_because: str
+):
+    island = an_island_of_one_node("tint", f"{__name__}:place_a_tint", None, "place-1")
+    island["nodes"][0]["pins"] = {pin: value}
+    with pytest.raises(FunctionNodeDoesNotCompile, match=f"pin on input `{pin}`.*{refused_because}"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [island],
+            _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__,
+        )
+
+
+AN_ASSET_UUID = "0eaf9ee2-0f73-4154-a3f6-a99c261b850d"
+
+
+@node
+def describe_a_cue(
+    title: str = "",
+    shape: Literal["sine", "square"] = "sine",
+    picture: Asset = Asset(AN_ASSET_UUID),
+    levels: list[float] = [0.5],  # noqa: B006
+) -> str:
+    return f"{title}/{shape}/{picture.asset[:8]}/{sum(levels)}"
+
+
+@node
+def double_each_level(levels: list[float] = [1.0]) -> list[float]:  # noqa: B006
+    return [level * 2 for level in levels]
+
+
+@node
+def total_the_levels(levels: list[float] = [0.0]) -> float:  # noqa: B006
+    return sum(levels)
+
+
+_FUNCTION_NODES_OF_STORED_VALUES_BY_IMPORT_PATH = {
+    f"{__name__}:{function_node.__qualname__}": function_node
+    for function_node in (describe_a_cue, double_each_level, total_the_levels)
+}
+
+
+def a_records_message_of_a_string(text: str) -> bytes:
+    """`{"value": text}` as msgpack, written out by hand for a string of at most 255 bytes."""
+    encoded = text.encode()
+    assert len(encoded) <= 255
+    length = bytes([0xA0 | len(encoded)]) if len(encoded) < 32 else b"\xd9" + bytes([len(encoded)])
+    return b"\x81\xa5value" + length + encoded
+
+
+def test_a_string_menu_asset_and_list_of_floats_set_on_inputs_reach_the_body_as_set():
+    island = an_island_of_one_node("cue", f"{__name__}:describe_a_cue", None, "cue-1")
+    island["nodes"][0]["pins"] = {
+        "title": "intro to the show",
+        "shape": "square",
+        "picture": {"asset": "5f0c3b1e-27a4-4bd3-9b51-6f0d5bd0b7a2"},
+        "levels": [0.25, 0.5],
+    }
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["cue"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_OF_STORED_VALUES_BY_IMPORT_PATH.__getitem__
+    )
+    assert fed.ran_compiled_by_node_id == {"cue-1": False}, "a String runs as Python"
+    payload = data_plane.read_from_input_port("cue")
+    assert payload is not None
+    assert bytes(payload) == a_records_message_of_a_string("intro to the show/square/5f0c3b1e/0.75")
+
+
+def test_an_input_of_a_stored_value_type_with_no_pin_reads_its_declared_default():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["cue"], [])
+    feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_one_node("cue", f"{__name__}:describe_a_cue", None, "cue-1")],
+        _FUNCTION_NODES_OF_STORED_VALUES_BY_IMPORT_PATH.__getitem__,
+    )
+    payload = data_plane.read_from_input_port("cue")
+    assert payload is not None
+    assert bytes(payload) == a_records_message_of_a_string(f"/sine/{AN_ASSET_UUID[:8]}/0.5")
+
+
+def test_a_list_of_floats_travels_from_one_node_to_the_next_unchanged():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["total"], [])
+    island = {
+        "input_port": "total",
+        "link_id": "L-island",
+        "output": {"node": "total-1", "port": "result"},
+        "nodes": [
+            {
+                "node": "double-1",
+                "breadcrumb_number": 0,
+                "import_path": f"{__name__}:double_each_level",
+                "config": None,
+                "links_into": [],
+                "pins": {"levels": [0.25, 0.5, 4]},
+            },
+            {
+                "node": "total-1",
+                "breadcrumb_number": 1,
+                "import_path": f"{__name__}:total_the_levels",
+                "config": None,
+                "links_into": [{"port": "levels", "from": {"node": "double-1", "port": "result"}}],
+            },
+        ],
+    }
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_OF_STORED_VALUES_BY_IMPORT_PATH.__getitem__
+    )
+    payload = data_plane.read_from_input_port("total")
+    assert payload is not None
+    assert struct.unpack("<d", bytes(payload)) == (9.5,)
+
+
+@pytest.mark.parametrize(
+    ("pin", "value", "refused_because"),
+    [
+        ("shape", "saw", "it takes one of `sine`, `square`"),
+        ("levels", ["loud"], "element 0 is 'loud', and it takes a number"),
+        ("picture", AN_ASSET_UUID, 'a stored Asset is the object {"asset": "<uuid>"}'),
+        ("title", 3, "it takes text"),
+    ],
+)
+def test_a_pin_value_of_a_stored_value_type_its_input_does_not_take_is_refused_by_name(
+    pin: str, value: Any, refused_because: str
+):
+    island = an_island_of_one_node("cue", f"{__name__}:describe_a_cue", None, "cue-1")
+    island["nodes"][0]["pins"] = {pin: value}
+    with pytest.raises(FunctionNodeDoesNotCompile, match=f"pin on input `{pin}`.*{refused_because}"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [island],
+            _FUNCTION_NODES_OF_STORED_VALUES_BY_IMPORT_PATH.__getitem__,
+        )

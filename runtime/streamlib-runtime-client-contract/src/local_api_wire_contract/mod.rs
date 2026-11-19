@@ -11,9 +11,12 @@ mod graph_answer_wire_types;
 mod graph_wire_types;
 mod link_check_wire_types;
 mod log_wire_types;
+mod node_type_wire_types;
+mod project_code_check_wire_types;
 mod project_wire_types;
 mod runtime_health_wire_types;
 mod stream_clock_spec;
+mod stream_condition_wire_types;
 mod stream_wire_types;
 
 pub use graph_answer_link_wire_types::{
@@ -37,14 +40,27 @@ pub use graph_answer_wire_types::{
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
     GraphTransactionAddedNote, GraphTransactionConnectedLink,
-    GraphTransactionInputOverriddenByALink, GraphTransactionRebuiltNode,
-    GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
+    GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
+    GraphTransactionRebuiltNode, GraphTransactionToolResult, InsertedNodeOnTheWire,
+    RefusedGraphLinkOnTheWire,
 };
 pub use link_check_wire_types::{
-    ConvertNodeToInsertOnTheWire, LinkCheckResult, PinLinkMarksOnTheWire, PinLinkOutcomeOnTheWire,
+    ConvertNodeToInsertOnTheWire, LinkCandidateChecked, LinkCandidateEnd, LinkCandidateNotChecked,
+    LinkCandidatesCheckResult, LinkCheckResult, PinLinkMarksOnTheWire, PinLinkOutcomeOnTheWire,
     PinLinkWarningOnTheWire,
 };
 pub use log_wire_types::LogsToolResult;
+pub use node_type_wire_types::{
+    DescribeNodeTypesToolResult, GraphGeneratorListed, ListNodeTypesToolResult,
+    ListPinTypesToolResult, NodeTypeCategoryFrom, NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot,
+    NodeTypeDescription, NodeTypeInputDescribed, NodeTypeInputMode, NodeTypeKind, NodeTypeListed,
+    NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortPin, NodeTypeSourceListed,
+    NodeTypeSourceListedOrigin, PinTypeConversionListed, PinTypeListed, SetNodeTypeGroupToolResult,
+};
+pub use project_code_check_wire_types::{
+    ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,
+    ProjectCodeCheckSeverity, ProjectCodeCheckState, ProjectCodeCheckVerdict, ProjectFileChecked,
+};
 pub use project_wire_types::{
     AssetAudioFactsOnTheWire, AssetImageFactsOnTheWire, AssetLutFactsOnTheWire,
     AssetMediaFactsOnTheWire, AssetMediaFactsReadOnTheWire, AssetPreviewOnTheWire,
@@ -71,6 +87,11 @@ pub use runtime_health_wire_types::{
     MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH, MachineRuntimeLockHolderPidAnswer,
 };
 pub use stream_clock_spec::{DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClockSpec};
+pub use stream_condition_wire_types::{
+    DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire,
+    DiagnosticRecoveryOnTheWire, NodeHealthOnTheWire, StreamConditionOnTheWire,
+    StreamHealthOnTheWire, StreamLoadOnTheWire, StreamPlaybackOnTheWire,
+};
 pub use stream_wire_types::{
     CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
     DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, ListStreamsToolResult,

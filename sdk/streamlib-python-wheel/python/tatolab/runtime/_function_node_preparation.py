@@ -114,13 +114,14 @@ def function_node_run_as_python_in_its_reader(
         function_node, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
     )
     body: Callable[..., Any] = function_node.__wrapped__
-    annotations = typing.get_type_hints(body)
+    annotations = typing.get_type_hints(body, localns=_type_parameters_of(body))
     for each_port in (*function_signature["inputs"], *function_signature["outputs"]):
         if each_port["value_type"] not in _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES:
             raise FunctionNodeDoesNotCompile(
                 f"{import_path}'s port `{each_port['port']}` is {each_port['value_type']}, and a "
-                f"function node carries numbers, bools and dicts in this release. To fix: make "
-                f"it `float`, `int`, `bool` or `dict`."
+                f"function node carries numbers, bools, Colors, Vectors, Rectangles, Transforms, "
+                f"Strings, Menus, Assets, Lists and dicts in this release. To fix: make it one "
+                f"of them."
             )
     for each_input in function_signature["inputs"]:
         if each_input["optional"] and each_input["value_type"] != UNREAD_MESSAGE_VALUE_TYPE:
@@ -157,6 +158,10 @@ def function_node_run_as_python_in_its_reader(
         why_it_does_not_compile=why_it_does_not_compile,
         input_value_types=tuple(each_input["value_type"] for each_input in function_signature["inputs"]),
         how_its_values_are_carried=_how_the_values_of_a_signature_are_carried(function_signature),
+        input_pin_types=tuple(each_input.get("pin_type") for each_input in function_signature["inputs"]),
+        output_pin_types=tuple(
+            each_output.get("pin_type") for each_output in function_signature["outputs"]
+        ),
     )
 
 
@@ -203,3 +208,12 @@ def config_values_of_one_function_node(
                 f"no default"
             )
     return config_values
+
+
+def _type_parameters_of(body: Callable[..., Any]) -> "dict[str, Any]":
+    """The type parameters a body declares, by name, which Python 3.12 does not read a string
+    annotation of the body with."""
+    return {
+        type_parameter.__name__: type_parameter
+        for type_parameter in getattr(body, "__type_params__", ())
+    }

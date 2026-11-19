@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use streamlib_runtime_client_contract::local_api_wire_contract::GraphTransactionInputOverriddenByALink;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
+};
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
@@ -122,6 +124,12 @@ pub enum ProjectSettingsAction {
     SetProjectDescription { description: Option<String> },
     /// Make the media asset `cover` the project's cover, `None` for none.
     SetProjectCover { cover: Option<Uuid> },
+    /// File the node type `node_type` under `group` in the project, or with `None` put it back
+    /// under the group its author declared.
+    SetNodeTypeGroup {
+        node_type: String,
+        group: Option<String>,
+    },
 }
 
 #[cfg(feature = "history")]
@@ -146,6 +154,13 @@ impl ProjectSettingsAction {
                 from: project_file.cover,
                 to: cover,
             },
+            Self::SetNodeTypeGroup { node_type, group } => {
+                ProjectSettingsOperation::SetNodeTypeGroup {
+                    from: project_file.node_type_groups.get(&node_type).cloned(),
+                    node_type,
+                    to: group,
+                }
+            }
         }
     }
 }
@@ -526,6 +541,13 @@ pub enum ProjectSettingsOperation {
         from: Option<Uuid>,
         to: Option<Uuid>,
     },
+    /// The group the project files `node_type` under went from `from` to `to`, `None` for the
+    /// group its author declared.
+    SetNodeTypeGroup {
+        node_type: String,
+        from: Option<String>,
+        to: Option<String>,
+    },
 }
 
 impl ProjectSettingsOperation {
@@ -537,6 +559,15 @@ impl ProjectSettingsOperation {
                 Self::SetProjectDescription { from: to, to: from }
             }
             Self::SetProjectCover { from, to } => Self::SetProjectCover { from: to, to: from },
+            Self::SetNodeTypeGroup {
+                node_type,
+                from,
+                to,
+            } => Self::SetNodeTypeGroup {
+                node_type,
+                from: to,
+                to: from,
+            },
         }
     }
 
@@ -547,6 +578,16 @@ impl ProjectSettingsOperation {
             Self::SetProjectName { to, .. } => project_file.name = to.clone(),
             Self::SetProjectDescription { to, .. } => project_file.description = to.clone(),
             Self::SetProjectCover { to, .. } => project_file.cover = *to,
+            Self::SetNodeTypeGroup { node_type, to, .. } => match to {
+                Some(group) => {
+                    project_file
+                        .node_type_groups
+                        .insert(node_type.clone(), group.clone());
+                }
+                None => {
+                    project_file.node_type_groups.remove(node_type);
+                }
+            },
         }
     }
 
@@ -557,6 +598,7 @@ impl ProjectSettingsOperation {
             Self::SetProjectName { to, .. } => format!("rename_project {to}"),
             Self::SetProjectDescription { .. } => "set_project_description".to_owned(),
             Self::SetProjectCover { .. } => "set_project_cover".to_owned(),
+            Self::SetNodeTypeGroup { node_type, .. } => format!("set_node_type_group {node_type}"),
         }
     }
 }
@@ -755,6 +797,19 @@ pub struct ProjectTransaction {
     /// named it; an action sent again under its key is answered with them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    /// Each node a `connect` of its actions inserted on its link, and why, as their answer named
+    /// it; an action sent again under its key is answered with them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes_inserted_on_links: Vec<ProjectTransactionNodeInsertedOnALink>,
+}
+
+/// A node a `connect` inserted on the link it asked for, by its UUID, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTransactionNodeInsertedOnALink {
+    /// The node's UUID.
+    pub node: Uuid,
+    /// Why the `connect` inserted it.
+    pub inserted_because: GraphTransactionNodeInsertedBecause,
 }
 
 /// What the caller of a transaction sent, and what the answer it was sent named beside the
@@ -765,6 +820,8 @@ pub struct ProjectTransactionAsSentAndAnswered {
     pub actions_as_sent: Vec<ProjectAction>,
     /// Each input value they set that a link overrides.
     pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    /// Each node a `connect` of theirs inserted on its link, and why.
+    pub nodes_inserted_on_links: Vec<ProjectTransactionNodeInsertedOnALink>,
 }
 
 impl ProjectTransaction {

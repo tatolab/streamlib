@@ -24,7 +24,7 @@ pub use pin_type_conversion::{
 };
 pub use video_frame::VideoFrame;
 
-use streamlib::sdk::descriptors::NodeClassImportPath;
+use streamlib::sdk::descriptors::{NodeClassImportPath, PinConversionOutputPick};
 use streamlib::sdk::nodes::NODE_REGISTRY;
 
 /// Each built-in that left the runtime for a module, by its former public class
@@ -73,12 +73,7 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
 /// module to install. In-process static registration (the api-server
 /// precedent) — no dlopen, and idempotent, so hosts may call it more than once.
 pub fn register_media_builtin_node_types() {
-    NODE_REGISTRY.register::<pin_type_conversion::AudioToTensor::Node>();
-    NODE_REGISTRY.register::<pin_type_conversion::TensorToAudio::Node>();
-    NODE_REGISTRY.register::<pin_type_conversion::ChannelsToRecords::Node>();
-    NODE_REGISTRY.register::<pin_type_conversion::RecordsToChannels::Node>();
-    NODE_REGISTRY.register::<pin_type_conversion::TextureToTensor::Node>();
-    NODE_REGISTRY.register::<pin_type_conversion::TensorToTexture::Node>();
+    register_the_conversion_node_types();
 
     for (former_class_name, module_node_type, module_distribution) in BUILT_INS_MOVED_TO_MODULES {
         match NodeClassImportPath::new(*module_node_type) {
@@ -96,6 +91,22 @@ pub fn register_media_builtin_node_types() {
             ),
         }
     }
+}
+
+/// Register each built-in conversion node, each with the function that picks the setting its
+/// output follows when it has one, on the process-wide registry.
+pub fn register_the_conversion_node_types() {
+    NODE_REGISTRY.register::<pin_type_conversion::AudioToTensor::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::TensorToAudio::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::ChannelsToRecords::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::RecordsToChannels::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::TextureToTensor::Node>();
+    NODE_REGISTRY.register_a_conversion_whose_output_a_setting_picks::<
+        pin_type_conversion::TensorToTexture::Node,
+    >(PinConversionOutputPick {
+        picked_for: pin_type_conversion::tensor_to_texture::the_format_picked_for_the_input,
+        given_under: pin_type_conversion::tensor_to_texture::the_texture_written_under_the_settings,
+    });
 }
 
 #[cfg(test)]

@@ -70,6 +70,7 @@ impl ControlOperationDispatcher {
                     state: listed_stream_state_on_the_wire(listing.state),
                     node_count: listing.node_count,
                     failed_because: listing.failed_because,
+                    condition: Some(listing.condition),
                     capture_devices_whose_access_was_never_asked_for: listing
                         .capture_devices_whose_access_was_never_asked_for
                         .into_iter()
@@ -103,14 +104,19 @@ impl ControlOperationDispatcher {
                         .map_err(|refusal| {
                             ControlOperationRefusal::of_an_engine_error("graph", &refusal)
                         })?;
-                    streams
+                    let mut stream_graph = streams
                         .runtime_operations_of(&stream)
                         .and_then(|stream_operations| {
-                            async_runtime.block_on(stream_operations.to_json_async())
+                            async_runtime.block_on(stream_operations.the_graph_as_answered_async())
                         })
                         .map_err(|refusal| {
                             ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
-                        })
+                        })?;
+                    crate::handlers::give_the_stream_graph_its_listed_condition(
+                        &mut stream_graph,
+                        &operations_on_the_loaded_streams.list_streams(),
+                    );
+                    Ok(stream_graph)
                 })
                 .await
                 .map_err(ControlOperationRefusal::the_task_did_not_finish(

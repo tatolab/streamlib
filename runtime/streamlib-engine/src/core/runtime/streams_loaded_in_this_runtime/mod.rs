@@ -16,6 +16,7 @@ pub(super) mod output_port_viewer;
 pub(super) mod project_stream_action_queue;
 pub(super) mod status;
 pub(super) mod stream_actions_of_this_runtime;
+pub(super) mod stream_condition;
 pub(super) mod stream_environment;
 pub(super) mod stream_graph_operation_applied_live;
 pub(super) mod stream_graph_operation_under_the_current_port_names;
@@ -25,4 +26,8 @@ pub(super) mod stream_step_coordinator;
 pub(super) mod view_node_output_written_by_a_panel;
 
 #[cfg(test)]
+mod graph_edits_in_one_commit_tests;
+#[cfg(test)]
 mod graph_input_tests;
+#[cfg(test)]
+mod reactive_reader_rule_tests;

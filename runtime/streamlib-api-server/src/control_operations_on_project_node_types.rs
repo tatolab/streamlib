@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The operation listing the node types a project offers.
+//! The operation listing the node types a project offers, and the one listing from source it
+//! and `list_node_types` both read.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
+use crate::node_type_groups_of_a_project::{NodeTypeGroupsOfAProject, NodeTypeGroupsOfAnImport};
 use crate::project_node_types_followed_for_changes::{
     NodeTypeListingStarted, NodeTypesChangedSinceTheLastListing,
 };
@@ -33,6 +35,7 @@ struct ProjectReadForItsNodeTypeListing {
     project_name: String,
     import_sources: Vec<ImportedProjectPythonSources>,
     what_the_runtime_read_of_each_import: BTreeMap<String, OneImportReadForItsNodeTypeListing>,
+    node_type_groups: NodeTypeGroupsOfAProject,
 }
 
 /// What the runtime itself reads of one import, beside the sources its interpreter lists.
@@ -46,6 +49,7 @@ struct OneImportReadForItsNodeTypeListing {
 /// The sources the project's interpreter lists for the project in `project_directory`, read off
 /// the async runtime.
 async fn the_node_type_sources_the_projects_interpreter_lists(
+    method_name: &'static str,
     project_directory: PathBuf,
     import_sources: Vec<ImportedProjectPythonSources>,
 ) -> Result<Vec<NodeTypeSourceReadWithoutRunningIt>, ControlOperationRefusal> {
@@ -56,18 +60,17 @@ async fn the_node_type_sources_the_projects_interpreter_lists(
         )
     })
     .await
-    .map_err(ControlOperationRefusal::the_task_did_not_finish(
-        "list_project_node_types failed: the listing",
-    ))?
-    .map_err(|refusal| format!("list_project_node_types failed: {refusal}"))?
+    .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
+        "{method_name} failed: the listing"
+    )))?
+    .map_err(|refusal| format!("{method_name} failed: {refusal}"))?
     .into_iter()
     .map(serde_json::from_value::<NodeTypeSourceReadWithoutRunningIt>)
     .collect::<Result<Vec<_>, _>>()
     .map_err(|not_a_source| {
         ControlOperationRefusal::failed(format!(
-            "list_project_node_types failed: the project's interpreter listed a source this \
-             runtime does not read ({not_a_source}); its `tatolab-stream` may differ from \
-             the runtime's"
+            "{method_name} failed: the project's interpreter listed a source this runtime does \
+             not read ({not_a_source}); its `tatolab-stream` may differ from the runtime's"
         ))
     })
 }
@@ -81,20 +84,58 @@ fn the_module_name_of_a_python_file(path: &str) -> String {
     package_or_module.replace('/', ".")
 }
 
-use streamlib_control_contract::ListProjectNodeTypesRequest;
+use streamlib_control_contract::{
+    ControlOperation, ListProjectNodeTypes, ListProjectNodeTypesRequest,
+};
+
 impl ControlOperationDispatcher {
     pub(crate) async fn list_project_node_types(
         &self,
         ListProjectNodeTypesRequest { project_directory }: ListProjectNodeTypesRequest,
     ) -> Result<ListProjectNodeTypesToolResult, ControlOperationRefusal> {
+        self.the_node_types_the_project_offers_read_from_source(
+            ListProjectNodeTypes::METHOD_NAME,
+            project_directory,
+        )
+        .await
+    }
+
+    /// The node types and graph generators the project in `project_directory` offers, by
+    /// source, read from source without running it for the operation `method_name`, each filed
+    /// under the group the project's and its imports' maps or its declaration put it in: kept as
+    /// the project's last listing, with what it changed announced on the project's feed and the
+    /// feed followed for the changes that list it again.
+    pub(crate) async fn the_node_types_the_project_offers_read_from_source(
+        &self,
+        method_name: &'static str,
+        project_directory: PathBuf,
+    ) -> Result<ListProjectNodeTypesToolResult, ControlOperationRefusal> {
+        self.the_node_types_the_project_offers_and_its_groups(method_name, project_directory)
+            .await
+            .map(|(listing, _)| listing)
+    }
+
+    /// The listing `the_node_types_the_project_offers_read_from_source` answers, with the node
+    /// type to group maps of the project and its imports that filed it, which also file the
+    /// node types the runtime brings itself.
+    pub(crate) async fn the_node_types_the_project_offers_and_its_groups(
+        &self,
+        method_name: &'static str,
+        project_directory: PathBuf,
+    ) -> Result<(ListProjectNodeTypesToolResult, NodeTypeGroupsOfAProject), ControlOperationRefusal>
+    {
         let listing_started = self.project_node_types_last_listed.start_a_listing();
         let project_read = self
             .a_project_repository_call_off_the_async_runtime(
-                "list_project_node_types",
+                method_name,
                 project_directory,
                 |project_repository| {
                     let mut import_sources = Vec::new();
                     let mut what_the_runtime_read_of_each_import = BTreeMap::new();
+                    let mut node_type_groups = NodeTypeGroupsOfAProject {
+                        own: project_repository.project_file().node_type_groups.clone(),
+                        of_each_import: Vec::new(),
+                    };
                     for import in &project_repository.every_import_the_project_resolves() {
                         let import_folder = project_repository
                             .project_directory()
@@ -125,14 +166,27 @@ impl ControlOperationDispatcher {
                             }
                         }
                         let import_project = import.project.to_string();
+                        let (import_project_name, import_node_type_groups) =
+                            match TatolabProjectFile::read_from_project_directory(&import_folder) {
+                                Ok(TatolabProjectFile {
+                                    name,
+                                    node_type_groups,
+                                    ..
+                                }) => (Some(name), node_type_groups),
+                                Err(_) => (None, BTreeMap::new()),
+                            };
+                        if !import_node_type_groups.is_empty() {
+                            node_type_groups
+                                .of_each_import
+                                .push(NodeTypeGroupsOfAnImport {
+                                    folder: import.folder.clone(),
+                                    groups: import_node_type_groups,
+                                });
+                        }
                         what_the_runtime_read_of_each_import.insert(
                             import_project.clone(),
                             OneImportReadForItsNodeTypeListing {
-                                project_name: TatolabProjectFile::read_from_project_directory(
-                                    &import_folder,
-                                )
-                                .ok()
-                                .map(|import_project_file| import_project_file.name),
+                                project_name: import_project_name,
                                 unread_files,
                             },
                         );
@@ -149,11 +203,13 @@ impl ControlOperationDispatcher {
                         project_name: project_repository.project_file().name.clone(),
                         import_sources,
                         what_the_runtime_read_of_each_import,
+                        node_type_groups,
                     })
                 },
             )
             .await?;
         let mut sources = the_node_type_sources_the_projects_interpreter_lists(
+            method_name,
             project_read.project_directory.clone(),
             project_read.import_sources,
         )
@@ -181,6 +237,13 @@ impl ControlOperationDispatcher {
                     .unreadable_modules
                     .extend(read_of_the_import.unread_files);
             }
+            for read in &mut source.node_types {
+                project_read.node_type_groups.file(
+                    &read.node_type,
+                    &mut read.category,
+                    &mut read.category_from,
+                );
+            }
         }
         let listing = ListProjectNodeTypesToolResult {
             project_directory: project_read.project_directory,
@@ -189,7 +252,7 @@ impl ControlOperationDispatcher {
             sources,
         };
         self.take_in_the_node_type_listing(project_read.project, listing_started, &listing);
-        Ok(listing)
+        Ok((listing, project_read.node_type_groups))
     }
 
     /// Keep `listing`, started at `listing_started`, as `project`'s last, announce on its feed what

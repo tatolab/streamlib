@@ -205,9 +205,11 @@ pub(crate) mod tests {
         ))
     }
 
-    /// The arguments of the slow `add_node` call.
+    /// The arguments of the slow `add_node` call: a live edit, which reaches the stub's slow
+    /// `add_node`; a committed one is refused at once, as the stub's stream directory holds no
+    /// project, and so is never the request still in flight.
     fn slow_add_node_arguments() -> Value {
-        json!({ "stream": STUB_STREAM_ASSET, "type": "nodes.slow:SlowNode" })
+        json!({ "stream": STUB_STREAM_ASSET, "type": "nodes.slow:SlowNode", "mode": "live" })
     }
 
     pub(crate) async fn upgraded_mcp_stdio_stream(

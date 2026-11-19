@@ -276,7 +276,7 @@ async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
     let why = connected["connected_links"][0]["not_judged_because"]
         .as_str()
         .unwrap_or_else(|| panic!("the link says why it was not judged: {connected}"));
-    assert!(why.contains("names no family"), "{why}");
+    assert!(why.contains("runs as no node of its own"), "{why}");
     assert_eq!(
         links_by_node_name_in(&project.the_graph_document_of("sub")),
         ["mixer/level -> level-out/value"]

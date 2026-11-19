@@ -212,6 +212,144 @@ async fn an_interface_node_added_with_no_family_takes_the_family_of_its_first_li
     assert_eq!(linked_output["config"], json!({ "port": "output1" }));
 }
 
+/// A top-level `GraphInput` naming its family that a transaction adds, renames, gives another
+/// port, moves or takes out renders as one loaded from its document does, with no reload: its
+/// interface with the value it carries, and its `value` output of the family it declares.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_input_a_transaction_adds_renames_and_takes_out_renders_its_interface_with_no_reload()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let transact = |operations: Value| {
+        tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": operations }),
+        )
+    };
+    let the_graph_input_in = |graph: &Value| -> Option<Value> {
+        graph["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|node| node["type"] == "tatolab.stream:GraphInput")
+            .cloned()
+    };
+
+    tool_answer(
+        &transact(json!([
+            { "operation": "add_node", "stream": stream_asset,
+              "type": "tatolab.stream:GraphInput", "as": "t",
+              "config": { "port": "tint", "family": "array",
+                          "default": [1, 0.5, 0.25], "range": [0, 1] } },
+        ]))
+        .await,
+    )
+    .expect("the Input is added");
+    let tint = the_graph_input_in(&engine.the_live_graph_of(&stream_id))
+        .expect("the graph holds the added GraphInput");
+    assert_eq!(
+        tint["components"]["graph_interface"],
+        json!({
+            "direction": "input",
+            "port": "tint",
+            "family": "array",
+            "current_value": [1, 0.5, 0.25]
+        }),
+        "{tint}"
+    );
+    assert_eq!(
+        tint["ports"]["outputs"][0]["family"]["family"], "array",
+        "{tint}"
+    );
+
+    let input_node = tint["id"].clone();
+    let the_input_after = |what: &str| -> Value {
+        the_graph_input_in(&engine.the_live_graph_of(&stream_id))
+            .unwrap_or_else(|| panic!("the graph still holds the GraphInput after {what}"))
+    };
+
+    tool_answer(
+        &transact(json!([
+            { "operation": "rename_node", "stream": stream_asset,
+              "node": input_node, "name": "tint control" },
+        ]))
+        .await,
+    )
+    .expect("the Input is renamed");
+    let renamed = the_input_after("its rename");
+    assert_eq!(renamed["name"], "tint-control", "{renamed}");
+    assert_eq!(
+        renamed["components"]["graph_interface"]["port"], "tint",
+        "{renamed}"
+    );
+
+    tool_answer(
+        &transact(json!([
+            { "operation": "set_node_config", "stream": stream_asset, "node": input_node,
+              "config": { "port": "hue", "family": "array",
+                          "default": [1, 0.5, 0.25], "range": [0, 1] } },
+        ]))
+        .await,
+    )
+    .expect("the Input's config names another port");
+    let hue = the_input_after("its config names another port");
+    assert_eq!(hue["components"]["graph_interface"]["port"], "hue", "{hue}");
+
+    tool_answer(
+        &transact(json!([
+            { "operation": "set_node_input_value", "stream": stream_asset,
+              "node": input_node, "input": "port", "value": "shade" },
+        ]))
+        .await,
+    )
+    .expect("the Input's port is set as an input value");
+    let shade = the_input_after("its port is set as an input value");
+    assert_eq!(
+        shade["components"]["graph_interface"]["port"], "shade",
+        "{shade}"
+    );
+
+    tool_answer(
+        &transact(json!([
+            { "operation": "set_studio_fields", "stream": stream_asset,
+              "node": input_node, "studio": { "position": [120, 40] } },
+        ]))
+        .await,
+    )
+    .expect("the Input is moved");
+    let moved = the_input_after("it is moved");
+    assert_eq!(moved["studio"]["position"], json!([120, 40]), "{moved}");
+
+    tool_answer(
+        &transact(json!([
+            { "operation": "remove_node", "stream": stream_asset, "node": input_node },
+        ]))
+        .await,
+    )
+    .expect("the Input is taken out");
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(the_graph_input_in(&live), None, "{live}");
+    tool_answer(
+        &transact(json!([
+            { "operation": "add_node", "stream": stream_asset,
+              "type": StreamToolsTestSink::node_class_import_path().as_str(),
+              "name": "tint control" },
+        ]))
+        .await,
+    )
+    .expect("a node takes the name the Input had");
+    let live = engine.the_live_graph_of(&stream_id);
+    let namesake = the_node_named(&live, "tint-control");
+    assert_eq!(
+        namesake["components"]["graph_interface"],
+        Value::Null,
+        "the Input taken out leaves no interface behind for a node of its name: {namesake}"
+    );
+}
+
 /// Two authors' edits interleave, and each author's `undo` reverses only that author's own;
 /// `redo` brings back what the author's undo reversed.
 #[tokio::test(flavor = "multi_thread")]

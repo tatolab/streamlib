@@ -89,8 +89,9 @@ fn the_verdicts_refusal(refused: Error) -> PinLinkRefusal {
 }
 
 /// A Float into an Integer at a placed level connects for free; a Float into a String is
-/// refused naming both nodes as the level names them, a link into a setting as taking no wire,
-/// and a link only a convert node bridges as its pin types not connecting.
+/// refused naming both nodes as the level names them, and a link into a setting as taking no
+/// wire; a link only a convert node bridges answers that convert node, as at the stream's own
+/// level, for the caller to refuse where `connect` places none.
 ///
 /// Mental-revert: a judgement reading the level's nodes from nowhere answers no verdict.
 #[test]
@@ -132,19 +133,24 @@ fn a_link_at_a_placed_level_takes_the_verdict_connect_takes() {
         ),
         PinLinkRefusal::InputTakesNoWire { .. }
     ));
-    assert!(matches!(
-        the_verdicts_refusal(
-            what_a_connect_makes_of(
-                &level,
-                a_link(
-                    (CELSIUS_SOURCE_NODE, "temperature"),
-                    (FAHRENHEIT_SINK_NODE, "temperature"),
-                ),
-            )
-            .expect_err("a convert node is not placed inside a placed stream"),
+    let through_a_convert_node = what_a_connect_makes_of(
+        &level,
+        a_link(
+            (CELSIUS_SOURCE_NODE, "temperature"),
+            (FAHRENHEIT_SINK_NODE, "temperature"),
         ),
-        PinLinkRefusal::PinTypesDoNotConnect { .. }
-    ));
+    )
+    .expect("a link a built-in conversion bridges answers that conversion");
+    let WhatALiveConnectMakesOfALink::Makes(Some(verdict)) = through_a_convert_node else {
+        panic!("two typed ends have a verdict: {through_a_convert_node:?}");
+    };
+    assert!(
+        matches!(
+            verdict.outcome,
+            PinLinkOutcome::ConnectsThroughConvertNode(_)
+        ),
+        "{verdict:?}"
+    );
 }
 
 /// A level holding links of its own is built with them, and a link at it is judged among its
@@ -363,12 +369,12 @@ fn a_link_reaching_a_node_of_a_type_not_described_is_judged_only_as_it_is_made()
         a_link((FLOAT_SOURCE_NODE, "value"), (undescribed, "anything")),
     )
     .expect("a link to a node not built is left to be judged as it is made");
-    let why = made
-        .why_it_makes_the_link_unjudged()
-        .expect("the link is made unjudged");
+    let WhatALiveConnectMakesOfALink::ReachesANodeNotBuilt { node_name, why } = made else {
+        panic!("the link is made unjudged: {made:?}");
+    };
+    assert_eq!(node_name, "mystery");
     assert!(
-        why.contains("`mystery`")
-            && why.contains("`placed_level_test:NotDescribed` is not described"),
+        why.contains("`placed_level_test:NotDescribed` is not described"),
         "{why}"
     );
 }

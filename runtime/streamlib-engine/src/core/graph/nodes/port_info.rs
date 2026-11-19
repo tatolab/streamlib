@@ -37,6 +37,11 @@ pub struct PortInfo {
     /// family alone.
     #[serde(flatten)]
     pub pin: Option<crate::core::descriptors::ResolvedPin>,
+    /// The pin type this port's node type declares, or how its graph finds it, and its flow;
+    /// `None` on a port that declares no pin. Not rendered here: `graph` serves the type it
+    /// resolves to.
+    #[serde(skip)]
+    pub declared_pin_type: Option<PinTypeAsDeclared>,
     /// Whether a value set live on this input is kept across Stop and a restart of the runtime,
     /// or reset at Stop. Mirrors the field on [`crate::core::descriptors::PortDescriptor`].
     #[serde(
@@ -65,6 +70,16 @@ pub struct PortInfo {
     /// when it declares none. Not rendered here: the pin declaration a client reads carries it.
     #[serde(skip)]
     pub meaning: Option<String>,
+}
+
+/// The pin type a port's node type declares, or how its graph finds it: exactly one, one of
+/// several, any, the type linked into an input, or the type a setting chooses; and its flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinTypeAsDeclared {
+    /// The type, or how it is found.
+    pub pin_type: crate::core::descriptors::DeclaredPinType,
+    /// How its messages are read.
+    pub flow: crate::core::descriptors::PinFlow,
 }
 
 /// The lowest and highest number an input takes, compared bound by bound bit for bit, so a port
@@ -115,6 +130,10 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             meaning: declared_pin
                 .as_ref()
                 .and_then(|declared| declared.annotations.meaning.clone()),
+            declared_pin_type: declared_pin.as_ref().map(|declared| PinTypeAsDeclared {
+                pin_type: declared.pin_type.clone(),
+                flow: declared.flow,
+            }),
             pin: declared_pin.and_then(crate::core::descriptors::PinDeclaration::into_resolved),
             lifetime: port.lifetime,
             input_mode: port.input_mode,
@@ -127,6 +146,13 @@ impl PortInfo {
     pub fn takes_a_wire(&self) -> bool {
         self.input_mode
             .is_none_or(crate::core::descriptors::NodeInputMode::takes_a_wire)
+    }
+
+    /// Whether this port is a Trigger, whose messages each carry an event and no value.
+    pub fn is_a_trigger(&self) -> bool {
+        self.pin
+            .as_ref()
+            .is_some_and(|pin| pin.flow == crate::core::descriptors::PinFlow::Trigger)
     }
 
     /// Whether this input is a setting a node reads each run, whose value is set live apart
@@ -162,5 +188,21 @@ impl PortInfo {
             true,
             family,
         ))
+    }
+}
+
+impl PortInfo {
+    /// Whether `other` is the input of the same name that takes the values this one takes: its
+    /// family, its pin type and how its graph finds it, its range, its input mode, its lifetime
+    /// and whether it may be unset, whatever its description.
+    pub(crate) fn takes_the_values_it_takes(&self, other: &PortInfo) -> bool {
+        self.name == other.name
+            && self.family == other.family
+            && self.pin == other.pin
+            && self.declared_pin_type == other.declared_pin_type
+            && self.range == other.range
+            && self.input_mode == other.input_mode
+            && self.lifetime == other.lifetime
+            && self.may_be_unset == other.may_be_unset
     }
 }

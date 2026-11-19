@@ -6,6 +6,7 @@ use std::path::Path;
 
 use parking_lot::RwLock;
 use serde::Serialize;
+use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticOnTheWire;
 
 use super::LoadedStreamInThisRuntime;
 use super::input_values_set_live::{
@@ -17,16 +18,23 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_val
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::descriptors::NodeValueLifetime;
-use crate::core::graph::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
+use crate::core::graph::graph_snapshot::{GraphSnapshot, LinkSetAside, NodeChangeADrawnLinkBlocks};
 use crate::core::graph::input_values::{the_input_value_change, the_lifetime_of_the_input};
 use crate::core::graph::legacy_config_of_a_node::{
     input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
 };
-use crate::core::graph::{Graph, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe};
+use crate::core::graph::{
+    ALinkConnected, Graph, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe,
+};
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
-use crate::core::runtime::RuntimeOperations;
+use crate::core::runtime::operations_runtime::GraphEditsHeldForOneCommit;
+use crate::core::runtime::operations_runtime::{
+    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
+};
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::LoadedStreamHolding;
+use crate::core::runtime::streams_loaded_in_this_runtime::stream_condition::StreamFailure;
+use crate::core::runtime::{RuntimeOperations, StreamFailureKind};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
@@ -84,10 +92,22 @@ impl LoadedStreamInThisRuntime {
             node_run_id,
             NodeChangeADrawnLinkBlocks::Rename,
         )?;
-        let renamed = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal_mut().rename_v(node_run_id, requested_name))?;
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        let held = GraphEditsHeldForOneCommit::the_ones_this_task_holds();
+        let renamed = self.compiler.scope(|graph, _tx| {
+            let name_before = graph
+                .traversal()
+                .v(node_run_id)
+                .first()
+                .map(|node| node.display_name.clone());
+            let renamed = graph
+                .traversal_mut()
+                .rename_v(node_run_id, requested_name)?;
+            if let (Some(held), Some(name_before)) = (&held, name_before) {
+                held.hold_the_name_before_a_rename(node_run_id, name_before);
+            }
+            Ok::<_, crate::core::Error>(renamed)
+        })?;
+        self.announce_the_graph_changed();
         Ok(renamed)
     }
 
@@ -147,7 +167,7 @@ impl LoadedStreamInThisRuntime {
                 .traversal()
                 .e(())
                 .iter()
-                .filter(|link| link.to_port().node_run_id() == node_run_id)
+                .filter(|link| link.to_port().node_run_id() == node_run_id && graph.stands(link))
                 .map(|link| link.to_port().port_name().to_string())
                 .filter(|port| {
                     node.is_an_exposed_config_field_input(port)
@@ -252,6 +272,11 @@ impl LoadedStreamInThisRuntime {
                 node_run_id,
                 &config_json,
             )?;
+            crate::core::graph::refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse(
+                graph,
+                node_run_id,
+                &config_json,
+            )?;
             crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
                 graph,
                 &self.node_types_this_stream_resolves,
@@ -316,43 +341,56 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Why this stream cannot play: a node of its graph is of a type its node code did not
-    /// describe, held as a placeholder, or a link of its document is set aside by its
-    /// validation; `None` when neither holds.
-    pub fn why_its_graph_as_held_keeps_this_stream_from_playing(&self) -> Option<String> {
+    /// describe, held as a placeholder; `None` when none is. A link of its document set aside,
+    /// which the engine does not wire, keeps nothing from playing: the stream plays without it.
+    pub fn why_its_graph_as_held_keeps_this_stream_from_playing(&self) -> Option<StreamFailure> {
         self.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
-            .or_else(|| {
-                self.graph_only_nodes_as_drawn
-                    .lock()
-                    .links_its_validation_set_aside
-                    .first()
-                    .map(|set_aside| set_aside.described())
-            })
+    }
+
+    /// Each diagnostic a node of this stream's graph carries, in the order the graph holds them.
+    pub fn diagnostics_of_its_nodes(&self) -> Vec<DiagnosticOnTheWire> {
+        self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter_map(|node| node.health_and_diagnostics())
+                .flat_map(|(_, diagnostics)| diagnostics)
+                .collect()
+        })
     }
 
     /// Why a node of a type its node code did not describe, held as a placeholder, keeps
     /// this stream from playing.
-    fn why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(&self) -> Option<String> {
+    fn why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(
+        &self,
+    ) -> Option<StreamFailure> {
         if let Some(why_none_of_its_node_code_is_read) = self
             .node_types_this_stream_resolves
             .why_every_node_type_is_held_as_a_placeholder()
         {
-            return Some(format!(
-                "it is held as its document is written, none of its node code read: \
-                 {why_none_of_its_node_code_is_read}"
+            return Some(StreamFailure::of_the_stream(
+                StreamFailureKind::NodeTypeNotDescribed,
+                format!(
+                    "it is held as its document is written, none of its node code read: \
+                     {why_none_of_its_node_code_is_read}"
+                ),
             ));
         }
         self.compiler.scope(|graph, _tx| {
             graph.traversal().v(()).iter().find_map(|node| {
                 self.node_types_this_stream_resolves
                     .placeholder_of_the_node_type_not_described(&node.node_type)
-                    .map(|placeholder| {
-                        format!(
+                    .map(|placeholder| StreamFailure {
+                        kind: StreamFailureKind::NodeTypeNotDescribed,
+                        place: node.diagnostic_place(),
+                        words: format!(
                             "its node `{}` is of the type `{}`, which its node code did not \
                              describe: {}",
                             node.display_name,
                             node.node_type,
                             placeholder.why_its_node_code_did_not_describe_it
-                        )
+                        ),
                     })
             })
         })
@@ -366,13 +404,28 @@ impl LoadedStreamInThisRuntime {
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
     /// resolves, each node added under its name, and each link connected by
-    /// name as a saved graph's link.
+    /// name as a saved graph's link, each from a function node after the
+    /// others. A link the engine cannot wire is set aside, so the stream opens
+    /// and plays without it.
+    ///
+    /// The load is made as graph edits held for one commit, so it is compiled and announced
+    /// once every node and link stands.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
         lend_directory: Option<&Path>,
     ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
+        self.in_one_commit_on_this_thread(|| {
+            self.load_graph_snapshot_within_the_graph_edits_held(graph, lend_directory)
+        })
+    }
+
+    fn load_graph_snapshot_within_the_graph_edits_held(
+        &self,
+        graph: &GraphSnapshot,
+        lend_directory: Option<&Path>,
+    ) -> Result<()> {
         crate::core::context::refuse_a_stream_clock_this_runtime_cannot_run(
             &graph.clock,
             self.stream_id(),
@@ -398,7 +451,7 @@ impl LoadedStreamInThisRuntime {
                     why_its_node_code_did_not_describe,
                 );
         }
-        let resolution = if self.holding == LoadedStreamHolding::RecordedByTheRuntime {
+        let mut resolution = if self.holding == LoadedStreamHolding::RecordedByTheRuntime {
             resolution.validated_setting_aside_each_link_it_refuses(
                 &self.node_types_this_stream_resolves,
             )?
@@ -441,33 +494,62 @@ impl LoadedStreamInThisRuntime {
                 .ok_or_else(|| Error::GraphError(format!("the graph holds no node `{node}`")))
         };
 
+        let mut links_the_engine_cannot_wire = Vec::new();
+        let mut drawn_link_of_each_link_made = HashMap::new();
         for link in &graph.links {
-            self.connect_a_link_of_a_saved_graph(
-                OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port),
-                InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
-            )
-            .map_err(|refusal| {
-                match resolution
-                    .graph_only_nodes_as_drawn
-                    .variables_as_drawn
-                    .links_resolved_from_a_variable
-                    .iter()
-                    .find(|resolved| resolved.link == *link)
-                {
-                    Some(resolved) => Error::GraphError(format!(
-                        "`GetVariable` node `{}` reads the variable `{}`, which holds \
-                         `{}/{}`, into `{}/{}`, and that link is refused: {refusal}",
-                        resolved.get_variable_node,
-                        resolved.variable,
-                        link.source.node,
-                        link.source.port,
-                        link.target.node,
-                        link.target.port
-                    )),
-                    None => refusal,
+            let refused_as_a_link_of_the_graph = |refusal: Error| match resolution
+                .graph_only_nodes_as_drawn
+                .variables_as_drawn
+                .links_resolved_from_a_variable
+                .iter()
+                .find(|resolved| resolved.link == *link)
+            {
+                Some(resolved) => Error::GraphError(format!(
+                    "`GetVariable` node `{}` reads the variable `{}`, which holds `{}/{}`, \
+                     into `{}/{}`, and that link is refused: {refusal}",
+                    resolved.get_variable_node,
+                    resolved.variable,
+                    link.source.node,
+                    link.source.port,
+                    link.target.node,
+                    link.target.port
+                )),
+                None => refusal,
+            };
+            let made = self
+                .block_on_the_engines_tokio_runtime(connect_impl(
+                    self.live_graph_change(),
+                    OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port),
+                    InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
+                    ALinkConnected::OfASavedGraph,
+                    WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,
+                ))
+                .map_err(refused_as_a_link_of_the_graph)?;
+            match made {
+                ALinkConnectedOrSetAside::Connected(link_id) => {
+                    drawn_link_of_each_link_made.insert(link_id, link);
                 }
-            })?;
+                ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it) => {
+                    links_the_engine_cannot_wire.push(LinkSetAside::because_of(
+                        link.clone(),
+                        &why_the_engine_cannot_wire_it,
+                    ));
+                }
+            }
         }
+        links_the_engine_cannot_wire.extend(self.set_aside_each_link_the_engine_cannot_wire(
+            Vec::new(),
+            &std::collections::HashSet::new(),
+            |link_id| {
+                drawn_link_of_each_link_made
+                    .get(link_id)
+                    .map(|link| (*link).clone())
+            },
+        )?);
+        resolution
+            .graph_only_nodes_as_drawn
+            .links_set_aside
+            .extend(links_the_engine_cannot_wire);
         *self.graph_only_nodes_as_drawn.lock() = resolution.graph_only_nodes_as_drawn;
         self.hold_the_live_values_the_project_store_keeps();
         Ok(())
@@ -710,6 +792,18 @@ fn set_the_saved_value(
         refuse_a_pin_value_a_process_node_cannot_read(node, input, value)?;
     }
     let saved_value_before = set_the_pin(node, input, value);
+    if let Err(refused) =
+        crate::core::graph::refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
+            graph,
+            node_run_id,
+            input,
+        )
+    {
+        if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
+            set_the_pin(node, input, saved_value_before);
+        }
+        return Err(refused);
+    }
     let live_value_before = graph
         .live_input_values()
         .set(node_uuid, input, None, lifetime);

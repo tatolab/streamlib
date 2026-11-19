@@ -186,6 +186,29 @@ fn a_second_node_of_one_view_in_a_stream_is_refused_naming_the_node_holding_it()
     );
 }
 
+/// A node of a view taken out and another of the same view added in one commit is taken: the
+/// node leaving holds the view no longer.
+///
+/// Mental-revert: counting the node pending deletion refuses the new one as a second node of
+/// the view.
+#[test]
+#[serial]
+fn a_node_of_a_view_replaced_by_another_in_one_commit_is_taken() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let deck = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
+
+    stream
+        .stream
+        .in_one_commit_on_this_thread(|| {
+            stream.stream.remove_node(&deck)?;
+            stream.add_a_node(DECK_VIEW_TYPE, "deck-2")
+        })
+        .expect("the node leaving holds the view no longer");
+
+    assert!(stream.stream.the_node_named("deck-2").is_ok());
+    assert!(stream.stream.the_node_named("deck").is_err());
+}
+
 #[test]
 #[serial]
 fn a_node_naming_a_view_that_does_not_open_is_refused_with_why() {
@@ -436,7 +459,7 @@ fn a_reader_that_connects_after_a_write_reads_the_value_its_output_keeps() {
     let beat = the_next_message_read(&mut beat_reader);
     assert_eq!(
         beat.payload,
-        1.0_f32.to_le_bytes().to_vec(),
+        1.0_f64.to_le_bytes().to_vec(),
         "the control value written before the reader connected"
     );
 }

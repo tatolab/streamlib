@@ -37,7 +37,9 @@ use crate::core::runtime::{
     TeardownProgressNoteOfOneStream,
 };
 use crate::core::{Error, Result};
+use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticOnTheWire;
 
+mod edits_its_document_holds_not_live;
 mod input_values_set_live;
 mod live_graph_edits;
 mod live_input_values_at_load_and_stop;
@@ -115,6 +117,13 @@ pub struct LoadedStreamInThisRuntime {
     /// The fragment, variable and interface nodes, and what they resolved to, of the
     /// graph this stream runs, so `graph` renders them as drawn.
     pub(in crate::core::runtime) graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
+    /// Held by the one writer whose graph edits are open on this stream, from the moment they
+    /// open until they close, so two writers' edits never interleave in one commit.
+    pub(in crate::core::runtime) one_writer_of_the_graph_at_a_time: Arc<tokio::sync::Mutex<()>>,
+    /// The thread that opened the batch of graph edits open on this stream, if one is, which a
+    /// start, a stop or a resume on it would wait for itself on.
+    pub(in crate::core::runtime) thread_holding_a_graph_edit_batch:
+        Mutex<Option<std::thread::ThreadId>>,
     /// Whether its playback is stopped and its graph held to read and edit, until its next
     /// start.
     is_held_stopped: AtomicBool,
@@ -125,8 +134,10 @@ pub struct LoadedStreamInThisRuntime {
     one_start_or_stop_at_a_time: Mutex<()>,
     /// Held across each change of an input's value, live or saved, from its check to its
     /// announcement, so the values each helper and island holds, the live values `graph`
-    /// renders and the order the changes are announced in all end on the last change made.
-    one_input_value_change_at_a_time: Mutex<()>,
+    /// renders and the order the changes are announced in all end on the last change made; a
+    /// connect holds it while it judges and makes its link, so a type choice a set puts back
+    /// never meets a link made under the choice it replaced.
+    pub(in crate::core::runtime) one_input_value_change_at_a_time: Arc<Mutex<()>>,
     /// Set by the one request that starts this stream's shutdown thread.
     shutdown_thread_started: AtomicBool,
     /// The step barrier while a stepped stream runs.
@@ -144,6 +155,9 @@ pub struct LoadedStreamInThisRuntime {
     display_name: RwLock<String>,
     /// The project and stream asset the stream is.
     stream_location: StreamLocation,
+    /// Each edit its graph document holds that its running graph did not take, as the
+    /// diagnostic at the part it changes, until the stream is brought to its document.
+    edits_its_document_holds_not_live: Mutex<Vec<DiagnosticOnTheWire>>,
 }
 
 /// What a loaded stream is keyed by and shown as: its id, its display name,
@@ -324,7 +338,10 @@ impl LoadedStreamInThisRuntime {
             )),
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
+            one_writer_of_the_graph_at_a_time: Arc::new(tokio::sync::Mutex::new(())),
+            thread_holding_a_graph_edit_batch: Mutex::new(None),
             is_held_stopped: AtomicBool::new(false),
+            edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -332,7 +349,7 @@ impl LoadedStreamInThisRuntime {
             _graph_change_listener: graph_change_listener,
             teardown_watchdog_budget,
             one_start_or_stop_at_a_time: Mutex::new(()),
-            one_input_value_change_at_a_time: Mutex::new(()),
+            one_input_value_change_at_a_time: Arc::default(),
             shutdown_thread_started: AtomicBool::new(false),
             step_coordinator: Mutex::new(None),
             end_claimed: AtomicBool::new(false),
@@ -436,7 +453,9 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// What this stream's teardown is waiting on, read by its watchdog.
-    fn teardown_progress_note(&self) -> &TeardownProgressNoteOfOneStream {
+    pub(in crate::core::runtime) fn teardown_progress_note(
+        &self,
+    ) -> &TeardownProgressNoteOfOneStream {
         &self
             .this_streams_identity_and_handles
             .teardown_progress_note
@@ -472,9 +491,28 @@ impl LoadedStreamInThisRuntime {
             .publish_on_this_streams_topic(event);
     }
 
+    /// This stream, held for a task that runs an edit made from synchronous code.
+    pub(in crate::core::runtime) fn this_stream_held_for_a_task(
+        &self,
+    ) -> crate::core::Result<Arc<Self>> {
+        self.this_stream.upgrade().ok_or_else(|| {
+            crate::core::Error::Runtime(format!(
+                "stream `{}` is no longer loaded",
+                self.stream_id()
+            ))
+        })
+    }
+
     /// The lifecycle status of this stream.
     pub fn status(&self) -> RuntimeStatus {
         *self.status.lock()
+    }
+
+    /// How many operations are logged on this stream's graph for its next commit to compile,
+    /// for a test that proves an operation logs none.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pending_operations_logged_for_a_test(&self) -> usize {
+        self.compiler.logged_pending_operations().len()
     }
 
     /// How many nodes this stream's live graph holds.
@@ -483,7 +521,23 @@ impl LoadedStreamInThisRuntime {
             .scope_reading(|graph| graph.traversal().v(()).iter().count())
     }
 
+    /// This stream's running graph as drawn, the graph every edit and check reads.
     pub fn to_json(&self) -> Result<serde_json::Value> {
+        serde_json::to_value(self.the_running_graph_rendered())
+            .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+    }
+
+    /// This stream's graph as `graph` answers it: its running graph, or, while its graph
+    /// document holds edits the running graph did not take, the document's graph over it.
+    pub fn the_graph_as_answered(&self) -> Result<serde_json::Value> {
+        let mut graph_response = self.the_running_graph_rendered();
+        self.render_the_document_over_the_live_graph_while_edits_are_not_live(&mut graph_response);
+        serde_json::to_value(graph_response)
+            .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+    }
+
+    /// This stream's running graph, rendered as `graph` answers it.
+    fn the_running_graph_rendered(&self) -> crate::core::json_schema::GraphResponse {
         #[cfg(any(test, feature = "test-support"))]
         crate::core::runtime::graph_renders_and_commits_counted_for_a_test::count_a_graph_render_of(
             self.loaded_stream_identity(),
@@ -535,8 +589,7 @@ impl LoadedStreamInThisRuntime {
             &mut graph_response.nodes,
             value_of_each_graph_input,
         );
-        serde_json::to_value(graph_response)
-            .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+        graph_response
     }
 
     /// Render, under each stateful function node's `function_node_state`

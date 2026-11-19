@@ -3,8 +3,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DiagnosticOnTheWire, DiagnosticPlaceOnTheWire, NodeHealthOnTheWire,
+};
+
 use super::super::components::{
-    ComponentMap, ComponentRenderer, default_component_renderers, default_components,
+    ComponentMap, ComponentRenderer, StateComponent, default_component_renderers,
+    default_components,
 };
 use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{GraphNodePorts, NodeRunId, PortInfo};
@@ -96,6 +101,23 @@ impl std::fmt::Debug for GraphNode {
 }
 
 impl GraphNode {
+    /// Where a diagnostic of this node applies: the node, by its id and name.
+    pub fn diagnostic_place(&self) -> DiagnosticPlaceOnTheWire {
+        DiagnosticPlaceOnTheWire::Node {
+            node_id: self.node_uuid.to_string(),
+            node_name: self.display_name.clone(),
+        }
+    }
+
+    /// The node's health and each diagnostic behind it, read from its state; `None` for a node
+    /// that keeps no state.
+    pub fn health_and_diagnostics(
+        &self,
+    ) -> Option<(NodeHealthOnTheWire, Vec<DiagnosticOnTheWire>)> {
+        self.get::<StateComponent>()
+            .map(|state| state.the_health_of_the_node(&self.diagnostic_place()))
+    }
+
     pub fn new(
         node_type: NodeClassImportPath,
         node_kind: Option<NodeKind>,
@@ -131,11 +153,14 @@ impl GraphNode {
     }
 
     pub(crate) fn runs_its_node(&self) -> bool {
-        use super::super::components::{
-            NodeInstanceComponent, OutOfProcessLinkWiringComponent, PendingDeletionComponent,
-        };
+        use super::super::components::{NodeInstanceComponent, OutOfProcessLinkWiringComponent};
         (self.has::<NodeInstanceComponent>() || self.has::<OutOfProcessLinkWiringComponent>())
-            && !self.has::<PendingDeletionComponent>()
+            && self.stands()
+    }
+
+    /// Whether this node stands: it is not pending deletion.
+    pub fn stands(&self) -> bool {
+        !self.has::<super::super::components::PendingDeletionComponent>()
     }
 
     /// The entries this node's output ports carry now.

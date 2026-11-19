@@ -5,7 +5,7 @@
 //! node, link or port, and the value each input reads while no link feeds it: its live value,
 //! else its saved one, else its declared default.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use parking_lot::RwLock;
 use serde_json::{Map, Value};
@@ -172,13 +172,31 @@ impl LiveInputValuesOfAStream {
     /// leaves says: removed, every one, the project's store forgetting each `kept` one; torn
     /// down at a Stop, to be put back, each on a `reset` input, the `kept` ones held across.
     pub fn forget_the_node(&self, node: Uuid, why: WhyTheNodeLeaves) {
+        self.forget_the_node_but_the_inputs(node, why, &HashSet::new());
+    }
+
+    /// [`Self::forget_the_node`], keeping the value set live on each of `inputs_kept`, which a
+    /// node holding `node`'s UUID after it still has.
+    pub(crate) fn forget_the_node_but_the_inputs(
+        &self,
+        node: Uuid,
+        why: WhyTheNodeLeaves,
+        inputs_kept: &HashSet<String>,
+    ) {
         let forgotten = {
             let mut values = self.values.write();
             match why {
-                WhyTheNodeLeaves::Removed => values.remove(&node),
+                WhyTheNodeLeaves::Removed if inputs_kept.is_empty() => values.remove(&node),
+                WhyTheNodeLeaves::Removed => values.get_mut(&node).map(|values_of_the_node| {
+                    values_of_the_node
+                        .extract_if(.., |input, _| !inputs_kept.contains(input))
+                        .collect()
+                }),
                 WhyTheNodeLeaves::TornDownAtAStop => {
                     if let Some(values_of_the_node) = values.get_mut(&node) {
-                        values_of_the_node.retain(|_, live| live.lifetime.is_kept());
+                        values_of_the_node.retain(|input, live| {
+                            live.lifetime.is_kept() || inputs_kept.contains(input)
+                        });
                         if values_of_the_node.is_empty() {
                             values.remove(&node);
                         }
@@ -347,7 +365,7 @@ pub(crate) fn the_pin_values_with_the_live_ones_over_them(
 }
 
 /// One value a live set makes: the node, by UUID, its input, and the value, `None` taking the
-/// input's live value off.
+/// input's live value off. A set of no value on a Trigger input fires it once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputValueToSetLive {
     /// The node, by UUID.
@@ -398,7 +416,15 @@ pub enum LiveInputValueSetRefusal {
         /// Why, in the runtime's words, naming the node and the input.
         runtime_words: String,
     },
-    /// A helper or island reading one of the values was not handed it.
+    /// The value at `set_index` fires a Trigger input of a node that does not run, so the fire
+    /// would reach no read.
+    TheNodeDoesNotRun {
+        /// The index of the refused fire among those asked.
+        set_index: usize,
+        /// Why the node does not run, as [`crate::core::Error::NodeOfAStreamIsNotRunning`].
+        refusal: crate::core::Error,
+    },
+    /// A helper or island reading one of the values, or a node one fires, was not handed it.
     NotHandedOver(crate::core::Error),
 }
 

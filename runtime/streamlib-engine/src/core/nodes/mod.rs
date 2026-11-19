@@ -9,6 +9,9 @@ pub mod __generated_private;
 mod empty_config;
 mod node_instance_factory;
 mod node_spec;
+mod node_type_ports_described_on_the_wire;
+#[cfg(test)]
+mod node_type_ports_described_on_the_wire_tests;
 mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;
 mod project_view_node;
@@ -25,7 +28,8 @@ pub use __generated_private::{
 };
 
 pub(crate) use __generated_private::{
-    FunctionNodeCallUnderWayInTheFarSide, FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
+    FiresNotHandedToTheFarSide, FunctionNodeCallUnderWayInTheFarSide,
+    FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
     FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use empty_config::EmptyConfig;
@@ -33,6 +37,7 @@ pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
 };
 pub use node_spec::NodeSpec;
+pub use node_type_ports_described_on_the_wire::NodeTypePortsDescribedOnTheWire;
 pub(crate) use node_types_one_stream_resolves::{
     HowANodeOfADescribedTypeRuns, is_a_natively_compiled_node_type,
 };
@@ -42,8 +47,7 @@ pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProce
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 pub(crate) use project_view_node::{
     THE_FAMILY_A_GRAPH_INPUT_DECLARES, is_the_input_of_an_output_a_panel_writes,
-    refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes,
-    the_message_a_value_written_onto_an_output_is, the_names_listed,
+    refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes, the_names_listed,
     the_node_type_of_a_top_level_graph_input, the_refusal_of_a_value_an_output_does_not_carry,
     the_saved_values_without_any_on_an_output_a_panel_writes,
 };

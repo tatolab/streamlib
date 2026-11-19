@@ -9,7 +9,12 @@ use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
 use crate::core::nodes::NODE_REGISTRY;
 
-#[path = "../../tests/support/rig_only_capability_skip.rs"]
+mod recording_far_side_link_delivery;
+pub(crate) use recording_far_side_link_delivery::{
+    ReclaimedLink, RecordingOutOfProcessFarSideLinkDelivery,
+};
+
+#[path = "../../../tests/support/rig_only_capability_skip.rs"]
 pub(crate) mod rig_only_capability_skip;
 
 #[crate::node(
@@ -115,6 +120,22 @@ impl crate::core::ManualNode for MockInputOnlyNode::Node {
     ) -> crate::core::error::Result<()> {
         Ok(())
     }
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
+/// A node reading the Trigger input `in1`, which reads by its pin's default delivery.
+#[crate::node(
+    execution = manual,
+    input("in1", pin_type = Trigger),
+)]
+pub(crate) struct MockTriggerReaderNode;
+
+impl crate::core::ManualNode for MockTriggerReaderNode::Node {
     fn start(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -490,162 +511,6 @@ impl<S: tracing::Subscriber> Layer<S> for CapturedTracingWarnings {
     }
 }
 
-/// One port a far side was asked to drop. Named rather than a tuple so a
-/// swapped port and link id fails the assert instead of passing it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReclaimedLink {
-    pub(crate) port_direction: crate::core::PortDirection,
-    pub(crate) local_port_name: String,
-    pub(crate) link_id: String,
-}
-
-/// A far side past its setup command that records every link it is handed and
-/// every port it is told to drop, holding each handed link's answer cell for the
-/// test to answer.
-///
-/// Clones share what they record, which is how a test reads what the engine
-/// asked of a far side it handed to an envelope.
-#[derive(Clone, Default)]
-pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
-    /// Every link handed over, with the direction it was wired in.
-    pub(crate) late_wired_links:
-        Arc<parking_lot::Mutex<Vec<(crate::core::PortDirection, serde_json::Value)>>>,
-    /// The answer cells handed over, in the order their links were — how a
-    /// test plays a far side that has not answered yet, opened its port, or
-    /// refused.
-    pub(crate) wire_answers_owed:
-        Arc<parking_lot::Mutex<Vec<Arc<crate::core::nodes::OutOfProcessLinkWireReply>>>>,
-    /// Every port the far side was told to drop.
-    pub(crate) reclaimed_links: Arc<parking_lot::Mutex<Vec<ReclaimedLink>>>,
-    /// Every function node island handed over, as the far side received it.
-    pub(crate) late_fed_function_node_islands: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
-    /// Every `(input port, link id)` whose island the far side was told to stop evaluating.
-    pub(crate) unfed_function_node_islands: Arc<parking_lot::Mutex<Vec<(String, String)>>>,
-    /// Every set of unlinked input values handed over, in order.
-    pub(crate) input_values_handed_over:
-        Arc<parking_lot::Mutex<Vec<serde_json::Map<String, serde_json::Value>>>>,
-    /// Every set of exposed config fields handed over, in order.
-    pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
-    /// Whether the far side refuses the input values handed over, as a helper that died does.
-    pub(crate) refuses_input_values: Arc<std::sync::atomic::AtomicBool>,
-    /// Whether the far side refuses the next input values handed over, and takes those after.
-    pub(crate) refuses_input_values_once: Arc<std::sync::atomic::AtomicBool>,
-    /// Run once, as the next input values are handed over: how a test changes a value while a
-    /// node is handed its values.
-    pub(crate) while_input_values_are_handed_over:
-        Arc<parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>>,
-    /// Whether the far side refuses the function node islands handed over, as a helper that died
-    /// does.
-    pub(crate) refuses_function_node_islands: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
-    for RecordingOutOfProcessFarSideLinkDelivery
-{
-    fn hand_over_a_link_wired_after_setup(
-        &self,
-        port_direction: crate::core::PortDirection,
-        link_wiring: &serde_json::Value,
-        answer_cell: Arc<crate::core::nodes::OutOfProcessLinkWireReply>,
-    ) -> crate::core::Result<()> {
-        self.late_wired_links
-            .lock()
-            .push((port_direction, link_wiring.clone()));
-        self.wire_answers_owed.lock().push(answer_cell);
-        Ok(())
-    }
-
-    fn tell_the_far_side_a_link_was_unwired(
-        &self,
-        port_direction: crate::core::PortDirection,
-        local_port_name: &str,
-        link_id: &str,
-    ) -> crate::core::Result<()> {
-        self.reclaimed_links.lock().push(ReclaimedLink {
-            port_direction,
-            local_port_name: local_port_name.to_string(),
-            link_id: link_id.to_string(),
-        });
-        Ok(())
-    }
-
-    fn hand_over_a_function_node_island_wired_after_setup(
-        &self,
-        function_node_island: &serde_json::Value,
-        answer_cell: Arc<crate::core::nodes::OutOfProcessLinkWireReply>,
-    ) -> crate::core::Result<()> {
-        if self
-            .refuses_function_node_islands
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(crate::core::Error::Configuration(
-                "the far side refuses function node islands in this test".to_string(),
-            ));
-        }
-        self.late_fed_function_node_islands
-            .lock()
-            .push(function_node_island.clone());
-        self.wire_answers_owed.lock().push(answer_cell);
-        Ok(())
-    }
-
-    fn tell_the_far_side_a_function_node_island_was_unwired(
-        &self,
-        input_port: &str,
-        link_id: &str,
-    ) -> crate::core::Result<()> {
-        self.unfed_function_node_islands
-            .lock()
-            .push((input_port.to_string(), link_id.to_string()));
-        Ok(())
-    }
-
-    fn hand_over_the_unlinked_input_values(
-        &self,
-        input_values: &serde_json::Map<String, serde_json::Value>,
-    ) -> crate::core::Result<()> {
-        if self
-            .refuses_input_values
-            .load(std::sync::atomic::Ordering::SeqCst)
-            || self
-                .refuses_input_values_once
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(crate::core::Error::Configuration(
-                "the far side refuses input values in this test".to_string(),
-            ));
-        }
-        self.input_values_handed_over
-            .lock()
-            .push(input_values.clone());
-        let while_handed_over = self.while_input_values_are_handed_over.lock().take();
-        if let Some(while_handed_over) = while_handed_over {
-            while_handed_over();
-        }
-        Ok(())
-    }
-
-    fn hand_over_the_config_fields_its_node_exposes_as_inputs(
-        &self,
-        exposed_config_fields: &[String],
-    ) -> crate::core::Result<()> {
-        self.exposed_config_fields_handed_over
-            .lock()
-            .push(exposed_config_fields.to_vec());
-        Ok(())
-    }
-
-    fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str) {
-        for answer_cell in self.wire_answers_owed.lock().iter() {
-            answer_cell.note_the_far_sides_answer(
-                crate::core::nodes::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
-                    reason: reason.to_string(),
-                },
-            );
-        }
-    }
-}
-
 /// A `sleep` parked in a process group of its own, standing in for a helper
 /// process.
 pub(crate) fn a_process_parked_in_a_process_group_of_its_own() -> std::process::Child {
@@ -904,6 +769,56 @@ pub(crate) fn wait_for_every_gpu_submission_made_so_far(gpu: &crate::core::conte
             .expect("the GPU's queue completion reads"),
         "the GPU work made before the test did not complete"
     );
+}
+
+/// A view of a project, of the type `view_type`, reading records on `in1`, as the project's
+/// `views/` folder would bring it: a node type that runs in the app process and that the
+/// stream's function node pool does not evaluate.
+pub(crate) fn a_view_of_a_project_reading_records(
+    view_type: &str,
+) -> streamlib_project_repository::ProjectViewFolderRead {
+    let manifest = a_view_manifest_reading_records();
+    streamlib_project_repository::ProjectViewFolderRead {
+        view_type: view_type.to_owned(),
+        brought_by: streamlib_project_repository::ProjectBringingAView {
+            project: uuid::Uuid::nil(),
+            project_name: "a-project-bringing-a-view".to_owned(),
+            import_folder: None,
+        },
+        folder: std::path::PathBuf::from("/a-project-bringing-a-view/views/program"),
+        manifest: streamlib_project_repository::read_tatolab_view_manifest(&manifest),
+        manifest_as_written: Some(manifest),
+    }
+}
+
+/// Write into `project_directory`'s `views/` the view `view_folder_name`, reading records on
+/// `in1`, which the project then brings as a node type that runs in the app process.
+pub(crate) fn a_view_reading_records_in(
+    project_directory: &std::path::Path,
+    view_folder_name: &str,
+) {
+    let folder = project_directory
+        .join(streamlib_project_repository::PROJECT_VIEWS_DIRECTORY)
+        .join(view_folder_name);
+    streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        &folder,
+        streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+    )
+    .expect("the view's folder");
+    std::fs::write(
+        folder.join(streamlib_project_repository::TATOLAB_VIEW_MANIFEST_FILE_NAME),
+        serde_json::to_vec(&a_view_manifest_reading_records()).expect("the manifest serializes"),
+    )
+    .expect("the view's manifest");
+}
+
+fn a_view_manifest_reading_records() -> serde_json::Value {
+    serde_json::json!({
+        "contract": "1.0", "title": "Program", "description": "What plays out.",
+        "entry": "index.html", "placement": "node",
+        "inputs": [{ "name": "in1", "family": "records", "description": "What it shows." }],
+        "outputs": []
+    })
 }
 
 #[cfg(test)]

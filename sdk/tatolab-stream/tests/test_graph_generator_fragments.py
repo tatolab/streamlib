@@ -92,11 +92,11 @@ def places_one_that_names_a_clock(stream_builder: StreamBuilder) -> None:
 INVERT_TWICE_FRAGMENT: dict[str, Any] = {
     "nodes": [
         {"name": "graphinput", "type": GRAPH_INPUT_TYPE,
-         "config": {"port": "video", "family": "packets"}},
-        {"name": "first", "type": FRAME_INVERTER_TYPE, "config": {"strength": 8}},
-        {"name": "second", "type": FRAME_INVERTER_TYPE, "config": {}},
+         "input_values": {"port": "video", "family": "packets"}},
+        {"name": "first", "type": FRAME_INVERTER_TYPE, "input_values": {"strength": 8}},
+        {"name": "second", "type": FRAME_INVERTER_TYPE, "input_values": {}},
         {"name": "graphoutput", "type": GRAPH_OUTPUT_TYPE,
-         "config": {"port": "video", "family": "packets"}},
+         "input_values": {"port": "video", "family": "packets"}},
     ],
     "links": [
         {"source": {"node": "graphinput", "port": "value"},
@@ -113,15 +113,15 @@ def look_placed_as(name: str) -> dict[str, Any]:
     return {
         "name": name,
         "type": "test_graph_generator_fragments:look",
-        "config": {},
+        "input_values": {},
         "fragment": {
             "nodes": [
                 {"name": "graphinput", "type": GRAPH_INPUT_TYPE,
-                 "config": {"port": "video", "family": "packets"}},
+                 "input_values": {"port": "video", "family": "packets"}},
                 {"name": "soft", "type": "test_graph_generator_fragments:invert_twice",
-                 "config": {"strength": 8}, "fragment": INVERT_TWICE_FRAGMENT},
+                 "input_values": {"strength": 8}, "fragment": INVERT_TWICE_FRAGMENT},
                 {"name": "graphoutput", "type": GRAPH_OUTPUT_TYPE,
-                 "config": {"port": "video", "family": "packets"}},
+                 "input_values": {"port": "video", "family": "packets"}},
             ],
             "links": [
                 {"source": {"node": "graphinput", "port": "value"},
@@ -137,7 +137,7 @@ def test_a_generator_looping_over_a_list_places_one_fragment_in_each_stream() ->
     for rig, camera_name in [(front_rig, "front"), (back_rig, "back")]:
         assert run_graph_generator(rig)["nodes"] == [
             look_placed_as(f"{camera_name}-look"),
-            {"name": f"{camera_name}-reader", "type": BRIGHTNESS_READER_TYPE, "config": {}},
+            {"name": f"{camera_name}-reader", "type": BRIGHTNESS_READER_TYPE, "input_values": {}},
         ]
         assert run_graph_generator(rig)["links"] == [
             {"source": {"node": f"{camera_name}-look", "port": "video"},
@@ -192,8 +192,8 @@ def test_a_setting_the_generator_does_not_promote_is_refused_naming_those_it_doe
     )
 
 
-def test_a_node_class_given_promoted_settings_is_refused_naming_config() -> None:
-    with pytest.raises(TypeError, match=r"pass its settings as `config=\{\.\.\.\}`"):
+def test_a_node_class_given_promoted_settings_is_refused_naming_input_values() -> None:
+    with pytest.raises(TypeError, match=r"pass its values as `input_values=\{\.\.\.\}`"):
         StreamBuilder("rig").add(FrameInverter, strength=3)  # pyright: ignore[reportCallIssue]
 
 

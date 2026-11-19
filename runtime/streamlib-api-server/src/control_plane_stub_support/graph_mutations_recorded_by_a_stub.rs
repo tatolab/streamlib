@@ -18,6 +18,18 @@ pub(crate) type ArmedAddNodeRefusal = ::std::sync::Arc<
     >,
 >;
 
+/// What a stub runtime refuses each edit that reaches a running stream only once the project's
+/// graph documents hold it with, when the test has armed one, standing in for a running graph
+/// that cannot take it.
+pub(crate) type ArmedRefusalOfEachEditTheDocumentsHoldFirst =
+    ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
+
+/// Each edit a front end held on a stub runtime as not live, with the refusal it was held for,
+/// in call order.
+pub(crate) type RecordedEditsHeldNotLive = ::std::sync::Arc<
+    ::parking_lot::Mutex<Vec<(::streamlib_project_repository::StreamGraphOperation, String)>>,
+>;
+
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
         fn add_node_async(
@@ -67,6 +79,28 @@ macro_rules! graph_mutation_ops_record_the_call {
             _link: &::streamlib_project_repository::StreamGraphDocumentLink,
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
+        }
+        fn the_verdict_of_a_link_between_two_running_nodes(
+            &self,
+            _link: &::streamlib_project_repository::StreamGraphDocumentLink,
+        ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {
+            None
+        }
+        fn the_verdict_of_a_link_between_two_node_types(
+            &self,
+            _from: ::streamlib::sdk::runtime::PortOfANodeOfAType<'_>,
+            _to: ::streamlib::sdk::runtime::PortOfANodeOfAType<'_>,
+        ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {
+            None
+        }
+        fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+            &'a self,
+            _held: &'a ::streamlib_project_repository::StreamGraphDocumentLinkEnd,
+            _held_direction: ::streamlib::sdk::error::PortDirection,
+            node_types_ports: &'a [::streamlib::sdk::runtime::ANodeTypesPort<'a>],
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'a, ::streamlib::sdk::error::Result<::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>>>> {
+            let answers = node_types_ports.iter().map(|_| Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))).collect();
+            Box::pin(async move { Ok(answers) })
         }
         fn what_a_connect_makes_of_a_link_at_a_placed_level(
             &self,
@@ -144,6 +178,24 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<bool> {
             Ok(true)
         }
+        fn open_a_graph_edit_batch(
+            self: ::std::sync::Arc<Self>,
+        ) -> ::streamlib::sdk::error::Result<
+            ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch>,
+        > {
+            Ok(::std::boxed::Box::new(
+                $crate::control_plane_stub_support::GraphEditsOfAStubAppliedOneByOne(self),
+            ))
+        }
+        fn hold_an_edit_its_document_holds_not_live(
+            &self,
+            graph_operation: &::streamlib_project_repository::StreamGraphOperation,
+            refusal: &str,
+        ) {
+            self.recorded_edits_held_not_live
+                .lock()
+                .push((graph_operation.clone(), refusal.to_owned()));
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -169,6 +221,10 @@ macro_rules! graph_mutation_ops_record_the_call {
                 applied,
                 ::streamlib_project_repository::StreamGraphOperation::AddNode { .. }
             );
+            let refusal_of_an_edit_the_documents_hold_first = graph_operation
+                .reaches_a_running_stream_once_the_documents_hold_it()
+                .then(|| self.armed_refusal_of_each_edit_the_documents_hold_first.lock().clone())
+                .flatten();
             self.recorded_graph_mutations.lock().push(graph_operation);
             let armed_refusal = is_an_add
                 .then(|| self.armed_add_node_refusal.lock().clone())
@@ -180,6 +236,9 @@ macro_rules! graph_mutation_ops_record_the_call {
                 }
                 if let Some(refusal) = name_refused {
                     return Err(refusal.into());
+                }
+                if let Some(refusal) = refusal_of_an_edit_the_documents_hold_first {
+                    return Err(::streamlib::sdk::error::Error::Runtime(refusal));
                 }
                 match armed_refusal {
                     Some(the_refusal) => Err(the_refusal()),
@@ -233,3 +292,27 @@ macro_rules! graph_mutation_ops_record_the_call {
 }
 
 pub(crate) use graph_mutation_ops_record_the_call;
+
+/// A batch of graph edits on a stub runtime: each edit applied as the stub applies one, and
+/// the batch closed with nothing left to judge.
+pub(crate) struct GraphEditsOfAStubAppliedOneByOne<Stub>(pub(crate) ::std::sync::Arc<Stub>);
+
+impl<Stub: ::streamlib::sdk::runtime::RuntimeOperations + 'static>
+    ::streamlib::sdk::runtime::GraphEditBatch for GraphEditsOfAStubAppliedOneByOne<Stub>
+{
+    fn apply_a_stream_graph_operation_live(
+        &self,
+        graph_operation: ::streamlib_project_repository::StreamGraphOperation,
+    ) -> ::streamlib::sdk::runtime::BoxFuture<
+        '_,
+        ::streamlib::sdk::error::Result<::streamlib_project_repository::StreamGraphOperation>,
+    > {
+        self.0.apply_a_stream_graph_operation_live(graph_operation)
+    }
+
+    fn close(
+        self: ::std::boxed::Box<Self>,
+    ) -> ::std::result::Result<(), ::streamlib::sdk::runtime::GraphEditBatchRefused> {
+        Ok(())
+    }
+}
