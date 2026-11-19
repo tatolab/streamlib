@@ -716,15 +716,15 @@ fn the_same_directory(first: &Path, second: &Path) -> bool {
     }
 }
 
-/// Record the stream `stream_record` records failed as `kind`, with `failed_because`; a record
-/// not written is logged.
+/// Record the stream `stream_record` records failed for `failure`; a record not written is
+/// logged.
 fn record_a_stream_held_from_its_document_failed(
     stream_records: &StreamRecordsInTheStateDirectory,
     stream_record: &mut StreamRecord,
-    kind: StreamFailureKind,
-    failed_because: String,
+    failure: StreamFailure,
 ) -> Result<StreamStateAfterItsRun> {
-    stream_record.fail_as(kind, failed_because.clone());
+    let failed_because = failure.words.clone();
+    stream_record.record_the_failure(failure);
     if let Err(not_written) = stream_records
         .write_the_record_a_load_made(stream_record.clone())
         .map(|written| *stream_record = written)

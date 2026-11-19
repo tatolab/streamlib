@@ -23,6 +23,18 @@ pub struct StreamConditionOnTheWire {
     pub diagnostics: Vec<DiagnosticOnTheWire>,
 }
 
+impl StreamConditionOnTheWire {
+    /// The condition of a healthy stream with `load` and `playback`.
+    pub fn healthy(load: StreamLoadOnTheWire, playback: StreamPlaybackOnTheWire) -> Self {
+        Self {
+            load,
+            playback,
+            health: StreamHealthOnTheWire::Healthy,
+            diagnostics: Vec::new(),
+        }
+    }
+}
+
 /// Whether a stream's graph is loaded in the runtime. The set grows: a value a client does not
 /// know reads as `not_loaded`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

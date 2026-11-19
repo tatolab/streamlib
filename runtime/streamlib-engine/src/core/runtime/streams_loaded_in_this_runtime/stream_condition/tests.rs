@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticRecoveryOnTheWire;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DiagnosticKindOnTheWire, DiagnosticRecoveryOnTheWire,
+};
 
 use super::*;
 
@@ -127,7 +129,7 @@ fn each_failure_kind_is_answered_as_the_diagnostic_kind_of_its_name() {
 }
 
 #[test]
-fn an_action_under_way_shows_the_load_and_playback_it_changes_and_clears_the_diagnostics() {
+fn an_action_that_loads_starts_or_unloads_a_stream_shows_its_change_and_clears_its_diagnostics() {
     let failed_loaded_and_stopped = the_condition_of_a_stream(
         StreamLoadOnTheWire::Loaded,
         StreamPlaybackOnTheWire::Stopped,
@@ -137,19 +139,15 @@ fn an_action_under_way_shows_the_load_and_playback_it_changes_and_clears_the_dia
         ),
         Vec::new(),
     );
-    let playing_and_loaded = the_condition_of_a_stream(
+    let playing_and_loaded = StreamConditionOnTheWire::healthy(
         StreamLoadOnTheWire::Loaded,
         StreamPlaybackOnTheWire::Playing,
-        None,
-        Vec::new(),
     );
-    let not_loaded = the_condition_of_a_stream(
+    let not_loaded = StreamConditionOnTheWire::healthy(
         StreamLoadOnTheWire::NotLoaded,
         StreamPlaybackOnTheWire::Stopped,
-        None,
-        Vec::new(),
     );
-    for (kind, as_listed, load, playback) in [
+    for (kind, listed, load, playback) in [
         (
             StreamActionKind::Load,
             &failed_loaded_and_stopped,
@@ -175,12 +173,6 @@ fn an_action_under_way_shows_the_load_and_playback_it_changes_and_clears_the_dia
             StreamPlaybackOnTheWire::Starting,
         ),
         (
-            StreamActionKind::Stop,
-            &playing_and_loaded,
-            StreamLoadOnTheWire::Loaded,
-            StreamPlaybackOnTheWire::Stopping,
-        ),
-        (
             StreamActionKind::Close,
             &playing_and_loaded,
             StreamLoadOnTheWire::Unloading,
@@ -200,14 +192,36 @@ fn an_action_under_way_shows_the_load_and_playback_it_changes_and_clears_the_dia
         ),
     ] {
         assert_eq!(
-            the_condition_while_an_action_works_on_it(kind, as_listed),
-            StreamConditionOnTheWire {
-                load,
-                playback,
-                health: StreamHealthOnTheWire::Healthy,
-                diagnostics: Vec::new(),
-            },
-            "{kind:?} on {as_listed:?}"
+            the_condition_while_an_action_works_on_it(kind, listed.clone()),
+            StreamConditionOnTheWire::healthy(load, playback),
+            "{kind:?} on {listed:?}"
         );
     }
+}
+
+#[test]
+fn a_stop_under_way_shows_the_stream_stopping_and_keeps_its_health() {
+    let degraded = the_condition_of_a_stream(
+        StreamLoadOnTheWire::Loaded,
+        StreamPlaybackOnTheWire::Playing,
+        None,
+        vec![a_diagnostic(
+            DiagnosticKindOnTheWire::NodeRaising,
+            a_node_place("blur"),
+        )],
+    );
+    assert_eq!(
+        the_condition_while_an_action_works_on_it(StreamActionKind::Stop, degraded.clone()),
+        StreamConditionOnTheWire {
+            playback: StreamPlaybackOnTheWire::Stopping,
+            ..degraded.clone()
+        }
+    );
+    assert_eq!(
+        the_condition_while_an_action_works_on_it(
+            StreamActionKind::MakeTheVenvCurrent,
+            degraded.clone()
+        ),
+        degraded
+    );
 }

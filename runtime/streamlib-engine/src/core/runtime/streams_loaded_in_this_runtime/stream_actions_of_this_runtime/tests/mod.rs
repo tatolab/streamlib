@@ -386,19 +386,6 @@ impl ProjectWithGraphDocuments {
     }
 }
 
-/// The condition of a healthy stream with `load` and `playback`.
-fn a_healthy_condition(
-    load: StreamLoadOnTheWire,
-    playback: StreamPlaybackOnTheWire,
-) -> StreamConditionOnTheWire {
-    StreamConditionOnTheWire {
-        load,
-        playback,
-        health: StreamHealthOnTheWire::Healthy,
-        diagnostics: Vec::new(),
-    }
-}
-
 fn records_in(streams_directory: &Path) -> StreamRecordsInTheStateDirectory {
     StreamRecordsInTheStateDirectory::open(streams_directory).expect("the records open")
 }

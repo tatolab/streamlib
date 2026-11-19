@@ -8,26 +8,12 @@
 use std::fmt;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire,
-    StreamConditionOnTheWire, StreamHealthOnTheWire, StreamLoadOnTheWire, StreamPlaybackOnTheWire,
+    DiagnosticOnTheWire, DiagnosticPlaceOnTheWire, StreamConditionOnTheWire, StreamHealthOnTheWire,
+    StreamLoadOnTheWire, StreamPlaybackOnTheWire,
 };
 
 use super::machine_state_directory::StreamFailureKind;
 use super::project_stream_action_queue::StreamActionKind;
-
-impl StreamFailureKind {
-    /// The diagnostic kind a failure of this kind is answered as.
-    pub fn on_the_wire(self) -> DiagnosticKindOnTheWire {
-        match self {
-            Self::ProjectVenvNotMade => DiagnosticKindOnTheWire::ProjectVenvNotMade,
-            Self::LoadRefused => DiagnosticKindOnTheWire::LoadRefused,
-            Self::StartRefused => DiagnosticKindOnTheWire::StartRefused,
-            Self::NodeTypeNotDescribed => DiagnosticKindOnTheWire::NodeTypeNotDescribed,
-            Self::LinkRefused => DiagnosticKindOnTheWire::LinkRefused,
-            Self::KeepsCrashingTheRuntime => DiagnosticKindOnTheWire::KeepsCrashingTheRuntime,
-        }
-    }
-}
 
 /// Why a stream cannot play: what its failure is, where it applies, in the runtime's words.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,25 +86,26 @@ pub(crate) fn the_condition_of_a_stream(
     }
 }
 
-/// The condition of a stream whose `condition` was `as_listed` while a stream action of `kind`
-/// works on it: loading or unloading, starting or stopping, as the action does, with no
-/// diagnostic, since the action retries or ends what failed.
+/// The condition of a stream `listed` so while a stream action of `kind` works on it: loading
+/// or unloading, starting or stopping, as the action does. An action that loads, starts or
+/// unloads it retries or ends what failed, so it shows healthy; a stop keeps the listed health
+/// and diagnostics.
 pub(crate) fn the_condition_while_an_action_works_on_it(
     kind: StreamActionKind,
-    as_listed: &StreamConditionOnTheWire,
+    listed: StreamConditionOnTheWire,
 ) -> StreamConditionOnTheWire {
-    let loaded = as_listed.load == StreamLoadOnTheWire::Loaded;
+    let loaded = listed.load == StreamLoadOnTheWire::Loaded;
     let plays = matches!(
-        as_listed.playback,
+        listed.playback,
         StreamPlaybackOnTheWire::Playing
             | StreamPlaybackOnTheWire::Paused
             | StreamPlaybackOnTheWire::Starting
     );
-    let (load, playback) = match kind {
+    match kind {
         StreamActionKind::Open | StreamActionKind::Load | StreamActionKind::ReloadAtStart => {
-            (StreamLoadOnTheWire::Loading, as_listed.playback)
+            StreamConditionOnTheWire::healthy(StreamLoadOnTheWire::Loading, listed.playback)
         }
-        StreamActionKind::StartPlayback => (
+        StreamActionKind::StartPlayback => StreamConditionOnTheWire::healthy(
             if loaded {
                 StreamLoadOnTheWire::Loaded
             } else {
@@ -126,26 +113,25 @@ pub(crate) fn the_condition_while_an_action_works_on_it(
             },
             StreamPlaybackOnTheWire::Starting,
         ),
-        StreamActionKind::Stop => (as_listed.load, StreamPlaybackOnTheWire::Stopping),
-        StreamActionKind::Close | StreamActionKind::Remove | StreamActionKind::Delete => (
-            if loaded {
-                StreamLoadOnTheWire::Unloading
-            } else {
-                as_listed.load
-            },
-            if plays {
-                StreamPlaybackOnTheWire::Stopping
-            } else {
-                as_listed.playback
-            },
-        ),
-        StreamActionKind::MakeTheVenvCurrent => (as_listed.load, as_listed.playback),
-    };
-    StreamConditionOnTheWire {
-        load,
-        playback,
-        health: StreamHealthOnTheWire::Healthy,
-        diagnostics: Vec::new(),
+        StreamActionKind::Stop => StreamConditionOnTheWire {
+            playback: StreamPlaybackOnTheWire::Stopping,
+            ..listed
+        },
+        StreamActionKind::Close | StreamActionKind::Remove | StreamActionKind::Delete => {
+            StreamConditionOnTheWire::healthy(
+                if loaded {
+                    StreamLoadOnTheWire::Unloading
+                } else {
+                    listed.load
+                },
+                if plays {
+                    StreamPlaybackOnTheWire::Stopping
+                } else {
+                    listed.playback
+                },
+            )
+        }
+        StreamActionKind::MakeTheVenvCurrent => listed,
     }
 }
 

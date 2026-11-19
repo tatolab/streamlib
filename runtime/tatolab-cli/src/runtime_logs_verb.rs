@@ -508,6 +508,7 @@ mod tests {
         serde_json::from_value(serde_json::json!({
             "stream": stream, "display_name": display_name, "state": "running",
             "location": null, "node_count": 1, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
+            "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []},
         }))
         .unwrap()
     }

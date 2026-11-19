@@ -338,7 +338,7 @@ impl Runner {
                         );
                         if let Err(not_written) =
                             stream_records.change_the_record(&stream_id, |recorded| {
-                                recorded.fail_as(why_it_cannot_play.kind, why_it_cannot_play.words);
+                                recorded.record_the_failure(why_it_cannot_play);
                             })
                         {
                             tracing::error!(
@@ -494,18 +494,14 @@ impl Runner {
                 None if crashes_in_a_row_before == 0 => continue,
                 None => record.runtime_crashes_in_a_row_implicating_it = 0,
             }
-            let counted = (
-                record.runtime_crashes_in_a_row_implicating_it,
-                record.failed_because.clone(),
-                record.failed_as,
-            );
+            let crashes_in_a_row = record.runtime_crashes_in_a_row_implicating_it;
+            let failure = record.failure();
             if let Err(not_written) =
                 stream_records.change_the_record(&record.stream_id, |recorded| {
-                    (
-                        recorded.runtime_crashes_in_a_row_implicating_it,
-                        recorded.failed_because,
-                        recorded.failed_as,
-                    ) = counted;
+                    recorded.runtime_crashes_in_a_row_implicating_it = crashes_in_a_row;
+                    if let Some(failure) = failure {
+                        recorded.record_the_failure(failure);
+                    }
                 })
             {
                 tracing::error!(
@@ -588,8 +584,7 @@ impl Runner {
             return record_a_stream_held_from_its_document_failed(
                 stream_records,
                 stream_record,
-                why_it_cannot_play.kind,
-                why_it_cannot_play.words,
+                why_it_cannot_play,
             );
         }
         if playback_after_the_load == ProjectPlaybackAfterItsLoad::HeldStopped {
@@ -843,8 +838,7 @@ pub(super) fn record_a_refused_load_failed(
     record_a_stream_held_from_its_document_failed(
         stream_records,
         stream_record,
-        kind,
-        refusal.to_string(),
+        StreamFailure::of_the_stream(kind, refusal.to_string()),
     )
 }
 

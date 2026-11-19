@@ -394,7 +394,7 @@ fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loa
                 "a-hosted",
                 StreamListingState::Running,
                 Some(1),
-                a_healthy_condition(
+                StreamConditionOnTheWire::healthy(
                     StreamLoadOnTheWire::Loaded,
                     StreamPlaybackOnTheWire::Playing,
                 ),
@@ -404,7 +404,7 @@ fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loa
             "b-recorded",
             StreamListingState::Running,
             Some(1),
-            a_healthy_condition(
+            StreamConditionOnTheWire::healthy(
                 StreamLoadOnTheWire::Loaded,
                 StreamPlaybackOnTheWire::Playing,
             ),
@@ -413,7 +413,7 @@ fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loa
             "c-stopped",
             StreamListingState::Stopped,
             None,
-            a_healthy_condition(
+            StreamConditionOnTheWire::healthy(
                 StreamLoadOnTheWire::NotLoaded,
                 StreamPlaybackOnTheWire::Stopped,
             ),
@@ -422,7 +422,7 @@ fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loa
             "d-not-re-loaded",
             StreamListingState::Running,
             None,
-            a_healthy_condition(
+            StreamConditionOnTheWire::healthy(
                 StreamLoadOnTheWire::NotLoaded,
                 StreamPlaybackOnTheWire::Playing,
             ),
@@ -430,6 +430,45 @@ fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loa
     ];
     expected.sort_by(|first, second| first.stream_id.cmp(&second.stream_id));
     assert_eq!(runner.list_streams(), expected);
+}
+
+#[test]
+#[serial]
+fn a_failed_record_not_loaded_is_listed_not_loaded_stopped_and_failed_with_its_kind_and_recovery() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project = ProjectWithGraphDocuments::with_no_venv();
+    let mut failed = a_record_of(&project, "camera");
+    failed.fail_as(
+        StreamFailureKind::KeepsCrashingTheRuntime,
+        "it was implicated in the runtime's last 2 crashes in a row".to_owned(),
+    );
+    records_in(state_directory.path()).write(&failed).unwrap();
+
+    let listed = runner
+        .list_streams()
+        .into_iter()
+        .find(|listed| listed.stream_id == failed.stream_id)
+        .unwrap();
+
+    assert_eq!(listed.state, StreamListingState::Failed);
+    assert_eq!(
+        listed.condition,
+        StreamConditionOnTheWire {
+            load: StreamLoadOnTheWire::NotLoaded,
+            playback: StreamPlaybackOnTheWire::Stopped,
+            health: StreamHealthOnTheWire::Failed,
+            diagnostics: vec![DiagnosticOnTheWire::of(
+                DiagnosticKindOnTheWire::KeepsCrashingTheRuntime,
+                DiagnosticPlaceOnTheWire::Stream,
+                "it was implicated in the runtime's last 2 crashes in a row".to_owned(),
+            )],
+        }
+    );
+    assert_eq!(
+        listed.condition.diagnostics[0].recovery,
+        streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticRecoveryOnTheWire::RetryTheLoad
+    );
 }
 
 #[test]
@@ -642,7 +681,7 @@ fn a_run_starts_the_stream_under_its_locations_id_and_records_it() {
             state: StreamListingState::Running,
             node_count: Some(1),
             failed_because: None,
-            condition: a_healthy_condition(
+            condition: StreamConditionOnTheWire::healthy(
                 StreamLoadOnTheWire::Loaded,
                 StreamPlaybackOnTheWire::Playing,
             ),
@@ -656,7 +695,7 @@ fn a_run_starts_the_stream_under_its_locations_id_and_records_it() {
             state: StreamListingState::Running,
             node_count: Some(1),
             failed_because: None,
-            condition: a_healthy_condition(
+            condition: StreamConditionOnTheWire::healthy(
                 StreamLoadOnTheWire::Loaded,
                 StreamPlaybackOnTheWire::Playing,
             ),

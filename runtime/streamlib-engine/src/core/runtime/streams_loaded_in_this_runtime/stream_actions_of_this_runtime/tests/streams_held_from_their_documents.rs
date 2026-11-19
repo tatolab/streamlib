@@ -295,6 +295,12 @@ fn a_stream_whose_graph_holds_a_link_its_validation_refuses_is_held_with_that_li
         listed.failed_because.as_deref(),
         Some(why_it_cannot_play.words.as_str())
     );
+    assert_eq!(
+        listed.condition.load,
+        StreamLoadOnTheWire::Loaded,
+        "a stream failed for a link set aside holds its graph to read and edit"
+    );
+    assert_eq!(listed.condition.playback, StreamPlaybackOnTheWire::Stopped);
     assert_eq!(listed.condition.health, StreamHealthOnTheWire::Failed);
     assert_eq!(
         listed.condition.diagnostics,

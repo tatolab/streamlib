@@ -346,19 +346,24 @@ pub(crate) async fn get_graph(
         Ok(stream_operations) => stream_operations,
         Err(refusal) => return *refusal,
     };
-    let graph = match stream_operations.to_json_async().await {
-        Ok(mut graph) => give_the_stream_graphs_their_condition(
-            &state.operations_on_the_loaded_streams,
-            std::slice::from_mut(&mut graph),
-        )
-        .await
-        .map(|()| graph),
-        Err(export_failure) => Err(export_failure),
-    };
-    match graph {
+    match the_stream_graph_with_its_condition(&state, stream_operations.as_ref()).await {
         Ok(graph) => Json(graph).into_response(),
         Err(export_failure) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &export_failure),
     }
+}
+
+/// The graph `stream_operations` exports, with its stream's condition.
+async fn the_stream_graph_with_its_condition(
+    state: &AppState,
+    stream_operations: &dyn RuntimeOperations,
+) -> Result<Value> {
+    let mut graph = stream_operations.to_json_async().await?;
+    give_the_stream_graphs_their_condition(
+        &state.operations_on_the_loaded_streams,
+        std::slice::from_mut(&mut graph),
+    )
+    .await?;
+    Ok(graph)
 }
 
 #[utoipa::path(

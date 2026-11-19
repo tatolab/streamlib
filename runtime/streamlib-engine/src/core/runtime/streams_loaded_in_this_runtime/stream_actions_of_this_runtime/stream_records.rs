@@ -106,9 +106,7 @@ impl Runner {
             return None;
         }
         match self.stream_record_of_the_id(stream.stream_id()) {
-            Ok(Some(StreamRecordAsRead::Current(record))) => record
-                .failure()
-                .map(|(kind, words)| StreamFailure::of_the_stream(kind, words.to_owned())),
+            Ok(Some(StreamRecordAsRead::Current(record))) => record.failure(),
             _ => None,
         }
     }
@@ -124,12 +122,30 @@ impl Runner {
                 let why_it_cannot_play = stream
                     .why_its_graph_as_held_keeps_this_stream_from_playing()
                     .or_else(|| self.why_the_record_of_a_loaded_stream_holds_it_failed(stream));
-                let playback = if is_paused(stream.status()) {
-                    StreamPlaybackOnTheWire::Paused
-                } else if why_it_cannot_play.is_some() || stream.is_held_stopped() {
-                    StreamPlaybackOnTheWire::Stopped
+                let paused = is_paused(stream.status());
+                let held_stopped = stream.is_held_stopped();
+                let failed = why_it_cannot_play.is_some();
+                let (state, playback) = if paused {
+                    (
+                        if failed {
+                            StreamListingState::Failed
+                        } else {
+                            StreamListingState::Paused
+                        },
+                        StreamPlaybackOnTheWire::Paused,
+                    )
+                } else if failed {
+                    (StreamListingState::Failed, StreamPlaybackOnTheWire::Stopped)
+                } else if held_stopped {
+                    (
+                        StreamListingState::Stopped,
+                        StreamPlaybackOnTheWire::Stopped,
+                    )
                 } else {
-                    StreamPlaybackOnTheWire::Playing
+                    (
+                        StreamListingState::Running,
+                        StreamPlaybackOnTheWire::Playing,
+                    )
                 };
                 let condition = the_condition_of_a_stream(
                     StreamLoadOnTheWire::Loaded,
@@ -141,15 +157,7 @@ impl Runner {
                     stream_id: stream.stream_id().to_string(),
                     display_name: stream.display_name(),
                     stream_location: Some(stream.stream_location().clone()),
-                    state: if why_it_cannot_play.is_some() {
-                        StreamListingState::Failed
-                    } else if is_paused(stream.status()) {
-                        StreamListingState::Paused
-                    } else if stream.is_held_stopped() {
-                        StreamListingState::Stopped
-                    } else {
-                        StreamListingState::Running
-                    },
+                    state,
                     node_count: Some(stream.node_count()),
                     failed_because: why_it_cannot_play.map(|failure| failure.words),
                     condition,
@@ -336,29 +344,15 @@ impl Runner {
     }
 }
 
-/// The condition of the stream `record` records, not loaded: paused, stopped or playing as it is
-/// recorded, a stream closed or failed stopped, and failed as its record says.
+/// The condition of the stream `record` records, not loaded: its playback and failure as its
+/// record says.
 fn the_condition_of_a_stream_recorded_not_loaded(
     record: &StreamRecord,
 ) -> StreamConditionOnTheWire {
-    let failure = record.failure();
-    let playback = if record.paused {
-        StreamPlaybackOnTheWire::Paused
-    } else if record.stopped || record.closed || failure.is_some() {
-        StreamPlaybackOnTheWire::Stopped
-    } else {
-        StreamPlaybackOnTheWire::Playing
-    };
     the_condition_of_a_stream(
         StreamLoadOnTheWire::NotLoaded,
-        playback,
-        failure.map(|(kind, words)| {
-            DiagnosticOnTheWire::of(
-                kind.on_the_wire(),
-                DiagnosticPlaceOnTheWire::Stream,
-                words.to_owned(),
-            )
-        }),
+        record.playback(),
+        record.failure().as_ref().map(StreamFailure::diagnostic),
         Vec::new(),
     )
 }

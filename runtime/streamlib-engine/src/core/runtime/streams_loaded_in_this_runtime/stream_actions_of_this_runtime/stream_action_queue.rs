@@ -175,7 +175,7 @@ impl Runner {
                         listing.failed_because = None;
                         listing.condition = the_condition_while_an_action_works_on_it(
                             action.kind,
-                            &listing.condition,
+                            listing.condition.clone(),
                         );
                         listing.stream_action_under_way = Some(working_on_it.clone());
                     }
@@ -188,11 +188,9 @@ impl Runner {
                         failed_because: None,
                         condition: the_condition_while_an_action_works_on_it(
                             action.kind,
-                            &the_condition_of_a_stream(
+                            StreamConditionOnTheWire::healthy(
                                 StreamLoadOnTheWire::NotLoaded,
                                 StreamPlaybackOnTheWire::Stopped,
-                                None,
-                                Vec::new(),
                             ),
                         ),
                         capture_devices_whose_access_was_never_asked_for: Vec::new(),

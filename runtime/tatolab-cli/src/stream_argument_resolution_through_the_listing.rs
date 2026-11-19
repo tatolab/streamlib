@@ -158,8 +158,8 @@ mod tests {
     use std::path::PathBuf;
 
     use streamlib_runtime_client_contract::local_api_wire_contract::{
-        ListedStreamState, StreamConditionOnTheWire, StreamHealthOnTheWire, StreamLoadOnTheWire,
-        StreamLocationOnTheWire, StreamPlaybackOnTheWire,
+        ListedStreamState, StreamConditionOnTheWire, StreamLoadOnTheWire, StreamLocationOnTheWire,
+        StreamPlaybackOnTheWire,
     };
 
     use super::*;
@@ -182,12 +182,10 @@ mod tests {
                 .unwrap()
             }),
             state,
-            condition: StreamConditionOnTheWire {
-                load: StreamLoadOnTheWire::NotLoaded,
-                playback: StreamPlaybackOnTheWire::Stopped,
-                health: StreamHealthOnTheWire::Healthy,
-                diagnostics: Vec::new(),
-            },
+            condition: StreamConditionOnTheWire::healthy(
+                StreamLoadOnTheWire::NotLoaded,
+                StreamPlaybackOnTheWire::Stopped,
+            ),
             node_count: None,
             failed_because: None,
             capture_devices_whose_access_was_never_asked_for: Vec::new(),

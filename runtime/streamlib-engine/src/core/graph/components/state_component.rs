@@ -414,6 +414,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_nodes_health_answers_its_failure_raise_or_readiness_as_one_diagnostic_at_its_place() {
+        let place = DiagnosticPlaceOnTheWire::Node {
+            node_id: "n-1".to_owned(),
+            node_name: "blur".to_owned(),
+        };
+        let diagnostic =
+            |kind, words: &str| DiagnosticOnTheWire::of(kind, place.clone(), words.to_owned());
+
+        let healthy = ObservableNodeState::new(NodeState::Running);
+        assert_eq!(
+            healthy.the_health_of_the_node(&place),
+            (NodeHealthOnTheWire::Healthy, Vec::new())
+        );
+
+        let not_ready = ObservableNodeState::new(NodeState::Running);
+        not_ready.note_why_the_node_is_not_ready(Some("no frame yet".to_owned()));
+        assert_eq!(
+            not_ready.the_health_of_the_node(&place),
+            (
+                NodeHealthOnTheWire::NotReady,
+                vec![diagnostic(
+                    DiagnosticKindOnTheWire::NodeNotReady,
+                    "no frame yet"
+                )]
+            )
+        );
+
+        let raising = ObservableNodeState::new(NodeState::Running);
+        raising.note_why_process_is_raising(Some("ZeroDivisionError".to_owned()));
+        assert_eq!(
+            raising.the_health_of_the_node(&place),
+            (
+                NodeHealthOnTheWire::Raising,
+                vec![diagnostic(
+                    DiagnosticKindOnTheWire::NodeRaising,
+                    "ZeroDivisionError"
+                )]
+            )
+        );
+        raising.note_why_process_is_raising(None);
+        assert_eq!(
+            raising.the_health_of_the_node(&place).0,
+            NodeHealthOnTheWire::Healthy,
+            "a node that stops raising is healthy again"
+        );
+
+        let failed = ObservableNodeState::new(NodeState::Running);
+        failed.fail_with("setup failed: no camera");
+        assert_eq!(
+            failed.the_health_of_the_node(&place),
+            (
+                NodeHealthOnTheWire::Failed,
+                vec![diagnostic(
+                    DiagnosticKindOnTheWire::NodeFailed,
+                    "setup failed: no camera"
+                )]
+            )
+        );
+
+        let placeholder = ObservableNodeState::new(NodeState::Idle);
+        placeholder.hold_as_a_placeholder("its node code did not describe `old:Filter`");
+        assert_eq!(
+            placeholder.the_health_of_the_node(&place),
+            (
+                NodeHealthOnTheWire::Failed,
+                vec![diagnostic(
+                    DiagnosticKindOnTheWire::NodeTypeNotDescribed,
+                    "its node code did not describe `old:Filter`"
+                )]
+            )
+        );
+    }
+
     /// A deadline far enough out that reaching it means the wait failed to
     /// observe the transition, rather than that the machine was slow.
     const UNREACHABLE_DEADLINE: Duration = Duration::from_secs(30);

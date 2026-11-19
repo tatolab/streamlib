@@ -563,8 +563,10 @@ impl Runner {
                 record_a_stream_held_from_its_document_failed(
                     stream_records,
                     &mut stream_record,
-                    StreamFailureKind::ProjectVenvNotMade,
-                    why_the_venv_was_not_made.to_string(),
+                    StreamFailure::of_the_stream(
+                        StreamFailureKind::ProjectVenvNotMade,
+                        why_the_venv_was_not_made.to_string(),
+                    ),
                 )?
             }
             (_, state) => state,

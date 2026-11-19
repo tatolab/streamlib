@@ -888,6 +888,9 @@ pub(crate) fn the_control_contract_schema_named(name: &str) -> serde_json::Value
 mod link_rendering_tests;
 
 #[cfg(test)]
+mod node_health_rendering_tests;
+
+#[cfg(test)]
 mod port_rendering_tests;
 
 #[cfg(test)]
