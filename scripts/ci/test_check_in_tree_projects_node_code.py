@@ -74,17 +74,24 @@ class InTreeProjectsTest(unittest.TestCase):
             ],
         )
 
-    def test_python_only_in_streams_imports_or_tests_is_not_a_projects_own(self) -> None:
+    def test_python_only_in_nested_projects_imports_or_tests_is_not_a_projects_own(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:
             directory = Path(scratch)
             project = InTreeProject("p", directory, True)
-            write(directory / "streams/s/node.py")
+            write(directory / "streams/nested/tatolab-project.json", "{}")
+            write(directory / "streams/nested/node.py")
             write(directory / "imports/m/node.py")
             write(directory / "tests/test_node.py")
             write(directory / ".venv/lib/site.py")
             self.assertFalse(holds_python_of_its_own(project))
             write(directory / "python/tatolab/m/node.py")
             self.assertTrue(holds_python_of_its_own(project))
+
+    def test_python_in_a_streams_folder_that_is_no_project_is_a_projects_own(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            write(directory / "streams/s/node.py")
+            self.assertTrue(holds_python_of_its_own(InTreeProject("p", directory, True)))
 
     def test_a_module_without_a_project_file_is_checked_in_a_scratch_project_of_its_package(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:
@@ -102,7 +109,7 @@ class InTreeProjectsTest(unittest.TestCase):
 
             self.assertEqual(checked, scratch_projects / "tatolab-compositor")
             self.assertTrue((checked / "python/tatolab/compositor/node.py").is_file())
-            self.assertFalse((checked / "streams").exists())
+            self.assertTrue((checked / "streams/s/main.graph.json").is_file())
             self.assertFalse((checked / "tests").exists())
             self.assertEqual(json.loads((checked / "tatolab-project.json").read_text())["name"], "tatolab-compositor")
             self.assertFalse((package / "tatolab-project.json").exists())

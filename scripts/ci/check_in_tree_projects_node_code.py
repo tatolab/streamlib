@@ -60,7 +60,7 @@ DIRECTORY_NAMES_NEVER_READ = frozenset({".venv", "__pycache__", "node_modules", 
 DIRECTORY_NAME_OF_TESTS = "tests"
 """The folder whose modules' findings are left out: a project's tests ship in no module or sample."""
 
-DIRECTORY_NAMES_A_SCRATCH_COPY_LEAVES_OUT = (".venv", "__pycache__", "node_modules", "target", "tests", "streams")
+DIRECTORY_NAMES_A_SCRATCH_COPY_LEAVES_OUT = (".venv", "__pycache__", "node_modules", "target", "tests")
 """What a module's scratch project does not copy from its package."""
 
 PASSED_EXIT_CODE = 0
@@ -138,14 +138,15 @@ def is_a_first_party_module(package: Path) -> bool:
 
 
 def holds_python_of_its_own(project: InTreeProject) -> bool:
-    """Whether the project's own code, outside its streams, imports, tests and build output, holds a `.py` file."""
+    """Whether the project's own code, outside its imports, tests, build output and the projects
+    nested in it, holds a `.py` file."""
     for directory, subdirectory_names, file_names in os.walk(project.directory):
         subdirectory_names[:] = [
             name
             for name in subdirectory_names
             if not name.startswith(".")
             and name not in DIRECTORY_NAMES_NEVER_READ
-            and not (Path(directory) == project.directory and name == "streams")
+            and not (Path(directory) / name / PROJECT_FILE_NAME).is_file()
         ]
         if any(file_name.endswith(".py") for file_name in file_names):
             return True
@@ -285,23 +286,31 @@ def the_directory_to_check(project: InTreeProject, scratch_directory: Path) -> P
 
 
 def check_a_project(runtime_unit: RuntimeUnit, project: InTreeProject, directory: Path) -> ProjectCheckOutcome:
-    """Make the project's `.venv` and ask the runtime to check its code."""
-    synced = subprocess.run(
-        ["uv", "sync", "--quiet", "--project", str(directory)],
-        capture_output=True,
-        text=True,
-        timeout=VENV_SYNC_TIMEOUT_SECONDS,
-        check=False,
-    )
+    """Make the project's `.venv` and ask the runtime to check its code; a step that fails or runs
+    out of time leaves the project not fully checked, and the run goes on to the next."""
+    outcome = ProjectCheckOutcome(project)
+    try:
+        synced = subprocess.run(
+            ["uv", "sync", "--quiet", "--project", str(directory)],
+            capture_output=True,
+            text=True,
+            timeout=VENV_SYNC_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        outcome.not_fully_checked_because.append(f"`uv sync` ran past {VENV_SYNC_TIMEOUT_SECONDS:.0f}s")
+        return outcome
     if synced.returncode != 0:
-        outcome = ProjectCheckOutcome(project)
         outcome.not_fully_checked_because.append(f"`uv sync` failed: {synced.stderr.strip()[-2000:]}")
         return outcome
-    checked = runtime_unit.tatolab_run("check", "--json", "--dir", str(directory), timeout=CHECK_TIMEOUT_SECONDS)
+    try:
+        checked = runtime_unit.tatolab_run("check", "--json", "--dir", str(directory), timeout=CHECK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        outcome.not_fully_checked_because.append(f"`tatolab check` ran past {CHECK_TIMEOUT_SECONDS:.0f}s")
+        return outcome
     try:
         answer = json.loads(checked.stdout)
     except json.JSONDecodeError:
-        outcome = ProjectCheckOutcome(project)
         outcome.not_fully_checked_because.append(
             f"`tatolab check` exited {checked.returncode} with no answer: {checked.stderr.strip()[-2000:]}"
         )
