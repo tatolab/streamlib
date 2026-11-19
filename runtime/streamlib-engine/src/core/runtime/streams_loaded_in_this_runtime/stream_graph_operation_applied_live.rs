@@ -536,7 +536,7 @@ impl LoadedStreamInThisRuntime {
 
 /// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config
 /// names no family, so the family it carries is resolved with the graph's links.
-fn is_a_graph_interface_node_naming_no_family(
+pub(in crate::core::runtime) fn is_a_graph_interface_node_naming_no_family(
     node_type: &str,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> bool {

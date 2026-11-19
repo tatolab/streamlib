@@ -103,3 +103,130 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
     );
     assert!(refusal.runtime_words.contains("`volume`"), "{refusal:?}");
 }
+
+/// The type of the `GraphInput` placed inside a stream to hold a setting there.
+const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
+
+/// The mixer of a project's `main`, collapsed into the placed stream `sub`, beside a
+/// `GraphInput` `volume` added inside `sub`: the placing node's UUID, and the mixer's and
+/// `volume`'s UUIDs as `main` draws them inside it.
+pub(super) struct TheMixerInsideAPlacedStream {
+    pub(super) subgraph: String,
+    pub(super) mixer: String,
+    pub(super) volume: String,
+}
+
+impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
+    /// The mixer of `project`'s loaded `main` collapsed by `alice` into the placed stream
+    /// `sub`, with a `GraphInput` `volume` added beside it inside `sub`.
+    pub(super) async fn the_mixer_collapsed_into_a_placed_stream(
+        &self,
+        project: &ProjectWithGraphDocuments,
+    ) -> TheMixerInsideAPlacedStream {
+        let stream_asset = project.stream_asset_of("main");
+        let collapsed = self
+            .the_answer_or_the_refusal_of(
+                "collapse_selection_into_subgraph",
+                json!({ "stream": stream_asset, "nodes": [MIXER_NODE_UUID], "name": "sub",
+                        "author": an_agent_named("alice") }),
+            )
+            .await
+            .expect("the mixer collapses into `sub`");
+        let subgraph = collapsed["added_nodes"][0]["node"]
+            .as_str()
+            .expect("the placing node")
+            .to_owned();
+        self.the_answer_or_the_refusal_of(
+            "add_node",
+            json!({ "stream": stream_asset, "level": [subgraph], "type": GRAPH_INPUT_NODE_TYPE,
+                    "name": "volume", "config": { "port": "volume", "family": "channels" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("a `GraphInput` is added inside `sub`");
+        let sub = project.the_graph_document_of("sub");
+        let drawn = |name: &str| {
+            the_uuid_a_held_node_takes_under(
+                &subgraph,
+                the_node_named(&sub, name)["id"]
+                    .as_str()
+                    .expect("the node's UUID"),
+            )
+        };
+        TheMixerInsideAPlacedStream {
+            mixer: drawn("mixer"),
+            volume: drawn("volume"),
+            subgraph,
+        }
+    }
+}
+
+/// A link inside a placed stream is judged by its pin types as the same link at the stream's
+/// own level is: a Float into a Texture is refused with `link_pin_types_do_not_connect`, and a
+/// link into a setting with `input_takes_no_wire`, each leaving the placed stream's document as
+/// it was; a link the verdict connects is saved in it.
+///
+/// Mental-revert: saving a link inside a placed stream unjudged saves the two refused links.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_inside_a_placed_stream_is_judged_by_its_pin_types() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let inside = engine
+        .the_mixer_collapsed_into_a_placed_stream(&project)
+        .await;
+    let link_inside = |source: (&str, &str), target: (&str, &str)| {
+        json!({
+            "stream": stream_asset, "level": [inside.subgraph], "author": an_agent_named("alice"),
+            "source": { "node": source.0, "port": source.1 },
+            "target": { "node": target.0, "port": target.1 },
+        })
+    };
+    let sub_before = project.the_graph_document_of("sub");
+
+    let pin_types_refused = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            link_inside((&inside.mixer, "level"), (&inside.mixer, "video")),
+        )
+        .await
+        .expect_err("a Float does not connect to a Texture inside a placed stream");
+    let setting_refused = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            link_inside((&inside.mixer, "level"), (&inside.volume, "value")),
+        )
+        .await
+        .expect_err("a setting inside a placed stream takes no wire");
+
+    assert_eq!(
+        pin_types_refused.refusal_code,
+        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+        "{pin_types_refused:?}"
+    );
+    assert!(
+        pin_types_refused
+            .runtime_words
+            .contains("`mixer.level` (Float) to `mixer.video` (Texture)"),
+        "{pin_types_refused:?}"
+    );
+    assert_eq!(
+        setting_refused.refusal_code,
+        ControlOperationRefusalCode::InputTakesNoWire,
+        "{setting_refused:?}"
+    );
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            link_inside((&inside.mixer, "level"), (&inside.mixer, "gain")),
+        )
+        .await
+        .expect("a Float into a Float connects inside a placed stream");
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_of("sub")),
+        ["mixer/level -> mixer/gain"]
+    );
+}

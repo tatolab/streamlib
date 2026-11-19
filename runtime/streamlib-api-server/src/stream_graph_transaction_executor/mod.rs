@@ -49,6 +49,7 @@ use crate::control_operations_on_project_assets::{
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
+mod connect_asked_at_a_level;
 mod former_port_names;
 mod input_value_sets;
 mod input_values_set_live;
@@ -56,6 +57,8 @@ mod live_application_and_reversal;
 mod request_application;
 mod request_to_graph_operation;
 mod streams_each_operation_names;
+use connect_asked_at_a_level::the_operation_a_connect_asks_at_the_level;
+pub(crate) use connect_asked_at_a_level::the_operation_a_connect_asks_inside_a_placed_stream;
 pub(crate) use streams_each_operation_names::StreamsTheRuntimeHolds;
 mod transaction_answers;
 
@@ -104,26 +107,13 @@ pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
     rendered_graph: &Value,
     stream_operations: &dyn RuntimeOperations,
 ) -> Result<StreamGraphOperation, GraphRequestRefusal> {
-    let level_as_drawn = StreamGraphDocument::from_value(rendered_graph.clone())?;
-    let no_node_by_label = HashMap::new();
-    let (source, target) = the_link_ends_under_their_current_port_names(
+    the_operation_a_connect_asks_at_the_level(
         source,
         target,
-        &level_as_drawn,
-        &no_node_by_label,
+        &StreamGraphDocument::from_value(rendered_graph.clone())?,
+        rendered_graph,
         stream_operations,
-    );
-    let operation = the_operation_a_connect_asks(
-        &source,
-        &target,
-        &level_as_drawn,
-        &no_node_by_label,
-        &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
-    )?;
-    if let StreamGraphOperation::Connect { link } = &operation {
-        refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
-    }
-    Ok(operation)
+    )
 }
 
 /// The node, link and field `action` names, as its caller named them.

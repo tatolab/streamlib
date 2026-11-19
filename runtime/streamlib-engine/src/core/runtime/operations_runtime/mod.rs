@@ -38,6 +38,7 @@ mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
 pub(super) use link_connected_between_two_ports::{
     connect_impl, the_verdict_connect_takes_on_a_link,
+    what_a_connect_makes_of_a_link_at_a_placed_level,
 };
 
 // =============================================================================
@@ -668,6 +669,18 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink> {
         self.what_a_connect_makes_of_the_link(link)
+    }
+
+    fn what_a_connect_makes_of_a_link_at_a_placed_level(
+        &self,
+        level: &streamlib_project_repository::StreamGraphDocument,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Result<WhatALiveConnectMakesOfALink> {
+        what_a_connect_makes_of_a_link_at_a_placed_level(
+            self.node_types_this_stream_resolves(),
+            level,
+            link,
+        )
     }
 
     fn the_name_a_node_added_with_none_takes(

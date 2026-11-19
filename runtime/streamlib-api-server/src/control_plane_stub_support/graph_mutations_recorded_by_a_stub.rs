@@ -68,6 +68,13 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
         }
+        fn what_a_connect_makes_of_a_link_at_a_placed_level(
+            &self,
+            _level: &::streamlib_project_repository::StreamGraphDocument,
+            _link: &::streamlib_project_repository::StreamGraphDocumentLink,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
+            Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             node_type: &str,

@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `check_link`: what `connect` would answer for one link, judged against the stream's running
-//! graph by the engine's own judgement of a connect, and made nowhere.
+//! graph, or the placed stream's level it is inside, by the engine's own judgement of a
+//! connect, and made nowhere.
+
+use std::sync::Arc;
 
 use streamlib::sdk::runtime::WhatALiveConnectMakesOfALink;
 use streamlib_control_contract::{CheckLink, CheckLinkRequest, Connect, ControlOperation};
@@ -15,6 +18,7 @@ use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOpe
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 use crate::stream_graph_transaction_executor::{
     GraphRequestRefusal, GraphTransactionRefusal, StreamsTheRuntimeHolds,
+    the_operation_a_connect_asks_inside_a_placed_stream,
     the_operation_a_connect_asks_of_the_running_stream,
 };
 
@@ -24,11 +28,14 @@ impl ControlOperationDispatcher {
     /// the rest judged by the engine's own judgement of a live connect. Neither the graph nor
     /// the project's history is changed, and no refusal is kept on the project's change feed.
     ///
-    /// Three links are refused unchecked: one inside a placed stream, under a non-empty
-    /// `level`; one closing a loop of function nodes no `PreviousValue` node is in, which
-    /// `connect` closes through a `PreviousValue` node it adds; and one reaching a node that
-    /// runs as no node of its own, which the live graph judges only as it is reconciled to a
-    /// document holding the link.
+    /// A link inside a placed stream, under a non-empty `level`, is read from the project's
+    /// documents as a transaction's `connect` reads it, and judged among that level's nodes by
+    /// the engine's own judgement of a link there.
+    ///
+    /// Two links are refused unchecked: one closing a loop of function nodes no
+    /// `PreviousValue` node is in, which `connect` closes through a `PreviousValue` node it
+    /// adds; and one reaching a node that runs as no node of its own, which the live graph
+    /// judges only as it is reconciled to a document holding the link.
     pub(crate) async fn check_link(
         &self,
         CheckLinkRequest {
@@ -53,24 +60,17 @@ impl ControlOperationDispatcher {
                     .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
             )
         };
-        if level.is_some_and(|level| !level.is_empty()) {
-            return Err(not_checked_yet(
-                "the link is inside a placed stream; check one at the stream's own level, with \
-                 `level` omitted",
-            ));
-        }
-
         let listings = self.operations_on_the_loaded_streams.list_streams();
-        let stream_id = match StreamsTheRuntimeHolds::listed_in(&listings).the_stream_named(&stream)
-        {
-            Ok((_, stream_id)) => stream_id,
-            Err(runtime_words) => {
-                return Ok(refused_as_connect_refuses(GraphRequestRefusal::coded(
-                    RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
-                    runtime_words,
-                )));
-            }
-        };
+        let (stream_asset, stream_id) =
+            match StreamsTheRuntimeHolds::listed_in(&listings).the_stream_named(&stream) {
+                Ok(named) => named,
+                Err(runtime_words) => {
+                    return Ok(refused_as_connect_refuses(GraphRequestRefusal::coded(
+                        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
+                        runtime_words,
+                    )));
+                }
+            };
         let stream_operations = self
             .operations_on_the_loaded_streams
             .runtime_operations_of_the_stream_a_call_names(&stream_id)
@@ -79,13 +79,52 @@ impl ControlOperationDispatcher {
             .to_json_async()
             .await
             .map_err(of_an_engine_error)?;
-        let operation = match the_operation_a_connect_asks_of_the_running_stream(
-            source.clone(),
-            target.clone(),
-            &rendered_graph,
-            stream_operations.as_ref(),
-        ) {
-            Ok(operation) => operation,
+        let level = level.unwrap_or_default();
+        let placed_level_and_operation = if level.is_empty() {
+            the_operation_a_connect_asks_of_the_running_stream(
+                source.clone(),
+                target.clone(),
+                &rendered_graph,
+                stream_operations.as_ref(),
+            )
+            .map(|operation| (None, operation))
+        } else {
+            let project_directory = listings
+                .iter()
+                .find(|listing| listing.stream_id == stream_id)
+                .and_then(|listing| listing.stream_location.as_ref())
+                .map(|stream_location| stream_location.project_directory.clone());
+            let project_repositories = Arc::clone(&self.project_repositories);
+            let stream_operations = Arc::clone(&stream_operations);
+            let (source, target) = (source.clone(), target.clone());
+            tokio::task::spawn_blocking(move || {
+                let project_directory = project_directory.ok_or_else(|| {
+                    GraphRequestRefusal::from(format!(
+                        "stream `{stream_id}` is of no project, so no placed stream inside it is \
+                         read from a document"
+                    ))
+                })?;
+                let project_repository =
+                    project_repositories.the_project_repository_at(&project_directory)?;
+                the_operation_a_connect_asks_inside_a_placed_stream(
+                    source,
+                    target,
+                    stream_asset,
+                    &level,
+                    &rendered_graph,
+                    stream_operations.as_ref(),
+                    &project_repository.lock(),
+                )
+                .map(|(level_document, operation)| (Some(level_document), operation))
+            })
+            .await
+            .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
+                "{} failed: the read of the placed stream",
+                CheckLink::METHOD_NAME
+            )))?
+        };
+        let (placed_level, operation) = match placed_level_and_operation {
+            Ok(placed_level_and_operation) => placed_level_and_operation,
             Err(refusal) => return Ok(refused_as_connect_refuses(refusal)),
         };
         let StreamGraphOperation::Connect { link } = operation else {
@@ -94,7 +133,12 @@ impl ControlOperationDispatcher {
                  `connect` closes through a `PreviousValue` node it adds",
             ));
         };
-        match stream_operations.what_a_live_connect_makes_of_the_link(&link) {
+        let what_a_connect_makes = match &placed_level {
+            None => stream_operations.what_a_live_connect_makes_of_the_link(&link),
+            Some(level_document) => stream_operations
+                .what_a_connect_makes_of_a_link_at_a_placed_level(level_document, &link),
+        };
+        match what_a_connect_makes {
             Ok(WhatALiveConnectMakesOfALink::Makes(verdict)) => {
                 Ok(LinkCheckResult::of_a_link_connect_makes(verdict.as_deref()))
             }

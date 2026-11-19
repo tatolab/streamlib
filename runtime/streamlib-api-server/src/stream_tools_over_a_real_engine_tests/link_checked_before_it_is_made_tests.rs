@@ -205,30 +205,61 @@ async fn check_link_answers_a_link_connect_makes_and_changes_nothing() {
     );
 }
 
-/// A link inside a placed stream is refused unchecked, since the check judges a link at the
-/// stream's own level alone.
+/// A link inside a placed stream, under a non-empty `level`, is checked as `connect` judges it
+/// there: each link `connect` refuses inside is answered with the very refusal it answers, and
+/// one it makes with `connects`, the placed stream's document left as it was by the check.
+///
+/// Mental-revert: refusing a non-empty `level` unchecked fails `check_link` itself.
 #[tokio::test(flavor = "multi_thread")]
-async fn check_link_refuses_a_link_inside_a_placed_stream() {
+async fn check_link_answers_what_connect_answers_for_a_link_inside_a_placed_stream() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_a_mixer();
     engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    let mut link = the_link(
-        json!(project.stream_asset_of("main")),
-        (MIXER_NODE_UUID, "level"),
-        (MIXER_NODE_UUID, "gain"),
-    );
-    link["level"] = json!([NO_NODE_UUID]);
+    let inside = engine
+        .the_mixer_collapsed_into_a_placed_stream(&project)
+        .await;
+    let link_inside = |source: (&str, &str), target: (&str, &str)| {
+        let mut link = the_link(json!(project.stream_asset_of("main")), source, target);
+        link["level"] = json!([inside.subgraph]);
+        link
+    };
+    let sub_before = project.the_graph_document_of("sub");
 
-    let refusal = engine
-        .the_answer_or_the_refusal_of("check_link", link)
-        .await
-        .expect_err("a level inside a placed stream is not checked");
+    for (what, link) in [
+        (
+            "pin types that do not connect",
+            link_inside((&inside.mixer, "level"), (&inside.mixer, "video")),
+        ),
+        (
+            "a setting",
+            link_inside((&inside.mixer, "level"), (&inside.volume, "value")),
+        ),
+        (
+            "a node the placed stream does not hold",
+            link_inside((&inside.mixer, "level"), (NO_NODE_UUID, "gain")),
+        ),
+    ] {
+        let checked = engine.the_check_of(&link).await;
+        assert_eq!(project.the_graph_document_of("sub"), sub_before, "{what}");
+        let refused = engine
+            .the_answer_or_the_refusal_of("connect", connected_by_alice(&link))
+            .await
+            .expect_err(what);
 
-    assert_eq!(refusal.action, "check_link", "{refusal:?}");
-    assert!(
-        refusal.runtime_words.contains("not checked yet"),
-        "{refusal:?}"
+        assert_eq!(checked["outcome"], "refused", "{what}: {checked}");
+        assert_eq!(
+            checked["refusal"],
+            serde_json::to_value(&*refused).unwrap(),
+            "{what}: check_link answers the refusal connect answers"
+        );
+    }
+
+    let made = link_inside((&inside.mixer, "level"), (&inside.mixer, "gain"));
+    assert_eq!(
+        engine.the_check_of(&made).await,
+        json!({ "outcome": "connects" })
     );
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
 }
 
 /// The function node type `node_type`, taking `inputs`, each a Records input or, with an audio

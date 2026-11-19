@@ -501,6 +501,12 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let mut placed_document_after_the_edit = reached.document.clone();
         placed_document_after_the_edit.apply(&edit)?;
+        if !reached.is_the_streams_own_level()
+            && let StreamGraphOperation::Connect { link } = &edit
+        {
+            stream_operations
+                .what_a_connect_makes_of_a_link_at_a_placed_level(&reached.document, link)?;
+        }
         let operation_answered =
             reached.the_operation_as_drawn(&edit, &placed_document_after_the_edit)?;
         label_what_the_operation_adds(

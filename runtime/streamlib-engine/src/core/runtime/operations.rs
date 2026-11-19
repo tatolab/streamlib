@@ -79,6 +79,17 @@ pub trait RuntimeOperations: Send + Sync {
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink>;
 
+    /// What a connect made now would make of `link` at `level`, a level of a placed stream as
+    /// its graph document holds it, each node by its UUID there, made nowhere: judged among that
+    /// level's nodes, by their types as this stream resolves them and the conversions it
+    /// registers, as [`Self::what_a_live_connect_makes_of_the_link`] judges a link of the live
+    /// graph; refused as the connect is refused.
+    fn what_a_connect_makes_of_a_link_at_a_placed_level(
+        &self,
+        level: &streamlib_project_repository::StreamGraphDocument,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Result<WhatALiveConnectMakesOfALink>;
+
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.
     fn the_name_a_node_added_with_none_takes(
