@@ -3,8 +3,8 @@
 
 use std::collections::HashSet;
 use streamlib_project_repository::{
-    GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphDocumentLink, StreamGraphOperation, is_a_graph_interface_node_type,
+    STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink, StreamGraphOperation,
+    is_a_graph_interface_node_type,
 };
 
 use uuid::Uuid;
@@ -49,7 +49,7 @@ impl LoadedStreamInThisRuntime {
             (StreamGraphOperation::Disconnect { link }, Some(as_given)) => link != as_given,
             _ => false,
         };
-        if self.the_operation_touches_a_node_no_node_runs_as(&graph_operation) {
+        if self.the_operation_is_drawn_before_the_live_graph_takes_it(&graph_operation) {
             return self
                 .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                 .await;
@@ -195,19 +195,23 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    fn the_operation_touches_a_node_no_node_runs_as(
+    /// Whether `graph_operation` is applied to the graph as drawn first and the live graph
+    /// reconciled to it: an edit that places or touches a node no node runs as, and one that
+    /// places, takes out or changes a `GraphInput` or `GraphOutput`, whose interface the graph as
+    /// drawn declares and `graph` renders from. A link to a running interface node is the live
+    /// graph's own, and `graph` renders it from there.
+    fn the_operation_is_drawn_before_the_live_graph_takes_it(
         &self,
         graph_operation: &StreamGraphOperation,
     ) -> bool {
         let no_node_runs_as = |node: Uuid| self.the_node_of_the_node(node).is_err();
+        let held_only_as_drawn =
+            |node: Uuid| no_node_runs_as(node) || self.the_node_is_a_graph_interface_node(node);
         match graph_operation {
             StreamGraphOperation::AddNode { node, links } => {
                 node.fragment.is_some()
                     || node.node_type == STREAM_FRAGMENT_NODE_TYPE
-                    || is_a_graph_interface_node_naming_no_family(
-                        &node.node_type,
-                        &node.input_values,
-                    )
+                    || is_a_graph_interface_node_type(&node.node_type)
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
@@ -215,6 +219,9 @@ impl LoadedStreamInThisRuntime {
             }
             StreamGraphOperation::Connect { link } | StreamGraphOperation::Disconnect { link } => {
                 no_node_runs_as(link.source.node) || no_node_runs_as(link.target.node)
+            }
+            StreamGraphOperation::RemoveNode { node, .. } => {
+                is_a_graph_interface_node_type(&node.node_type) || held_only_as_drawn(node.id)
             }
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }
@@ -226,7 +233,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => true,
-            other => other.node().is_some_and(no_node_runs_as),
+            other => other.node().is_some_and(held_only_as_drawn),
         }
     }
 
@@ -432,6 +439,19 @@ impl LoadedStreamInThisRuntime {
         .await
     }
 
+    /// Whether the node `node` runs as a `GraphInput` or a `GraphOutput`, whose interface the
+    /// graph as drawn declares, so an edit to it is drawn before the live graph takes it.
+    fn the_node_is_a_graph_interface_node(&self, node: Uuid) -> bool {
+        self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .find(|held| held.node_uuid == node)
+                .is_some_and(|held| is_a_graph_interface_node_type(held.node_type.as_str()))
+        })
+    }
+
     fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {
         self.compiler.scope(|graph, _tx| {
             let nodes: Vec<_> = graph.traversal().v(()).iter().collect();
@@ -474,7 +494,7 @@ impl LoadedStreamInThisRuntime {
             self.the_operation_under_the_current_port_names(StreamGraphOperation::Connect {
                 link: link.clone(),
             });
-        if self.the_operation_touches_a_node_no_node_runs_as(&connect) {
+        if self.the_operation_is_drawn_before_the_live_graph_takes_it(&connect) {
             StreamGraphDocument::from_value(self.to_json()?)
                 .map_err(Error::GraphError)?
                 .apply(&connect)
@@ -532,16 +552,4 @@ impl LoadedStreamInThisRuntime {
                 .map(|held| held.id.clone())
         }))
     }
-}
-
-/// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config
-/// names no family, so the family it carries is resolved with the graph's links.
-fn is_a_graph_interface_node_naming_no_family(
-    node_type: &str,
-    input_values: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    is_a_graph_interface_node_type(node_type)
-        && input_values
-            .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
-            .is_none_or(serde_json::Value::is_null)
 }
