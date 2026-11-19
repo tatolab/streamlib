@@ -229,16 +229,34 @@ fn only_the_projects_own_views_or_those_among_the_paths_are_checked() {
 fn an_imports_views_folder_that_does_not_read_keeps_no_own_view_from_being_checked() {
     let workspace = tempfile::tempdir().unwrap();
     let project_directory = workspace.path().join("acme");
-    a_project_named(&project_directory, "acme");
+    let mut project_file = a_project_named(&project_directory, "acme");
     a_view_folder_holding(&project_directory, "typed", TYPED_MANIFEST);
-    std::fs::create_dir_all(project_directory.join(PROJECT_IMPORTS_DIRECTORY)).unwrap();
+    let import_directory = project_directory
+        .join(PROJECT_IMPORTS_DIRECTORY)
+        .join("levels");
+    let imported_project = a_project_named(&import_directory, "levels");
     std::fs::write(
-        project_directory
-            .join(PROJECT_IMPORTS_DIRECTORY)
-            .join("levels"),
+        import_directory.join(PROJECT_VIEWS_DIRECTORY),
         "not a folder",
     )
     .unwrap();
+    project_file.dependencies.push(ProjectImport {
+        project: imported_project.project,
+        folder: "levels".into(),
+        source: "/elsewhere/levels".into(),
+        version: "0".repeat(64),
+        copied_files: BTreeMap::new(),
+    });
+    std::fs::write(
+        project_directory.join(PROJECT_FILE_NAME),
+        project_file.canonical_bytes().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        crate::project_views::every_view_a_project_and_its_imports_bring(&project_directory)
+            .is_err(),
+        "the import's `views` file is one the import-aware listing refuses"
+    );
 
     let checked = check_a_projects_view_manifests(&project_directory, None).unwrap();
 
