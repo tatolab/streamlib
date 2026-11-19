@@ -70,7 +70,7 @@ def compile_function_node_to_its_evaluate_entry(
         function_node, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
     )
     body: Callable[..., Any] = function_node.__wrapped__
-    annotations = typing.get_type_hints(body)
+    annotations = typing.get_type_hints(body, localns=_type_parameters_of(body))
     for each_input in function_signature["inputs"]:
         _refuse_a_value_the_evaluate_entry_cannot_carry(
             import_path, f"input `{each_input['parameter']}`", each_input["value_type"]
@@ -129,7 +129,6 @@ def compile_function_node_to_its_evaluate_entry(
         config_value_types,
         state_record_class,
         state_value_types,
-        output_record_class,
         named_tuple_by_dataclass,
     )
     wrapper_globals["carray"] = carray
@@ -337,7 +336,6 @@ def _evaluate_entry_wrapper_source(
     config_value_types: "dict[str, str]",
     state_record_class: Optional[type],
     state_value_types: "dict[str, str]",
-    output_record_class: Optional[type],
     named_tuple_by_dataclass: "dict[type, type]",
 ) -> "tuple[str, dict[str, Any]]":
     wrapper_globals: "dict[str, Any]" = {}
@@ -413,7 +411,7 @@ def _evaluate_entry_wrapper_source(
     else:
         lines.append("    output = returned")
     for index, each_output in enumerate(function_signature["outputs"]):
-        output_expression = "output" if output_record_class is None else f"output.{each_output['field']}"
+        output_expression = "output" if each_output["field"] is None else f"output.{each_output['field']}"
         handed_out_slot = handed_out_slot_by_output_index.get(index)
         if handed_out_slot is None:
             lines.append(f"    outputs[{index}] = {_to_f64(output_expression, each_output['value_type'])}")
@@ -451,3 +449,12 @@ def _from_f64(value_expression: str, value_type: str) -> str:
     if value_type == "bool":
         return f"({value_expression} != 0.0)"
     return value_expression
+
+
+def _type_parameters_of(body: Callable[..., Any]) -> "dict[str, Any]":
+    """The type parameters a body declares, by name, which Python 3.12 does not read a string
+    annotation of the body with."""
+    return {
+        type_parameter.__name__: type_parameter
+        for type_parameter in getattr(body, "__type_params__", ())
+    }

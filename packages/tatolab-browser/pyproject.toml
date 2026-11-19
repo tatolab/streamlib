@@ -53,3 +53,7 @@ typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
 reportMissingModuleSource = "none"
+
+# What the Marketplace files this module under.
+[tool.tatolab.catalog]
+category = "Sources"

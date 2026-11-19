@@ -115,6 +115,7 @@ impl NewProjectScaffold {
             cover: None,
             created_with_runtime: Some(THIS_RUNTIME_VERSION.to_owned()),
             dependencies: Vec::new(),
+            node_type_groups: Default::default(),
         };
         let bytes = project_file.canonical_bytes().map_err(|refusal| {
             Error::Runtime(format!("the project file was not written: {refusal}"))

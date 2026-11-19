@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::NodeTypeCategoryFrom;
 use super::graph_wire_types::RefusedGraphLinkOnTheWire;
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
@@ -861,8 +862,11 @@ pub struct NodeTypeReadFromSource {
     pub kind: Option<String>,
     /// The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
     pub description: String,
-    /// The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
+    /// The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
     pub category: Option<String>,
+    /// Who filed it under `category`; null when nothing files it.
+    #[serde(default)]
+    pub category_from: Option<NodeTypeCategoryFrom>,
     /// The input ports, `None` where only the node's native half states them.
     pub inputs: Option<Vec<NodeTypePortReadFromSource>>,
     /// The output ports, `None` where only the node's native half states them.

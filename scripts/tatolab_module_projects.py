@@ -11,8 +11,30 @@ licence files, its top-level streams, and every wheel the release built for it u
 syncs with no Rust toolchain and no index serving the module. The catalog,
 `catalog/v1.json`, lists each archive with its SHA-256, the `@node`s and `@stream`s it
 brings, read by the `tatolab.stream` listing the runtime runs, never by parsing source here,
-and under `platforms` each machine a wheel of it installs on, left out when its one wheel is
-pure, so an app can say a module brings nothing on a machine its wheels leave out.
+under `platforms` each machine a wheel of it installs on, left out when its one wheel is
+pure, so an app can say a module brings nothing on a machine its wheels leave out, and under
+`lowest_runtime_version` the lowest `tatolab-stream` its wheels require, which is the lowest
+runtime that can resolve it, so an app can say a module needs a newer runtime before adding it.
+
+What a storefront shows before a module is added, each from what the module project declares:
+- `category`, one of `CATALOG_CATEGORIES`, from its `pyproject.toml`'s
+  `[tool.tatolab.catalog]` `category`;
+- `download_size`, the archive's size in bytes;
+- under each node, its `inputs` and `outputs` as the listing reads them, each a `name`, a
+  `family` and a `description`, left out where the listing reads none;
+- `views`, each folder of its `views/` the archive carries, by its `tatolab_view.json`: its
+  `view_type` (`<project name>:<folder>`), `title`, `description`, `placement` and the
+  `devices` among its declared capabilities (`camera`, `microphone`, `gpu`); a manifest that
+  does not name what view contract 1.0 requires fails the catalog;
+- `gallery`, the URL of each picture `[tool.tatolab.catalog]` `gallery` names, the cover first,
+  published beside the archive under `modules/<distribution>-<version>/gallery/`, left out
+  when it names none;
+- `release_notes`, the workspace `CHANGELOG.md`'s section for the release the archive is
+  built at, in Markdown, left out when it has none;
+- `copy_version`, the version `add_dependency` records for an import of the archive, the
+  SHA-256 of its files' hashes as canonical JSON, and under `earlier_versions` each earlier
+  release's `version` and `copy_version` the catalog listed, so an app names the release an
+  import's copy carries.
 
 Stdlib only, beside the uv that makes each listing's venv.
 Commands:
@@ -20,6 +42,7 @@ Commands:
   `write-catalog <output root> <uv> <tatolab-stream wheel> [<catalog it replaces>]`
 """
 
+import email.parser
 import hashlib
 import json
 import re
@@ -31,6 +54,28 @@ import zipfile
 from pathlib import Path
 
 PROJECT_FILE_NAME = "tatolab-project.json"
+# The project the runtime unit carries and links into every project; never a catalog module.
+CORE_PROJECT_DIRECTORY_NAMES = ("tatolab-core-nodes",)
+# What a storefront files a module under, in the order it offers them.
+CATALOG_CATEGORIES = ("Sources", "Audio", "Effects", "Compositing & output", "Control", "I/O & codecs")
+VIEWS_DIRECTORY_NAME = "views"
+VIEW_MANIFEST_FILE_NAME = "tatolab_view.json"
+# What a view manifest must name to read against view contract 1.0, and the devices among the
+# capabilities it may declare.
+VIEW_MANIFEST_REQUIRED_FIELDS = ("contract", "title", "entry", "placement")
+VIEW_PLACEMENTS = ("area", "node")
+VIEW_DEVICE_CAPABILITIES = ("camera", "microphone", "gpu")
+GALLERY_DIRECTORY_NAME = "gallery"
+GALLERY_PICTURE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+CHANGELOG_FILE_NAME = "CHANGELOG.md"
+# What an import of a project leaves out, as the runtime's `add_dependency` copies one.
+FOLDERS_AN_IMPORT_SKIPS = ("node_modules", "__pycache__")
+# The file that makes a folder a Python virtual environment, which an import leaves out whole.
+PYVENV_CONFIG_FILE_NAME = "pyvenv.cfg"
+VIEW_CONTRACT = "1.0"
+# A gallery picture's file name is its URL's last segment as written, so it needs no encoding.
+GALLERY_PICTURE_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+FILE_NAMES_AN_IMPORT_SKIPS = (".DS_Store",)
 PACKAGES_DIRECTORY_NAME = "packages"
 MODULES_DIRECTORY_NAME = "modules"
 CATALOG_RELATIVE_PATH = Path("catalog") / "v1.json"
@@ -47,6 +92,10 @@ PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE = "tatolab.stream._project_node_type_list
 INSTALLED_DISTRIBUTION_SOURCE = "installed_distribution"
 # Every archive member's timestamp, so an archive of the same files is the same bytes.
 ARCHIVE_MEMBER_TIMESTAMP = (2025, 1, 1, 0, 0, 0)
+THE_RUNTIMES_DISTRIBUTION_NAME = "tatolab-stream"
+# A requirement's name and its `>=` or `==` version, bare or in parentheses, before any further
+# comma-joined bound or marker.
+REQUIREMENT_FLOOR = re.compile(r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*\(?\s*(?:>=|==)\s*(?P<version>[0-9][0-9A-Za-z.+!-]*)")
 
 
 class ModuleProjectNotAssembled(Exception):
@@ -94,6 +143,37 @@ def toml_basic_string(text):
     return json.dumps(text)
 
 
+def lowest_runtime_version_the_wheel_requires(wheel_path):
+    """The `tatolab-stream` version the wheel at `wheel_path` requires at the lowest, as its `METADATA` names it."""
+    wheel_path = Path(wheel_path)
+    with zipfile.ZipFile(wheel_path) as wheel_archive:
+        metadata_names = [name for name in wheel_archive.namelist() if re.fullmatch(r"[^/]+\.dist-info/METADATA", name)]
+        if len(metadata_names) != 1:
+            raise ModuleProjectNotAssembled(f"{wheel_path.name} holds no single `.dist-info/METADATA`")
+        metadata = email.parser.Parser().parsestr(wheel_archive.read(metadata_names[0]).decode(), headersonly=True)
+    floors = (REQUIREMENT_FLOOR.match(requirement) for requirement in metadata.get_all("Requires-Dist") or [])
+    requirements = [
+        floor for floor in floors if floor and normalized_distribution_name(floor["name"]) == normalized_distribution_name(THE_RUNTIMES_DISTRIBUTION_NAME)
+    ]
+    if len(requirements) != 1:
+        raise ModuleProjectNotAssembled(
+            f"{wheel_path.name} requires {THE_RUNTIMES_DISTRIBUTION_NAME} {'with no `>=` or `==` version' if not requirements else 'more than once'}, "
+            "so the lowest runtime it runs on is unknown"
+        )
+    return requirements[0]["version"]
+
+
+def lowest_runtime_version_the_wheels_require(wheel_paths):
+    """The one lowest `tatolab-stream` version every wheel of a module requires; a module whose wheels differ is refused."""
+    versions = {lowest_runtime_version_the_wheel_requires(wheel_path) for wheel_path in wheel_paths}
+    if len(versions) != 1:
+        raise ModuleProjectNotAssembled(
+            f"the wheels {', '.join(Path(wheel_path).name for wheel_path in wheel_paths)} require different lowest "
+            f"{THE_RUNTIMES_DISTRIBUTION_NAME} versions: {', '.join(sorted(versions))}"
+        )
+    return versions.pop()
+
+
 def module_project_pyproject(distribution_name, version, wheel_file_names):
     """The `pyproject.toml` of a module project carrying `wheel_file_names` of `distribution_name`.
 
@@ -138,13 +218,99 @@ def module_project_pyproject(distribution_name, version, wheel_file_names):
 def every_module_project_directory_in(workspace_root):
     """Each `packages/<directory>/` holding a project file, in name order."""
     packages_directory = Path(workspace_root) / PACKAGES_DIRECTORY_NAME
-    return sorted(project_file.parent for project_file in packages_directory.glob(f"*/{PROJECT_FILE_NAME}"))
+    return sorted(
+        project_file.parent
+        for project_file in packages_directory.glob(f"*/{PROJECT_FILE_NAME}")
+        if project_file.parent.name not in CORE_PROJECT_DIRECTORY_NAMES
+    )
+
+
+def pyproject_of_the_module_in(module_project_directory):
+    with open(Path(module_project_directory) / "pyproject.toml", "rb") as pyproject_file:
+        return tomllib.load(pyproject_file)
 
 
 def distribution_name_of_the_module_in(module_project_directory):
     """The distribution the module's own `pyproject.toml` builds."""
-    with open(Path(module_project_directory) / "pyproject.toml", "rb") as pyproject_file:
-        return tomllib.load(pyproject_file)["project"]["name"]
+    return pyproject_of_the_module_in(module_project_directory)["project"]["name"]
+
+
+def catalog_declaration_of_the_module_in(module_project_directory):
+    """The module's `[tool.tatolab.catalog]`: its `category` and the gallery pictures it names, by path; refused when either is not one the catalog takes."""
+    module_project_directory = Path(module_project_directory)
+    declared = pyproject_of_the_module_in(module_project_directory).get("tool", {}).get("tatolab", {}).get("catalog", {})
+    category = declared.get("category")
+    if category not in CATALOG_CATEGORIES:
+        raise ModuleProjectNotAssembled(
+            f"{module_project_directory / 'pyproject.toml'} names {json.dumps(category)} as its `[tool.tatolab.catalog]` category, "
+            f"not one of {', '.join(CATALOG_CATEGORIES)}"
+        )
+    gallery = declared.get("gallery", [])
+    if not isinstance(gallery, list) or not all(isinstance(picture, str) for picture in gallery):
+        raise ModuleProjectNotAssembled(f"{module_project_directory / 'pyproject.toml'}'s `[tool.tatolab.catalog]` gallery is not a list of paths")
+    gallery_pictures = []
+    for picture in gallery:
+        picture_path = (module_project_directory / picture).resolve()
+        if (
+            not picture_path.is_relative_to(module_project_directory.resolve())
+            or not picture_path.is_file()
+            or picture_path.suffix.lower() not in GALLERY_PICTURE_SUFFIXES
+            or not GALLERY_PICTURE_FILE_NAME.fullmatch(picture_path.name)
+        ):
+            raise ModuleProjectNotAssembled(
+                f"{module_project_directory.name}'s gallery names {json.dumps(picture)}, "
+                f"which is no {', '.join(GALLERY_PICTURE_SUFFIXES)} picture inside its module project "
+                "named with letters, digits, `.`, `_` and `-`"
+            )
+        gallery_pictures.append(picture_path)
+    if len({picture.name for picture in gallery_pictures}) != len(gallery_pictures):
+        raise ModuleProjectNotAssembled(f"{module_project_directory.name}'s gallery names two pictures of one file name")
+    return category, gallery_pictures
+
+
+def release_notes_of_the_version(workspace_root, version):
+    """The body of the workspace `CHANGELOG.md`'s `## [<version>]` section, or nothing when it has none."""
+    changelog = Path(workspace_root) / CHANGELOG_FILE_NAME
+    if not changelog.is_file():
+        return ""
+    section = re.search(
+        rf"^## \[{re.escape(version)}\][^\n]*\n(?P<body>.*?)(?=^## \[|\Z)",
+        changelog.read_text(),
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    return section["body"].strip() if section else ""
+
+
+def paths_an_import_carries(relative_paths):
+    """Each of `relative_paths`, the files of one project, that `add_dependency` copies when it imports the project, in path order."""
+    relative_paths = set(relative_paths)
+    virtual_environment_folders = {
+        relative_path.rsplit("/", 1)[0] + "/" for relative_path in relative_paths if relative_path.endswith(f"/{PYVENV_CONFIG_FILE_NAME}")
+    }
+
+    def is_carried(relative_path):
+        *folders, file_name = relative_path.split("/")
+        return (
+            file_name not in FILE_NAMES_AN_IMPORT_SKIPS
+            and not any(folder.startswith(".") or folder in FOLDERS_AN_IMPORT_SKIPS for folder in folders)
+            and not any(relative_path.startswith(folder) for folder in virtual_environment_folders)
+        )
+
+    return sorted(relative_path for relative_path in relative_paths if is_carried(relative_path))
+
+
+def files_under_the_folder_an_import_carries(folder):
+    """Each file under `folder` an import carries, by its path relative to `folder`, in path order."""
+    folder = Path(folder)
+    return paths_an_import_carries(path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file())
+
+
+def copy_version_of(member_bytes_by_name):
+    """The version `add_dependency` records for an import of these files: the SHA-256 of each one's SHA-256, by path, as canonical JSON."""
+    copied_files = {
+        member_name: hashlib.sha256(member_bytes_by_name[member_name]).hexdigest() for member_name in paths_an_import_carries(member_bytes_by_name)
+    }
+    return hashlib.sha256((json.dumps(copied_files, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()).hexdigest()
 
 
 def sha256_of_file(path):
@@ -165,13 +331,15 @@ def write_the_archive(archive_path, member_bytes_by_name):
             archive.writestr(member, member_bytes_by_name[member_name])
 
 
-def assemble_one_module_project(module_project_directory, wheels_directory, version, output_root):
-    """Write the module project's archive and its sidecars under `output_root/modules/`; answers the archive's path."""
+def assemble_one_module_project(module_project_directory, wheels_directory, version, output_root, release_notes=""):
+    """Write the module project's archive, its gallery and its sidecars under `output_root/modules/`; answers the archive's path."""
     module_project_directory = Path(module_project_directory)
     distribution_name = distribution_name_of_the_module_in(module_project_directory)
+    category, gallery_pictures = catalog_declaration_of_the_module_in(module_project_directory)
     wheel_paths = sorted(Path(wheels_directory).glob(wheel_file_name_prefix_of(distribution_name, version) + "*.whl"))
     if not wheel_paths:
         raise ModuleProjectNotAssembled(f"{distribution_name} has no wheel at {version} in {wheels_directory}")
+    lowest_runtime_version = lowest_runtime_version_the_wheels_require(wheel_paths)
     project_file = json.loads((module_project_directory / PROJECT_FILE_NAME).read_text())
     for required_key in ("project", "name", "description"):
         if not project_file.get(required_key):
@@ -187,14 +355,25 @@ def assemble_one_module_project(module_project_directory, wheels_directory, vers
             member_bytes_by_name[carried_file_name] = carried_file.read_bytes()
     for stream_document in sorted((module_project_directory / STREAMS_DIRECTORY_NAME).glob(f"*{STREAM_DOCUMENT_SUFFIX}")):
         member_bytes_by_name[f"{STREAMS_DIRECTORY_NAME}/{stream_document.name}"] = stream_document.read_bytes()
+    views_directory = module_project_directory / VIEWS_DIRECTORY_NAME
+    if views_directory.is_dir():
+        for relative_path in files_under_the_folder_an_import_carries(views_directory):
+            member_bytes_by_name[f"{VIEWS_DIRECTORY_NAME}/{relative_path}"] = (views_directory / relative_path).read_bytes()
     for wheel_path in wheel_paths:
         member_bytes_by_name[f"{ARCHIVE_WHEELS_DIRECTORY_NAME}/{wheel_path.name}"] = wheel_path.read_bytes()
 
     modules_directory = Path(output_root) / MODULES_DIRECTORY_NAME
     modules_directory.mkdir(parents=True, exist_ok=True)
-    archive_file_name = f"{normalized_distribution_name(distribution_name)}-{version}.zip"
+    archive_stem = f"{normalized_distribution_name(distribution_name)}-{version}"
+    archive_file_name = f"{archive_stem}.zip"
     archive_path = modules_directory / archive_file_name
     write_the_archive(archive_path, member_bytes_by_name)
+    gallery_urls = []
+    for picture_path in gallery_pictures:
+        published_picture = modules_directory / archive_stem / GALLERY_DIRECTORY_NAME / picture_path.name
+        published_picture.parent.mkdir(parents=True, exist_ok=True)
+        published_picture.write_bytes(picture_path.read_bytes())
+        gallery_urls.append(f"{GET_TATOLAB_COM_URL}/{published_picture.relative_to(output_root).as_posix()}")
     archive_sha256 = sha256_of_file(archive_path)
     Path(str(archive_path) + ARCHIVE_SHA256_SIDECAR_SUFFIX).write_text(f"{archive_sha256}  {archive_file_name}\n")
     entry_without_its_members = {
@@ -202,14 +381,22 @@ def assemble_one_module_project(module_project_directory, wheels_directory, vers
         "name": distribution_name,
         "title": project_file["name"],
         "summary": project_file["description"],
+        "category": category,
         "version": version,
+        "copy_version": copy_version_of(member_bytes_by_name),
         "download_url": f"{GET_TATOLAB_COM_URL}/{MODULES_DIRECTORY_NAME}/{archive_file_name}",
         "download_sha256": archive_sha256,
+        "download_size": archive_path.stat().st_size,
         "homepage_url": f"{MODULE_SOURCE_URL_PREFIX}/{module_project_directory.name}",
+        "lowest_runtime_version": lowest_runtime_version,
     }
     machines = [machine_of_a_wheel_platform_tag(wheel_path.name) for wheel_path in wheel_paths]
     if None not in machines:
         entry_without_its_members["platforms"] = machines
+    if gallery_urls:
+        entry_without_its_members["gallery"] = gallery_urls
+    if release_notes:
+        entry_without_its_members["release_notes"] = release_notes
     Path(str(archive_path) + ARCHIVE_LISTING_SIDECAR_SUFFIX).write_text(json.dumps(entry_without_its_members, indent=2) + "\n")
     return archive_path
 
@@ -217,9 +404,10 @@ def assemble_one_module_project(module_project_directory, wheels_directory, vers
 def assemble_every_module_project(workspace_root, wheels_directory, version, output_root):
     """Each module project's archive this run's wheels make; a module with none is named and left out."""
     assembled = []
+    release_notes = release_notes_of_the_version(workspace_root, version)
     for module_project_directory in every_module_project_directory_in(workspace_root):
         try:
-            assembled.append(assemble_one_module_project(module_project_directory, wheels_directory, version, output_root))
+            assembled.append(assemble_one_module_project(module_project_directory, wheels_directory, version, output_root, release_notes))
         except ModuleProjectNotAssembled as not_assembled:
             print(f"::warning::{not_assembled}; its module project is left out of this publish", file=sys.stderr)
     return assembled
@@ -235,6 +423,38 @@ def stream_members_of_the_archive(archive):
         file_stem = Path(member_name).name[: -len(STREAM_DOCUMENT_SUFFIX)]
         members.append({"name": graph_document.get("display_name") or file_stem, "import_path": graph_document["asset"], "summary": ""})
     return members
+
+
+def view_members_of_the_archive(archive):
+    """Each view the archive's `views/<folder>/tatolab_view.json` declares, as a catalog entry names it."""
+    project_name = json.loads(archive.read(PROJECT_FILE_NAME))["name"]
+    members = []
+    for member_name in sorted(archive.namelist()):
+        if not re.fullmatch(rf"{VIEWS_DIRECTORY_NAME}/[^/]+/{re.escape(VIEW_MANIFEST_FILE_NAME)}", member_name):
+            continue
+        manifest = json.loads(archive.read(member_name))
+        missing = [field for field in VIEW_MANIFEST_REQUIRED_FIELDS if not isinstance(manifest.get(field), str) or not manifest[field]]
+        if missing:
+            raise ModuleProjectNotDescribed(f"{member_name} does not read against view contract {VIEW_CONTRACT}: it names no {', '.join(missing)}")
+        if manifest["contract"] != VIEW_CONTRACT:
+            raise ModuleProjectNotDescribed(f"{member_name} is built for view contract {json.dumps(manifest['contract'])}, not {VIEW_CONTRACT}")
+        if manifest["placement"] not in VIEW_PLACEMENTS:
+            raise ModuleProjectNotDescribed(f"{member_name}'s placement {json.dumps(manifest['placement'])} is not area or node")
+        members.append(
+            {
+                "view_type": f"{project_name}:{member_name.split('/')[1]}",
+                "title": manifest["title"],
+                "description": manifest.get("description") or "",
+                "placement": manifest["placement"],
+                "devices": [capability for capability in manifest.get("capabilities", []) if capability in VIEW_DEVICE_CAPABILITIES],
+            }
+        )
+    return members
+
+
+def ports_as_the_catalog_names_them(ports):
+    """Each port the listing read, as its `name`, `family` and `description`."""
+    return [{"name": port["name"], "family": port.get("family"), "description": port.get("description") or ""} for port in ports]
 
 
 def first_line_of(description):
@@ -261,14 +481,17 @@ def node_members_the_listing_names(listing_document, distribution_name):
     undeclared = [node_type["type"] for node_type in source.get("node_types", []) if node_type.get("kind") is None]
     if undeclared:
         raise ModuleProjectNotDescribed(f"{distribution_name} names entry points the listing finds no node at: {', '.join(undeclared)}")
-    members = [
-        {
+    members = []
+    for node_type in source.get("node_types", []):
+        member = {
             "name": node_type["type"].split(":", 1)[1],
             "import_path": node_type["type"],
             "summary": first_line_of(node_type.get("description")),
         }
-        for node_type in source.get("node_types", [])
-    ]
+        for direction in ("inputs", "outputs"):
+            if node_type.get(direction) is not None:
+                member[direction] = ports_as_the_catalog_names_them(node_type[direction])
+        members.append(member)
     if not members:
         raise ModuleProjectNotDescribed(f"{distribution_name} brings no node the listing reads")
     return members
@@ -312,20 +535,34 @@ def catalog_entry_of_the_archive(archive_path, uv, tatolab_stream_wheel):
     entry["nodes"] = node_members_the_listing_names(listing_document, entry["name"])
     with zipfile.ZipFile(archive_path) as archive:
         entry["streams"] = stream_members_of_the_archive(archive)
+        entry["views"] = view_members_of_the_archive(archive)
     return entry
+
+
+def earlier_versions_beside(entry, the_entry_it_replaces):
+    """Each earlier release's `version` and `copy_version` the catalog listed for `entry`'s module, oldest first."""
+    if the_entry_it_replaces is None:
+        return []
+    earlier = [*the_entry_it_replaces.get("earlier_versions", [])]
+    if the_entry_it_replaces.get("copy_version") and the_entry_it_replaces.get("version") != entry.get("version"):
+        earlier.append({"version": the_entry_it_replaces["version"], "copy_version": the_entry_it_replaces["copy_version"]})
+    return [earlier_version for earlier_version in earlier if earlier_version.get("version") != entry.get("version")]
 
 
 def catalog_with_these_entries(entries, catalog_it_replaces):
     """The catalog listing `entries` in name order, beside each entry of `catalog_it_replaces` no entry here names."""
+    entries_it_replaces = {
+        normalized_distribution_name(entry.get("name", "")): entry for entry in (catalog_it_replaces or {}).get("entries", [])
+    }
     named_now = {normalized_distribution_name(entry["name"]) for entry in entries}
-    kept = [
-        entry
-        for entry in (catalog_it_replaces or {}).get("entries", [])
-        if normalized_distribution_name(entry.get("name", "")) not in named_now
-    ]
+    kept = [entry for name, entry in entries_it_replaces.items() if name not in named_now]
+    written = []
+    for entry in entries:
+        earlier_versions = earlier_versions_beside(entry, entries_it_replaces.get(normalized_distribution_name(entry["name"])))
+        written.append({**entry, "earlier_versions": earlier_versions} if earlier_versions else entry)
     return {
         "catalog_version": CATALOG_VERSION,
-        "entries": sorted([*entries, *kept], key=lambda entry: (entry.get("kind") != "package", entry["name"])),
+        "entries": sorted([*written, *kept], key=lambda entry: (entry.get("kind") != "package", entry["name"])),
     }
 
 

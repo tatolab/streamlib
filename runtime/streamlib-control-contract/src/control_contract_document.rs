@@ -282,6 +282,54 @@ mod tests {
         }
     }
 
+    /// A node type as each listing answers it, filed under a group by the project, validates
+    /// against its schema in the document, and one filed by no one the contract names does not.
+    #[test]
+    fn a_node_type_listed_with_who_filed_it_is_an_answer_the_contract_states() {
+        let document = control_contract_document();
+        let the_schema_of = |name: &str| {
+            jsonschema::validator_for(&json!({
+                "$ref": format!("#/components/schemas/{name}"),
+                "components": document["components"],
+            }))
+            .unwrap_or_else(|refusal| panic!("`{name}` is a schema: {refusal}"))
+        };
+        let recorded = [
+            (
+                "NodeTypeListed",
+                json!({"node_type": "nodes.mix:Mixer", "documentation": "Mixes.",
+                       "category": "Show/Levels", "category_from": "project",
+                       "kind": "process", "described_from": "source"}),
+            ),
+            (
+                "NodeTypeReadFromSource",
+                json!({"type": "nodes.mix:Mixer", "kind": "process", "description": "Mixes.",
+                       "category": "Robot/Hands", "category_from": "import",
+                       "inputs": [], "outputs": [], "path": "nodes/mix.py", "line": 1}),
+            ),
+        ];
+        for (name, answer) in recorded {
+            let validator = the_schema_of(name);
+            assert!(validator.is_valid(&answer), "{answer} is a `{name}`");
+            for category_from in ["declaration", "import", "project"] {
+                let mut filed = answer.clone();
+                filed["category_from"] = json!(category_from);
+                assert!(validator.is_valid(&filed), "{filed} is a `{name}`");
+            }
+            let mut filed_by_no_one_named = answer.clone();
+            filed_by_no_one_named["category_from"] = json!("elsewhere");
+            assert!(
+                !validator.is_valid(&filed_by_no_one_named),
+                "{filed_by_no_one_named} is no `{name}`"
+            );
+        }
+        assert!(
+            document["components"]["schemas"]["NodeTypeDescription"]["properties"]
+                .get("category_from")
+                .is_some()
+        );
+    }
+
     #[test]
     fn the_document_lists_every_registered_operation_in_table_order() {
         let document = control_contract_document();

@@ -19,6 +19,7 @@ from tatolab.runtime._function_node_carried_values import (
     FunctionNodeRunAsPythonInItsReader,
     PART_VALUE_TYPES,
     UNREAD_MESSAGE_VALUE_TYPE,
+    parts_a_value_type_reads,
     value_class_of_a_part_value_type,
 )
 from tatolab.runtime._function_node_stored_values import (
@@ -159,7 +160,9 @@ class FunctionNodeBodyRunAsPython:
                 )
             return copy.deepcopy(input_value)
         if value_type in PART_VALUE_TYPES:
-            return value_class_of_a_part_value_type(value_type).from_parts(input_value)
+            return value_class_of_a_part_value_type(value_type).from_parts(
+                parts_a_value_type_reads(value_type, input_value)
+            )
         if value_type in STORED_VALUE_TYPES:
             what_it_is = f"function node `{self._node_id}`'s input `{parameter_name}`"
             if not isinstance(input_value, dict) or STORED_VALUE_RECORD_KEY not in input_value:

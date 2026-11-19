@@ -117,6 +117,8 @@ impl RefusalCodeAndPlace {
             | ProjectRepositoryRefusal::StreamAssetHasNoImportSettings(_)
             | ProjectRepositoryRefusal::AssetStillReferenced { .. }
             | ProjectRepositoryRefusal::BlankProjectName
+            | ProjectRepositoryRefusal::BlankNodeTypeMovedIntoAGroup
+            | ProjectRepositoryRefusal::NodeTypeGroupIsNotAPath { .. }
             | ProjectRepositoryRefusal::CoverIsNotAMediaAsset { .. }
             | ProjectRepositoryRefusal::AssetIsTheProjectCover(_)
             | ProjectRepositoryRefusal::DuplicateIntoAnExistingPath { .. }

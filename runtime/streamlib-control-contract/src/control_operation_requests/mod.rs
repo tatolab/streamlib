@@ -45,7 +45,9 @@ pub use graph_edit_requests::{
     SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
     WriteGraphInputRequest,
 };
-pub use node_type_requests::{DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest};
+pub use node_type_requests::{
+    DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest, SetNodeTypeGroupRequest,
+};
 pub use playback_and_stream_action_requests::{
     OneStreamActionRequest, STREAM_ACTION_ARGUMENT_DESCRIPTION,
     STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION, SetStreamClockScaleRequest,

@@ -96,10 +96,10 @@ fn the_ends_connect_links(
 /// an end the graph cannot take, a link its pin types or families refuse, one feeding a
 /// function node island into the app process, one an island cannot take, or one whose channel
 /// cannot be named. A link of a saved graph, as `a_link_connected` says, keeps one the verdict
-/// refuses by its pin types alone when its families take it, and leaves one an island cannot
-/// take to the commit that builds the stream, so the graph opens. Answers the verdict of two
-/// typed ends that connect, `None` for ends their families judge, and the channel the link
-/// carries on.
+/// refuses by its pin types alone when its families take it, and leaves one feeding an island
+/// into the app process or one an island cannot take to the commit that builds the stream, so
+/// the graph opens and the link can be removed. Answers the verdict of two typed ends that
+/// connect, `None` for ends their families judge, and the channel the link carries on.
 fn refuse_a_link_connect_refuses(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -110,8 +110,8 @@ fn refuse_a_link_connect_refuses(
     refuse_a_destination_this_graph_cannot_take(graph, to)?;
     let verdict =
         refuse_a_link_its_pin_types_or_families_refuse(graph, from, to, a_link_connected)?;
-    refuse_a_link_feeding_an_island_into_the_app_process(graph, from, to)?;
     if a_link_connected == ALinkConnected::MadeNow {
+        refuse_a_link_feeding_an_island_into_the_app_process(graph, from, to)?;
         refuse_a_link_an_island_cannot_take(graph, from, to, None)?;
     }
     let channel =
