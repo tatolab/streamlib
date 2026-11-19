@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::super::handle_escalate_op;
-use super::super::handle_lifecycle::EscalateHandleRegistry;
+use super::super::handle_lifecycle::{
+    EscalateHandleRegistry, release_everything_a_torn_down_helper_held,
+};
 use super::super::kernel_shader_stage_source::SPIRV_MAGIC_LE;
 use super::linux_and_macos::prepare_ray_tracing_kernel_registration;
 use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;

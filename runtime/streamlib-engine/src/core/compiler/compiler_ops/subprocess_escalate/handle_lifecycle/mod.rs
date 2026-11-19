@@ -16,6 +16,7 @@ pub(crate) use node_output_pools_of_one_helper::{
 };
 use one_off_acquisition_count_reservation::OneOffAcquisitionCountReservation;
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
@@ -157,6 +158,10 @@ pub(crate) struct EscalateHandleRegistry {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     surface_color_conversion_session:
         Mutex<crate::core::context::surfaces_and_their_stores::surface_color_conversion::SurfaceColorConversionSession>,
+    /// The ids of the acceleration structures this helper built and has not
+    /// released; they live in `GpuContext`'s own registry, so this is how a
+    /// torn-down helper's structures are found again.
+    acceleration_structures_built_for_the_helper: Mutex<HashSet<String>>,
 }
 
 impl EscalateHandleRegistry {
@@ -245,6 +250,38 @@ impl EscalateHandleRegistry {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Hold the id of an acceleration structure built for the helper, so its
+    /// teardown releases the structure when the helper never did.
+    pub(super) fn hold_acceleration_structure_built_for_the_helper(
+        &self,
+        acceleration_structure_id: String,
+    ) {
+        self.locked_acceleration_structures_built_for_the_helper()
+            .insert(acceleration_structure_id);
+    }
+
+    /// Stop holding an acceleration structure the helper released itself.
+    fn forget_acceleration_structure_the_helper_released(&self, acceleration_structure_id: &str) {
+        self.locked_acceleration_structures_built_for_the_helper()
+            .remove(acceleration_structure_id);
+    }
+
+    fn drain_acceleration_structures_built_for_the_helper(&self) -> Vec<String> {
+        self.locked_acceleration_structures_built_for_the_helper()
+            .drain()
+            .collect()
+    }
+
+    /// Taken for one insert, removal or drain, so it recovers rather than
+    /// panics when poisoned.
+    fn locked_acceleration_structures_built_for_the_helper(
+        &self,
+    ) -> MutexGuard<'_, HashSet<String>> {
+        self.acceleration_structures_built_for_the_helper
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Remove a handle by id, handing back what was held so the caller can
     /// pair its removal with the kind-specific cleanup, and its count back to
     /// the node. `None` when the id was unknown. Used by the escalate
@@ -319,7 +356,10 @@ pub(super) fn handle_release_handle(
     // An acceleration structure is registered against `GpuContext`
     // rather than against the per-subprocess handle registry, so its id
     // reaches the same release verb through the device gate.
-    let released = removed || release_acceleration_structure(sandbox, &handle_id);
+    let released = removed || {
+        registry.forget_acceleration_structure_the_helper_released(&handle_id);
+        release_acceleration_structure(sandbox, &handle_id)
+    };
     if released {
         EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
@@ -402,6 +442,9 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
             .registered_handle
             .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
         release_node_output_pool_slot(sandbox, released_slot);
+    }
+    for acceleration_structure_id in registry.drain_acceleration_structures_built_for_the_helper() {
+        release_acceleration_structure(sandbox, &acceleration_structure_id);
     }
 }
 

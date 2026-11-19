@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::hex_encoded_wire_bytes::decode_hex;
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
 use super::super::surface_bound_kernel_binding::{
@@ -94,6 +95,7 @@ pub(super) fn surface_bound_ray_tracing_binding_kind(
 /// 5. Empty geometry, or an acceleration-structure build failure.
 pub(in super::super) fn handle_register_acceleration_structure_blas(
     sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
     rid: String,
     req: EscalateRequestRegisterAccelerationStructureBlas,
 ) -> EscalateResponse {
@@ -155,17 +157,12 @@ pub(in super::super) fn handle_register_acceleration_structure_blas(
         Ok(full.register_acceleration_structure(blas))
     });
 
-    match registered {
-        Ok(acceleration_structure_id) => EscalateResponse::Ok(EscalateResponseOk {
-            request_id: rid,
-            handle_id: acceleration_structure_id,
-            ..Default::default()
-        }),
-        Err(e) => EscalateResponse::Err(EscalateResponseErr {
-            request_id: rid,
-            message: format!("register_acceleration_structure_blas failed: {e}"),
-        }),
-    }
+    answer_a_structure_built_for_the_helper(
+        registry,
+        rid,
+        "register_acceleration_structure_blas",
+        registered,
+    )
 }
 
 /// Build a TLAS over previously-registered BLASes, against `GpuContext`.
@@ -183,6 +180,7 @@ pub(in super::super) fn handle_register_acceleration_structure_blas(
 /// 5. An unknown `blas_id`, a `blas_id` naming a TLAS, or a build failure.
 pub(in super::super) fn handle_register_acceleration_structure_tlas(
     sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
     rid: String,
     req: EscalateRequestRegisterAccelerationStructureTlas,
 ) -> EscalateResponse {
@@ -262,15 +260,36 @@ pub(in super::super) fn handle_register_acceleration_structure_tlas(
         Ok(full.register_acceleration_structure(tlas))
     });
 
+    answer_a_structure_built_for_the_helper(
+        registry,
+        rid,
+        "register_acceleration_structure_tlas",
+        registered,
+    )
+}
+
+/// Answer a structure build with the new structure's id, held for the helper
+/// so the structure goes with it, or with the build's failure.
+fn answer_a_structure_built_for_the_helper(
+    registry: &EscalateHandleRegistry,
+    rid: String,
+    op: &str,
+    registered: crate::core::error::Result<String>,
+) -> EscalateResponse {
     match registered {
-        Ok(acceleration_structure_id) => EscalateResponse::Ok(EscalateResponseOk {
-            request_id: rid,
-            handle_id: acceleration_structure_id,
-            ..Default::default()
-        }),
+        Ok(acceleration_structure_id) => {
+            registry.hold_acceleration_structure_built_for_the_helper(
+                acceleration_structure_id.clone(),
+            );
+            EscalateResponse::Ok(EscalateResponseOk {
+                request_id: rid,
+                handle_id: acceleration_structure_id,
+                ..Default::default()
+            })
+        }
         Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("register_acceleration_structure_tlas failed: {e}"),
+            message: format!("{op} failed: {e}"),
         }),
     }
 }
