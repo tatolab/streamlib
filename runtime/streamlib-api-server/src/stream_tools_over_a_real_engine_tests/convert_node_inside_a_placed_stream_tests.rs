@@ -21,9 +21,8 @@ const BGRA_WRITER_NODE_UUID: &str = "e7e7e7e7-e7e7-4e7e-8e7e-e7e7e7e7e7e7";
 /// that same refusal, and the placed stream's document is left as it was; one holding
 /// `bgra8_unorm` connects there.
 ///
-/// Mental-revert: judging a link inside a placed stream by the ports its node types state, and
-/// not by the settings each node holds, connects the first link with a warning that the output
-/// states no format.
+/// Mental-revert: leaving a plain `connect` inside a placed stream unjudged once the level's
+/// document takes it saves the first link.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_convert_node_inside_a_placed_stream_is_judged_by_the_format_it_holds() {
     register_the_convert_node_test_node_types_once();
