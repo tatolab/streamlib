@@ -19,6 +19,7 @@ use super::{
     the_verdict_connect_takes_on_a_link,
 };
 use crate::core::compiler::Compiler;
+use crate::core::compiler::compiler_ops::function_node_island::the_island_links_into_a_reactive_reader_only_islands_feed;
 use crate::core::descriptors::{
     AudioWindowContract, FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName,
     NodeDescriptor, NodeKind, PortDescriptor, PortFamily, PortFamilyDeclaration,
@@ -38,6 +39,7 @@ const HELPER_PROCESS_READER: &str = "app_process_check:meter";
 const HELPER_PROCESS_WINDOWED_READER: &str = "app_process_check:windowed_meter";
 const HELPER_PROCESS_REACTIVE_READER: &str = "app_process_check:reactive_meter";
 const HELPER_PROCESS_SOURCE: &str = "app_process_check:source";
+const HELPER_PROCESS_MANUAL_READER: &str = "app_process_check:manual_meter";
 
 fn a_records_port(name: &str) -> PortDescriptor {
     PortDescriptor::new(
@@ -62,6 +64,7 @@ fn a_described_node_type(
         import_path,
         "a fixture",
     );
+    descriptor.function_node_runs_as_python = matches!(node_kind, NodeKind::Function { .. });
     descriptor.node_kind = node_kind;
     descriptor.inputs = inputs.iter().map(|name| a_records_port(name)).collect();
     descriptor.outputs = outputs.iter().map(|name| a_records_port(name)).collect();
@@ -116,6 +119,7 @@ fn a_stopped_stream_resolving_a_function_node_type() -> Arc<Compiler> {
     for (import_path, inputs, outputs) in [
         (HELPER_PROCESS_REACTIVE_READER, &["in1", "in2"][..], &[][..]),
         (HELPER_PROCESS_SOURCE, &[][..], &["out"][..]),
+        (HELPER_PROCESS_MANUAL_READER, &["in1"][..], &[][..]),
     ] {
         node_types
             .register_a_type_described_in_this_streams_node_interpreter(
@@ -129,6 +133,10 @@ fn a_stopped_stream_resolving_a_function_node_type() -> Arc<Compiler> {
     node_types.record_the_execution_a_described_class_declares(
         NodeClassImportPath::new(HELPER_PROCESS_REACTIVE_READER).unwrap(),
         ProcessExecution::Reactive,
+    );
+    node_types.record_the_execution_a_described_class_declares(
+        NodeClassImportPath::new(HELPER_PROCESS_MANUAL_READER).unwrap(),
+        ProcessExecution::Manual,
     );
     Arc::new(Compiler::new_of_a_stream(
         Arc::new(node_types),
@@ -196,7 +204,7 @@ fn connect_a_link_of_a_saved_graph_on_this_thread(
             from,
             to,
             ALinkConnected::OfASavedGraph,
-            WhenTheEngineCannotWireALink::SetAside,
+            WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,
         ))
 }
 
@@ -321,11 +329,26 @@ fn assert_refused_made_now_and_set_aside_from_a_saved_graph(
     assert_eq!(the_links_in(compiler), links_before);
     match connect_a_link_of_a_saved_graph_on_this_thread(compiler, from, to) {
         Ok(ALinkConnectedOrSetAside::SetAside(why)) => {
-            assert!(why.to_string().contains(words), "{why}");
+            assert_eq!(
+                without_the_link_ids_named(&why.to_string()),
+                without_the_link_ids_named(&refused)
+            );
         }
         made => panic!("a saved graph's link is set aside, got {made:?}"),
     }
     assert_eq!(the_links_in(compiler), links_before);
+}
+
+/// `words` with each link id they name as `link '<id>'` left out, since a link made twice is
+/// given a new id each time.
+fn without_the_link_ids_named(words: &str) -> String {
+    let mut parts = words.split("link '");
+    let mut kept = parts.next().unwrap_or_default().to_owned();
+    for part in parts {
+        kept.push_str("link '");
+        kept.push_str(part.split_once('\'').map_or(part, |(_, after)| after));
+    }
+    kept
 }
 
 /// A second link into a port an island feeds is caught at the edit.
@@ -411,12 +434,30 @@ fn an_island_into_a_reactive_reader_only_islands_feed_is_caught_at_the_edit() {
     let switch = a_node_of(&compiler, FUNCTION_NODE);
     let source = a_node_of(&compiler, HELPER_PROCESS_SOURCE);
     let reader = a_node_of(&compiler, HELPER_PROCESS_REACTIVE_READER);
-    assert_refused_made_now_and_set_aside_from_a_saved_graph(
+    let refused = connect_on_this_thread(
         &compiler,
         OutputLinkPortRef::new(switch.clone(), "result"),
         InputLinkPortRef::new(reader.clone(), "in1"),
-        "would never run",
-    );
+    )
+    .expect_err("connect refuses the link made now");
+    assert!(refused.to_string().contains("would never run"), "{refused}");
+    assert_eq!(the_links_in(&compiler), 0);
+
+    let made = connect_a_link_of_a_saved_graph_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(switch.clone(), "result"),
+        InputLinkPortRef::new(reader.clone(), "in1"),
+    )
+    .expect("a saved graph's link leaves the reader rule to the sweep")
+    .connected()
+    .expect("the link is made");
+    let swept = compiler.scope_reading(the_island_links_into_a_reactive_reader_only_islands_feed);
+    assert_eq!(swept.len(), 1);
+    assert_eq!(swept[0].0, made);
+    assert_eq!(swept[0].1.to_string(), refused.to_string());
+    compiler.scope(|graph, _tx| {
+        graph.traversal_mut().e(&made).drop();
+    });
 
     connect_on_this_thread(
         &compiler,
@@ -456,8 +497,20 @@ fn a_removal_leaving_a_reactive_reader_fed_only_by_islands_is_caught_at_the_edit
     for removal in [ARemoval::OfALink(&source_link), ARemoval::OfANode(&source)] {
         let refused = compiler
             .scope_reading(|graph| refuse_a_removal_that_strands_a_reactive_reader(graph, removal))
-            .expect_err("the reader would never run again");
-        assert!(refused.to_string().contains("never run again"), "{refused}");
+            .expect_err("the reader would never run again")
+            .to_string();
+        assert!(refused.contains("never run again"), "{refused}");
+        assert!(
+            refused.contains(&format!(
+                "or disconnect the function node link into `{reader}`"
+            )),
+            "{refused}"
+        );
+        let removal_named = match removal {
+            ARemoval::OfALink(link_id) => format!("removing link `{link_id}`"),
+            ARemoval::OfANode(node_run_id) => format!("removing node `{node_run_id}`"),
+        };
+        assert!(refused.contains(&removal_named), "{refused}");
     }
     compiler
         .scope_reading(|graph| {
@@ -530,6 +583,49 @@ fn a_destination_past_its_inbound_cap_is_caught_at_the_edit() {
         OutputLinkPortRef::new(one_too_many, "out"),
         InputLinkPortRef::new(meter, "in1"),
         "inbound links, and a destination carries at most",
+    );
+}
+
+/// The stream's function node pool, one destination for every island it carries, is caught at
+/// the edit past its inbound cap, though no reader it feeds is.
+///
+/// Mental-revert: counting only each reader's own inbound links takes every island link and
+/// the start refuses the pool.
+#[test]
+fn the_function_node_pool_past_its_inbound_cap_is_caught_at_the_edit() {
+    const READS_OF_EACH_ISLAND: usize = 30;
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let an_island_link_reading_from_outside = |compiler: &Arc<Compiler>| {
+        let switch = a_node_of(compiler, FUNCTION_NODE);
+        for _ in 0..READS_OF_EACH_ISLAND {
+            let source = a_node_of(compiler, HELPER_PROCESS_SOURCE);
+            connect_on_this_thread(
+                compiler,
+                OutputLinkPortRef::new(source, "out"),
+                InputLinkPortRef::new(switch.clone(), "x"),
+            )
+            .expect("the island reads one more source");
+        }
+        (
+            OutputLinkPortRef::new(switch, "result"),
+            InputLinkPortRef::new(a_node_of(compiler, HELPER_PROCESS_MANUAL_READER), "in1"),
+        )
+    };
+    let islands_the_pool_takes =
+        streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION / READS_OF_EACH_ISLAND;
+    for _ in 0..islands_the_pool_takes {
+        let (from, to) = an_island_link_reading_from_outside(&compiler);
+        connect_on_this_thread(&compiler, from, to).expect("the pool carries one more island");
+    }
+    let (from, to) = an_island_link_reading_from_outside(&compiler);
+    assert_refused_made_now_and_set_aside_from_a_saved_graph(
+        &compiler,
+        from,
+        to,
+        &format!(
+            "the stream's function node pool would hold {} inbound links",
+            (islands_the_pool_takes + 1) * READS_OF_EACH_ISLAND
+        ),
     );
 }
 

@@ -20,7 +20,7 @@ use crate::core::nodes::NodeTypesOneStreamResolves;
 use super::{
     is_a_previous_value_node, is_fed_by_a_node_that_is_not_a_function_node, link_in,
     runs_inside_the_read_of_each_node_it_feeds, the_function_nodes_upstream_of,
-    the_links_into_function_nodes_from_outside_any_island, the_readers_a_function_node_feeds,
+    the_links_into_function_nodes_from_outside_any_island, the_readers_a_link_into_reaches,
 };
 
 /// Refuse, before a commit changes anything, an edit an island cannot take: a
@@ -44,11 +44,18 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
         let link = link_in(graph, link_id)?;
         refuse_a_link_an_island_cannot_take(graph, link.source(), link.to_port(), Some(link_id))?;
     }
-    refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
-        graph,
-        links_to_remove,
-        is_a_running_reader,
-    )?;
+    if let Some(reader_id) =
+        the_reader_a_removal_strands(graph, links_to_remove, is_a_running_reader)?
+    {
+        let removal_named = match links_to_remove {
+            [link_id] => format!("link `{link_id}`"),
+            _ => format!("{} links", links_to_remove.len()),
+        };
+        return Err(the_refusal_of_a_removal_stranding(
+            &removal_named,
+            &reader_id,
+        ));
+    }
     for (updated_id, _) in config_updates {
         if runs_inside_the_read_of_each_node_it_feeds(graph, updated_id) {
             return Err(Error::Config(format!(
@@ -267,65 +274,99 @@ fn refuse_an_island_into_a_port_declaring_an_audio_window(
     Ok(())
 }
 
-/// Refuse removing `links_to_remove` when it leaves a reader `is_a_reader_judged` takes, one
-/// that runs reactively, fed only by function node islands, which have no source to wake it.
-pub(crate) fn refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
+/// The reader, one `is_a_reader_judged` takes, that removing `links_to_remove` leaves running
+/// reactively, fed only by function node islands, which have no source to wake it.
+pub(crate) fn the_reader_a_removal_strands(
     graph: &Graph,
     links_to_remove: &[LinkUniqueId],
     is_a_reader_judged: impl Fn(&NodeRunId) -> bool,
-) -> Result<()> {
+) -> Result<Option<NodeRunId>> {
     for link_id in links_to_remove {
         let link = link_in(graph, link_id)?;
         if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()) {
             continue;
         }
-        let destination_id = link.to_port().node_run_id();
-        let readers_it_wakes = if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
+        if let Some(reader_id) =
+            the_readers_a_link_into_reaches(graph, link.to_port().node_run_id())
+                .into_iter()
+                .find(|reader_id| {
+                    is_a_reader_judged(reader_id)
+                        && is_reactive_and_left_fed_only_by_islands(
+                            graph,
+                            reader_id,
+                            links_to_remove,
+                        )
+                })
         {
-            the_readers_a_function_node_feeds(graph, destination_id)
-        } else {
-            HashSet::from([destination_id.clone()])
-        };
-        for reader_id in &readers_it_wakes {
-            if is_a_reader_judged(reader_id)
-                && is_reactive_and_left_fed_only_by_islands(graph, reader_id, links_to_remove)
-            {
-                return Err(Error::InvalidLink(format!(
-                    "removing `{link_id}` leaves `{reader_id}`, which runs reactively, fed only \
-                     by function node islands, which have no source to wake it, so it would \
-                     never run again. To fix: link it another source first, or remove it"
-                )));
-            }
+            return Ok(Some(reader_id));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
-/// Refuse `link_id`, which `graph` holds, when it feeds a function node island into a reader
-/// that runs reactively and that only islands feed.
+/// The refusal of removing `removal_named`, which leaves `reader_id` running reactively, fed
+/// only by function node islands.
+pub(crate) fn the_refusal_of_a_removal_stranding(
+    removal_named: &str,
+    reader_id: &NodeRunId,
+) -> Error {
+    Error::InvalidLink(format!(
+        "removing {removal_named} leaves `{reader_id}`, which runs reactively, fed only by \
+         function node islands, which have no source to wake it, so it would never run again. \
+         To fix: link it another source first, or disconnect the function node link into \
+         `{reader_id}` first, or remove it"
+    ))
+}
+
+/// Refuse `link`, which `graph` holds, when it feeds a function node island into a reader that
+/// runs reactively and that only islands feed.
 pub(crate) fn refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands(
     graph: &Graph,
-    link_id: &LinkUniqueId,
+    link: &Link,
 ) -> Result<()> {
-    let link = link_in(graph, link_id)?;
     if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()) {
         return Ok(());
     }
-    let destination_id = link.to_port().node_run_id();
-    let readers_it_feeds = if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
-        the_readers_a_function_node_feeds(graph, destination_id)
-    } else {
-        HashSet::from([destination_id.clone()])
-    };
-    match readers_it_feeds.iter().find(|reader_id| {
-        runs_reactively(graph, reader_id)
-            && !is_fed_by_a_node_that_is_not_a_function_node(graph, reader_id)
-    }) {
+    match the_readers_a_link_into_reaches(graph, link.to_port().node_run_id())
+        .iter()
+        .find(|reader_id| is_a_reactive_reader_only_islands_feed(graph, reader_id))
+    {
         Some(reader_id) => Err(the_refusal_of_a_reactive_reader_fed_only_by_islands(
             reader_id,
         )),
         None => Ok(()),
     }
+}
+
+/// Each link `graph` holds from a function node into a reader that runs reactively and that
+/// only islands feed, with why the engine cannot wire it: judged once every link of a saved
+/// graph or a batch of edits is made, so the order they are made in never matters.
+pub(crate) fn the_island_links_into_a_reactive_reader_only_islands_feed(
+    graph: &Graph,
+) -> Vec<(LinkUniqueId, Error)> {
+    graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| {
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().node_run_id())
+                && is_a_reactive_reader_only_islands_feed(graph, link.to_port().node_run_id())
+        })
+        .map(|link| {
+            (
+                link.id.clone(),
+                the_refusal_of_a_reactive_reader_fed_only_by_islands(link.to_port().node_run_id()),
+            )
+        })
+        .collect()
+}
+
+/// Whether `reader_id` runs reactively and only function node islands feed it, so no source
+/// wakes it.
+pub(crate) fn is_a_reactive_reader_only_islands_feed(graph: &Graph, reader_id: &NodeRunId) -> bool {
+    runs_reactively(graph, reader_id)
+        && !is_fed_by_a_node_that_is_not_a_function_node(graph, reader_id)
 }
 
 /// The refusal of a link feeding a function node island into `reader_id`, which runs

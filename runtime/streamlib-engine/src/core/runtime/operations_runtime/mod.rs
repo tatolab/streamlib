@@ -17,8 +17,9 @@ use super::runtime::TokioRuntimeVariant;
 use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::RuntimeContext;
 use crate::core::compiler::compiler_ops::function_node_island::{
-    refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands,
     runs_inside_the_read_of_each_node_it_feeds,
+    the_island_links_into_a_reactive_reader_only_islands_feed, the_reader_a_removal_strands,
+    the_refusal_of_a_removal_stranding,
 };
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
@@ -70,14 +71,21 @@ fn refuse_a_removal_that_strands_a_reactive_reader(
         })
         .map(|link| link.id.clone())
         .collect();
-    refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
-        graph,
-        &links_removed,
-        |reader_id| {
-            !matches!(removal, ARemoval::OfANode(node_run_id) if node_run_id == reader_id)
-                && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
-        },
-    )
+    let Some(reader_id) = the_reader_a_removal_strands(graph, &links_removed, |reader_id| {
+        !matches!(removal, ARemoval::OfANode(node_run_id) if node_run_id == reader_id)
+            && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
+    })?
+    else {
+        return Ok(());
+    };
+    let removal_named = match removal {
+        ARemoval::OfANode(node_run_id) => format!("node `{node_run_id}`"),
+        ARemoval::OfALink(link_id) => format!("link `{link_id}`"),
+    };
+    Err(the_refusal_of_a_removal_stranding(
+        &removal_named,
+        &reader_id,
+    ))
 }
 
 /// One edit that takes something out of a stream's graph.
@@ -618,13 +626,47 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Refuse `removal` when it leaves a reader it does not take out that runs reactively, fed
-    /// only by function node islands, which have no source to wake it.
-    fn refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
-        &self,
-        removal: ARemoval<'_>,
-    ) -> Result<()> {
+    /// only by function node islands, which have no source to wake it; while a batch of graph
+    /// operations is open, that is judged as the batch closes.
+    fn refuse_a_removal_this_stream_cannot_take(&self, removal: ARemoval<'_>) -> Result<()> {
+        if self.a_batch_of_graph_operations_is_open() {
+            return Ok(());
+        }
         self.compiler
             .scope_reading(|graph| refuse_a_removal_that_strands_a_reactive_reader(graph, removal))
+    }
+
+    /// Whether a batch of graph operations is open on this stream.
+    pub(in crate::core::runtime) fn a_batch_of_graph_operations_is_open(&self) -> bool {
+        self.batches_of_graph_operations_open
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
+    }
+
+    /// What a connect an edit makes does with a link the engine cannot wire: refused whole now,
+    /// or, while a batch of graph operations is open, the reader rule judged as it closes.
+    fn the_connect_an_edit_makes(&self) -> WhenTheEngineCannotWireALink {
+        if self.a_batch_of_graph_operations_is_open() {
+            WhenTheEngineCannotWireALink::RefuseLeavingTheReaderRuleToASweep
+        } else {
+            WhenTheEngineCannotWireALink::Refuse
+        }
+    }
+
+    /// Refuse this stream's graph when it holds a link from a function node into a reader that
+    /// runs reactively and that only islands feed, which no source would ever wake.
+    pub(in crate::core::runtime) fn refuse_a_reactive_reader_only_islands_feed(
+        &self,
+    ) -> Result<()> {
+        self.compiler.scope_reading(|graph| {
+            match the_island_links_into_a_reactive_reader_only_islands_feed(graph)
+                .into_iter()
+                .next()
+            {
+                Some((_, why_the_engine_cannot_wire_it)) => Err(why_the_engine_cannot_wire_it),
+                None => Ok(()),
+            }
+        })
     }
 
     /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
@@ -669,9 +711,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                 NodeChangeADrawnLinkBlocks::Removal,
             )
             .and_then(|()| {
-                self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
-                    ARemoval::OfANode(&node_run_id),
-                )
+                self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(&node_run_id))
             })
         {
             return Box::pin(std::future::ready(Err(refusal)));
@@ -689,15 +729,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             from,
             to,
             ALinkConnected::MadeNow,
-            WhenTheEngineCannotWireALink::Refuse,
+            self.the_connect_an_edit_makes(),
         );
         self.in_this_streams_log_route(async move { connect.await?.connected() })
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-        if let Err(refusal) = self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
-            ARemoval::OfALink(&link_id),
-        ) {
+        if let Err(refusal) =
+            self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(&link_id))
+        {
             return Box::pin(std::future::ready(Err(refusal)));
         }
         self.in_this_streams_log_route(disconnect_impl(self.live_graph_change(), link_id))
@@ -921,9 +961,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             node_run_id,
             NodeChangeADrawnLinkBlocks::Removal,
         )?;
-        self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(ARemoval::OfANode(
-            node_run_id,
-        ))?;
+        self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(node_run_id))?;
         self.block_on_the_engines_tokio_runtime(remove_node_impl(
             self.live_graph_change(),
             node_run_id.clone(),
@@ -936,19 +974,37 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             from,
             to,
             ALinkConnected::MadeNow,
-            WhenTheEngineCannotWireALink::Refuse,
+            self.the_connect_an_edit_makes(),
         ))?
         .connected()
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
-        self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(ARemoval::OfALink(
-            link_id,
-        ))?;
+        self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(link_id))?;
         self.block_on_the_engines_tokio_runtime(disconnect_impl(
             self.live_graph_change(),
             link_id.clone(),
         ))
+    }
+
+    fn open_a_batch_of_graph_operations(&self) {
+        self.batches_of_graph_operations_open
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn close_a_batch_of_graph_operations(&self) -> Result<()> {
+        let batches_open_before = self
+            .batches_of_graph_operations_open
+            .try_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |batches_open| Some(batches_open.saturating_sub(1)),
+            )
+            .unwrap_or_default();
+        if batches_open_before > 1 {
+            return Ok(());
+        }
+        self.refuse_a_reactive_reader_only_islands_feed()
     }
 
     fn request_this_streams_shutdown(&self, reason: &str) -> Result<()> {

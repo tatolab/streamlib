@@ -115,6 +115,9 @@ pub struct LoadedStreamInThisRuntime {
     /// The fragment, variable and interface nodes, and what they resolved to, of the
     /// graph this stream runs, so `graph` renders them as drawn.
     pub(in crate::core::runtime) graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
+    /// How many batches of graph operations are open on this stream: while one is, the rule a
+    /// reactive reader sets is judged once, as the batch closes, against the graph it leaves.
+    pub(in crate::core::runtime) batches_of_graph_operations_open: std::sync::atomic::AtomicUsize,
     /// Whether its playback is stopped and its graph held to read and edit, until its next
     /// start.
     is_held_stopped: AtomicBool,
@@ -324,6 +327,7 @@ impl LoadedStreamInThisRuntime {
             )),
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
+            batches_of_graph_operations_open: std::sync::atomic::AtomicUsize::new(0),
             is_held_stopped: AtomicBool::new(false),
             engine_resources_shared_by_every_stream,
             compiler,

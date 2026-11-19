@@ -106,6 +106,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         let stream_operations = self
                             .operations_on_the_loaded_streams
                             .runtime_operations_of_the_stream_a_call_names(stream_id)?;
+                        stream_operations.open_a_batch_of_graph_operations();
                         streams.insert(
                             stream_id.clone(),
                             StreamATransactionEdits {
@@ -142,10 +143,15 @@ impl StreamGraphTransactionExecutor<'_> {
             match applied {
                 Ok(applied) => applied_live.push(applied),
                 Err(refusal) => {
+                    let _ = close_the_batch_open_on_each_stream(&streams);
                     self.reverse_what_was_applied_live(&streams, applied_live);
                     return Err(refusal);
                 }
             }
+        }
+        if let Err(refusal) = close_the_batch_open_on_each_stream(&streams) {
+            self.reverse_what_was_applied_live(&streams, applied_live);
+            return Err(refusal);
         }
         match project_repository.apply_project_operations(
             author,
@@ -254,6 +260,7 @@ impl StreamGraphTransactionExecutor<'_> {
         streams: &BTreeMap<String, StreamATransactionEdits>,
         applied_live: Vec<(String, OneOperationAppliedLive)>,
     ) {
+        open_a_batch_on_each_stream(streams);
         for (stream_id, applied) in applied_live.into_iter().rev() {
             let Some(stream) = streams.get(&stream_id) else {
                 continue;
@@ -263,6 +270,17 @@ impl StreamGraphTransactionExecutor<'_> {
                 stream.stream_operations.as_ref(),
                 &applied,
             );
+        }
+        for (stream_id, stream) in streams {
+            if let Err(not_judged_whole) =
+                stream.stream_operations.close_a_batch_of_graph_operations()
+            {
+                tracing::error!(
+                    stream = %stream_id,
+                    %not_judged_whole,
+                    "a running stream refused the graph a reversal of a refused transaction left"
+                );
+            }
         }
     }
 
@@ -296,5 +314,30 @@ impl StreamGraphTransactionExecutor<'_> {
                 "could not set live again a value a refused graph transaction replaced"
             );
         }
+    }
+}
+
+/// Open a batch of graph operations on each of `streams`, so each running stream judges the rule
+/// a reactive reader sets against the graph the operations leave, not edit by edit.
+pub(super) fn open_a_batch_on_each_stream(streams: &BTreeMap<String, StreamATransactionEdits>) {
+    for stream in streams.values() {
+        stream.stream_operations.open_a_batch_of_graph_operations();
+    }
+}
+
+/// Close the batch [`open_a_batch_on_each_stream`] opened on each of `streams`, every one of them
+/// closed, refused as the first running stream refuses the graph its batch leaves.
+pub(super) fn close_the_batch_open_on_each_stream(
+    streams: &BTreeMap<String, StreamATransactionEdits>,
+) -> Result<(), GraphRequestRefusal> {
+    let mut first_refusal = None;
+    for stream in streams.values() {
+        if let Err(refusal) = stream.stream_operations.close_a_batch_of_graph_operations() {
+            first_refusal.get_or_insert(refusal);
+        }
+    }
+    match first_refusal {
+        Some(refusal) => Err(GraphRequestRefusal::from(refusal)),
+        None => Ok(()),
     }
 }

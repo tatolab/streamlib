@@ -1,6 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use super::live_application_and_reversal::{
+    close_the_batch_open_on_each_stream, open_a_batch_on_each_stream,
+};
 use super::*;
 use streamlib::sdk::graph::input_values::InputValueToSetLive;
 
@@ -108,6 +111,7 @@ impl StreamGraphTransactionExecutor<'_> {
             &requests_and_the_stream_id_each_names,
             &staged,
         )?;
+        open_a_batch_on_each_stream(&staged.streams);
 
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
@@ -123,6 +127,7 @@ impl StreamGraphTransactionExecutor<'_> {
             let applied = match self.apply_one_action(request, &stream_id, &mut staged) {
                 Ok(applied) => applied,
                 Err(refusal) => {
+                    let _ = close_the_batch_open_on_each_stream(&staged.streams);
                     self.reverse_what_was_applied_live(&staged.streams, applied_live);
                     return Err(GraphTransactionRefusal::of_the_operation(
                         request_index,
@@ -143,6 +148,10 @@ impl StreamGraphTransactionExecutor<'_> {
             }
         }
 
+        if let Err(refusal) = close_the_batch_open_on_each_stream(&staged.streams) {
+            self.reverse_what_was_applied_live(&staged.streams, applied_live);
+            return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
+        }
         let WhatTheTransactionHasStaged {
             streams,
             labels_of_added_nodes,

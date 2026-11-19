@@ -14,10 +14,12 @@ mod island_edit_refusals;
 mod island_placement;
 
 pub(crate) use island_edit_refusals::{
-    refuse_a_link_an_island_cannot_take, refuse_a_link_feeding_an_island_into_the_app_process,
+    is_a_reactive_reader_only_islands_feed, refuse_a_link_an_island_cannot_take,
+    refuse_a_link_feeding_an_island_into_the_app_process,
     refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands,
-    refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands,
     refuse_an_edit_an_island_cannot_take,
+    the_island_links_into_a_reactive_reader_only_islands_feed, the_reader_a_removal_strands,
+    the_refusal_of_a_removal_stranding,
 };
 use island_edit_refusals::{
     the_refusal_of_a_reactive_reader_fed_only_by_islands,
@@ -33,7 +35,6 @@ use streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE;
 use crate::core::NodeRunId;
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
-use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
     FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
@@ -424,9 +425,7 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
                 &reader_id,
             )
         })?;
-    if reader_link_wiring.far_side_process_execution() == ProcessExecution::Reactive
-        && !is_fed_by_a_node_that_is_not_a_function_node(graph, &reader_id)
-    {
+    if is_a_reactive_reader_only_islands_feed(graph, &reader_id) {
         return Err(the_refusal_of_a_reactive_reader_fed_only_by_islands(
             &reader_id,
         ));
@@ -755,7 +754,7 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 
 /// The nodes outside any island that `function_node_id`'s outputs reach,
 /// through the function nodes downstream of it.
-pub(crate) fn the_readers_a_function_node_feeds(
+fn the_readers_a_function_node_feeds(
     graph: &Graph,
     function_node_id: &NodeRunId,
 ) -> HashSet<NodeRunId> {
@@ -763,6 +762,19 @@ pub(crate) fn the_readers_a_function_node_feeds(
         .into_iter()
         .map(|(reader_id, _)| reader_id)
         .collect()
+}
+
+/// The nodes outside any island that a link into `destination_id` reaches: the readers a
+/// function node feeds, or the node itself.
+pub(crate) fn the_readers_a_link_into_reaches(
+    graph: &Graph,
+    destination_id: &NodeRunId,
+) -> HashSet<NodeRunId> {
+    if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
+        the_readers_a_function_node_feeds(graph, destination_id)
+    } else {
+        HashSet::from([destination_id.clone()])
+    }
 }
 
 /// Each input port, of a node outside any island, that `function_node_id`
@@ -808,7 +820,10 @@ pub(crate) fn the_function_nodes_among<'a>(
         .collect()
 }
 
-fn link_in<'graph>(graph: &'graph Graph, link_id: &LinkUniqueId) -> Result<&'graph Link> {
+pub(crate) fn link_in<'graph>(
+    graph: &'graph Graph,
+    link_id: &LinkUniqueId,
+) -> Result<&'graph Link> {
     graph
         .traversal()
         .e(link_id)

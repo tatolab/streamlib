@@ -26,3 +26,5 @@ pub(super) mod view_node_output_written_by_a_panel;
 
 #[cfg(test)]
 mod graph_input_tests;
+#[cfg(test)]
+mod reactive_reader_rule_tests;

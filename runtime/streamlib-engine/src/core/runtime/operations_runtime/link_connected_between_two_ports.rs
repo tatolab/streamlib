@@ -18,19 +18,30 @@ use crate::core::compiler::compiler_ops::refuse_a_link_a_channel_cannot_carry;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::PinLinkVerdict;
 use crate::core::graph::{
-    ALinkConnected, Graph, LinkUniqueId, refuse_a_link_its_pin_types_or_families_refuse,
+    ALinkConnected, Graph, Link, LinkUniqueId, refuse_a_link_its_pin_types_or_families_refuse,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::ChannelName;
 
-/// What connect does with a link the engine cannot wire.
+/// What connect does with a link the engine cannot wire, and when it judges the rule a reader
+/// that runs reactively sets: that something other than an island feeds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::core::runtime) enum WhenTheEngineCannotWireALink {
-    /// Refuse it, as an edit made now is refused.
+    /// Refuse it, judged whole now, as an edit made on its own is.
     Refuse,
-    /// Make nothing and answer why, so a saved graph opens and plays without the link.
-    SetAside,
+    /// Refuse it, the reader rule left to a sweep once each link of an added node or a batch of
+    /// edits is made, so the order they are made in never matters.
+    RefuseLeavingTheReaderRuleToASweep,
+    /// Make nothing and answer why, so a saved graph opens and plays without the link, the
+    /// reader rule left to the sweep a load or a reconcile makes once each link is made.
+    SetAsideLeavingTheReaderRuleToASweep,
+}
+
+impl WhenTheEngineCannotWireALink {
+    fn judges_the_reader_rule_now(self) -> bool {
+        self == Self::Refuse
+    }
 }
 
 /// What connect made of one link.
@@ -78,11 +89,6 @@ pub(in crate::core::runtime) async fn connect_impl(
     } = live_graph_change;
     let (from, to) = the_ends_connect_links(&compiler, from, to)?;
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: from.clone(),
-        to: to.clone(),
-    });
-
     let link_id = match apply_a_link(
         &compiler,
         from.clone(),
@@ -93,6 +99,10 @@ pub(in crate::core::runtime) async fn connect_impl(
         ALinkConnectedOrSetAside::Connected(link_id) => link_id,
         set_aside @ ALinkConnectedOrSetAside::SetAside(_) => return Ok(set_aside),
     };
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
+        from: from.clone(),
+        to: to.clone(),
+    });
 
     commit_live_graph_change(&compiler, live).await?;
 
@@ -154,51 +164,71 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
     compiler.scope(|graph, _tx| {
         let (verdict, _) =
             refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)?;
-        let link_id = add_a_link_unless_the_engine_cannot_wire_it(graph, from, to)??;
+        let link_id = add_a_link_unless_the_engine_cannot_wire_it(
+            graph,
+            from,
+            to,
+            WhenTheEngineCannotWireALink::Refuse,
+        )?
+        .connected()?;
         graph.traversal_mut().e(&link_id).drop();
         Ok(verdict)
     })
 }
 
 /// Add the link from `from` to `to` to `graph` and judge it as the engine wires it, with the
-/// graph holding it: kept when the engine can wire it, taken out again, with why, when it
-/// cannot.
+/// graph holding it, the reader rule as `when_the_engine_cannot_wire_it` says: kept when the
+/// engine can wire it, taken out again when it cannot, and then refused or answered set aside.
 fn add_a_link_unless_the_engine_cannot_wire_it(
     graph: &mut Graph,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
-) -> Result<std::result::Result<LinkUniqueId, Error>> {
+    when_the_engine_cannot_wire_it: WhenTheEngineCannotWireALink,
+) -> Result<ALinkConnectedOrSetAside> {
     let link_id = graph
         .traversal_mut()
         .add_e(from, to)
         .first()
         .map(|link| link.id.clone())
         .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
-    match refuse_a_held_link_the_engine_cannot_wire(graph, &link_id) {
-        Ok(()) => Ok(Ok(link_id)),
-        Err(why_the_engine_cannot_wire_it) => {
-            graph.traversal_mut().e(&link_id).drop();
-            Ok(Err(why_the_engine_cannot_wire_it))
+    let link = graph
+        .traversal()
+        .e(&link_id)
+        .first()
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    let judged = refuse_a_held_link_the_engine_cannot_wire(graph, link).and_then(|()| {
+        if when_the_engine_cannot_wire_it.judges_the_reader_rule_now() {
+            refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands(graph, link)
+        } else {
+            Ok(())
+        }
+    });
+    let Err(why_the_engine_cannot_wire_it) = judged else {
+        return Ok(ALinkConnectedOrSetAside::Connected(link_id));
+    };
+    graph.traversal_mut().e(&link_id).drop();
+    match when_the_engine_cannot_wire_it {
+        WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep => Ok(
+            ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it),
+        ),
+        WhenTheEngineCannotWireALink::Refuse
+        | WhenTheEngineCannotWireALink::RefuseLeavingTheReaderRuleToASweep => {
+            Err(why_the_engine_cannot_wire_it)
         }
     }
 }
 
-/// Refuse `link_id`, which `graph` holds, when the engine cannot wire it as the stream plays:
-/// one feeding a function node island into a node in the app process, one an island cannot
-/// take, one leaving a reactive reader fed only by islands, or one a channel cannot carry.
+/// Refuse `link`, which `graph` holds, when the engine cannot wire it as the stream plays: one
+/// feeding a function node island into a node in the app process, one an island cannot take, or
+/// one a channel cannot carry. The rule a reactive reader sets is judged apart, with the link or
+/// by a sweep once every link is made.
 pub(in crate::core::runtime) fn refuse_a_held_link_the_engine_cannot_wire(
     graph: &Graph,
-    link_id: &LinkUniqueId,
+    link: &Link,
 ) -> Result<()> {
-    let link = graph
-        .traversal()
-        .e(link_id)
-        .first()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
     refuse_a_link_feeding_an_island_into_the_app_process(graph, link.source(), link.to_port())?;
-    refuse_a_link_an_island_cannot_take(graph, link.source(), link.to_port(), Some(link_id))?;
-    refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands(graph, link_id)?;
-    refuse_a_link_a_channel_cannot_carry(graph, link_id)
+    refuse_a_link_an_island_cannot_take(graph, link.source(), link.to_port(), Some(&link.id))?;
+    refuse_a_link_a_channel_cannot_carry(graph, link)
 }
 
 /// Add the link from `from` to `to` to the graph and queue it for wiring, or, when the engine
@@ -212,22 +242,20 @@ fn apply_a_link(
 ) -> Result<ALinkConnectedOrSetAside> {
     compiler.scope(|graph, tx| {
         let (_, channel) = refuse_a_link_connect_refuses(graph, &from, &to, a_link_connected)?;
-        match add_a_link_unless_the_engine_cannot_wire_it(graph, from, to)? {
-            Ok(link_id) => {
-                tx.log(PendingOperation::AddLink(link_id.clone()));
-                tracing::debug!(
-                    link_id = %link_id,
-                    channel = channel.as_str(),
-                    "connect assigned channel"
-                );
-                Ok(ALinkConnectedOrSetAside::Connected(link_id))
-            }
-            Err(why_the_engine_cannot_wire_it) => match when_the_engine_cannot_wire_it {
-                WhenTheEngineCannotWireALink::Refuse => Err(why_the_engine_cannot_wire_it),
-                WhenTheEngineCannotWireALink::SetAside => Ok(ALinkConnectedOrSetAside::SetAside(
-                    why_the_engine_cannot_wire_it,
-                )),
-            },
+        let made = add_a_link_unless_the_engine_cannot_wire_it(
+            graph,
+            from,
+            to,
+            when_the_engine_cannot_wire_it,
+        )?;
+        if let ALinkConnectedOrSetAside::Connected(link_id) = &made {
+            tx.log(PendingOperation::AddLink(link_id.clone()));
+            tracing::debug!(
+                link_id = %link_id,
+                channel = channel.as_str(),
+                "connect assigned channel"
+            );
         }
+        Ok(made)
     })
 }

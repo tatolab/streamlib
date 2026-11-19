@@ -12,7 +12,10 @@ use super::input_values_set_live::{
     hand_back_each, hand_each_island_again_or_put_the_values_back, is_held_on_the_graph,
 };
 use crate::core::compiler::PendingOperation;
-use crate::core::compiler::compiler_ops::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
+use crate::core::compiler::compiler_ops::function_node_island::{
+    runs_inside_the_read_of_each_node_it_feeds,
+    the_island_links_into_a_reactive_reader_only_islands_feed,
+};
 use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
@@ -29,7 +32,7 @@ use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::RuntimeOperations;
 use crate::core::runtime::operations_runtime::{
-    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
+    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl, disconnect_impl,
 };
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::LoadedStreamHolding;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
@@ -38,25 +41,6 @@ impl LoadedStreamInThisRuntime {
     // =========================================================================
     // Graph operations
     // =========================================================================
-
-    /// `links` with each from a function node after the others, so a saved graph links each
-    /// reader its own sources before an island feeding it is judged; `the_node_a_link_leaves`
-    /// finds the node a link comes from.
-    pub(in crate::core::runtime) fn links_from_function_nodes_last<'links, Link>(
-        &self,
-        links: &'links [Link],
-        the_node_a_link_leaves: impl Fn(&Link) -> Option<NodeRunId>,
-    ) -> Vec<&'links Link> {
-        let mut ordered: Vec<&Link> = links.iter().collect();
-        self.compiler.scope_reading(|graph| {
-            ordered.sort_by_key(|link| {
-                the_node_a_link_leaves(link).is_some_and(|source_node| {
-                    runs_inside_the_read_of_each_node_it_feeds(graph, &source_node)
-                })
-            });
-        });
-        ordered
-    }
 
     pub fn add_node(&self, spec: impl Into<NodeSpec>) -> Result<NodeRunId> {
         <Self as RuntimeOperations>::add_node(self, spec.into())
@@ -460,9 +444,8 @@ impl LoadedStreamInThisRuntime {
         };
 
         let mut links_the_engine_cannot_wire = Vec::new();
-        for link in self.links_from_function_nodes_last(&graph.links, |link| {
-            node_run_id_of(&link.source.node).ok()
-        }) {
+        let mut drawn_link_of_each_link_made = HashMap::new();
+        for link in &graph.links {
             let refused_as_a_link_of_the_graph = |refusal: Error| match resolution
                 .graph_only_nodes_as_drawn
                 .variables_as_drawn
@@ -488,12 +471,34 @@ impl LoadedStreamInThisRuntime {
                     OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port),
                     InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
                     ALinkConnected::OfASavedGraph,
-                    WhenTheEngineCannotWireALink::SetAside,
+                    WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,
                 ))
                 .map_err(refused_as_a_link_of_the_graph)?;
-            if let ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it) = made {
+            match made {
+                ALinkConnectedOrSetAside::Connected(link_id) => {
+                    drawn_link_of_each_link_made.insert(link_id, link);
+                }
+                ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it) => {
+                    links_the_engine_cannot_wire.push(LinkSetAside::because_of(
+                        link.clone(),
+                        &why_the_engine_cannot_wire_it,
+                    ));
+                }
+            }
+        }
+        // The rule a reader that runs reactively sets is judged once every link is made, so the
+        // order the graph lists its links in never sets one aside.
+        for (link_id, why_the_engine_cannot_wire_it) in self
+            .compiler
+            .scope_reading(the_island_links_into_a_reactive_reader_only_islands_feed)
+        {
+            self.block_on_the_engines_tokio_runtime(disconnect_impl(
+                self.live_graph_change(),
+                link_id.clone(),
+            ))?;
+            if let Some(link) = drawn_link_of_each_link_made.get(&link_id) {
                 links_the_engine_cannot_wire.push(LinkSetAside::because_of(
-                    link.clone(),
+                    (*link).clone(),
                     &why_the_engine_cannot_wire_it,
                 ));
             }

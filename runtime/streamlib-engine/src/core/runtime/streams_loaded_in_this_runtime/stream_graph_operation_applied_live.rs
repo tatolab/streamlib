@@ -14,7 +14,7 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
+    ALinkConnected, LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
     the_default_name_a_new_node_takes,
 };
 use crate::core::pubsub::RuntimeEvent;
@@ -22,8 +22,8 @@ use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::runtime::operations::{RuntimeOperations, WhatALiveConnectMakesOfALink};
 use crate::core::runtime::operations_runtime::{
-    ConfigReferencesOfTheAddedNode, describe_the_type_an_add_names_when_it_must,
-    the_verdict_connect_takes_on_a_link,
+    ConfigReferencesOfTheAddedNode, WhenTheEngineCannotWireALink, connect_impl,
+    describe_the_type_an_add_names_when_it_must, the_verdict_connect_takes_on_a_link,
 };
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -92,22 +92,10 @@ impl LoadedStreamInThisRuntime {
                     }
                 };
                 node.name = added.name;
-                let links_and_the_nodes_they_leave: Vec<(
-                    &StreamGraphDocumentLink,
-                    Option<NodeRunId>,
-                )> = links
-                    .iter()
-                    .map(|link| (link, self.the_node_of_the_node(link.source.node).ok()))
-                    .collect();
-                for (link, _) in self.links_from_function_nodes_last(
-                    &links_and_the_nodes_they_leave,
-                    |(_, the_node_it_leaves)| the_node_it_leaves.clone(),
-                ) {
-                    if let Err(refusal) = self.connect_the_link(link).await {
-                        self.take_out_the_node_a_refused_add_left(node.id, &refusal)
-                            .await;
-                        return Err(refusal);
-                    }
+                if let Err(refusal) = self.connect_each_link_of_an_added_node(&links).await {
+                    self.take_out_the_node_a_refused_add_left(node.id, &refusal)
+                        .await;
+                    return Err(refusal);
                 }
                 Ok(StreamGraphOperation::AddNode { node, links })
             }
@@ -465,6 +453,31 @@ impl LoadedStreamInThisRuntime {
                     ))
                 })
         })
+    }
+
+    /// Connect each of `links`, those of a node an add made, the rule a reader that runs
+    /// reactively sets judged once they are all made, so the order they are listed in never
+    /// matters; while a batch of graph operations is open, that is judged as it closes.
+    async fn connect_each_link_of_an_added_node(
+        &self,
+        links: &[StreamGraphDocumentLink],
+    ) -> Result<()> {
+        for link in links {
+            let (from, to) = self.the_ends_of_the_link(link)?;
+            connect_impl(
+                self.live_graph_change(),
+                from,
+                to,
+                ALinkConnected::MadeNow,
+                WhenTheEngineCannotWireALink::RefuseLeavingTheReaderRuleToASweep,
+            )
+            .await?
+            .connected()?;
+        }
+        if self.a_batch_of_graph_operations_is_open() {
+            return Ok(());
+        }
+        self.refuse_a_reactive_reader_only_islands_feed()
     }
 
     async fn connect_the_link(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {

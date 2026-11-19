@@ -8,6 +8,9 @@ use serde_json::{Map, Value};
 use streamlib_project_repository::STREAM_DOCUMENT_ASSET_KEY;
 use uuid::Uuid;
 
+use crate::core::compiler::compiler_ops::function_node_island::{
+    link_in, the_island_links_into_a_reactive_reader_only_islands_feed,
+};
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
@@ -358,14 +361,11 @@ impl LoadedStreamInThisRuntime {
                     Error::GraphError(format!("the live graph holds no node {node_uuid}"))
                 })
         };
-        let links_from_function_nodes_last = self
-            .links_from_function_nodes_last(&document_links, |document_link| {
-                node_of(&document_link.by_node_uuid.source_node).ok()
-            });
+        let mut links_made_now = HashSet::new();
         for LinkOfAGraphDocument {
             by_node_uuid: document_link,
             as_drawn,
-        } in links_from_function_nodes_last
+        } in &document_links
         {
             if live_links.contains(document_link) {
                 continue;
@@ -390,11 +390,11 @@ impl LoadedStreamInThisRuntime {
                 == ALinkConnected::OfASavedGraph
                 || links_set_aside_before_the_document.contains(document_link)
             {
-                WhenTheEngineCannotWireALink::SetAside
+                WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep
             } else {
-                WhenTheEngineCannotWireALink::Refuse
+                WhenTheEngineCannotWireALink::RefuseLeavingTheReaderRuleToASweep
             };
-            if let ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it) = connect_impl(
+            match connect_impl(
                 self.live_graph_change(),
                 from,
                 to,
@@ -403,13 +403,26 @@ impl LoadedStreamInThisRuntime {
             )
             .await?
             {
-                self.graph_only_nodes_as_drawn.lock().links_set_aside.push(
-                    LinkSetAside::because_of(as_drawn.clone(), &why_the_engine_cannot_wire_it),
-                );
+                ALinkConnectedOrSetAside::Connected(link_id) => {
+                    if when_the_engine_cannot_wire_it
+                        == WhenTheEngineCannotWireALink::RefuseLeavingTheReaderRuleToASweep
+                    {
+                        links_made_now.insert(link_id);
+                    }
+                }
+                ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it) => {
+                    self.graph_only_nodes_as_drawn.lock().links_set_aside.push(
+                        LinkSetAside::because_of(as_drawn.clone(), &why_the_engine_cannot_wire_it),
+                    );
+                }
             }
         }
-        self.set_aside_each_kept_link_the_engine_cannot_wire_now(&document_links, &live_links)
-            .await?;
+        self.set_aside_each_link_the_engine_cannot_wire_now(
+            &document_links,
+            &live_links,
+            &links_made_now,
+        )
+        .await?;
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         saved_values_handed_over
     }
@@ -466,30 +479,27 @@ impl LoadedStreamInThisRuntime {
                 .copied()
                 .ok_or_else(|| Error::GraphError(format!("the graph holds no node `{node_name}`")))
         };
+        let by_node_uuid = |link: &GraphSnapshotLink| -> Result<RunningLinkBetweenTwoNodesByUuid> {
+            Ok(RunningLinkBetweenTwoNodesByUuid {
+                source_node: document_node_uuid_named(&link.source.node)?,
+                source_port: cast_name(&link.source.port)?,
+                target_node: document_node_uuid_named(&link.target.node)?,
+                target_port: cast_name(&link.target.port)?,
+            })
+        };
         let document_links = graph
             .links
             .iter()
             .map(|link| {
                 Ok(LinkOfAGraphDocument {
-                    by_node_uuid: RunningLinkBetweenTwoNodesByUuid {
-                        source_node: document_node_uuid_named(&link.source.node)?,
-                        source_port: cast_name(&link.source.port)?,
-                        target_node: document_node_uuid_named(&link.target.node)?,
-                        target_port: cast_name(&link.target.port)?,
-                    },
+                    by_node_uuid: by_node_uuid(link)?,
                     as_drawn: link.clone(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
         let links_set_aside_before_the_document = self.the_links_set_aside_by_node_uuid();
         for set_aside in &resolution.graph_only_nodes_as_drawn.links_set_aside {
-            let set_aside_by_node_uuid = RunningLinkBetweenTwoNodesByUuid {
-                source_node: document_node_uuid_named(&set_aside.link.source.node)?,
-                source_port: cast_name(&set_aside.link.source.port)?,
-                target_node: document_node_uuid_named(&set_aside.link.target.node)?,
-                target_port: cast_name(&set_aside.link.target.port)?,
-            };
-            if !links_set_aside_before_the_document.contains(&set_aside_by_node_uuid) {
+            if !links_set_aside_before_the_document.contains(&by_node_uuid(&set_aside.link)?) {
                 return Err(Error::GraphError(format!(
                     "the graph is refused: {}",
                     set_aside.described()
@@ -504,42 +514,78 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
-    /// Disconnect and set aside each link of `document_links` the live graph held before the
-    /// reconcile made its links, `live_links_before`, that the engine cannot wire now that the
-    /// reconcile took nodes and links out around it, so the stream still plays. A link carried
-    /// through the function node pool is judged as the pool wires it, and left as it is.
-    async fn set_aside_each_kept_link_the_engine_cannot_wire_now(
+    /// Disconnect and set aside each link of `document_links` the engine cannot wire now that
+    /// the reconcile made its links, so the stream still plays: each the live graph held before
+    /// it, `live_links_before`, that it took nodes and links out around, then, swept once every
+    /// link is made, each from a function node into a reader that runs reactively and that only
+    /// islands feed. Refused when the sweep meets one of `links_made_now`, which are judged as
+    /// `connect` judges a link made now. A link carried through the function node pool is
+    /// judged as the pool wires it, and left as it is.
+    async fn set_aside_each_link_the_engine_cannot_wire_now(
         &self,
         document_links: &[LinkOfAGraphDocument],
         live_links_before: &HashSet<RunningLinkBetweenTwoNodesByUuid>,
+        links_made_now: &HashSet<LinkUniqueId>,
     ) -> Result<()> {
+        let document_link_of: HashMap<&RunningLinkBetweenTwoNodesByUuid, &LinkOfAGraphDocument> =
+            document_links
+                .iter()
+                .map(|document_link| (&document_link.by_node_uuid, document_link))
+                .collect();
+        let mut drawn_link_of_each_link_held = HashMap::new();
+        let mut kept_links = Vec::new();
         for live_link in self.the_live_links_by_node_uuid() {
             let [link_id] = live_link.wired_as.as_slice() else {
                 continue;
             };
-            if !live_links_before.contains(&live_link.link_as_given) {
+            let Some(document_link) = document_link_of.get(&live_link.link_as_given) else {
                 continue;
+            };
+            drawn_link_of_each_link_held.insert(link_id.clone(), &document_link.as_drawn);
+            if live_links_before.contains(&live_link.link_as_given) {
+                kept_links.push(link_id.clone());
             }
-            let Some(document_link) = document_links
-                .iter()
-                .find(|document_link| document_link.by_node_uuid == live_link.link_as_given)
-            else {
-                continue;
-            };
-            let Err(why_the_engine_cannot_wire_it) = self
-                .compiler
-                .scope_reading(|graph| refuse_a_held_link_the_engine_cannot_wire(graph, link_id))
-            else {
-                continue;
-            };
+        }
+        let kept_links_the_engine_cannot_wire = self.compiler.scope_reading(|graph| {
+            let mut kept_links_the_engine_cannot_wire = Vec::new();
+            for link_id in kept_links {
+                if let Err(why_the_engine_cannot_wire_it) =
+                    refuse_a_held_link_the_engine_cannot_wire(graph, link_in(graph, &link_id)?)
+                {
+                    kept_links_the_engine_cannot_wire
+                        .push((link_id, why_the_engine_cannot_wire_it));
+                }
+            }
+            Ok::<_, Error>(kept_links_the_engine_cannot_wire)
+        })?;
+        for (link_id, _) in &kept_links_the_engine_cannot_wire {
             disconnect_impl(self.live_graph_change(), link_id.clone()).await?;
-            self.graph_only_nodes_as_drawn
-                .lock()
-                .links_set_aside
-                .push(LinkSetAside::because_of(
-                    document_link.as_drawn.clone(),
-                    &why_the_engine_cannot_wire_it,
-                ));
+        }
+        let mut island_links_the_engine_cannot_wire = self
+            .compiler
+            .scope_reading(the_island_links_into_a_reactive_reader_only_islands_feed);
+        if let Some(made_now) = island_links_the_engine_cannot_wire
+            .iter()
+            .position(|(link_id, _)| links_made_now.contains(link_id))
+        {
+            return Err(island_links_the_engine_cannot_wire.swap_remove(made_now).1);
+        }
+        for (link_id, _) in &island_links_the_engine_cannot_wire {
+            disconnect_impl(self.live_graph_change(), link_id.clone()).await?;
+        }
+        let mut graph_only_nodes_as_drawn = self.graph_only_nodes_as_drawn.lock();
+        for (link_id, why_the_engine_cannot_wire_it) in kept_links_the_engine_cannot_wire
+            .into_iter()
+            .chain(island_links_the_engine_cannot_wire)
+        {
+            if let Some(link) = drawn_link_of_each_link_held.get(&link_id) {
+                graph_only_nodes_as_drawn
+                    .links_set_aside
+                    .push(LinkSetAside::because_of(
+                        (*link).clone(),
+                        &why_the_engine_cannot_wire_it,
+                    ));
+            }
         }
         Ok(())
     }

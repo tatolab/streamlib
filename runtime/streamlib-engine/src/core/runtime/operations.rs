@@ -231,6 +231,20 @@ pub trait RuntimeOperations: Send + Sync {
     /// from within a tokio task - use the async variant instead.
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
 
+    /// Open a batch of graph operations on this stream: until it closes, the rule a reader that
+    /// runs reactively sets, that something other than a function node island feeds it, is not
+    /// judged edit by edit, so a batch taking out a source, its islands and their reader is
+    /// judged by the graph it leaves. Batches nest.
+    fn open_a_batch_of_graph_operations(&self) {}
+
+    /// Close the batch [`Self::open_a_batch_of_graph_operations`] opened, judging, once the
+    /// outermost closes, that rule against the graph the batch leaves: refused when it holds a
+    /// link from a function node into a reader that runs reactively and that only islands feed,
+    /// and the batch is then to be taken back.
+    fn close_a_batch_of_graph_operations(&self) -> Result<()> {
+        Ok(())
+    }
+
     // =========================================================================
     // Lifecycle
     // =========================================================================
