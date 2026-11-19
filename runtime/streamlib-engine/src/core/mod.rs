@@ -113,8 +113,7 @@ pub use execution::{
 };
 pub use graph::graph_snapshot::{
     GraphFragment, GraphOnlyNodesAsDrawn, GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode,
-    GraphSnapshotWithGraphOnlyNodesResolved, LinkSetAsideByTheGraphsValidation,
-    NodeChangeADrawnLinkBlocks,
+    GraphSnapshotWithGraphOnlyNodesResolved, LinkSetAside, NodeChangeADrawnLinkBlocks,
 };
 pub use graph::{
     ComponentMap, ComponentRenderer, DeviceMatchedAudioWindowContractsComponent,

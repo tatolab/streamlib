@@ -40,8 +40,9 @@ pub use graph_answer_wire_types::{
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
     GraphTransactionAddedNote, GraphTransactionConnectedLink,
-    GraphTransactionInputOverriddenByALink, GraphTransactionRebuiltNode,
-    GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
+    GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
+    GraphTransactionRebuiltNode, GraphTransactionToolResult, InsertedNodeOnTheWire,
+    RefusedGraphLinkOnTheWire,
 };
 pub use link_check_wire_types::{
     ConvertNodeToInsertOnTheWire, LinkCandidateChecked, LinkCandidateEnd, LinkCandidateNotChecked,

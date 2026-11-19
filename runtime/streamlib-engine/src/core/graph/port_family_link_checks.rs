@@ -6,10 +6,7 @@
 //! output resolves from its node's config.
 
 use super::pin_type_link_checks::ALinkConnected;
-use super::{
-    Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef,
-    PendingDeletionComponent,
-};
+use super::{Graph, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::descriptors::{
     PortFamilyDeclaration, PortFamilyLinkEndpoint, PortFamilyLinkRefusal,
     refusal_of_a_link_between_port_families,
@@ -71,7 +68,7 @@ pub(crate) fn the_outputs_a_link_carries_on<'graph>(
         let links_into_the_followed_input = graph.traversal().e(()).iter().filter(|link| {
             link.to_port().node_run_id() == &node.id
                 && link.to_port().port_name() == followed_input_port
-                && !link.has::<PendingDeletionComponent>()
+                && graph.stands(link)
         });
         for link_into_the_followed_input in links_into_the_followed_input {
             if let Some(upstream_node) = graph
@@ -134,8 +131,7 @@ pub(crate) fn the_inputs_an_input_is_carried_on_to<'graph>(
                 .out_e()
                 .iter()
                 .filter(|link| {
-                    link.source().port_name() == following_output.name
-                        && !link.has::<PendingDeletionComponent>()
+                    link.source().port_name() == following_output.name && graph.stands(link)
                 });
             for link_out in links_out_of_the_following_output {
                 let Some(downstream_node) = graph
@@ -311,8 +307,10 @@ pub(crate) fn refuse_what_a_link_carries_on_past_its_input(
 
 /// Refuse a config update `config_to_apply` on node `node_run_id` under which a link out of
 /// it, or what a passer carries on from one, would be refused by its families, names or codec.
-/// Its Image formats are not judged again: no config sets them, and a wired link has passed
-/// them or, a saved graph's, been kept despite them.
+/// Its Image formats are not judged again here: a wired link has passed them or, a saved
+/// graph's, been kept despite them, and the one node whose config sets them, a convert node
+/// whose output follows a setting, has its links judged under the new config by
+/// [`super::refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse`].
 pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
     graph: &Graph,
     node_run_id: &NodeRunId,
@@ -326,7 +324,7 @@ pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_ref
         .v(node_run_id)
         .out_e()
         .iter()
-        .filter(|link| !link.has::<PendingDeletionComponent>());
+        .filter(|link| graph.stands(link));
     for link in outbound_links {
         let Some(to_node) = graph.traversal().v(link.to_port().node_run_id()).first() else {
             continue;

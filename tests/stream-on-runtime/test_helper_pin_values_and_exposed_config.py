@@ -97,17 +97,20 @@ def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_se
     )
 
 
-def test_a_function_node_input_no_value_reaches_refuses_the_streams_start_naming_it(
+def test_a_function_node_input_no_value_reaches_waits_on_its_node_and_the_stream_plays(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """`Clamp`'s `x` is linked to nothing, unpinned, and declares no default, so
-    the stream is refused as it starts, naming the node and the input."""
+    """`Clamp`'s `x` is linked to nothing, unpinned, and declares no default: the
+    stream plays, and `graph` names `x` as the input `clamp` waits on."""
     tatolabd = start_tatolabd_running_stream(clamp_with_its_input_linked_to_nothing_into_python_sink)
-    failed_stream = tatolabd.stream_runs[-1].failed_stream()
-    assert failed_stream is not None, "the stream must be recorded failed"
-    _, failed_because = failed_stream
-    assert "`clamp`'s input `x`" in failed_because, failed_because
-    assert "no value reaches" in failed_because, failed_because
+    assert tatolabd.stream_runs[-1].failed_stream() is None, "the stream is not failed"
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    (clamp,) = [
+        node
+        for node in tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "clamp"
+    ]
+    assert clamp.get("inputs_waiting_for_a_value") == ["x"], clamp
 
 
 def test_a_function_node_linked_live_with_an_input_no_value_reaches_holds_until_its_pin_is_set(
@@ -428,6 +431,9 @@ def test_a_typed_node_built_with_input_values_starts_with_them_and_reopens_with_
 
     first_run = tatolabd.stream_runs[-1]
     assert first_run.stop_the_stream() == 0
+    project_directory = first_run.await_loaded()["project_directory"]
+    queued_close = local_api.call_tool("close_project", {"project_directory": project_directory})
+    assert local_api.stream_action_once_ended(queued_close["action"])["state"] == "done"
     reopened_at = time.monotonic_ns()
     tatolabd.run_stream(
         TatolabRunOfAProject(

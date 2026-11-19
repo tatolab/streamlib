@@ -4,8 +4,9 @@
 """The sample that declares each kind of pin, on `tatolabd`: listed among the samples, created
 from the copy the runtime unit carries, played, saved and opened again.
 
-`examples/every-pin-kind` holds typed function and shader nodes, a Graph Input, and one node
-not yet typed that holds a setting. The pin types `graph` names here are what the Studio's
+`examples/every-pin-kind` holds typed function and shader nodes, a Graph Input, one node not
+yet typed that holds a setting, and a node type whose inputs each name the control the Studio
+draws. The pin types `graph` names here are what the Studio's
 recordings are made from, so each later type, mode and flow joins the sample and this check.
 """
 
@@ -60,8 +61,22 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
     "tally": {"picture": "texture", "tally": None},
 }
 
+#: The control each input of `Caption` names, which the Studio draws in place of its type's
+#: default. The stream places one `Caption` that nothing reads, so its interpreter describes the
+#: node type with its annotations: a node type read from source alone states no pin types.
+CONTROL_NAMED_BY_EACH_CAPTION_INPUT = {
+    "shown": "checkbox",
+    "lines": "dial",
+    "size": "dial",
+    "words": "multiline",
+    "style": "code",
+    "align": "segmented",
+    "anchor": "xy_pad",
+    "font": "file_picker",
+}
+
 #: The nodes whose `process()`, or evaluation, must never raise while the stream plays.
-NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally")
+NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally", "caption")
 
 #: The function nodes, which run inside the read of the stream's function node pool, since
 #: `glow` is a shader node and `beat` runs as Python.
@@ -185,7 +200,7 @@ def play(local_api: LocalApiClient, project_directory: str, stream_id: str) -> N
     played = local_api.stream_action_once_ended(
         queued_playback["action"], timeout=PROJECT_LOAD_TIMEOUT_SECONDS
     )
-    assert played["state"] == "done", played
+    assert played["state"] == "done", json.dumps(played)
     assert {stream["stream"]: stream["state"] for stream in played["streams"]} == {
         stream_id: "running"
     }, played
@@ -247,6 +262,13 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
         for node_name in PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     } == PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     assert node_named(graph, "brightness")["type"] == "tatolab.stream:GraphInput"
+    (caption,) = local_api.call_tool(
+        "describe_node_types",
+        {"project_directory": project_directory, "node_types": ["nodes.caption:Caption"]},
+    )["node_types"]
+    assert {
+        pin["name"]: pin.get("annotations", {}).get("control") for pin in caption["inputs"]
+    } == CONTROL_NAMED_BY_EACH_CAPTION_INPUT, caption
     assert_the_stream_runs_cleanly_through_its_links(graph)
     beats_per_minute = input_port_named(node_named(graph, "beat"), "beats_per_minute")
     assert beats_per_minute.get("value_comes_from") == "saved", beats_per_minute

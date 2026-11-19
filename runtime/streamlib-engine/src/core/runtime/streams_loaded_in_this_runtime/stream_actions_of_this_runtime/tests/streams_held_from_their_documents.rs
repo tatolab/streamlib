@@ -238,9 +238,14 @@ fn the_graph_of_a_source_linked_into_a_sink(
     })
 }
 
+/// A recorded stream whose document holds a link its validation refuses opens with that link
+/// shown failed on the link, never wired, and plays every other node and link.
+///
+/// Mental-revert: holding the stream from playing while it holds a link set aside lists it
+/// failed and refuses its play.
 #[test]
 #[serial]
-fn a_stream_whose_graph_holds_a_link_its_validation_refuses_is_held_with_that_link_shown_failed() {
+fn a_stream_whose_graph_holds_a_link_its_validation_refuses_plays_with_that_link_shown_failed() {
     let state_directory = tempfile::tempdir().unwrap();
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_source_linked_into_a_sink(
@@ -252,60 +257,35 @@ fn a_stream_whose_graph_holds_a_link_its_validation_refuses_is_held_with_that_li
     let held = runner.loaded_stream_of_the_id(&camera).unwrap();
     assert!(held.is_held_stopped());
     assert_eq!(held.node_count(), 2);
-    let graph = held.to_json().unwrap();
-    let links = graph["links"].as_array().unwrap();
-    assert_eq!(links.len(), 2, "{graph}");
-    let set_aside = links
-        .iter()
-        .find(|link| link["target"]["port"] == "no_such_input")
-        .unwrap_or_else(|| panic!("the refused link is shown: {graph}"));
-    assert_eq!(set_aside["state"], "error", "{graph}");
-    assert!(
-        set_aside["error_reason"]
-            .as_str()
-            .is_some_and(|why| why.contains("no_such_input")),
-        "{graph}"
-    );
-    let why_it_cannot_play = held
-        .why_its_graph_as_held_keeps_this_stream_from_playing()
-        .expect("a link set aside keeps it from playing");
-    assert!(
-        why_it_cannot_play
-            .words
-            .contains("`source/out2` -> `sink/no_such_input` is refused"),
-        "{why_it_cannot_play}"
-    );
-    assert_eq!(why_it_cannot_play.kind, StreamFailureKind::LinkRefused);
+    let the_link_set_aside_is_shown_failed = |graph: &serde_json::Value| {
+        let links = graph["links"].as_array().unwrap();
+        assert_eq!(links.len(), 2, "{graph}");
+        let set_aside = links
+            .iter()
+            .find(|link| link["target"]["port"] == "no_such_input")
+            .unwrap_or_else(|| panic!("the refused link is shown: {graph}"));
+        assert_eq!(set_aside["state"], "error", "{graph}");
+        assert!(
+            set_aside["error_reason"]
+                .as_str()
+                .is_some_and(|why| why.contains("no_such_input")),
+            "{graph}"
+        );
+    };
+    the_link_set_aside_is_shown_failed(&held.to_json().unwrap());
     assert_eq!(
-        why_it_cannot_play.place,
-        DiagnosticPlaceOnTheWire::Link {
-            from_node: "source".to_owned(),
-            from_port: "out2".to_owned(),
-            to_node: "sink".to_owned(),
-            to_port: "no_such_input".to_owned(),
-        }
+        held.why_its_graph_as_held_keeps_this_stream_from_playing(),
+        None
     );
     let listed = runner
         .list_streams()
         .into_iter()
         .find(|listed| listed.stream_id == camera)
         .unwrap();
-    assert_eq!(listed.state, StreamListingState::Failed);
-    assert_eq!(
-        listed.failed_because.as_deref(),
-        Some(why_it_cannot_play.words.as_str())
-    );
-    assert_eq!(
-        listed.condition.load,
-        StreamLoadOnTheWire::Loaded,
-        "a stream failed for a link set aside holds its graph to read and edit"
-    );
+    assert_eq!(listed.state, StreamListingState::Stopped, "{listed:?}");
+    assert_eq!(listed.failed_because, None);
+    assert_eq!(listed.condition.load, StreamLoadOnTheWire::Loaded);
     assert_eq!(listed.condition.playback, StreamPlaybackOnTheWire::Stopped);
-    assert_eq!(listed.condition.health, StreamHealthOnTheWire::Failed);
-    assert_eq!(
-        listed.condition.diagnostics,
-        vec![why_it_cannot_play.diagnostic()]
-    );
 
     let queued = runner.start_playback(project.path()).unwrap();
     let played = the_stream_action_once_finished(&runner, &queued.action_id);
@@ -315,15 +295,13 @@ fn a_stream_whose_graph_holds_a_link_its_validation_refuses_is_held_with_that_li
             .iter()
             .map(|stream| (stream.stream_id.as_str(), stream.state))
             .collect::<Vec<_>>(),
-        [(camera.as_str(), Some(StreamListingState::Failed))],
+        [(camera.as_str(), Some(StreamListingState::Running))],
         "{played:?}"
     );
-    assert!(
-        runner
-            .loaded_stream_of_the_id(&camera)
-            .unwrap()
-            .is_held_stopped()
-    );
+    let playing = runner.loaded_stream_of_the_id(&camera).unwrap();
+    assert!(!playing.is_held_stopped());
+    the_link_set_aside_is_shown_failed(&playing.to_json().unwrap());
+    assert!(!the_record_of(state_directory.path(), &camera).is_failed());
 }
 
 #[test]
@@ -350,8 +328,12 @@ fn an_edit_of_a_stream_holding_a_link_set_aside_keeps_it_and_refuses_a_new_link_
     )
     .expect("an edit keeps the link already set aside");
     assert!(
-        held.why_its_graph_as_held_keeps_this_stream_from_playing()
-            .is_some()
+        held.to_json().unwrap()["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["state"] == "error"),
+        "the link set aside is kept"
     );
 
     let mut a_second_refused_link = the_graph_of_a_source_linked_into_a_sink("camera", true);
@@ -377,18 +359,70 @@ fn an_edit_of_a_stream_holding_a_link_set_aside_keeps_it_and_refuses_a_new_link_
     )
     .expect("taking the refused link out is an edit");
     assert_eq!(
-        held.why_its_graph_as_held_keeps_this_stream_from_playing(),
-        None
-    );
-    assert_eq!(
         held.to_json().unwrap()["links"].as_array().unwrap().len(),
         1
     );
 }
 
+/// A play whose start is refused, here by a clock the runtime does not run, keeps the stream
+/// held stopped with its graph, and records it failed with the refusal.
 #[test]
 #[serial]
 fn a_play_whose_start_is_refused_keeps_the_stream_held_stopped_and_records_it_failed() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+    let camera = project.stream_id_of("camera");
+    a_project_opened_on(&runner, &project);
+    let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+    held.compiler.scope(|graph, _tx| {
+        graph.set_stream_clock_spec(crate::core::context::StreamClockSpec::Scaled {
+            scale: 1.0,
+            step_ns: 0,
+        })
+    });
+
+    let queued = runner.start_playback(project.path()).unwrap();
+    let played = the_stream_action_once_finished(&runner, &queued.action_id);
+
+    assert_eq!(
+        played
+            .streams
+            .iter()
+            .map(|stream| (stream.stream_id.as_str(), stream.state))
+            .collect::<Vec<_>>(),
+        [(camera.as_str(), Some(StreamListingState::Failed))],
+        "{played:?}"
+    );
+    let still_held = runner.loaded_stream_of_the_id(&camera).unwrap();
+    assert!(Arc::ptr_eq(&held, &still_held), "the stream stays held");
+    assert!(still_held.is_held_stopped() && still_held.runtime_context.lock().is_none());
+    assert_eq!(still_held.node_count(), 1);
+    let record = the_record_of(state_directory.path(), &camera);
+    assert!(record.stopped, "{record:?}");
+    assert!(
+        record
+            .failed_because
+            .as_deref()
+            .is_some_and(|why| why.contains("a step of 0 ns")),
+        "{record:?}"
+    );
+    let listed = runner
+        .list_streams()
+        .into_iter()
+        .find(|listed| listed.stream_id == camera)
+        .unwrap();
+    assert_eq!(listed.state, StreamListingState::Failed);
+}
+
+/// A function node with an input no link, pin or default gives a value plays: the stream starts,
+/// and its graph names the input on the node, which holds until the input has a value.
+///
+/// Mental-revert: refusing the stream's start over such an input fails a
+/// stream whose every edit the runtime accepted.
+#[test]
+#[serial]
+fn a_function_node_input_no_value_reaches_waits_on_its_node_and_the_stream_plays() {
     let state_directory = tempfile::tempdir().unwrap();
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -427,28 +461,22 @@ fn a_play_whose_start_is_refused_keeps_the_stream_held_stopped_and_records_it_fa
             .iter()
             .map(|stream| (stream.stream_id.as_str(), stream.state))
             .collect::<Vec<_>>(),
-        [(camera.as_str(), Some(StreamListingState::Failed))],
+        [(camera.as_str(), Some(StreamListingState::Running))],
         "{played:?}"
     );
-    let still_held = runner.loaded_stream_of_the_id(&camera).unwrap();
-    assert!(Arc::ptr_eq(&held, &still_held), "the stream stays held");
-    assert!(still_held.is_held_stopped() && still_held.runtime_context.lock().is_none());
-    assert_eq!(still_held.node_count(), 2);
-    let record = the_record_of(state_directory.path(), &camera);
-    assert!(record.stopped, "{record:?}");
-    assert!(
-        record
-            .failed_because
-            .as_deref()
-            .is_some_and(|why| why.contains("no value reaches")),
-        "{record:?}"
+    let rendered = held.to_json().unwrap();
+    let remap = rendered["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["type"] == "test_ops:remap")
+        .unwrap_or_else(|| panic!("the function node is drawn: {rendered}"));
+    assert_eq!(
+        remap["inputs_waiting_for_a_value"],
+        serde_json::json!(["x"]),
+        "{rendered}"
     );
-    let listed = runner
-        .list_streams()
-        .into_iter()
-        .find(|listed| listed.stream_id == camera)
-        .unwrap();
-    assert_eq!(listed.state, StreamListingState::Failed);
+    assert!(!the_record_of(state_directory.path(), &camera).is_failed());
 }
 
 #[test]
@@ -511,16 +539,21 @@ fn a_recorded_stream_linking_into_a_graph_inputs_value_is_held_with_that_link_se
     let held = runner.loaded_stream_of_the_id(&camera).unwrap();
     assert!(held.is_held_stopped());
     assert_eq!(held.node_count(), 3);
-    let why_it_cannot_play = held
-        .why_its_graph_as_held_keeps_this_stream_from_playing()
-        .expect("a link set aside keeps it from playing");
-    assert!(
-        why_it_cannot_play
-            .words
-            .contains("input `value` of `echo`, a setting, which takes no wire"),
-        "{why_it_cannot_play}"
+    assert_eq!(
+        held.why_its_graph_as_held_keeps_this_stream_from_playing(),
+        None,
+        "a link set aside keeps nothing from playing"
     );
     let rendered = held.to_json().unwrap();
+    assert!(
+        rendered["links"].as_array().unwrap().iter().any(|link| {
+            link["state"] == "error"
+                && link["error_reason"].as_str().is_some_and(|why| {
+                    why.contains("input `value` of `echo`, a setting, which takes no wire")
+                })
+        }),
+        "{rendered}"
+    );
     let links_loaded: Vec<&serde_json::Value> = rendered["links"]
         .as_array()
         .unwrap()
@@ -576,4 +609,282 @@ fn a_stream_whose_load_is_refused_is_held_from_its_document_reading_none_of_its_
         .unwrap();
     assert_eq!(listed.state, StreamListingState::Failed);
     assert_eq!(listed.node_count, Some(1), "{listed:?}");
+}
+
+/// A natively registered function node type, `Switch`, whose `result` carries Records, so a
+/// project's document names it without a node interpreter describing it.
+fn a_native_function_node_type_of_records() -> NodeClassImportPath {
+    use crate::core::descriptors::{
+        FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor,
+        PortFamily, PortFamilyDeclaration,
+    };
+    let switch_type = NodeClassImportPath::new(format!("{}::Switch", module_path!())).unwrap();
+    static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
+    REGISTERED_ONCE_PER_PROCESS.call_once(|| {
+        let mut switch = NodeDescriptor::new(
+            NodeClassShortName::new("Switch").unwrap(),
+            switch_type.clone(),
+            "a fixture",
+        )
+        .with_output(
+            PortDescriptor::new(
+                "result",
+                "",
+                true,
+                PortFamilyDeclaration::of_family(PortFamily::Records),
+            )
+            .with_delivery_profile("newest"),
+        );
+        switch.node_kind = NodeKind::Function {
+            language: FunctionNodeLanguage::Python,
+        };
+        crate::core::nodes::NODE_REGISTRY
+            .register_with_a_constructor_for_a_test(
+                switch,
+                Box::new(|_node| Err(Error::NotSupported("a fixture runs no node".to_owned()))),
+            )
+            .expect("register the fixture node type");
+    });
+    switch_type
+}
+
+/// A recorded stream whose document feeds a function node island into a view of its project,
+/// which runs in the app process and which the function node pool does not evaluate, opens
+/// stopped with that link shown failed for why, and plays every other node and link.
+///
+/// Mental-revert: refusing the saved link at the load fails the stream's open, and connecting it
+/// fails the stream at its start.
+#[test]
+#[serial]
+fn a_recorded_stream_whose_document_feeds_an_island_into_the_app_process_opens_and_plays() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let mut document = the_graph_of_a_source_linked_into_a_sink("camera", false);
+    document["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "5e2a7c90-6b1d-4f4a-9c3e-8d7f2a1b0c55",
+            "name": "switch",
+            "type": a_native_function_node_type_of_records().as_str(),
+            "config": {},
+        }));
+    document["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "0c6f3d2e-9b1a-4e7d-8f2c-5a4b3c2d1e0f",
+            "name": "program",
+            "type": format!("{TEST_PROJECT_NAME}:program"),
+            "config": {},
+        }));
+    document["links"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "source": {"node": "switch", "port": "result"},
+            "target": {"node": "program", "port": "in1"},
+        }));
+    let project = ProjectWithGraphDocuments::holding(document);
+    crate::core::test_support::a_view_reading_records_in(project.path(), "program");
+    let camera = project.stream_id_of("camera");
+    a_project_opened_on(&runner, &project);
+
+    let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+    let the_island_link_is_shown_failed = |graph: &serde_json::Value| {
+        let links = graph["links"].as_array().unwrap();
+        assert_eq!(links.len(), 2, "{graph}");
+        let set_aside = links
+            .iter()
+            .find(|link| link["source"]["node"] == "switch")
+            .unwrap_or_else(|| panic!("the island link is shown: {graph}"));
+        assert_eq!(set_aside["state"], "error", "{graph}");
+        assert!(
+            set_aside["error_reason"]
+                .as_str()
+                .is_some_and(|why| why.contains("runs in the app process")),
+            "{graph}"
+        );
+    };
+    the_island_link_is_shown_failed(&held.to_json().unwrap());
+    let listed = runner
+        .list_streams()
+        .into_iter()
+        .find(|listed| listed.stream_id == camera)
+        .unwrap();
+    assert_eq!(listed.state, StreamListingState::Stopped, "{listed:?}");
+    assert_eq!(listed.failed_because, None);
+
+    let queued = runner.start_playback(project.path()).unwrap();
+    let played = the_stream_action_once_finished(&runner, &queued.action_id);
+    assert_eq!(
+        played
+            .streams
+            .iter()
+            .map(|stream| (stream.stream_id.as_str(), stream.state))
+            .collect::<Vec<_>>(),
+        [(camera.as_str(), Some(StreamListingState::Running))],
+        "{played:?}"
+    );
+    the_island_link_is_shown_failed(
+        &runner
+            .loaded_stream_of_the_id(&camera)
+            .unwrap()
+            .to_json()
+            .unwrap(),
+    );
+    assert!(!the_record_of(state_directory.path(), &camera).is_failed());
+}
+
+/// Two shader nodes reading each other's Image play beside an independent node: the stream
+/// starts, the two are failed on their nodes, naming the cycle, with their links unwired, and
+/// the other node runs; taking the way back out live builds the two, which the fixture's
+/// evaluator refuses.
+///
+/// Mental-revert: refusing the compile over the cycle fails the stream's start.
+#[test]
+#[serial]
+fn shader_nodes_in_a_cycle_fail_on_their_nodes_and_the_stream_plays() {
+    use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
+    use crate::core::descriptors::{
+        NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor, PortFamily,
+        PortFamilyDeclaration,
+    };
+    use crate::core::{InputLinkPortRef, OutputLinkPortRef};
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_source_linked_into_a_sink(
+        "camera", false,
+    ));
+    let camera = project.stream_id_of("camera");
+    a_project_opened_on(&runner, &project);
+    let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+    let mut blur = NodeDescriptor::new(
+        NodeClassShortName::new("blur").unwrap(),
+        NodeClassImportPath::new("test_shaders:blur").unwrap(),
+        "a shader node type for a test",
+    )
+    .with_input(
+        PortDescriptor::new(
+            "image",
+            "",
+            true,
+            PortFamilyDeclaration::of_family(PortFamily::Image),
+        )
+        .with_delivery_profile("newest"),
+    )
+    .with_output(PortDescriptor::new(
+        "result",
+        "",
+        true,
+        PortFamilyDeclaration::of_family(PortFamily::Image),
+    ));
+    blur.node_kind = NodeKind::Shader;
+    held.node_types_this_stream_resolves()
+        .register_a_type_described_in_this_streams_node_interpreter(
+            blur,
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
+                shader_node_program: shader_program(
+                    "blur",
+                    "return image.sample(float2(0.5, 0.5));",
+                    &["image"],
+                    &[],
+                ),
+                evaluator_of_the_island_it_hosts: Box::new(|node| {
+                    Err(Error::Configuration(format!(
+                        "`{}` builds no node in this test",
+                        node.id
+                    )))
+                }),
+            },
+        )
+        .unwrap();
+    let a_blur = || {
+        held.add_node(crate::core::nodes::NodeSpec::new(
+            NodeClassImportPath::new("test_shaders:blur").unwrap(),
+            serde_json::Value::Null,
+        ))
+        .unwrap()
+    };
+    let (first, second) = (a_blur(), a_blur());
+    held.connect(
+        OutputLinkPortRef::new(first.clone(), "result"),
+        InputLinkPortRef::new(second.clone(), "image"),
+    )
+    .unwrap();
+    let way_back = held
+        .connect(
+            OutputLinkPortRef::new(second.clone(), "result"),
+            InputLinkPortRef::new(first.clone(), "image"),
+        )
+        .unwrap();
+
+    let queued = runner.start_playback(project.path()).unwrap();
+    let played = the_stream_action_once_finished(&runner, &queued.action_id);
+    assert_eq!(
+        played
+            .streams
+            .iter()
+            .map(|stream| (stream.stream_id.as_str(), stream.state))
+            .collect::<Vec<_>>(),
+        [(camera.as_str(), Some(StreamListingState::Running))],
+        "{played:?}"
+    );
+    let why_each_node_failed = || -> BTreeMap<(bool, String), serde_json::Value> {
+        held.to_json().unwrap()["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| {
+                (
+                    (
+                        node["type"] == "test_shaders:blur",
+                        node["name"].as_str().unwrap().to_owned(),
+                    ),
+                    node["components"]["failed_because"].clone(),
+                )
+            })
+            .collect()
+    };
+    let the_shader_nodes_failed_because = || -> Vec<serde_json::Value> {
+        why_each_node_failed()
+            .into_iter()
+            .filter(|((is_a_shader_node, _), _)| *is_a_shader_node)
+            .map(|(_, why)| why)
+            .collect()
+    };
+    let failed = why_each_node_failed();
+    let shader_nodes_failed_because = the_shader_nodes_failed_because();
+    assert_eq!(shader_nodes_failed_because.len(), 2, "{failed:?}");
+    for why in &shader_nodes_failed_because {
+        assert!(
+            why.as_str()
+                .is_some_and(|why| why.contains("To fix: break the cycle")),
+            "{failed:?}"
+        );
+    }
+    assert_eq!(
+        failed.iter().filter(|(_, why)| why.is_null()).count(),
+        2,
+        "the source and the sink run: {failed:?}"
+    );
+    let rendered = held.to_json().unwrap();
+    assert!(
+        rendered["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|link| link["source"]["node"] != "source")
+            .all(|link| link["state"] != "wired"),
+        "{rendered}"
+    );
+
+    let built = held
+        .disconnect(&way_back)
+        .expect_err("the fixture's evaluator builds nothing");
+    assert!(
+        built.to_string().contains("builds no node in this test"),
+        "taking the way back out builds the two: {built}"
+    );
+    assert!(!the_record_of(state_directory.path(), &camera).is_failed());
 }

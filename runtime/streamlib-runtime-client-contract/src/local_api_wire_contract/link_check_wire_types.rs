@@ -132,7 +132,7 @@ pub struct LinkCandidatesCheckResult {
 
 /// What a link made between two typed ends converts and warns of, as the judgement of those
 /// ends says: the marks a link carries in `graph` and in a transaction's answer.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct PinLinkMarksOnTheWire {
     /// `true` when the input reads what the output carries as its own type at no cost: Boolean,
@@ -176,9 +176,8 @@ pub enum PinLinkOutcomeOnTheWire {
     /// and Float among themselves, a Vector into a Vector or a Color, one number into a Vector
     /// or a Color, or a Menu into a String.
     ConnectsWithFreeConversion,
-    /// The two ends connect through the convert node `convert_node` names, placed between them.
-    /// Not answered yet: `connect` refuses a link that needs a convert node, so such a link is
-    /// answered `refused`.
+    /// The two ends connect through the built-in convert node `convert_node` names, which
+    /// `connect` places between them in the same edit, collapsed, linking each end to it.
     ConnectsThroughConvertNode,
     /// The link is not made; `refusal` says why.
     Refused,
@@ -208,12 +207,16 @@ pub struct ConvertNodeToInsertOnTheWire {
     pub input_pin_type: PinType,
     /// The output that feeds the link's input.
     pub output_port: String,
-    /// The type that output gives.
+    /// The type that output gives, under the settings `input_values` holds.
     pub output_pin_type: PinType,
+    /// The settings the node holds, each by its input's name, picked for the link's input; absent
+    /// when what its output gives follows no setting.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub input_values: serde_json::Map<String, serde_json::Value>,
 }
 
 impl ConvertNodeToInsertOnTheWire {
-    /// The wire form of `convert_node`.
+    /// The wire form of `convert_node`, its output typed as the settings it picks make it.
     fn of(convert_node: &ConvertNodeToInsert) -> Self {
         let conversion = &convert_node.conversion;
         Self {
@@ -221,7 +224,8 @@ impl ConvertNodeToInsertOnTheWire {
             input_port: conversion.input_port_name.clone(),
             input_pin_type: conversion.input_pin_type.clone(),
             output_port: conversion.output_port_name.clone(),
-            output_pin_type: conversion.output_pin_type.clone(),
+            output_pin_type: convert_node.output_pin_type.clone(),
+            input_values: convert_node.input_values.clone(),
         }
     }
 }

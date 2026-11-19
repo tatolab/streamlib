@@ -2,18 +2,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    InsertedNodeOnTheWire, PinLinkMarksOnTheWire,
+};
 
 /// What the answer of a graph transaction names beside the operations it applied: the `as` of
-/// each node added, and each input value set that a link overrides.
-pub(super) struct WhatAnAnswerNamesBesideItsOperations<'labels> {
-    pub(super) labels_of_added_nodes: &'labels HashMap<Uuid, String>,
+/// each node added, why a `connect` inserted each node it added on its link, and each input
+/// value set that a link overrides.
+pub(super) struct WhatAnAnswerNamesBesideItsOperations<'named> {
+    pub(super) what_the_answer_names_of_each_added_node:
+        &'named HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
     pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
 }
 
 impl StreamGraphTransactionExecutor<'_> {
     /// The answer of `applied_before`, the transaction of the project `project` an action sent
-    /// again under its key first applied: each edit of a loaded stream under its stream id, and
-    /// each input value set that a link overrode, as its first answer named them.
+    /// again under its key first applied: each edit of a loaded stream under its stream id, each
+    /// input value set that a link overrode, and each node a `connect` inserted on its link, as
+    /// its first answer named them.
     pub(super) fn the_answer_of_a_graph_transaction_applied_before(
         &self,
         project: Uuid,
@@ -36,6 +42,21 @@ impl StreamGraphTransactionExecutor<'_> {
                 .unwrap_or_else(|| stream.to_string());
             applied_live.push((stream_id, graph_operation));
         }
+        let what_the_answer_names_of_each_added_node = applied_before
+            .transaction
+            .nodes_inserted_on_links
+            .iter()
+            .map(|inserted| {
+                (
+                    inserted.node,
+                    WhatTheAnswerNamesOfAnAddedNode {
+                        node_in_its_document: inserted.node,
+                        label: None,
+                        inserted_because: Some(inserted.inserted_because),
+                    },
+                )
+            })
+            .collect();
         self.the_answer_of_a_graph_transaction(
             GraphEditMode::Commit,
             Some(applied_before.transaction.transaction.to_string()),
@@ -47,7 +68,7 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             applied_live,
             WhatAnAnswerNamesBesideItsOperations {
-                labels_of_added_nodes: &HashMap::new(),
+                what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
             },
         )
@@ -61,7 +82,7 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_operations_of: &dyn Fn(&str) -> Option<Arc<dyn RuntimeOperations>>,
         applied_live: Vec<(String, StreamGraphOperation)>,
         WhatAnAnswerNamesBesideItsOperations {
-            labels_of_added_nodes,
+            what_the_answer_names_of_each_added_node,
             overridden_by_links,
         }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
@@ -78,7 +99,16 @@ impl StreamGraphTransactionExecutor<'_> {
                         stream: stream_id.clone(),
                         node: node.id.to_string(),
                         name: node.name.clone(),
-                        label: labels_of_added_nodes.get(&node.id).cloned(),
+                        label: what_the_answer_names_of_each_added_node
+                            .get(&node.id)
+                            .and_then(|named| named.label.clone()),
+                        inserted: what_the_answer_names_of_each_added_node
+                            .get(&node.id)
+                            .and_then(|named| named.inserted_because)
+                            .map(|inserted_because| InsertedNodeOnTheWire {
+                                node_type: node.node_type.clone(),
+                                inserted_because,
+                            }),
                     });
                 }
                 StreamGraphOperation::FoldIntoFragment { fold } => {
@@ -87,7 +117,10 @@ impl StreamGraphTransactionExecutor<'_> {
                             stream: stream_id.clone(),
                             node: fragment.to_string(),
                             name: fold.fragment_name().to_owned(),
-                            label: labels_of_added_nodes.get(&fragment).cloned(),
+                            label: what_the_answer_names_of_each_added_node
+                                .get(&fragment)
+                                .and_then(|named| named.label.clone()),
+                            inserted: None,
                         });
                     }
                 }
@@ -131,7 +164,11 @@ impl StreamGraphTransactionExecutor<'_> {
                             }
                         }
                     });
-                let (state, error_reason) = graph_render
+                let HowTheGraphReadsALink {
+                    state,
+                    error_reason,
+                    marks,
+                } = graph_render
                     .as_ref()
                     .map(|graph_render| how_the_graph_reads_the_link(graph_render, link))
                     .unwrap_or_default();
@@ -141,6 +178,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     target: link_end_on_the_wire(&link.target),
                     state,
                     error_reason,
+                    marks,
                 });
             }
             let mut operation = serde_json::to_value(&applied).unwrap_or_default();
@@ -171,12 +209,20 @@ fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWi
     }
 }
 
-/// The `state` and `error_reason` the `graph` render `graph_render` gives `link`, whose ends it
-/// names by node name.
+/// What the `graph` render of a link says of it: its `state`, its `error_reason`, and what it
+/// converts and warns of.
+#[derive(Default)]
+struct HowTheGraphReadsALink {
+    state: Option<String>,
+    error_reason: Option<String>,
+    marks: PinLinkMarksOnTheWire,
+}
+
+/// What the `graph` render `graph_render` says of `link`, whose ends it names by node name.
 fn how_the_graph_reads_the_link(
     graph_render: &Value,
     link: &StreamGraphDocumentLink,
-) -> (Option<String>, Option<String>) {
+) -> HowTheGraphReadsALink {
     let node_name_of = |node: Uuid| {
         graph_render["nodes"]
             .as_array()
@@ -190,7 +236,7 @@ fn how_the_graph_reads_the_link(
         node_name_of(link.source.node),
         node_name_of(link.target.node),
     ) else {
-        return (None, None);
+        return HowTheGraphReadsALink::default();
     };
     let end_is = |end: &Value, name: &str, port: &str| {
         end["node"].as_str() == Some(name) && end["port"].as_str() == Some(port)
@@ -205,8 +251,19 @@ fn how_the_graph_reads_the_link(
                     && end_is(&rendered["target"], &target_name, &link.target.port)
             })
     else {
-        return (None, None);
+        return HowTheGraphReadsALink::default();
     };
     let text_at = |key: &str| rendered_link[key].as_str().map(str::to_owned);
-    (text_at("state"), text_at("error_reason"))
+    let marks = PinLinkMarksOnTheWire::deserialize(rendered_link).unwrap_or_else(|not_read| {
+        tracing::warn!(
+            %not_read,
+            "a connected link's pin marks could not be read from the render"
+        );
+        PinLinkMarksOnTheWire::default()
+    });
+    HowTheGraphReadsALink {
+        state: text_at("state"),
+        error_reason: text_at("error_reason"),
+        marks,
+    }
 }

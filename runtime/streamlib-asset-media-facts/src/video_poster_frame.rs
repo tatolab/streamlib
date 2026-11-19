@@ -16,6 +16,7 @@ use crate::first_video_sync_sample::{
 };
 use crate::image_file_media_facts::preview_picture_of;
 use crate::{AssetMediaFactsUnreadable, AssetPreviewPictureMadeFromTheFile};
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::with_no_iceoryx2_listener_bind_changing_the_umask;
 
 /// The file name of the helper the runtime unit carries beside `tatolabd`.
 pub const VIDEO_POSTER_FRAME_HELPER_EXECUTABLE_FILE_NAME: &str = "tatolab-video-poster-frame";
@@ -179,13 +180,14 @@ impl VideoPosterFrameHelper {
         &self,
         first_sync_sample: &FirstVideoSyncSampleAsAnnexB,
     ) -> Result<RgbaPictureFromThePosterFrameHelper, String> {
-        let mut helper = Command::new(&self.executable)
+        let mut command = Command::new(&self.executable);
+        command
             .arg(VIDEO_POSTER_FRAME_HELPER_CODEC_ARGUMENT)
             .arg(first_sync_sample.codec.wire_name())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        let mut helper = with_no_iceoryx2_listener_bind_changing_the_umask(|| command.spawn())
             .map_err(|why| {
                 format!(
                     "the poster frame helper {} did not start: {why}",

@@ -22,6 +22,8 @@ from check_in_tree_projects_node_code import (
     the_directory_to_check,
     the_exit_code_of,
     the_report,
+    the_venv_sync_command,
+    this_checkouts_tatolab_stream_version,
 )
 
 A_PROJECT = InTreeProject("examples/a", Path("examples/a"), True)
@@ -214,6 +216,22 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(the_exit_code_of([passed]), PASSED_EXIT_CODE)
         self.assertEqual(the_exit_code_of([passed, unfinished]), NOT_FULLY_CHECKED_EXIT_CODE)
         self.assertEqual(the_exit_code_of([unfinished, failed]), FAILED_EXIT_CODE)
+
+
+class VenvSyncTest(unittest.TestCase):
+    def test_the_sync_holds_tatolab_stream_at_this_checkouts_version(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            repository = Path(scratch)
+            write(
+                repository / "sdk" / "tatolab-stream" / "pyproject.toml",
+                '[project]\nname = "tatolab-stream"\nversion = "1.2.3"\n',
+            )
+            version = this_checkouts_tatolab_stream_version(repository)
+        self.assertEqual(version, "1.2.3")
+        command = the_venv_sync_command(Path("examples/a"), version)
+        self.assertEqual(command[:2], ["uv", "sync"])
+        self.assertIn("examples/a", command)
+        self.assertEqual(command[command.index("--upgrade-package") + 1], "tatolab-stream==1.2.3")
 
 
 if __name__ == "__main__":

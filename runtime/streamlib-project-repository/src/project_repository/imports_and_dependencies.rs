@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 impl ProjectRepository {
     /// Import the project `source` holds, a project folder or a `.zip` of one on this machine by
@@ -407,7 +408,7 @@ impl ProjectRepository {
                     None => None,
                 };
                 if let Some(imports_folder) = import_folder.parent() {
-                    std::fs::create_dir_all(imports_folder)?;
+                    create_directory_and_its_missing_parents_at_the_process_umask(imports_folder)?;
                 }
                 if let Err(not_placed) = std::fs::rename(&staged_folder, &import_folder) {
                     if let (Some(replaced), Some(set_aside)) = (replacing, &set_aside) {
@@ -453,7 +454,7 @@ impl ProjectRepository {
             .join(PROJECT_IMPORT_STAGING_DIRECTORY)
             .join(format!("set-aside-{}", Uuid::new_v4()));
         if let Some(staging) = set_aside.parent() {
-            std::fs::create_dir_all(staging)?;
+            create_directory_and_its_missing_parents_at_the_process_umask(staging)?;
         }
         std::fs::rename(&import_folder, &set_aside)?;
         Ok(Some(set_aside))
@@ -473,14 +474,14 @@ impl ProjectRepository {
             .join(Uuid::new_v4().to_string());
         let prefix = format!("{PROJECT_IMPORTS_DIRECTORY}/{folder}/");
         let written = (|| {
-            std::fs::create_dir_all(&staged_folder)?;
+            create_directory_and_its_missing_parents_at_the_process_umask(&staged_folder)?;
             for (path, bytes) in self.history.files_at_commit(commit)? {
                 let Some(inside_the_import) = path.strip_prefix(&prefix) else {
                     continue;
                 };
                 let destination = staged_folder.join(inside_the_import);
                 if let Some(parent) = destination.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
                 }
                 std::fs::write(destination, bytes)?;
             }

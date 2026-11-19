@@ -58,9 +58,9 @@ pub use engine_owned_iceoryx2_domain::{
     ChannelDataServiceLoanedSample, ChannelDataServicePortFactory, ChannelDataServicePublisher,
     ChannelDataServiceSample, ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError,
     ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, Iceoryx2DomainRefusal,
-    channel_data_service_builder, create_iceoryx2_node_in_domain,
-    create_the_reserved_slot_subscriber_of, engine_owned_iceoryx2_prefix_for_this_user,
-    iceoryx2_config_for_domain,
+    bind_an_iceoryx2_listener_outside_every_child_process_start, channel_data_service_builder,
+    create_iceoryx2_node_in_domain, create_the_reserved_slot_subscriber_of,
+    engine_owned_iceoryx2_prefix_for_this_user, iceoryx2_config_for_domain,
 };
 pub use gpu_pool_claim_table::{
     GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS,

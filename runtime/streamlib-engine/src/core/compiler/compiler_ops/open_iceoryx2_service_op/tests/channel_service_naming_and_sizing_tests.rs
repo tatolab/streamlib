@@ -107,14 +107,14 @@ fn destination_max_notifiers_is_the_fixed_cap_and_refuses_past_it() {
         connect_one_more_source(&mut graph);
     }
     assert_eq!(
-        destination_max_notifiers(&mut graph, &dest_uid).expect("three inbound links fit the cap"),
+        destination_max_notifiers(&graph, &dest_uid).expect("three inbound links fit the cap"),
         MAX_INBOUND_LINKS_PER_DESTINATION,
     );
 
     for _ in 3..=MAX_INBOUND_LINKS_PER_DESTINATION {
         connect_one_more_source(&mut graph);
     }
-    let refused = destination_max_notifiers(&mut graph, &dest_uid)
+    let refused = destination_max_notifiers(&graph, &dest_uid)
         .expect_err("one inbound link past the cap is refused");
     assert!(
         refused.to_string().contains("at most"),
@@ -122,13 +122,17 @@ fn destination_max_notifiers_is_the_fixed_cap_and_refuses_past_it() {
     );
 }
 
-/// A graph resolving function node types, with a destination fed
-/// `channel_links` links through channels.
+/// A graph resolving function node types, with a destination in a helper
+/// process, which evaluates an island at each read, fed `channel_links` links
+/// through channels.
 fn a_destination_fed_through_channels(channel_links: usize) -> (Graph, NodeRunId) {
     let mut graph =
         crate::core::compiler::compiler_ops::function_node_island::tests::a_graph_resolving_three_function_node_types(
         );
-    let dest_id = add_mock_input_only(&mut graph);
+    let dest_id =
+        crate::core::compiler::compiler_ops::function_node_island::tests::a_helper_reader_before_its_setup(
+            &mut graph,
+        );
     for _ in 0..channel_links {
         let src_id = add_mock_output_only(&mut graph);
         graph.traversal_mut().add_e(
@@ -153,7 +157,7 @@ fn a_link_from_an_island_the_destination_evaluates_holds_no_notifier_of_its_cap(
         InputLinkPortRef::new(&dest_uid, "in1"),
     );
     assert_eq!(
-        destination_max_notifiers(&mut graph, &dest_uid)
+        destination_max_notifiers(&graph, &dest_uid)
             .expect("the island link is evaluated in the read and needs no notifier"),
         MAX_INBOUND_LINKS_PER_DESTINATION,
     );
@@ -200,7 +204,7 @@ fn each_read_of_a_link_into_an_island_at_the_destination_holds_a_notifier_of_its
             InputLinkPortRef::new(&dest_uid, "in1"),
         );
     }
-    let refused = destination_max_notifiers(&mut graph, &dest_uid)
+    let refused = destination_max_notifiers(&graph, &dest_uid)
         .expect_err("the link read through the destination is one inbound link past the cap");
     assert!(
         refused.to_string().contains(&format!(
@@ -208,6 +212,66 @@ fn each_read_of_a_link_into_an_island_at_the_destination_holds_a_notifier_of_its
             MAX_INBOUND_LINKS_PER_DESTINATION + 1
         )),
         "got {refused}"
+    );
+}
+
+/// Island reads that push a destination past its inbound cap are refused at the edit and by
+/// the wiring in the same words, counted from the graph alike.
+///
+/// Mental-revert: counting the edit's links apart from the wiring's lets the edit take a link
+/// the start then refuses.
+#[test]
+fn island_reads_past_a_destinations_inbound_cap_are_refused_at_the_edit_and_the_wiring_alike() {
+    use crate::core::compiler::compiler_ops::function_node_island::tests::{
+        a_class_node_feeding_remap_into_a_helper_reader,
+        a_graph_resolving_three_function_node_types,
+    };
+    use crate::core::compiler::compiler_ops::refuse_a_link_a_channel_cannot_carry;
+    let mut graph = a_graph_resolving_three_function_node_types();
+    let (remap, dest_uid, _, into_in1) =
+        a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+    for _ in 0..MAX_INBOUND_LINKS_PER_DESTINATION - 1 {
+        let src_id = add_mock_output_only(&mut graph);
+        graph.traversal_mut().add_e(
+            OutputLinkPortRef::new(&src_id, "out1"),
+            InputLinkPortRef::new(&dest_uid, "in1"),
+        );
+    }
+    fn link_of<'graph>(
+        graph: &'graph Graph,
+        link_id: &LinkUniqueId,
+    ) -> &'graph crate::core::graph::Link {
+        graph.traversal().e(link_id).first().unwrap()
+    }
+    refuse_a_link_a_channel_cannot_carry(&graph, link_of(&graph, &into_in1))
+        .expect("one island read and the channel links fill the cap");
+    destination_max_notifiers(&graph, &dest_uid).expect("the wiring takes the cap filled");
+
+    let into_in2 = graph
+        .traversal_mut()
+        .add_e(
+            OutputLinkPortRef::new(&remap, "result"),
+            InputLinkPortRef::new(&dest_uid, "in2"),
+        )
+        .first()
+        .unwrap()
+        .id
+        .clone();
+    let refused_at_the_edit =
+        refuse_a_link_a_channel_cannot_carry(&graph, link_of(&graph, &into_in2))
+            .expect_err("a second island read is one past the cap");
+    let refused_by_the_wiring = destination_max_notifiers(&graph, &dest_uid)
+        .expect_err("the wiring refuses the destination past its cap");
+    assert_eq!(
+        refused_at_the_edit.to_string(),
+        refused_by_the_wiring.to_string()
+    );
+    assert!(
+        refused_at_the_edit.to_string().contains(&format!(
+            "{} inbound links",
+            MAX_INBOUND_LINKS_PER_DESTINATION + 1
+        )),
+        "{refused_at_the_edit}"
     );
 }
 

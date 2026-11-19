@@ -5,6 +5,7 @@
 //! graph by the engine's own judgement of a connect, and made nowhere; and that one judgement of
 //! a link on a running graph, which `check_link_candidates` makes of each candidate.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -15,20 +16,20 @@ use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::runtime::{ANodeTypesPort, RuntimeOperations, WhatALiveConnectMakesOfALink};
 use streamlib_control_contract::{CheckLink, CheckLinkRequest, Connect, ControlOperation};
 use streamlib_project_repository::{
-    GraphEditStream, StreamGraphActionLinkEnd, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    GraphEditStream, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentLinkEnd,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, LinkCheckResult,
-    StreamGraphOnTheWire,
+    ControlOperationRefusalCode, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
+    GraphTransactionNodeInsertedBecause, LinkCheckResult, StreamGraphOnTheWire,
 };
 use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 use crate::stream_graph_transaction_executor::{
-    GraphRequestRefusal, GraphTransactionRefusal, StreamsTheRuntimeHolds,
-    the_current_name_of_a_port, the_node_a_connects_end_names,
-    the_operation_a_connect_asks_of_the_running_stream,
+    GraphRequestRefusal, GraphTransactionRefusal, StreamsTheRuntimeHolds, WhatAConnectAsks,
+    WhereAnOperationEdits, the_current_name_of_a_port, the_level_holds_both_ends_by_uuid,
+    the_node_a_connects_end_names, what_a_connect_asks_of_the_running_stream,
 };
 
 /// Why a link is not checked yet, in the runtime's words.
@@ -159,8 +160,9 @@ impl ControlOperationDispatcher {
 
     /// What `connect` would answer for the link `request` names: the stream it names resolved
     /// as a graph edit resolves it, the link read as a transaction's `connect` reads it, and
-    /// the rest judged by the engine's own judgement of a live connect. Neither the graph nor
-    /// the project's history is changed, and no refusal is kept on the project's change feed.
+    /// the rest judged by the engine's own judgement of a live connect. A link `connect` carries
+    /// through the convert node it places answers that node. Neither the graph nor the project's
+    /// history is changed, and no refusal is kept on the project's change feed.
     ///
     /// Each link [`LinkNotCheckedYet`] names is refused unchecked.
     pub(crate) async fn check_link(
@@ -183,7 +185,7 @@ impl ControlOperationDispatcher {
             Ok(running_graph) => running_graph,
             Err(NoRunningGraphToCheckLinksOn::StreamNotFound(refusal)) => {
                 return Ok(LinkCheckResult::of_a_link_connect_refuses(
-                    GraphTransactionRefusal::of_a_connect(&source, &target, refusal)
+                    GraphTransactionRefusal::of_a_connect(None, &source, &target, refusal)
                         .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
                 ));
             }
@@ -264,43 +266,76 @@ impl TheRunningGraphLinksAreCheckedOn {
 
     /// What `connect` would answer for the link from `source` to `target`: read as a
     /// transaction's `connect` reads it, then judged by the engine's own judgement of a live
-    /// connect. A refusal of a port a node does not have suggests the ports of the node's type,
-    /// where the stream's project is listed.
+    /// connect, a link `connect` carries through the convert node it places answering that node.
+    /// A refusal of a port a node does not have suggests the ports of the node's type, where the
+    /// stream's project is listed.
     pub(crate) fn check(
         &self,
         source: &StreamGraphActionLinkEnd,
         target: &StreamGraphActionLinkEnd,
     ) -> Result<LinkCheckResult, LinkNotCheckedYet> {
-        let refused_on_the_running_stream = |refusal: GraphRequestRefusal| {
-            let refusal = GraphTransactionRefusal::of_a_connect(source, target, refusal);
-            LinkCheckResult::of_a_link_connect_refuses(
-                match &self.project_directory {
-                    Some(project_directory) => refusal
-                        .suggesting_the_ports_of_the_node_type_it_names(
-                            project_directory,
-                            &self.rendered_graph,
-                        ),
-                    None => refusal,
-                }
-                .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
-            )
+        let refused_on_the_running_stream =
+            |edits: Option<WhereAnOperationEdits<'_>>, refusal: GraphRequestRefusal| {
+                let refusal = GraphTransactionRefusal::of_a_connect(edits, source, target, refusal);
+                LinkCheckResult::of_a_link_connect_refuses(
+                    match &self.project_directory {
+                        Some(project_directory) => refusal
+                            .suggesting_the_ports_of_the_node_type_it_names(
+                                project_directory,
+                                &self.rendered_graph,
+                            ),
+                        None => refusal,
+                    }
+                    .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
+                )
+            };
+        let level_as_drawn = match StreamGraphDocument::from_value(self.rendered_graph.clone()) {
+            Ok(level_as_drawn) => level_as_drawn,
+            Err(not_read) => return Ok(refused_on_the_running_stream(None, not_read.into())),
         };
-        let operation = match the_operation_a_connect_asks_of_the_running_stream(
+        let at_its_own_level = WhereAnOperationEdits {
+            stream_id: &self.stream_id,
+            level: &[],
+            level_holds_both_link_ends: the_level_holds_both_ends_by_uuid(
+                &level_as_drawn,
+                source,
+                target,
+                &HashMap::new(),
+            ),
+        };
+        let asked = match what_a_connect_asks_of_the_running_stream(
             source.clone(),
             target.clone(),
             &self.rendered_graph,
+            &level_as_drawn,
             self.stream_operations.as_ref(),
         ) {
-            Ok(operation) => operation,
-            Err(refusal) => return Ok(refused_on_the_running_stream(refusal)),
+            Ok(asked) => asked,
+            Err(refusal) => {
+                return Ok(refused_on_the_running_stream(
+                    Some(at_its_own_level),
+                    refusal,
+                ));
+            }
         };
-        let StreamGraphOperation::Connect { link } = operation else {
-            return Err(LinkNotCheckedYet::ClosesALoopOfFunctionNodes);
+        let link = match asked {
+            WhatAConnectAsks::Link(link)
+            | WhatAConnectAsks::ThroughANode {
+                original_link: link,
+                because: GraphTransactionNodeInsertedBecause::ConvertsPinTypes,
+                ..
+            } => link,
+            WhatAConnectAsks::ThroughANode {
+                because:
+                    GraphTransactionNodeInsertedBecause::ClosesALoop
+                    | GraphTransactionNodeInsertedBecause::ForAnotherReason,
+                ..
+            } => return Err(LinkNotCheckedYet::ClosesALoopOfFunctionNodes),
         };
         the_check_of_what_a_live_connect_makes(
             self.stream_operations
                 .what_a_live_connect_makes_of_the_link(&link),
-            refused_on_the_running_stream,
+            |refusal| refused_on_the_running_stream(Some(at_its_own_level), refusal),
         )
     }
 

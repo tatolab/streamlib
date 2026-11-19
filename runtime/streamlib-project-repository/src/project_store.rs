@@ -20,6 +20,7 @@ use redb::{ReadableDatabase, TableDefinition};
 use serde_json::Value as JsonValue;
 
 use crate::PROJECT_RUNTIME_DIRECTORY;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// The store's file inside the project's runtime directory.
 pub const PROJECT_STORE_FILE_NAME: &str = "project.redb";
@@ -135,12 +136,12 @@ impl ProjectStore {
         debounce_window: Duration,
     ) -> Result<Self, ProjectStoreRefusal> {
         if let Some(directory) = store_file.parent() {
-            std::fs::create_dir_all(directory).map_err(|why| {
-                ProjectStoreRefusal::DirectoryNotMade {
+            create_directory_and_its_missing_parents_at_the_process_umask(directory).map_err(
+                |why| ProjectStoreRefusal::DirectoryNotMade {
                     directory: directory.to_path_buf(),
                     why,
-                }
-            })?;
+                },
+            )?;
         }
         let database =
             redb::Database::create(store_file).map_err(|why| ProjectStoreRefusal::NotOpened {

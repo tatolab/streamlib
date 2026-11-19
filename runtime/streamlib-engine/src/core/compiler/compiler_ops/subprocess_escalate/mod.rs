@@ -236,10 +236,10 @@ pub(crate) fn handle_escalate_op(
             Some(graphics::handle_run_graphics_draw(sandbox, rid, req))
         }
         EscalateRequest::RegisterAccelerationStructureBlas(req) => Some(
-            ray_tracing::handle_register_acceleration_structure_blas(sandbox, rid, req),
+            ray_tracing::handle_register_acceleration_structure_blas(sandbox, registry, rid, req),
         ),
         EscalateRequest::RegisterAccelerationStructureTlas(req) => Some(
-            ray_tracing::handle_register_acceleration_structure_tlas(sandbox, rid, req),
+            ray_tracing::handle_register_acceleration_structure_tlas(sandbox, registry, rid, req),
         ),
         EscalateRequest::RegisterRayTracingKernel(req) => Some(
             ray_tracing::handle_register_ray_tracing_kernel(sandbox, rid, req),

@@ -36,6 +36,9 @@ from runtime_unit_under_test import REPOSITORY_ROOT
 CONTROL_CONTRACT_FILE = REPOSITORY_ROOT / "runtime" / "streamlib-control-contract" / "contract.json"
 COMPONENT_SCHEMA_REFERENCE_PREFIX = "#/components/schemas/"
 BUILD_A_GRAPH_SCRIPT_NAME = "build_a_graph"
+TEXTURE_TO_TENSOR_NODE_TYPE = "tatolab.stream:TextureToTensor"
+#: The runtime's own node types the stand-in catalog lists beside the installed modules' ones.
+BUILT_IN_NODE_TYPES = {"tatolab.stream:TensorToAudio", TEXTURE_TO_TENSOR_NODE_TYPE}
 PACKAGES_DIRECTORY = REPOSITORY_ROOT / "packages"
 INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP = "tatolab.nodes"
 #: A project's own node types live under `nodes/`; the runtime describes one when it is placed.
@@ -117,11 +120,15 @@ class ContractBackedAgentSession:
              "type": "tatolab.testpattern:TestPatternSource"}
         ]
         self.links: "list[dict[str, Any]]" = []
-        self.described_node_types = the_installed_modules_node_types() | {
+        self.described_node_types = the_installed_modules_node_types() | BUILT_IN_NODE_TYPES | {
             node["type"] for node in self.nodes
         }
-        #: The inputs a link from a picture output connects to; `check_link` refuses any other.
+        #: The inputs a link from a picture output connects to; `check_link` refuses any other
+        #: but those of `tensor_inputs`.
         self.picture_inputs = {"layer_0"}
+        #: The Tensor inputs a link from a picture output reaches through a `TextureToTensor`
+        #: node `connect` places between them.
+        self.tensor_inputs = {"array"}
         self.transactions: "list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]" = []
         self.tool_calls: "list[tuple[str, dict[str, Any]]]" = []
         self.refused_operations: "set[str]" = set()
@@ -240,6 +247,15 @@ class ContractBackedAgentSession:
             )
             if arguments["target"]["port"] in self.picture_inputs:
                 return self.checked_against_the_result_schema(operation, {"outcome": "connects"})
+            if arguments["target"]["port"] in self.tensor_inputs:
+                return self.checked_against_the_result_schema(operation, {
+                    "outcome": "connects_through_convert_node",
+                    "convert_node": {
+                        "node_type": TEXTURE_TO_TENSOR_NODE_TYPE,
+                        "input_port": "image", "input_pin_type": {"type": "texture"},
+                        "output_port": "array", "output_pin_type": {"type": "tensor"},
+                    },
+                })
             return self.checked_against_the_result_schema(operation, {
                 "outcome": "refused",
                 "refusal": {
@@ -374,17 +390,30 @@ class ContractBackedAgentSession:
                     node_by_label.get(each[end]["node"]) or self.the_node_of_the_id(each[end]["node"])
                     for end in ("source", "target")
                 )
-                added_links.append({
-                    "id": str(uuid.uuid4()),
-                    "source": {"node": source["name"], "port": each["source"]["port"]},
-                    "target": {"node": target["name"], "port": each["target"]["port"]},
-                })
-                answer["connected_links"].append({
-                    "stream": self.stream_id,
-                    "source": {"node": source["id"], "port": each["source"]["port"]},
-                    "target": {"node": target["id"], "port": each["target"]["port"]},
-                    "state": "pending",
-                })
+                ends = [((source, each["source"]["port"]), (target, each["target"]["port"]))]
+                if each["target"]["port"] in self.tensor_inputs:
+                    convert_node = {"id": str(uuid.uuid4()), "name": "texturetotensor",
+                                    "type": TEXTURE_TO_TENSOR_NODE_TYPE}
+                    added_nodes.append(convert_node)
+                    answer["added_nodes"].append({
+                        "stream": self.stream_id, "node": convert_node["id"],
+                        "name": convert_node["name"], "node_type": TEXTURE_TO_TENSOR_NODE_TYPE,
+                        "inserted_because": "converts_pin_types",
+                    })
+                    ends = [((source, each["source"]["port"]), (convert_node, "image")),
+                            ((convert_node, "array"), (target, each["target"]["port"]))]
+                for (link_source, source_port), (link_target, target_port) in ends:
+                    added_links.append({
+                        "id": str(uuid.uuid4()),
+                        "source": {"node": link_source["name"], "port": source_port},
+                        "target": {"node": link_target["name"], "port": target_port},
+                    })
+                    answer["connected_links"].append({
+                        "stream": self.stream_id,
+                        "source": {"node": link_source["id"], "port": source_port},
+                        "target": {"node": link_target["id"], "port": target_port},
+                        "state": "pending",
+                    })
         self.nodes += added_nodes
         self.links += added_links
         self.transactions.append((answer["transaction"], added_nodes, added_links))
@@ -457,11 +486,12 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
     assert called[2:] == [
         "list_streams", "list_node_types", "transact", "describe_node_types",
         CALL_OPERATION_TOOL_NAME, "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
-        "transact", "graph", "undo", "undo", "undo", "graph",
+        "transact", "graph", CALL_OPERATION_TOOL_NAME, "transact", "graph", "undo", "graph",
+        "undo", "undo", "undo", "graph",
     ]
     checked = [arguments["operation"] for name, arguments in session.tool_calls
                if name == CALL_OPERATION_TOOL_NAME]
-    assert checked == ["check_link_candidates", "check_link", "check_link"]
+    assert checked == ["check_link_candidates", "check_link", "check_link", "check_link"]
 
 
 def test_an_operation_that_is_not_a_listed_tool_is_called_through_call_operation() -> None:
@@ -554,7 +584,7 @@ def test_an_answer_that_misses_an_expectation_fails_the_run() -> None:
     session = ContractBackedAgentSession(the_committed_control_contract())
     session.undo_reverses_nothing = True
 
-    with pytest.raises(AgentLoopScriptRunFailed, match="graph_after_the_undo.*holds an item where"):
+    with pytest.raises(AgentLoopScriptRunFailed, match="graph_after_the_conversion_is_undone.*holds an item where"):
         played(agent_loop_script_from(build_a_graph_document()), session)
 
 

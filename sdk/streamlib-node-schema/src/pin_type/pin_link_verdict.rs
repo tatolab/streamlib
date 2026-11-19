@@ -3,8 +3,7 @@
 
 use std::fmt;
 
-use super::{BundleMember, NodeInputMode, PinConversion, PinType};
-use crate::NodeClassImportPath;
+use super::{BundleMember, NodeInputMode, PinConversion, PinConversionOutputPicked, PinType};
 use crate::port_family::{
     CodecDirection, EncodedMedia, PortFamily, codec_nodes_placed_between,
     node_placed_between_families,
@@ -52,9 +51,9 @@ pub enum PinLinkOutcome {
     /// The input takes what the output carries as its own type, at no cost.
     ConnectsWithFreeConversion(FreePinConversion),
     /// The two ends connect through a node of one built-in conversion placed between them.
-    ConnectsThroughConvertNode(ConvertNodeToInsert),
+    ConnectsThroughConvertNode(Box<ConvertNodeToInsert>),
     /// The two ends do not connect.
-    Refused(PinLinkRefusal),
+    Refused(Box<PinLinkRefusal>),
 }
 
 /// Two differing types the verdict lets connect, each variant stating what the input reads.
@@ -74,11 +73,17 @@ pub enum FreePinConversion {
     MenuOptionNameAsString,
 }
 
-/// The convert node a link needs, and the refusal of the link made without it.
+/// The convert node a link needs, the settings it holds, and the refusal of the link made
+/// without it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvertNodeToInsert {
     /// The built-in conversion that bridges the two ends.
     pub conversion: PinConversion,
+    /// The settings the conversion picks for the input it feeds, each by its input's name, which
+    /// the node holds as its input values; empty when its output follows no setting.
+    pub input_values: serde_json::Map<String, serde_json::Value>,
+    /// The type the node's output gives under those settings.
+    pub output_pin_type: PinType,
     /// The refusal of the link made straight from one end to the other.
     pub refusal_without_it: PinLinkRefusal,
 }
@@ -99,8 +104,8 @@ pub enum PinLinkRefusal {
         output: PinLinkEndNamed,
         /// The input end.
         input: PinLinkEndNamed,
-        /// Each node type stating a conversion that bridges the two ends.
-        conversions_that_bridge: Vec<NodeClassImportPath>,
+        /// Each conversion that bridges the two ends, none of which `connect` places.
+        conversions_that_bridge: Vec<PinConversion>,
     },
 }
 
@@ -186,12 +191,13 @@ impl fmt::Display for PinLinkRefusal {
                     },
                     [conversion] => write!(
                         formatter,
-                        ". To fix: place a `{conversion}` node between them"
+                        ". To fix: place a `{}` node between them",
+                        conversion.node_type
                     ),
                     conversions => write!(
                         formatter,
                         ". To fix: place one of {} between them",
-                        in_backticks(conversions)
+                        in_backticks(conversions.iter().map(|conversion| &conversion.node_type))
                     ),
                 }
             }
@@ -331,10 +337,10 @@ pub fn pin_link_verdict(
         .is_some_and(|input_mode| !input_mode.takes_a_wire())
     {
         return PinLinkVerdict {
-            outcome: PinLinkOutcome::Refused(PinLinkRefusal::input_takes_no_wire(
+            outcome: PinLinkOutcome::Refused(Box::new(PinLinkRefusal::input_takes_no_wire(
                 input.end.node_name,
                 input.end.port_name,
-            )),
+            ))),
             warnings: Vec::new(),
         };
     }
@@ -362,10 +368,12 @@ pub fn pin_link_verdict(
     let bridging: Vec<BridgingConversion<'_>> = conversions
         .iter()
         .filter_map(|conversion| {
+            let picked = conversion.output_picked_for(input.pin_type)?;
             Some(BridgingConversion {
                 conversion,
                 into_it: direct_link_between(output.pin_type, &conversion.input_pin_type)?,
-                out_of_it: direct_link_between(&conversion.output_pin_type, input.pin_type)?,
+                out_of_it: direct_link_between(&picked.output_pin_type, input.pin_type)?,
+                picked,
             })
         })
         .collect();
@@ -374,7 +382,7 @@ pub fn pin_link_verdict(
         input: input.into(),
         conversions_that_bridge: bridging
             .iter()
-            .map(|bridging| bridging.conversion.node_type.clone())
+            .map(|bridging| bridging.conversion.clone())
             .collect(),
     };
     let mut insertable = bridging
@@ -386,25 +394,31 @@ pub fn pin_link_verdict(
             warnings.extend(only_one.out_of_it.warnings);
             warnings.extend(meanings_differ);
             PinLinkVerdict {
-                outcome: PinLinkOutcome::ConnectsThroughConvertNode(ConvertNodeToInsert {
-                    conversion: only_one.conversion.clone(),
-                    refusal_without_it: refusal,
-                }),
+                outcome: PinLinkOutcome::ConnectsThroughConvertNode(Box::new(
+                    ConvertNodeToInsert {
+                        conversion: only_one.conversion.clone(),
+                        input_values: only_one.picked.input_values,
+                        output_pin_type: only_one.picked.output_pin_type,
+                        refusal_without_it: refusal,
+                    },
+                )),
                 warnings,
             }
         }
         _ => PinLinkVerdict {
-            outcome: PinLinkOutcome::Refused(refusal),
+            outcome: PinLinkOutcome::Refused(Box::new(refusal)),
             warnings: Vec::new(),
         },
     }
 }
 
-/// A conversion that bridges two ends, with the direct link into it and out of it.
+/// A conversion that bridges two ends, with the direct link into it and out of it, and what it
+/// picks to feed the input.
 struct BridgingConversion<'conversion> {
     conversion: &'conversion PinConversion,
     into_it: DirectPinLink,
     out_of_it: DirectPinLink,
+    picked: PinConversionOutputPicked,
 }
 
 /// A link a direct rule makes: as it is, or through a free conversion, with what it warns of.

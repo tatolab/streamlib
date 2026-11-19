@@ -19,12 +19,15 @@ use crate::core::context::{
 use crate::core::rhi::{PixelFormat, SourceLayoutInfo};
 use crate::linux::v4l2_color::v4l2_color_to_h273_color_vui;
 
-use super::V4L2_BUFFER_COUNT;
-use super::v4l2_capture_dequeue_loop::{V4l2CaptureDequeueLoopInputs, run_the_v4l2_dequeue_loop};
+use super::v4l2_capture_buffer_queue::V4l2DeviceCaptureBufferQueue;
+use super::v4l2_capture_dequeue_loop::{
+    V4l2CaptureDequeueLoopInputs, V4l2CaptureInput, run_the_v4l2_dequeue_loop,
+};
 use super::v4l2_capture_gpu_resources::{
     CameraGpuResources, log_the_v4l2_capture_buffer_path_to_the_gpu,
     set_up_the_camera_gpu_resources,
 };
+use super::v4l2_driver_buffers_mapped_for_reading::V4l2DriverBuffersMappedForReading;
 
 /// The two V4L2 capture formats the GPU converter has shaders for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +47,7 @@ impl CaptureFormat {
 }
 
 pub(super) fn capture_thread_loop(
-    mut stream: v4l::io::mmap::Stream,
+    stream: v4l::io::mmap::Stream,
     is_capturing: Arc<AtomicBool>,
     hand_off: CapturedVideoFrameHandOff,
     gpu_context: GpuContextLimitedAccess,
@@ -172,21 +175,44 @@ pub(super) fn capture_thread_loop(
         use_dmabuf,
     );
 
-    // DMA-BUF path drives DQBUF/QBUF per frame directly, so it QBUFs the
-    // initial set + STREAMONs manually (the mmap stream does this internally
-    // on first `next()`, which the MMAP path relies on).
-    if use_dmabuf
-        && let Err(streamon_error) =
-            queue_the_initial_dma_buf_buffers_and_stream_on(device_fd, &camera_name)
+    let mut capture_buffer_queue = V4l2DeviceCaptureBufferQueue::of_the_stream(&stream);
+    let mapped_driver_buffers = if use_dmabuf {
+        None
+    } else {
+        match V4l2DriverBuffersMappedForReading::map_every_buffer_of(&capture_buffer_queue) {
+            Ok(mapped_driver_buffers) => Some(mapped_driver_buffers),
+            Err(mapping_error) => {
+                tracing::error!(camera = camera_name, error = %mapping_error, "mapping the capture buffers failed");
+                record_that_capture_ended_on_its_own(format!(
+                    "the device's capture buffers could not be mapped: {mapping_error}"
+                ));
+                return;
+            }
+        }
+    };
+    if let Err(stream_on_error) =
+        capture_buffer_queue.queue_every_buffer_and_stream_on(&camera_name)
     {
-        record_that_capture_ended_on_its_own(format!("VIDIOC_STREAMON failed: {streamon_error}"));
+        tracing::error!(camera = camera_name, error = %stream_on_error, "starting the capture stream failed");
+        record_that_capture_ended_on_its_own(format!(
+            "the device's stream could not start: {stream_on_error}"
+        ));
         return;
     }
+    let input = match &mapped_driver_buffers {
+        None => V4l2CaptureInput::DmaBuf {
+            imported_buffers: &dmabuf_imported_buffers,
+        },
+        Some(mapped_driver_buffers) => V4l2CaptureInput::Mmap {
+            mapped_driver_buffers,
+            storage_buffers: &input_storage_buffers,
+            storage_buffer_mappings: input_mapped_ptrs,
+        },
+    };
 
     run_the_v4l2_dequeue_loop(
-        &mut stream,
+        &mut capture_buffer_queue,
         V4l2CaptureDequeueLoopInputs {
-            device_fd,
             is_capturing: &is_capturing,
             hand_off: &hand_off,
             camera_name: &camera_name,
@@ -195,10 +221,7 @@ pub(super) fn capture_thread_loop(
             fourcc,
             capture_instant_resolver: &capture_instant_resolver,
             conversion_stage: &mut conversion_stage,
-            input_storage_buffers: &input_storage_buffers,
-            input_mapped_ptrs,
-            use_dmabuf,
-            dmabuf_imported_buffers: &dmabuf_imported_buffers,
+            input,
             input_byte_size,
             src_layout,
             resolved_color: &resolved_color,
@@ -207,17 +230,8 @@ pub(super) fn capture_thread_loop(
         &record_that_capture_ended_on_its_own,
     );
 
-    // STREAMOFF in DMA-BUF mode (the mmap stream's Drop handles MMAP mode).
-    if use_dmabuf {
-        unsafe {
-            let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
-            libc::ioctl(
-                device_fd,
-                v4l::v4l2::vidioc::VIDIOC_STREAMOFF as libc::c_ulong,
-                &mut buf_type,
-            );
-        }
-    }
+    capture_buffer_queue.stream_off();
+    drop(mapped_driver_buffers);
 
     // The imported fds are driver-owned (`vkImportMemoryFdInfoKHR` took
     // ownership); dropping the buffers frees them through Vulkan.
@@ -296,50 +310,4 @@ fn query_the_v4l2_color_and_buffer_layout(
             )
         }
     }
-}
-
-/// Queue every driver buffer and turn streaming on, for the DMA-BUF path,
-/// which drives DQBUF/QBUF itself. A failed STREAMON is returned; a failed
-/// initial QBUF is logged and streaming starts with the buffers that queued.
-fn queue_the_initial_dma_buf_buffers_and_stream_on(
-    device_fd: RawFd,
-    camera_name: &str,
-) -> std::io::Result<()> {
-    unsafe {
-        for i in 0..V4L2_BUFFER_COUNT {
-            let mut v4l2_buf: v4l::v4l_sys::v4l2_buffer = std::mem::zeroed();
-            v4l2_buf.type_ = v4l::buffer::Type::VideoCapture as u32;
-            v4l2_buf.memory = v4l::memory::Memory::Mmap as u32;
-            v4l2_buf.index = i;
-            if libc::ioctl(
-                device_fd,
-                v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
-                &mut v4l2_buf,
-            ) != 0
-            {
-                tracing::error!(
-                    camera = camera_name,
-                    buffer_index = i,
-                    errno = std::io::Error::last_os_error().raw_os_error(),
-                    "initial VIDIOC_QBUF failed"
-                );
-            }
-        }
-        let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
-        if libc::ioctl(
-            device_fd,
-            v4l::v4l2::vidioc::VIDIOC_STREAMON as libc::c_ulong,
-            &mut buf_type,
-        ) != 0
-        {
-            let streamon_error = std::io::Error::last_os_error();
-            tracing::error!(
-                camera = camera_name,
-                errno = streamon_error.raw_os_error(),
-                "VIDIOC_STREAMON failed — camera produces no frames; stopping capture thread"
-            );
-            return Err(streamon_error);
-        }
-    }
-    Ok(())
 }

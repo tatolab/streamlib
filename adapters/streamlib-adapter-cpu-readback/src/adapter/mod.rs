@@ -46,6 +46,8 @@ use crate::view::{
 };
 
 mod adapter_persistent_submit_context;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod adapter_persistent_submit_context_tests;
 mod in_process_cpu_readback_copy_trigger;
 mod surface_adapter_for_cpu_readback;
 

@@ -198,6 +198,36 @@ def pin_value_carried(
     return _exactly_as_f64(stored_value, what_it_is)
 
 
+# The number of components a Vector of each value type holds.
+_COMPONENTS_OF_EACH_VECTOR_VALUE_TYPE = {"vector2": 2, "vector3": 3, "vector4": 4}
+
+
+def parts_a_value_type_reads(value_type: str, carried: Any) -> Any:
+    """The parts an input of `value_type`, one of `PART_VALUE_TYPES`, reads of what another node
+    of its island handed out, with the free conversion a link allows.
+
+    One number spreads over every component of a Vector, and over the red, green and blue of a
+    Color, opaque. A Vector or a Color into one of another size keeps the components it shares
+    and reads each missing one as 0, a Color's alpha as 1. A Rectangle and a Transform read
+    their parts as they are. Mirrors the reading of a link from outside the island.
+    """
+    if value_type == "color":
+        component_count = 4
+    else:
+        component_count = _COMPONENTS_OF_EACH_VECTOR_VALUE_TYPE.get(value_type)
+        if component_count is None:
+            return carried
+    if isinstance(carried, (int, float)) and not isinstance(carried, bool):
+        number = float(carried)
+        return (number, number, number, 1.0) if value_type == "color" else (number,) * component_count
+    if not isinstance(carried, tuple):
+        return carried
+    missing = (0.0, 0.0, 0.0, 1.0 if value_type == "color" else 0.0)
+    return tuple(
+        carried[index] if index < len(carried) else missing[index] for index in range(component_count)
+    )
+
+
 def value_class_of_a_part_value_type(value_type: str) -> Any:
     """The `tatolab.stream` value class a function node's signature names `value_type`, one of `PART_VALUE_TYPES`.
 
