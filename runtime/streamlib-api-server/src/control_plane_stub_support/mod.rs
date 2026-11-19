@@ -195,6 +195,13 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<bool> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn hold_an_edit_its_document_holds_not_live(
+            &self,
+            _graph_operation: &::streamlib_project_repository::StreamGraphOperation,
+            _refusal: &str,
+        ) {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             _graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -633,6 +640,10 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     state: ::streamlib::sdk::runtime::StreamListingState::Running,
                     node_count: None,
                     failed_because: None,
+                    condition: ::streamlib_runtime_client_contract::local_api_wire_contract::StreamConditionOnTheWire::healthy(
+                        ::streamlib_runtime_client_contract::local_api_wire_contract::StreamLoadOnTheWire::Loaded,
+                        ::streamlib_runtime_client_contract::local_api_wire_contract::StreamPlaybackOnTheWire::Playing,
+                    ),
                     capture_devices_whose_access_was_never_asked_for: Vec::new(),
                     stream_action_under_way: None,
                 }]
@@ -672,7 +683,8 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 
 mod graph_mutations_recorded_by_a_stub;
 pub(crate) use graph_mutations_recorded_by_a_stub::{
-    ArmedAddNodeRefusal, GraphEditsOfAStubAppliedOneByOne, graph_mutation_ops_record_the_call,
+    ArmedAddNodeRefusal, ArmedRefusalOfEachEditTheDocumentsHoldFirst,
+    GraphEditsOfAStubAppliedOneByOne, RecordedEditsHeldNotLive, graph_mutation_ops_record_the_call,
 };
 
 /// The target of every tracing span and event raised on the calling thread

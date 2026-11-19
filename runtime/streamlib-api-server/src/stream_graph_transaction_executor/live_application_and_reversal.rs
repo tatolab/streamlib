@@ -20,27 +20,52 @@ pub(super) struct StreamATransactionEdits {
 
 impl StreamGraphTransactionExecutor<'_> {
     /// Make each of `operations`, each by the loaded stream it changes, on that running stream,
-    /// once the project's graph documents hold it; a running stream that refuses one is logged
-    /// and takes it at its next load.
+    /// once the project's graph documents hold it. A running stream that refuses one holds it,
+    /// and each later one of that stream, as an edit not live yet, which `graph` draws and its
+    /// diagnostics list until its playback stops and brings it to its document.
     pub(super) fn make_live_what_the_documents_now_hold(
         &self,
         operations: Vec<(String, StreamGraphOperation)>,
     ) {
+        let mut refusal_of_each_stream_that_refused: HashMap<String, String> = HashMap::new();
         for (stream_id, operation) in operations {
-            let made_live = self
+            let stream_operations = match self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(&stream_id)
-                .and_then(|stream_operations| {
-                    self.async_runtime
-                        .block_on(stream_operations.apply_a_stream_graph_operation_live(operation))
-                });
-            if let Err(refusal) = made_live {
+            {
+                Ok(stream_operations) => stream_operations,
+                Err(why) => {
+                    tracing::warn!(
+                        stream = %stream_id,
+                        %why,
+                        "the project's graph documents hold an edit of a stream not loaded; the \
+                         stream takes it at its next load"
+                    );
+                    continue;
+                }
+            };
+            if let Some(refusal) = refusal_of_each_stream_that_refused.get(&stream_id) {
+                stream_operations.hold_an_edit_its_document_holds_not_live(
+                    &operation,
+                    &format!("an earlier edit of the same transaction was not taken: {refusal}"),
+                );
+                continue;
+            }
+            let held_if_refused = operation.clone();
+            if let Err(refusal) = self
+                .async_runtime
+                .block_on(stream_operations.apply_a_stream_graph_operation_live(operation))
+            {
+                let refusal = refusal.to_string();
                 tracing::warn!(
                     stream = %stream_id,
                     %refusal,
                     "the project's graph documents hold an edit its running stream refused; the \
-                     stream takes it at its next load"
+                     stream holds it not live until its playback stops"
                 );
+                stream_operations
+                    .hold_an_edit_its_document_holds_not_live(&held_if_refused, &refusal);
+                refusal_of_each_stream_that_refused.insert(stream_id, refusal);
             }
         }
     }

@@ -344,7 +344,9 @@ fn a_stream_failed_for_crashing_the_runtime_is_held_at_the_start_reading_none_of
     );
     assert!(
         held.why_its_graph_as_held_keeps_this_stream_from_playing()
-            .is_some_and(|why| why.contains("none of its node code read")),
+            .is_some_and(|why| why.kind == StreamFailureKind::NodeTypeNotDescribed
+                && why.place == DiagnosticPlaceOnTheWire::Stream
+                && why.words.contains("none of its node code read")),
     );
     let listed = runner
         .list_streams()

@@ -18,6 +18,18 @@ pub(crate) type ArmedAddNodeRefusal = ::std::sync::Arc<
     >,
 >;
 
+/// What a stub runtime refuses each edit that reaches a running stream only once the project's
+/// graph documents hold it with, when the test has armed one, standing in for a running graph
+/// that cannot take it.
+pub(crate) type ArmedRefusalOfEachEditTheDocumentsHoldFirst =
+    ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
+
+/// Each edit a front end held on a stub runtime as not live, with the refusal it was held for,
+/// in call order.
+pub(crate) type RecordedEditsHeldNotLive = ::std::sync::Arc<
+    ::parking_lot::Mutex<Vec<(::streamlib_project_repository::StreamGraphOperation, String)>>,
+>;
+
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
         fn add_node_async(
@@ -144,6 +156,15 @@ macro_rules! graph_mutation_ops_record_the_call {
                 $crate::control_plane_stub_support::GraphEditsOfAStubAppliedOneByOne(self),
             )
         }
+        fn hold_an_edit_its_document_holds_not_live(
+            &self,
+            graph_operation: &::streamlib_project_repository::StreamGraphOperation,
+            refusal: &str,
+        ) {
+            self.recorded_edits_held_not_live
+                .lock()
+                .push((graph_operation.clone(), refusal.to_owned()));
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -169,6 +190,10 @@ macro_rules! graph_mutation_ops_record_the_call {
                 applied,
                 ::streamlib_project_repository::StreamGraphOperation::AddNode { .. }
             );
+            let refusal_of_an_edit_the_documents_hold_first = graph_operation
+                .reaches_a_running_stream_once_the_documents_hold_it()
+                .then(|| self.armed_refusal_of_each_edit_the_documents_hold_first.lock().clone())
+                .flatten();
             self.recorded_graph_mutations.lock().push(graph_operation);
             let armed_refusal = is_an_add
                 .then(|| self.armed_add_node_refusal.lock().clone())
@@ -180,6 +205,9 @@ macro_rules! graph_mutation_ops_record_the_call {
                 }
                 if let Some(refusal) = name_refused {
                     return Err(refusal.into());
+                }
+                if let Some(refusal) = refusal_of_an_edit_the_documents_hold_first {
+                    return Err(::streamlib::sdk::error::Error::Runtime(refusal));
                 }
                 match armed_refusal {
                     Some(the_refusal) => Err(the_refusal()),

@@ -144,6 +144,7 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     ],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &[
+        "condition",
         "extensions",
         "function_node_pool",
         "machine",
@@ -170,6 +171,7 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "ports",
         "inputs_waiting_for_a_value",
         "components",
+        "live",
     ],
 };
 
@@ -190,6 +192,7 @@ const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "free_conversion",
         "warnings",
         "components",
+        "live",
     ],
 };
 

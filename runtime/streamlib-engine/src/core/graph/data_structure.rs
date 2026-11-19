@@ -367,6 +367,7 @@ impl Graph {
                 .node_weights()
                 .find(is_the_pool)
                 .map(render_a_node),
+            condition: None,
         }
     }
 

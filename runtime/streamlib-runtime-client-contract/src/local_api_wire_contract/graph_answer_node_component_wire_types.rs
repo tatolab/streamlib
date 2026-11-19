@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::{GraphInterfacePortOnTheWire, GraphVariableOnTheWire};
+use super::{
+    DiagnosticOnTheWire, GraphInterfacePortOnTheWire, GraphVariableOnTheWire, NodeHealthOnTheWire,
+};
 
 /// What the runtime keeps on a node, each under its own key. `failed_because`,
 /// `process_raising_because` and `not_ready_because` are always present, null when unset; every
@@ -39,6 +41,13 @@ pub struct GraphNodeComponentsOnTheWire {
         schemars(required, schema_with = "a_string_or_null")
     )]
     pub not_ready_because: Option<String>,
+    /// Whether the node is healthy, read from its state and why; absent where the node keeps
+    /// no state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<NodeHealthOnTheWire>,
+    /// Each problem behind the node's health, placed on the node; absent while it is healthy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<DiagnosticOnTheWire>,
     /// On a node in a helper process of its own, the helper processes started for it since its
     /// stream loaded.
     #[serde(default, skip_serializing_if = "Option::is_none")]

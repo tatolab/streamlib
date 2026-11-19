@@ -13,7 +13,9 @@ use serde_json::{Map, Value};
 use streamlib_node_schema::NodeClassImportPath;
 use streamlib_node_schema::pin_type::ResolvedPin;
 
-use super::{GraphLinkOnTheWire, GraphNodeComponentsOnTheWire, StreamClockSpec};
+use super::{
+    GraphLinkOnTheWire, GraphNodeComponentsOnTheWire, StreamClockSpec, StreamConditionOnTheWire,
+};
 
 /// `graph`'s answer: the graph of the stream it names, or every loaded stream's graph under the
 /// machine's name when it names none.
@@ -79,6 +81,11 @@ pub struct StreamGraphOnTheWire {
     /// `carried_through_the_function_node_pool`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_node_pool: Option<GraphNodeOnTheWire>,
+    /// Whether the stream's graph is loaded, whether it plays and whether it is healthy, apart,
+    /// with each diagnostic behind its health: a live key, absent where the graph is no
+    /// stream's the runtime holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<StreamConditionOnTheWire>,
 }
 
 /// A labelled group of one level's nodes, which a node joins by naming its `id` as its
@@ -165,6 +172,11 @@ pub struct GraphNodeOnTheWire {
     /// node is. A spec key, present on a fragment alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragment: Option<GraphFragmentOnTheWire>,
+    /// `false` on a node the stream's graph document holds and its running graph does not hold
+    /// yet, drawn as the document writes it until the stream's playback stops; absent on every
+    /// other node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<bool>,
 }
 
 /// How a node's code runs.

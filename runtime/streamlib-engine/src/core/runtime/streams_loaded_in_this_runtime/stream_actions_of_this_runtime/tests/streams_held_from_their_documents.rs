@@ -284,6 +284,8 @@ fn a_stream_whose_graph_holds_a_link_its_validation_refuses_plays_with_that_link
         .unwrap();
     assert_eq!(listed.state, StreamListingState::Stopped, "{listed:?}");
     assert_eq!(listed.failed_because, None);
+    assert_eq!(listed.condition.load, StreamLoadOnTheWire::Loaded);
+    assert_eq!(listed.condition.playback, StreamPlaybackOnTheWire::Stopped);
 
     let queued = runner.start_playback(project.path()).unwrap();
     let played = the_stream_action_once_finished(&runner, &queued.action_id);

@@ -17,6 +17,11 @@ use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
 use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
 use crate::core::graph::is_in_exposed_name_cast_form;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DiagnosticKindOnTheWire, StreamPlaybackOnTheWire,
+};
+
+use super::stream_condition::StreamFailure;
 use crate::core::runtime::{StreamEnvironment, StreamListingState, StreamLocation};
 use crate::core::{Error, Result};
 
@@ -25,6 +30,38 @@ pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 9;
 
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
+
+/// What a recorded stream's failure is, as its record keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamFailureKind {
+    /// Its project's venv was not made.
+    ProjectVenvNotMade,
+    /// Its code gave no graph, or its load was refused.
+    LoadRefused,
+    /// It loaded, and its start was refused.
+    StartRefused,
+    /// A node of a type its node code did not describe is held as a placeholder.
+    NodeTypeNotDescribed,
+    /// A link its graph's validation refused is held as drawn.
+    LinkRefused,
+    /// It was implicated in too many of the runtime's crashes in a row.
+    KeepsCrashingTheRuntime,
+}
+
+impl StreamFailureKind {
+    /// The diagnostic kind a failure of this kind is answered as.
+    pub fn on_the_wire(self) -> DiagnosticKindOnTheWire {
+        match self {
+            Self::ProjectVenvNotMade => DiagnosticKindOnTheWire::ProjectVenvNotMade,
+            Self::LoadRefused => DiagnosticKindOnTheWire::LoadRefused,
+            Self::StartRefused => DiagnosticKindOnTheWire::StartRefused,
+            Self::NodeTypeNotDescribed => DiagnosticKindOnTheWire::NodeTypeNotDescribed,
+            Self::LinkRefused => DiagnosticKindOnTheWire::LinkRefused,
+            Self::KeepsCrashingTheRuntime => DiagnosticKindOnTheWire::KeepsCrashingTheRuntime,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +86,10 @@ pub struct StreamRecord {
     /// Why the stream is failed, so the runtime's start skips it until
     /// an `open_project` or `reload_project` retries it; `None` when it is not failed.
     pub failed_because: Option<String>,
+    /// What its failure is, while it is failed; `None` on a failure recorded before the runtime
+    /// typed them, which reads as [`StreamFailureKind::LoadRefused`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failed_as: Option<StreamFailureKind>,
     /// How many of the runtime's crashes in a row, the last included, the
     /// stream was implicated in.
     pub runtime_crashes_in_a_row_implicating_it: u32,
@@ -98,8 +139,43 @@ impl StreamRecord {
             closed: false,
             paused: false,
             failed_because: None,
+            failed_as: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             pending_stream_actions: Vec::new(),
+        }
+    }
+
+    /// Record the stream failed as `kind`, in the runtime's `words`.
+    pub fn fail_as(&mut self, kind: StreamFailureKind, words: String) {
+        self.failed_because = Some(words);
+        self.failed_as = Some(kind);
+    }
+
+    /// The stream's failure, of the stream as a whole, while it is failed.
+    pub fn failure(&self) -> Option<StreamFailure> {
+        self.failed_because.as_ref().map(|words| {
+            StreamFailure::of_the_stream(
+                self.failed_as.unwrap_or(StreamFailureKind::LoadRefused),
+                words.clone(),
+            )
+        })
+    }
+
+    /// Record the stream failed for `failure`.
+    pub fn record_the_failure(&mut self, failure: StreamFailure) {
+        self.fail_as(failure.kind, failure.words);
+    }
+
+    /// Whether the stream plays, as its record says while it is not loaded: stopped when
+    /// stopped, closed or failed, whatever its pause; else paused; else playing, and played again
+    /// once it loads.
+    pub fn playback(&self) -> StreamPlaybackOnTheWire {
+        if self.stopped || self.closed || self.is_failed() {
+            StreamPlaybackOnTheWire::Stopped
+        } else if self.paused {
+            StreamPlaybackOnTheWire::Paused
+        } else {
+            StreamPlaybackOnTheWire::Playing
         }
     }
 
@@ -150,6 +226,7 @@ impl StreamRecord {
         self.closed = false;
         self.paused = false;
         self.failed_because = None;
+        self.failed_as = None;
         self.runtime_crashes_in_a_row_implicating_it = 0;
         changed
     }

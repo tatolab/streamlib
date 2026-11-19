@@ -290,15 +290,47 @@ class NodeDeclarationDecorator:
 
     __slots__ = ()
 
-    def __call__(self, *_arguments: object, **_keyword_arguments: object) -> NoReturn:
-        """Refuse bare `@node`: every node names its kind."""
-        raise TypeError(
-            "bare `@node` declares no kind; every node names its kind. A class with "
-            "`setup()` / `process()` and ports is `@node.process`, bare or with the same "
-            "keyword arguments (`execution`, `interval_ms`, `scheduling`, "
-            "`paced_by_real_time`). A function that computes its outputs "
-            "from its inputs is `@node.function`. What describes a node, its "
-            "`category` and `description`, is `@node.meta`."
+    @overload
+    def __call__(
+        self, node_function: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]", /
+    ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
+
+    @overload
+    def __call__(self, node_function: None = None, /, **keyword_arguments: object) -> NoReturn: ...
+
+    def __call__(
+        self, node_function: "Optional[Callable[..., Any]]" = None, /, **keyword_arguments: object
+    ) -> "FunctionNode[..., Any]":
+        """Declare a function as a function node whose pins each state their pin type.
+
+        Each plain parameter is an input, `Annotated[float, NumberRange(minimum=0.0,
+        maximum=1.0), NumberUnit("Hz"), PinMeaning("frequency")] = 440.0`: its type is the
+        pin type, the objects beside it are what the pin states besides, and its default is
+        the value the input holds until one is set or linked. `T | None = None` is an input
+        that may be unset and reads `None`. The return annotation is the output `result`.
+        `Time`, `State[...]` and `Stateful[...]` are read as under `@node.function`, and what
+        describes the node is `@node.meta`. A mistake is refused at decoration as a
+        `NodeDeclarationRefusal`, and a pin type the runtime does not carry yet is refused by
+        name. A class keeps `@node.process` until class nodes read pin types.
+        """
+        if node_function is None or keyword_arguments:
+            raise TypeError(
+                "bare `@node` takes the function it declares and no arguments. A class with "
+                "`setup()` / `process()` and ports is `@node.process`, bare or with its "
+                "keyword arguments (`execution`, `interval_ms`, `scheduling`, "
+                "`paced_by_real_time`)."
+            )
+        if isinstance(node_function, type):
+            raise TypeError(
+                f"bare `@node` declares a function node, and {node_function.__name__} is a "
+                f"class. A class with `setup()` / `process()` and ports is `@node.process`, "
+                f"bare or with its keyword arguments (`execution`, `interval_ms`, "
+                f"`scheduling`, `paced_by_real_time`)."
+            )
+        return declare_function_node(
+            node_function,
+            declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
+            reads_pin_types=True,
         )
 
     def meta(
