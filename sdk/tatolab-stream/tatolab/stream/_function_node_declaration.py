@@ -39,7 +39,12 @@ from ._node_config_schema import (
     json_schema_for_a_node_declaring_no_config,
 )
 from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
-from ._pin_declaration import NO_DEFAULT, NodeDeclarationRefusal, read_pin_declaration
+from ._pin_declaration import (
+    NO_DEFAULT,
+    NodeDeclarationRefusal,
+    read_pin_declaration,
+    refuse_former_names_that_find_no_one_pin,
+)
 from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 __all__ = [
@@ -215,6 +220,7 @@ class _FunctionNodeSignatureReading:
         self.config_class: Optional[type] = None
         self._port_spelling_by_cast_name: "dict[str, str]" = {}
         self._unread_message_input_ports: "list[str]" = []
+        self._typed_pins: "list[tuple[str, str, PinDeclarationOnTheWire]]" = []
 
         for parameter in inspect.signature(function).parameters.values():
             self._read_parameter(parameter, annotations)
@@ -226,6 +232,7 @@ class _FunctionNodeSignatureReading:
                 f"several outputs."
             )
         self.output_ports, self._signature_outputs = self._read_return(annotations["return"])
+        refuse_former_names_that_find_no_one_pin(self._function_name, self._typed_pins)
 
     @property
     def function_signature(self) -> "dict[str, Any]":
@@ -441,6 +448,7 @@ class _FunctionNodeSignatureReading:
             ),
             direction="input",
         )
+        self._typed_pins.append((parameter.name, port_name, declared.declaration))
         self._signature_inputs.append(
             {
                 "parameter": parameter.name,
@@ -625,6 +633,7 @@ class _FunctionNodeSignatureReading:
         declared = read_pin_declaration(
             self._function_name, _SINGLE_OUTPUT_NAME, output_annotation, direction="output"
         )
+        self._typed_pins.append((_SINGLE_OUTPUT_NAME, port_name, declared.declaration))
         value_class = _the_value_class_of_parts_a_pin_declares(declared.declaration)
         family = _family_a_pin_travels_on(declared.declaration)
         family_declaration: "dict[str, Any]" = {"family": family}

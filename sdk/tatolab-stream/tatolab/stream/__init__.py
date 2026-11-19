@@ -27,6 +27,7 @@ from ._exposed_name_cast import (
     cast_exposed_name_to_url_safe as cast_exposed_name_to_url_safe,
 )
 from ._description import Description as Description
+from ._formerly_named import FormerlyNamed as FormerlyNamed
 from ._number_range import NumberRange as NumberRange
 from ._pin_annotations import NumberStep as NumberStep
 from ._pin_annotations import NumberUnit as NumberUnit
@@ -228,6 +229,7 @@ __all__ = [
     "NodeOutputTextureRing",
     "NodeReference",
     "NodeReferenceToNodeType",
+    "FormerlyNamed",
     "NumberRange",
     "NumberStep",
     "NumberUnit",
