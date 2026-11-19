@@ -10,8 +10,8 @@ use serde_json::{Map, Value, json};
 
 use super::stored_value_check::integer_bounds;
 use super::{
-    BuiltInPinTypeName, BundleMember, DeclaredPinType, FloatSize, PinDeclaration, PinNumberRange, PinType,
-    VectorComponentCount,
+    BuiltInPinTypeName, BundleMember, DeclaredPinType, FloatSize, PinDeclaration, PinNumberRange,
+    PinType, VectorComponentCount,
 };
 
 impl PinDeclaration {
@@ -145,11 +145,7 @@ fn the_tighter_upper_bound(own: f64, range: Option<PinNumberRange>) -> f64 {
 
 /// An Integer's own bounds, `lowest` and `highest`, held within `range` too, each rounded in to
 /// the nearest whole number; exact, since an Integer's bounds pass 2^53.
-fn whole_bounds_within(
-    lowest: i128,
-    highest: i128,
-    range: Option<PinNumberRange>,
-) -> (i128, i128) {
+fn whole_bounds_within(lowest: i128, highest: i128, range: Option<PinNumberRange>) -> (i128, i128) {
     let minimum = range.and_then(|range| range.minimum);
     let maximum = range.and_then(|range| range.maximum);
     (
