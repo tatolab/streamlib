@@ -28,6 +28,8 @@ use super::{
 };
 use crate::core::descriptors::PortStreamFacts;
 use crate::core::error::{Error, Result};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::core::execution::readable_wake_descriptor::ReadableWakeDescriptor;
 use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::output_port_stream_facts::UpstreamStreamFactsByInboundLink;
 use streamlib_ipc_types::BagsAGapInTheNumberingSaysWereLost;
@@ -36,6 +38,7 @@ mod function_node_island_feeding;
 mod inbound_link_accounting;
 mod input_port_mailbox_reads;
 mod input_port_setup;
+mod queued_trigger_fires;
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
 /// mixdown and framing work runs with that mutex released.
@@ -339,6 +342,13 @@ pub struct InputMailboxesInner {
     /// The clock of its stream, which stamps each read of an unlinked input's value; media time
     /// until it is reached.
     stream_clock: Arc<std::sync::OnceLock<Arc<crate::core::context::StreamClock>>>,
+    queued_trigger_fires: parking_lot::Mutex<queued_trigger_fires::TriggerFiresQueuedByInput>,
+    /// Made readable when a fire is queued or a listener is installed, so the reactive loop
+    /// waiting on it reads the fire, or registers the listener, with or without a link.
+    /// `None` when it could not be created, which leaves the loop to find a fire on its next
+    /// pass.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    reactive_loop_wake: Option<ReadableWakeDescriptor>,
 }
 
 impl InputMailboxesInner {
@@ -357,6 +367,16 @@ impl InputMailboxesInner {
             input_ports_fed_by_function_node_islands: parking_lot::RwLock::default(),
             input_ports_read_as_their_pin_value_while_unlinked: parking_lot::RwLock::default(),
             stream_clock: Arc::default(),
+            queued_trigger_fires: parking_lot::Mutex::default(),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            reactive_loop_wake: ReadableWakeDescriptor::create()
+                .inspect_err(|failure| {
+                    tracing::warn!(
+                        "input mailboxes could not create their reactive loop wake, so a fire \
+                         on an unlinked Trigger input is read on the loop's next pass: {failure}"
+                    )
+                })
+                .ok(),
         }
     }
 
@@ -404,6 +424,7 @@ impl InputMailboxesInner {
     /// Check if a port has already been configured.
     pub fn has_port(&self, port: &str) -> bool {
         self.ports.lock().contains_key(port)
+            || self.was_ever_fired(port)
             || self
                 .input_ports_fed_by_function_node_islands
                 .read()
@@ -428,6 +449,8 @@ impl InputMailboxesInner {
         subscribers_and_listener.listener = Some(listener);
         self.listener_generation
             .fetch_add(1, std::sync::atomic::Ordering::Release);
+        drop(subscribers_and_listener);
+        self.wake_the_reactive_loop();
     }
 
     /// How many listeners have been installed so far. A runner that built its
@@ -450,12 +473,40 @@ impl InputMailboxesInner {
             .map(|l| unsafe { l.file_descriptor().native_handle() })
     }
 
-    /// Drain any pending event activations from the listener so the fd transitions
-    /// back to the not-readable state. No-op when no listener is configured.
+    /// The descriptor the reactive loop waits on beside the listener, readable once a fire
+    /// is queued or a listener installed; `None` where it could not be created. Valid for as
+    /// long as these mailboxes live.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn reactive_loop_wake_fd(&self) -> Option<i32> {
+        use std::os::fd::AsRawFd;
+        self.reactive_loop_wake
+            .as_ref()
+            .map(|wake| wake.readable_end().as_raw_fd())
+    }
+
+    /// Make the reactive loop's wake readable, ending its wait.
+    fn wake_the_reactive_loop(&self) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(wake) = &self.reactive_loop_wake
+            && let Err(failure) = wake.make_readable()
+        {
+            tracing::warn!(
+                "input mailboxes could not wake their reactive loop, which finds what arrived \
+                 on its next pass: {failure}"
+            );
+        }
+    }
+
+    /// Drain any pending event activations from the listener, and the reactive loop's wake,
+    /// so each fd transitions back to the not-readable state.
     ///
-    /// Call this after `epoll_wait` reports the fd readable, before the next
+    /// Call this after `epoll_wait` reports an fd readable, before the next
     /// `epoll_wait`, otherwise the wait returns immediately on the same event.
     pub fn drain_listener(&self) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(wake) = &self.reactive_loop_wake {
+            wake.drain();
+        }
         if let Some(listener) = &self.inbound_link_subscribers_and_listener.lock().listener
             && let Err(e) = listener.try_wait(|_event_activation| {})
         {
@@ -475,7 +526,9 @@ impl InputMailboxesInner {
     }
 
     pub fn has_data(&self, port: &str) -> bool {
-        if self.pin_value_read_by_an_unlinked(port).is_some() {
+        if self.pin_value_read_by_an_unlinked(port).is_some()
+            || self.a_trigger_fire_is_queued_on(port)
+        {
             return true;
         }
         self.receive_pending();
@@ -507,7 +560,7 @@ impl InputMailboxesInner {
     }
 
     /// True iff any configured input port has at least one queued
-    /// payload. Drains pending iceoryx2 samples into the per-port
+    /// payload, or a fire waits on an unlinked Trigger input. Drains pending iceoryx2 samples into the per-port
     /// mailboxes first, so this reflects total queue depth rather than
     /// just iceoryx2-buffered state.
     ///
@@ -521,6 +574,9 @@ impl InputMailboxesInner {
     /// count on its own: the island fed port it feeds answers for it, so a
     /// message the island would hand nothing out for wakes no reader.
     pub fn any_port_has_data(&self) -> bool {
+        if self.a_trigger_fire_is_queued() {
+            return true;
+        }
         self.receive_pending();
         let island_ports_reading_links_from_outside_them: Vec<(
             String,

@@ -26,7 +26,7 @@ use streamlib::sdk::node_interpreter::{
     node_interpreter_bootstrap_path,
 };
 use streamlib::sdk::runtime::{
-    STREAM_RECORD_SCHEMA_VERSION, StreamLocation, StreamRecord, StreamRecordAsRead,
+    StreamEnvironment, StreamLocation, StreamRecord, StreamRecordAsRead,
     StreamRecordsInTheStateDirectory,
 };
 
@@ -451,18 +451,17 @@ pub(crate) fn a_stream_record(
         graph_document.to_string(),
     )
     .expect("the graph document");
-    StreamRecord {
-        schema_version: STREAM_RECORD_SCHEMA_VERSION,
-        stream_id: location.stream_id_named(TEST_PROJECT_NAME, stream_name),
-        location,
+    let stream_environment = StreamEnvironment {
+        project_directory: project_directory.to_path_buf(),
         interpreter: interpreter.to_path_buf(),
-        stopped,
-        closed: false,
-        paused: false,
-        failed_because: None,
-        runtime_crashes_in_a_row_implicating_it: 0,
-        pending_stream_actions: Vec::new(),
-    }
+    };
+    let mut record = StreamRecord::of_a_running_stream(
+        location.stream_id_named(TEST_PROJECT_NAME, stream_name),
+        location,
+        &stream_environment,
+    );
+    record.stopped = stopped;
+    record
 }
 
 pub(crate) fn an_executable_standing_in_for_the_interpreter() -> PathBuf {

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::NodeTypeCategoryFrom;
 use super::graph_wire_types::RefusedGraphLinkOnTheWire;
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
@@ -489,6 +490,9 @@ pub enum ControlOperationRefusalCode {
     /// The file changed, or was taken out, since it was read, so the write was not made;
     /// `refused_file` names it. Read it again to see what it holds now.
     FileChangedSinceItWasRead,
+    /// A check of the project's code was still running at its bound and was killed; the
+    /// runtime's words give the bound, and `refused_file` the file it was checking.
+    CheckRanOutOfTime,
     /// The request was understood and not done; changing it can help. The runtime's words say
     /// what to change.
     // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.
@@ -863,8 +867,11 @@ pub struct NodeTypeReadFromSource {
     pub kind: Option<String>,
     /// The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
     pub description: String,
-    /// The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
+    /// The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
     pub category: Option<String>,
+    /// Who filed it under `category`; null when nothing files it.
+    #[serde(default)]
+    pub category_from: Option<NodeTypeCategoryFrom>,
     /// The input ports, `None` where only the node's native half states them.
     pub inputs: Option<Vec<NodeTypePortReadFromSource>>,
     /// The output ports, `None` where only the node's native half states them.

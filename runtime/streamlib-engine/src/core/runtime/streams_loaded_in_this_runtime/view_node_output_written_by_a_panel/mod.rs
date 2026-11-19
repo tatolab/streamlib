@@ -12,10 +12,8 @@ use uuid::Uuid;
 use crate::core::descriptors::PortFamily;
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{Graph, GraphNode, GraphNodeWithComponents, NodeInstanceComponent};
-use crate::core::nodes::{
-    the_message_a_value_written_onto_an_output_is, the_names_listed,
-    the_refusal_of_a_value_an_output_does_not_carry,
-};
+use crate::core::nodes::{the_names_listed, the_refusal_of_a_value_an_output_does_not_carry};
+use crate::core::pin_value_packing::the_message_a_value_written_onto_an_output_is;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 use streamlib_project_repository::a_panel_writes;

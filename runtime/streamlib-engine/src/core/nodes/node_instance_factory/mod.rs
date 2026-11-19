@@ -576,8 +576,9 @@ impl NodeInstanceFactory {
         self.descriptors.read().values().cloned().collect()
     }
 
-    /// The conversion each registered node type states, sorted by node type.
-    pub(crate) fn pin_conversions(&self) -> Arc<[PinConversion]> {
+    /// The conversion each node type registered with a constructor states, which the engine
+    /// offers, sorted by node type; a type registered by its descriptor alone offers none.
+    pub fn pin_conversions(&self) -> Arc<[PinConversion]> {
         Arc::clone(&self.conversions.read())
     }
 

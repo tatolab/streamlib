@@ -30,9 +30,9 @@ use crate::refusal_code_and_place::RefusalCodeAndPlace;
 /// at each end of the link it names, so a refusal can suggest a call into them.
 #[derive(Default)]
 pub(crate) struct WhatAGraphOperationNames {
-    node: Option<String>,
+    pub(super) node: Option<String>,
     node_unless_the_refusal_names_one: Option<String>,
-    link: Option<RefusedGraphLinkOnTheWire>,
+    pub(super) link: Option<RefusedGraphLinkOnTheWire>,
     field: Option<String>,
     stream: Option<String>,
     level: Vec<Uuid>,
@@ -41,6 +41,7 @@ pub(crate) struct WhatAGraphOperationNames {
 
 /// The stream and level an operation edits, and whether that level holds, by UUID, the node at
 /// each end of the link the operation names.
+#[derive(Clone, Copy)]
 pub(crate) struct WhereAnOperationEdits<'stream> {
     pub(crate) stream_id: &'stream str,
     pub(crate) level: &'stream [Uuid],
@@ -182,7 +183,7 @@ pub(super) fn what_a_graph_action_names<Stream>(
 /// and the JSON pointer, into the action's own params, of the value refused.
 #[derive(Debug)]
 pub(crate) struct GraphRequestRefusal {
-    code_and_place: Box<RefusalCodeAndPlace>,
+    pub(super) code_and_place: Box<RefusalCodeAndPlace>,
     runtime_words: String,
     refused_params_pointer: Option<String>,
 }
@@ -316,9 +317,12 @@ impl From<ProjectRepositoryRefusal> for GraphRequestRefusal {
 /// Why a graph action was refused, in the runtime's own words, and which of its operations
 /// was refused when one was.
 pub(crate) struct GraphTransactionRefusal {
-    refused_operation_index: Option<usize>,
-    what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
-    refusal: GraphRequestRefusal,
+    pub(super) refused_operation_index: Option<usize>,
+    pub(super) what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
+    pub(super) refusal: GraphRequestRefusal,
+    /// The call a refusal suggests in place of the one refused, set where the refusal is
+    /// answered; the conversion a refusal of a link names to place suggests its own otherwise.
+    pub(super) suggested_call: Option<Box<SuggestedOperationCall>>,
 }
 
 impl GraphTransactionRefusal {
@@ -331,6 +335,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: Some(refused_operation_index),
             what_the_refused_operation_names: Box::new(what_the_refused_operation_names),
             refusal: refusal.into(),
+            suggested_call: None,
         }
     }
 
@@ -355,6 +360,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: None,
             what_the_refused_operation_names: Box::default(),
             refusal: refusal.into(),
+            suggested_call: None,
         }
     }
 
@@ -373,13 +379,11 @@ impl GraphTransactionRefusal {
             refused_params_pointer,
         } = self.refusal;
         let mut code_and_place = *code_and_place;
-        let suggested_call = code_and_place
-            .conversion_to_place
-            .take()
-            .and_then(|conversion| {
-                what_the_refused_operation_names
-                    .the_transact_placing_the_conversion_on_its_link(&conversion)
-            });
+        let conversion_to_place = code_and_place.conversion_to_place.take();
+        let suggested_call = self.suggested_call.map(|suggested| *suggested).or_else(|| {
+            what_the_refused_operation_names
+                .the_transact_placing_the_conversion_on_its_link(conversion_to_place.as_deref()?)
+        });
         let refused_params_pointer = match (refused_params_pointer, self.refused_operation_index) {
             (Some(pointer), Some(index)) if tool_name == Transact::METHOD_NAME => {
                 Some(format!("/operations/{index}{pointer}"))

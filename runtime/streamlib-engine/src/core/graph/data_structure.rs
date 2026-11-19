@@ -13,12 +13,14 @@ use super::nodes::{GraphNode, NodeRunId};
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
+use crate::core::PortDirection;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
 use crate::core::graph::input_values::{LiveInputValuesOfAStream, the_value_an_input_reads};
 use crate::core::graph::pin_type_link_checks::the_verdict_on_a_link_between_typed_ends;
+use crate::core::graph::the_pin_a_port_resolves_to;
 use crate::core::json_schema::{
     GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId, rendered_link,
     rendered_link_carried_through_the_function_node_pool,
@@ -149,25 +151,33 @@ impl Graph {
         })
     }
 
-    /// `from` and `to`, the ends of a link, each under its port's current name; an end whose
-    /// node or port the graph does not hold is left as given, for its refusal to name.
-    pub fn link_ends_under_their_current_port_names(
+    /// `from`, a link's output end, under its port's current name; an end whose node or port
+    /// the graph does not hold is left as given, for its refusal to name.
+    pub fn output_under_its_current_name(
         &self,
         from: super::OutputLinkPortRef,
-        to: super::InputLinkPortRef,
-    ) -> (super::OutputLinkPortRef, super::InputLinkPortRef) {
-        let node_of = |node_run_id: &NodeRunId| {
-            self.digraph
-                .node_weights()
-                .find(|node| &node.id == node_run_id)
-        };
-        let from = node_of(from.node_run_id())
+    ) -> super::OutputLinkPortRef {
+        self.node_of_the_run_id(from.node_run_id())
             .and_then(|node| node.try_output(from.port_name()))
-            .unwrap_or(from);
-        let to = node_of(to.node_run_id())
+            .unwrap_or(from)
+    }
+
+    /// `to`, a link's input end, under its port's current name; an end whose node or port the
+    /// graph does not hold is left as given, for its refusal to name.
+    pub fn input_under_its_current_name(
+        &self,
+        to: super::InputLinkPortRef,
+    ) -> super::InputLinkPortRef {
+        self.node_of_the_run_id(to.node_run_id())
             .and_then(|node| node.try_input(to.port_name()))
-            .unwrap_or(to);
-        (from, to)
+            .unwrap_or(to)
+    }
+
+    /// The node `node_run_id` names, if the graph holds it.
+    fn node_of_the_run_id(&self, node_run_id: &NodeRunId) -> Option<&GraphNode> {
+        self.digraph
+            .node_weights()
+            .find(|node| &node.id == node_run_id)
     }
 
     /// Drop the node `node_run_id` and the links into and out of it, then forget the values set
@@ -340,6 +350,14 @@ impl Graph {
                     port,
                     linked_inputs.contains(&(&node.id, port.name.as_str())),
                 );
+                rendered_input.pin =
+                    the_pin_a_port_resolves_to(self, node, port, PortDirection::Input);
+            }
+            for (rendered_output, port) in
+                rendered.ports.outputs.iter_mut().zip(&node.ports.outputs)
+            {
+                rendered_output.pin =
+                    the_pin_a_port_resolves_to(self, node, port, PortDirection::Output);
             }
             rendered
         };
@@ -367,6 +385,7 @@ impl Graph {
                 .node_weights()
                 .find(is_the_pool)
                 .map(render_a_node),
+            condition: None,
         }
     }
 

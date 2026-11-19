@@ -4,16 +4,17 @@
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CloseViewerToolResult, CreateNodeFileToolResult, ListProjectFilesToolResult,
     ListProjectNodeTypesToolResult, ListProjectViewsToolResult, OpenViewerToolResult,
-    ProjectFileTransactionToolResult, ReadProjectFileToolResult, WriteStudioViewOutputToolResult,
+    ProjectCodeCheckResult, ProjectFileTransactionToolResult, ReadProjectFileToolResult,
+    WriteStudioViewOutputToolResult,
 };
 
-use super::{EVERY_SURFACE, SetNodeInputValue};
+use super::{EVERY_SURFACE, ListNodeTypes, SetNodeInputValue};
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
     ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
 };
 use crate::control_operation_requests::{
-    CloseViewerRequest, CreateNodeFileRequest, ListProjectFilesRequest,
+    CheckProjectCodeRequest, CloseViewerRequest, CreateNodeFileRequest, ListProjectFilesRequest,
     ListProjectNodeTypesRequest, ListProjectViewsRequest, OpenViewerRequest,
     ReadProjectFileRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
@@ -91,6 +92,26 @@ impl ControlOperation for WriteProjectFile {
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
+/// `check_project_code`: check a project's code on disk without running a stream, answering each
+/// finding as data.
+pub struct CheckProjectCode;
+
+impl ControlOperation for CheckProjectCode {
+    type Request = CheckProjectCodeRequest;
+    type Result = ProjectCodeCheckResult;
+    const METHOD_NAME: &'static str = "check_project_code";
+    const ONE_LINE_DOC: &'static str =
+        "Check a project's code on disk without running a stream, answering each finding as data.";
+    const AGENT_USAGE_NOTE: &'static str = "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. The one check today is `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::File;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
 /// `list_project_node_types`: list the node types a project offers, from its own node files and the
 /// packages it installs.
 pub struct ListProjectNodeTypes;
@@ -99,8 +120,8 @@ impl ControlOperation for ListProjectNodeTypes {
     type Request = ListProjectNodeTypesRequest;
     type Result = ListProjectNodeTypesToolResult;
     const METHOD_NAME: &'static str = "list_project_node_types";
-    const ONE_LINE_DOC: &'static str = "List the node types a project offers, from its own node files and the packages it installs.";
-    const AGENT_USAGE_NOTE: &'static str = "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.";
+    const ONE_LINE_DOC: &'static str = "List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.";
+    const AGENT_USAGE_NOTE: &'static str = "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::NodeType;
@@ -108,6 +129,7 @@ impl ControlOperation for ListProjectNodeTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const REPLACED_BY: Option<&'static str> = Some(ListNodeTypes::METHOD_NAME);
 }
 
 /// `list_project_views`: list the Tato Studio views a project brings.

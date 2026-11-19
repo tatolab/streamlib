@@ -238,6 +238,7 @@ pub mod sdk {
     pub use crate::core::graph::graph_snapshot;
     pub use crate::core::json_schema;
     pub use crate::core::media_clock;
+    pub use crate::core::pin_value_packing;
     pub use crate::core::prelude;
     pub use crate::core::rhi;
     pub use crate::core::runtime;
@@ -249,9 +250,10 @@ pub mod sdk {
             __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
             DynamicNodeConstructorFn, EmptyConfig, GeneratedNode, InstalledModuleOfANodeType,
             ManualNode, NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec, NodeState,
-            NodeStateComponent, NodeTypesOneStreamResolves, OutOfProcessFarSideLinkDelivery,
-            OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
-            ReactiveNode, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
+            NodeStateComponent, NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
+            OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
+            OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ReactiveNode,
+            VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
         };
 
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};

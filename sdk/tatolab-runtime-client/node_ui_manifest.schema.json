@@ -30,29 +30,6 @@
   ],
   "description": "What a module's `node_ui/tatolab_node_ui.json` registers.",
   "$defs": {
-    "NodeUiManifestControl": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "type": {
-          "$ref": "#/$defs/BuiltInPinTypeName",
-          "description": "The pin type whose inputs the control edits or shows."
-        },
-        "control": {
-          "type": "string",
-          "description": "The control's name, which a pin's `control` annotation picks it by. Left out, the control\nis its pin type's default."
-        },
-        "script": {
-          "type": "string",
-          "description": "The script that default-exports the control's element class, inside the node UI folder."
-        }
-      },
-      "required": [
-        "type",
-        "script"
-      ],
-      "description": "A control a module registers for one pin type."
-    },
     "BuiltInPinTypeName": {
       "oneOf": [
         {
@@ -162,6 +139,29 @@
         }
       ],
       "description": "The name of a built-in pin type: the `type` tag of its pin type."
+    },
+    "NodeUiManifestControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/BuiltInPinTypeName",
+          "description": "The pin type whose inputs the control edits or shows."
+        },
+        "control": {
+          "type": "string",
+          "description": "The control's name, which a pin's `control` annotation picks it by. Left out, the control\nis its pin type's default."
+        },
+        "script": {
+          "type": "string",
+          "description": "The script that default-exports the control's element class, inside the node UI folder."
+        }
+      },
+      "required": [
+        "type",
+        "script"
+      ],
+      "description": "A control a module registers for one pin type."
     },
     "NodeUiManifestNodeBody": {
       "type": "object",

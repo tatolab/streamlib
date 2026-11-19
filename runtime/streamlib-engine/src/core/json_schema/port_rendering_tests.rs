@@ -73,6 +73,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
         audio_window: None,
         pin_default: None,
         pin: None,
+        declared_pin_type: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
@@ -112,6 +113,7 @@ fn a_node_whose_output_is(
             audio_window: None,
             pin_default: None,
             pin: None,
+            declared_pin_type: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             former_names: Vec::new(),
             may_be_unset: false,
@@ -293,6 +295,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
         audio_window: None,
         pin_default: None,
         pin: None,
+        declared_pin_type: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
@@ -327,6 +330,40 @@ fn a_picture_ports_descriptor_renders_its_pin_type_and_flow_and_no_retired_type_
     assert_carries_no_type_key(&json);
 }
 
+#[test]
+fn a_typed_ports_descriptor_renders_the_range_unit_and_meaning_its_pin_declares() {
+    let mut declaration = crate::core::descriptors::PinDeclaration::exactly(
+        crate::core::descriptors::PinType::Float { exact_size: None },
+    );
+    declaration.annotations.range = Some(crate::core::descriptors::PinNumberRange {
+        minimum: Some(20.0),
+        maximum: Some(20000.0),
+    });
+    declaration.annotations.unit = Some("Hz".to_owned());
+    declaration.annotations.meaning = Some("frequency".to_owned());
+    let port = crate::core::PortDescriptor::new(
+        "frequency",
+        "",
+        true,
+        crate::core::descriptors::PortFamilyDeclaration::of_family(
+            crate::core::descriptors::PortFamily::Channels,
+        ),
+    )
+    .with_pin_declaration(declaration);
+
+    let json = serde_json::to_value(PortDescriptorOutput::from(&port)).unwrap();
+
+    assert_eq!(json["pin_type"]["pin_type"]["type"], "float");
+    assert_eq!(
+        json["annotations"],
+        serde_json::json!({
+            "range": {"minimum": 20.0, "maximum": 20000.0},
+            "unit": "Hz",
+            "meaning": "frequency",
+        })
+    );
+}
+
 fn declared_window_contract() -> crate::core::descriptors::AudioWindowContract {
     crate::core::descriptors::AudioWindowContract::Declaration(
         crate::core::descriptors::AudioWindowContractDeclaredValues {
@@ -349,6 +386,7 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
         audio_window: Some(declared_window_contract()),
         pin_default: None,
         pin: None,
+        declared_pin_type: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
@@ -397,6 +435,7 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
         )),
         pin_default: None,
         pin: None,
+        declared_pin_type: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
@@ -433,6 +472,7 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
         audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
         pin_default: None,
         pin: None,
+        declared_pin_type: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
@@ -472,6 +512,7 @@ fn a_node_declaring_the_sentinel(
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
             pin_default: None,
             pin: None,
+            declared_pin_type: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             former_names: Vec::new(),
             may_be_unset: false,

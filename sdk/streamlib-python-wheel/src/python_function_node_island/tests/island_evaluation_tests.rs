@@ -38,7 +38,7 @@ fn an_island_of_add_one_then_scale(
                 "add_one".to_string(),
                 0,
                 compiled_to(add_one_and_count_calls),
-                vec![(None, 2.0)],
+                vec![(None, PinValueTheBootstrapHandsOver::Number(2.0))],
                 vec![],
                 vec![0.0],
                 1,
@@ -48,7 +48,7 @@ fn an_island_of_add_one_then_scale(
                 "scale".to_string(),
                 1,
                 compiled_to(scale_by_config_plus_seconds),
-                vec![(Some((0, 0)), 0.0)],
+                vec![(Some((0, 0)), PinValueTheBootstrapHandsOver::Number(0.0))],
                 vec![10.0],
                 vec![],
                 1,
@@ -73,7 +73,7 @@ fn each_node_reads_the_one_before_it_and_its_pin_and_config() {
     let output = island.evaluate_the_island_output_for_this_read().unwrap();
     assert_eq!(
         output.value,
-        FunctionNodeIslandOutputValue::ControlValue((2.0 + 1.0) * 10.0 + 1.0)
+        FunctionNodeIslandOutputValue::ControlValue(vec![(2.0 + 1.0) * 10.0 + 1.0])
     );
     assert_eq!(output.evaluated_at_ns, 1_000_000_000);
 }
@@ -89,7 +89,7 @@ fn an_input_past_a_nodes_own_sets_the_config_value_it_names_at_each_evaluation()
                     "add_one".to_string(),
                     0,
                     compiled_to(add_one_and_count_calls),
-                    vec![(None, 2.0)],
+                    vec![(None, PinValueTheBootstrapHandsOver::Number(2.0))],
                     vec![],
                     vec![0.0],
                     1,
@@ -99,7 +99,10 @@ fn an_input_past_a_nodes_own_sets_the_config_value_it_names_at_each_evaluation()
                     "scale".to_string(),
                     1,
                     compiled_to(scale_by_config_plus_seconds),
-                    vec![(None, 4.0), (Some((0, 0)), 0.0)],
+                    vec![
+                        (None, PinValueTheBootstrapHandsOver::Number(4.0)),
+                        (Some((0, 0)), PinValueTheBootstrapHandsOver::Number(0.0)),
+                    ],
                     vec![10.0],
                     vec![],
                     1,
@@ -119,7 +122,7 @@ fn an_input_past_a_nodes_own_sets_the_config_value_it_names_at_each_evaluation()
             .evaluate_the_island_output_for_this_read()
             .unwrap()
             .value,
-        FunctionNodeIslandOutputValue::ControlValue(4.0 * (2.0 + 1.0)),
+        FunctionNodeIslandOutputValue::ControlValue(vec![4.0 * (2.0 + 1.0)]),
         "the linked config value, not the one the node was handed, scales"
     );
 }
@@ -132,7 +135,10 @@ fn a_config_value_an_input_sets_that_the_node_does_not_take_is_refused_naming_it
                 "scale".to_string(),
                 0,
                 compiled_to(scale_by_config_plus_seconds),
-                vec![(None, 4.0), (None, 3.0)],
+                vec![
+                    (None, PinValueTheBootstrapHandsOver::Number(4.0)),
+                    (None, PinValueTheBootstrapHandsOver::Number(3.0)),
+                ],
                 vec![10.0],
                 vec![],
                 1,
@@ -256,7 +262,7 @@ fn a_stateful_node_resumes_from_the_state_its_stream_carries_and_writes_each_new
                 "counts_calls".to_string(),
                 4,
                 compiled_to(add_one_and_count_calls),
-                vec![(None, 0.0)],
+                vec![(None, PinValueTheBootstrapHandsOver::Number(0.0))],
                 vec![],
                 vec![0.0],
                 1,
@@ -314,7 +320,7 @@ fn a_node_reading_one_not_evaluated_before_it_is_refused() {
                 "reads_ahead".to_string(),
                 3,
                 compiled_to(add_one_and_count_calls),
-                vec![(Some((0, 0)), 0.0)],
+                vec![(Some((0, 0)), PinValueTheBootstrapHandsOver::Number(0.0))],
                 vec![],
                 vec![0.0],
                 1,
@@ -377,7 +383,7 @@ fn an_island_of_add_one_then_a_node_run_as_python(
                 "add_one".to_string(),
                 0,
                 compiled_to(add_one_and_count_calls),
-                vec![(None, 2.0)],
+                vec![(None, PinValueTheBootstrapHandsOver::Number(2.0))],
                 vec![],
                 vec![0.0],
                 1,
@@ -387,7 +393,7 @@ fn an_island_of_add_one_then_a_node_run_as_python(
                 "tally".to_string(),
                 1,
                 run_as_python_counting_its_calls(),
-                vec![(Some((0, 0)), 0.0)],
+                vec![(Some((0, 0)), PinValueTheBootstrapHandsOver::Number(0.0))],
                 vec![],
                 vec![0.0],
                 2,
@@ -444,7 +450,7 @@ fn a_number_a_node_run_as_python_gives_is_a_control_value() {
             .evaluate_the_island_output_for_this_read()
             .unwrap()
             .value,
-        FunctionNodeIslandOutputValue::ControlValue(42.0),
+        FunctionNodeIslandOutputValue::ControlValue(vec![42.0]),
         "the node resumed from the state its stream carries"
     );
     assert_eq!(
@@ -473,7 +479,7 @@ fn a_node_run_as_python_that_raises_hands_out_nothing_and_is_noted_with_what_it_
                 "tally".to_string(),
                 5,
                 run_as_python_counting_its_calls(),
-                vec![(None, -1.0)],
+                vec![(None, PinValueTheBootstrapHandsOver::Number(-1.0))],
                 vec![],
                 vec![0.0],
                 2,
@@ -569,7 +575,7 @@ fn a_raise_is_noted_until_the_node_runs_cleanly_and_the_island_answers_again() {
             .evaluate_the_island_output_for_this_read()
             .unwrap()
             .value,
-        FunctionNodeIslandOutputValue::ControlValue(2.0)
+        FunctionNodeIslandOutputValue::ControlValue(vec![2.0])
     );
     assert!(the_raises_noted_by(&island).is_empty());
 }
@@ -583,7 +589,7 @@ fn a_compiled_node_handed_a_dict_hands_out_nothing_and_is_noted_with_why() {
                     "tally".to_string(),
                     0,
                     run_as_python_counting_its_calls(),
-                    vec![(None, 1.0)],
+                    vec![(None, PinValueTheBootstrapHandsOver::Number(1.0))],
                     vec![],
                     vec![],
                     2,
@@ -593,7 +599,7 @@ fn a_compiled_node_handed_a_dict_hands_out_nothing_and_is_noted_with_why() {
                     "add_one".to_string(),
                     1,
                     compiled_to(add_one_and_count_calls),
-                    vec![(Some((0, 0)), 0.0)],
+                    vec![(Some((0, 0)), PinValueTheBootstrapHandsOver::Number(0.0))],
                     vec![],
                     vec![0.0],
                     1,

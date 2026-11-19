@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    GraphTransactionToolResult, LinkCheckResult, ProjectTransactionOnTheWire,
-    WriteGraphInputToolResult,
+    GraphTransactionToolResult, LinkCandidatesCheckResult, LinkCheckResult,
+    ProjectTransactionOnTheWire, WriteGraphInputToolResult,
 };
 
 use super::EVERY_SURFACE;
@@ -12,7 +12,7 @@ use crate::control_operation::{
     ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
 };
 use crate::control_operation_requests::{
-    AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkRequest,
+    AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkCandidatesRequest, CheckLinkRequest,
     CollapseSelectionIntoSubgraphRequest, ImportGraphGeneratorRequest, OneLinkGraphEditRequest,
     OneNodeGraphEditRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
     SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
@@ -87,6 +87,25 @@ impl ControlOperation for CheckLink {
     const ONE_LINE_DOC: &'static str =
         "Answer what `connect` would answer for one link in a loaded stream, changing nothing.";
     const AGENT_USAGE_NOTE: &'static str = "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `check_link_candidates`: what `check_link` would answer for each link between one placed end
+/// and many candidate ends, made nowhere.
+pub struct CheckLinkCandidates;
+
+impl ControlOperation for CheckLinkCandidates {
+    type Request = CheckLinkCandidatesRequest;
+    type Result = LinkCandidatesCheckResult;
+    const METHOD_NAME: &'static str = "check_link_candidates";
+    const ONE_LINE_DOC: &'static str = "Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.";
+    const AGENT_USAGE_NOTE: &'static str = "Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{\"output\": {\"node\": …, \"port\": …}}`, each candidate then an input, or `{\"input\": …}`, each candidate then an output. `among` is `\"placed_ports\"`, every such port of every node at the level; `\"node_type_ports\"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{\"ends\": [...]}`, these ends alone, each `{\"kind\": \"placed_port\", \"node\", \"port\"}` or `{\"kind\": \"node_type_port\", \"node_type\", \"port\"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, as `check_link` refuses it, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;

@@ -134,6 +134,68 @@ fn a_failed_record_reads_back_whole() {
 }
 
 #[test]
+fn a_failure_reads_back_with_its_kind_and_one_recorded_before_kinds_reads_as_a_refused_load() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+    for kind in [
+        StreamFailureKind::ProjectVenvNotMade,
+        StreamFailureKind::LoadRefused,
+        StreamFailureKind::StartRefused,
+        StreamFailureKind::NodeTypeNotDescribed,
+        StreamFailureKind::LinkRefused,
+        StreamFailureKind::KeepsCrashingTheRuntime,
+    ] {
+        let mut record = a_record_of("camera-app", "preview");
+        record.fail_as(kind, format!("{kind:?}"));
+        records.write(&record).unwrap();
+
+        let Some(StreamRecordAsRead::Current(read)) = records.read(&record.stream_id).unwrap()
+        else {
+            panic!("the record reads back current");
+        };
+        assert_eq!(
+            read.failure(),
+            Some(StreamFailure::of_the_stream(kind, format!("{kind:?}")))
+        );
+    }
+
+    let mut written_before_kinds =
+        serde_json::to_value(a_record_of("camera-app", "preview")).unwrap();
+    written_before_kinds["failed_because"] = serde_json::json!("it crashed the runtime");
+    assert_eq!(written_before_kinds.get("failed_as"), None);
+    let read: StreamRecord = serde_json::from_value(written_before_kinds).unwrap();
+    assert_eq!(
+        read.failure(),
+        Some(StreamFailure::of_the_stream(
+            StreamFailureKind::LoadRefused,
+            "it crashed the runtime".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn a_record_answers_its_playback_paused_stopped_or_playing_and_stopped_while_failed() {
+    let mut record = a_record_of("camera-app", "preview");
+    assert_eq!(record.playback(), StreamPlaybackOnTheWire::Playing);
+    record.paused = true;
+    assert_eq!(record.playback(), StreamPlaybackOnTheWire::Paused);
+    record.paused = false;
+    record.fail_as(StreamFailureKind::StartRefused, "refused".to_owned());
+    assert_eq!(record.playback(), StreamPlaybackOnTheWire::Stopped);
+    record.paused = true;
+    assert_eq!(
+        record.playback(),
+        StreamPlaybackOnTheWire::Stopped,
+        "a failed record is stopped whatever its pause"
+    );
+    record.paused = false;
+    record.mark_running_resetting_its_crash_count();
+    assert_eq!(record.failure(), None);
+    record.mark_open_with_its_playback_stopped();
+    assert_eq!(record.playback(), StreamPlaybackOnTheWire::Stopped);
+}
+
+#[test]
 fn a_record_whose_id_begins_with_a_dot_is_read_like_any_other() {
     let state_directory = tempfile::tempdir().unwrap();
     let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();

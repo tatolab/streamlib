@@ -33,7 +33,7 @@ fn a_project_whose_main_stream_holds_a_mixer_and_a_graph_input() -> ProjectWithG
 }
 
 /// The link from `source` to `target`, each `(node, port)`, in `stream`, as `check_link` takes it.
-fn the_link(stream: Value, source: (&str, &str), target: (&str, &str)) -> Value {
+pub(super) fn the_link(stream: Value, source: (&str, &str), target: (&str, &str)) -> Value {
     json!({
         "stream": stream,
         "source": { "node": source.0, "port": source.1 },
@@ -275,17 +275,17 @@ const WAVE_TYPE: &str = "link_check_test:Wave";
 const MIX_TYPE: &str = "link_check_test:Mix";
 const REMAP_TYPE: &str = "link_check_test:Remap";
 const WINDOWED_TYPE: &str = "link_check_test:Windowed";
-const SECONDS_TYPE: &str = "link_check_test:Seconds";
-const FRAMES_TYPE: &str = "link_check_test:Frames";
+pub(super) const SECONDS_TYPE: &str = "link_check_test:Seconds";
+pub(super) const FRAMES_TYPE: &str = "link_check_test:Frames";
 
 const FIRST_LFO_UUID: &str = "1f1f1f1f-1f1f-4f1f-8f1f-1f1f1f1f1f1f";
 const SECOND_LFO_UUID: &str = "2f2f2f2f-2f2f-4f2f-8f2f-2f2f2f2f2f2f";
 const WAVE_UUID: &str = "9f9f9f9f-9f9f-4f9f-8f9f-9f9f9f9f9f9f";
-const MIX_UUID: &str = "3f3f3f3f-3f3f-4f3f-8f3f-3f3f3f3f3f3f";
-const REMAP_UUID: &str = "4f4f4f4f-4f4f-4f4f-8f4f-4f4f4f4f4f4f";
+pub(super) const MIX_UUID: &str = "3f3f3f3f-3f3f-4f3f-8f3f-3f3f3f3f3f3f";
+pub(super) const REMAP_UUID: &str = "4f4f4f4f-4f4f-4f4f-8f4f-4f4f4f4f4f4f";
 const WINDOWED_UUID: &str = "5f5f5f5f-5f5f-4f5f-8f5f-5f5f5f5f5f5f";
-const SECONDS_UUID: &str = "6f6f6f6f-6f6f-4f6f-8f6f-6f6f6f6f6f6f";
-const FRAMES_UUID: &str = "7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f";
+pub(super) const SECONDS_UUID: &str = "6f6f6f6f-6f6f-4f6f-8f6f-6f6f6f6f6f6f";
+pub(super) const FRAMES_UUID: &str = "7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f";
 
 /// The node type `node_type` whose one port, `port`, is typed `pin_type` and means `meaning`:
 /// an output, or, with `is_an_input`, an input.
@@ -381,7 +381,7 @@ pub(super) fn register_the_link_check_node_types_once() {
 /// A project whose stream `main` holds two Lfos, a Wave giving Channels, a Mix the first feeds on `a`, a Remap the Mix
 /// feeds, a function node whose `audio` input declares an audio window, a node giving Float
 /// `seconds` and one taking Integer `frames`.
-fn a_project_whose_main_stream_holds_function_nodes() -> ProjectWithGraphDocuments {
+pub(super) fn a_project_whose_main_stream_holds_function_nodes() -> ProjectWithGraphDocuments {
     register_the_link_check_node_types_once();
     let node = |id: &str, name: &str, node_type: &str| json!({ "id": id, "name": name, "type": node_type, "config": {} });
     let link = |source: (&str, &str), target: (&str, &str)| {

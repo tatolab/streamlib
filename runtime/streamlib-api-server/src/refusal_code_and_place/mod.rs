@@ -120,6 +120,8 @@ impl RefusalCodeAndPlace {
             | ProjectRepositoryRefusal::StreamAssetHasNoImportSettings(_)
             | ProjectRepositoryRefusal::AssetStillReferenced { .. }
             | ProjectRepositoryRefusal::BlankProjectName
+            | ProjectRepositoryRefusal::BlankNodeTypeMovedIntoAGroup
+            | ProjectRepositoryRefusal::NodeTypeGroupIsNotAPath { .. }
             | ProjectRepositoryRefusal::CoverIsNotAMediaAsset { .. }
             | ProjectRepositoryRefusal::AssetIsTheProjectCover(_)
             | ProjectRepositoryRefusal::DuplicateIntoAnExistingPath { .. }
@@ -194,6 +196,11 @@ impl RefusalCodeAndPlace {
                 ..Self::coded(NodeNotRunning)
             },
             Error::NodePortNotFound {
+                port_name,
+                direction,
+                ..
+            }
+            | Error::NodeTypePortNotFound {
                 port_name,
                 direction,
                 ..

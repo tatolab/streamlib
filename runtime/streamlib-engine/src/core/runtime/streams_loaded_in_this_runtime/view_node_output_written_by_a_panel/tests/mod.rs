@@ -227,7 +227,13 @@ impl AStreamOfAProjectBringingViews {
                 LiveInputValueSetRefusal::TheInputIsResetWhileStopped { runtime_words, .. }
                 | LiveInputValueSetRefusal::TheInputIsSetTwice { runtime_words, .. },
             ) => Err(Error::Configuration(runtime_words)),
-            Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over)) => Err(not_handed_over),
+            Err(
+                LiveInputValueSetRefusal::TheNodeDoesNotRun {
+                    refusal: not_handed_over,
+                    ..
+                }
+                | LiveInputValueSetRefusal::NotHandedOver(not_handed_over),
+            ) => Err(not_handed_over),
         }
     }
 

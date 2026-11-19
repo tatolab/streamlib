@@ -540,6 +540,7 @@ fn a_rendered_node(name: &str) -> GraphNodeOutput {
         },
         components: Default::default(),
         input_values: serde_json::Map::new(),
+        live: None,
         pins: serde_json::Map::new(),
         exposed_config_fields: Vec::new(),
         studio: serde_json::Map::new(),
@@ -593,6 +594,7 @@ fn the_render_matches_a_runtime_link_whose_ports_the_runtime_cast() {
         display_name: None,
         stream: None,
         clock: Default::default(),
+        condition: None,
         nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
         links: vec![a_rendered_link(
             "L2",
@@ -626,6 +628,7 @@ fn the_render_carries_each_runtime_links_id_and_drops_a_drawn_link_whose_reader_
         display_name: None,
         stream: None,
         clock: Default::default(),
+        condition: None,
         nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
         links: vec![a_rendered_link(
             "L2",
@@ -699,6 +702,7 @@ fn a_drawn_link_read_through_a_variable_says_what_its_running_link_converts_and_
         display_name: None,
         stream: None,
         clock: Default::default(),
+        condition: None,
         nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
         links: vec![warned_running_link],
         references: Vec::new(),

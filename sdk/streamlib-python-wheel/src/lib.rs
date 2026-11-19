@@ -127,11 +127,27 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        python_function_node_island::read_the_parts_at_an_input_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_function_node_island::read_the_stored_value_at_an_input_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_function_node_island::write_the_stored_value_on_an_output_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_function_node_island::hand_an_unread_message_on,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
         python_input_port_pin_values::read_each_unlinked_input_port_as_its_pin_value,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_input_port_pin_values::queue_a_fire_of_each_trigger_input,
         module
     )?)?;
     module.add_class::<python_function_node_island::FunctionNodeEvaluatedAsAStandaloneNode>()?;

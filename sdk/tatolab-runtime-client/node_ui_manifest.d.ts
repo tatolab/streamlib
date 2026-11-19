@@ -8,8 +8,8 @@
  * Its JSON Schema is `node_ui_manifest.schema.json`.
  */
 export type {
+  BuiltInPinTypeName,
   NodeUiManifest,
   NodeUiManifestControl,
-  BuiltInPinTypeName,
   NodeUiManifestNodeBody,
 } from "./control_contract.js";

@@ -8,7 +8,7 @@ use super::*;
 
 /// A venv interpreter whose node type listing keeps the request it was sent in
 /// `listing-request.json` and prints `listing.json`, which a test writes first.
-const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._project_node_type_listing_entry*) cat > listing-request.json; cat listing.json ;;\nesac\nexit 0\n";
+pub(super) const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._project_node_type_listing_entry*) cat > listing-request.json; cat listing.json ;;\nesac\nexit 0\n";
 
 /// Project `cell` imports project `arm`: the listing is sent the Python files of `arm`'s folder
 /// under `imports/` as they are on disk and nothing else of it, and answers each source as the
@@ -74,6 +74,8 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     assert_eq!(listed["project"], json!(cell.project), "{listed}");
     assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
     dependency_source["project_name"] = json!(TEST_PROJECT_NAME);
+    let mut project_source = project_source;
+    project_source["node_types"][0]["category_from"] = Value::Null;
     assert_eq!(
         listed["sources"],
         json!([project_source, dependency_source]),
@@ -93,7 +95,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
 }
 
 /// The next announcement on `change_feed` that names node types, within a few seconds.
-async fn the_next_node_types_announced(
+pub(super) async fn the_next_node_types_announced(
     change_feed: &mut tokio::sync::broadcast::Receiver<
         streamlib_project_repository::ProjectChangeFeedAnnouncement,
     >,
@@ -116,7 +118,7 @@ async fn the_next_node_types_announced(
     .expect("node types are announced")
 }
 
-fn the_node_types_named_by(
+pub(super) fn the_node_types_named_by(
     change: &streamlib_project_repository::ProjectChangeOnTheFeed,
 ) -> (&'static str, Vec<String>) {
     use streamlib_project_repository::ProjectChangeOnTheFeed;
@@ -137,7 +139,7 @@ fn the_node_types_named_by(
 
 /// Write the `listing.json` the stub interpreter prints for `project`: one installed distribution
 /// offering `node_types`.
-fn write_the_listing_of_one_distribution_offering(
+pub(super) fn write_the_listing_of_one_distribution_offering(
     project: &ProjectWithGraphDocuments,
     node_types: Value,
 ) {
@@ -154,7 +156,7 @@ fn write_the_listing_of_one_distribution_offering(
 }
 
 /// A node type as a listing document offers it, with no pins.
-fn a_listed_node_type(node_type: &str, description: &str) -> Value {
+pub(super) fn a_listed_node_type(node_type: &str, description: &str) -> Value {
     json!({ "type": node_type, "kind": "process", "description": description,
             "category": "Sources/Cameras", "inputs": [], "outputs": [] })
 }

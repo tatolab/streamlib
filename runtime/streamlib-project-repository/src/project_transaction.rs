@@ -124,6 +124,12 @@ pub enum ProjectSettingsAction {
     SetProjectDescription { description: Option<String> },
     /// Make the media asset `cover` the project's cover, `None` for none.
     SetProjectCover { cover: Option<Uuid> },
+    /// File the node type `node_type` under `group` in the project, or with `None` put it back
+    /// under the group its author declared.
+    SetNodeTypeGroup {
+        node_type: String,
+        group: Option<String>,
+    },
 }
 
 #[cfg(feature = "history")]
@@ -148,6 +154,13 @@ impl ProjectSettingsAction {
                 from: project_file.cover,
                 to: cover,
             },
+            Self::SetNodeTypeGroup { node_type, group } => {
+                ProjectSettingsOperation::SetNodeTypeGroup {
+                    from: project_file.node_type_groups.get(&node_type).cloned(),
+                    node_type,
+                    to: group,
+                }
+            }
         }
     }
 }
@@ -528,6 +541,13 @@ pub enum ProjectSettingsOperation {
         from: Option<Uuid>,
         to: Option<Uuid>,
     },
+    /// The group the project files `node_type` under went from `from` to `to`, `None` for the
+    /// group its author declared.
+    SetNodeTypeGroup {
+        node_type: String,
+        from: Option<String>,
+        to: Option<String>,
+    },
 }
 
 impl ProjectSettingsOperation {
@@ -539,6 +559,15 @@ impl ProjectSettingsOperation {
                 Self::SetProjectDescription { from: to, to: from }
             }
             Self::SetProjectCover { from, to } => Self::SetProjectCover { from: to, to: from },
+            Self::SetNodeTypeGroup {
+                node_type,
+                from,
+                to,
+            } => Self::SetNodeTypeGroup {
+                node_type,
+                from: to,
+                to: from,
+            },
         }
     }
 
@@ -549,6 +578,16 @@ impl ProjectSettingsOperation {
             Self::SetProjectName { to, .. } => project_file.name = to.clone(),
             Self::SetProjectDescription { to, .. } => project_file.description = to.clone(),
             Self::SetProjectCover { to, .. } => project_file.cover = *to,
+            Self::SetNodeTypeGroup { node_type, to, .. } => match to {
+                Some(group) => {
+                    project_file
+                        .node_type_groups
+                        .insert(node_type.clone(), group.clone());
+                }
+                None => {
+                    project_file.node_type_groups.remove(node_type);
+                }
+            },
         }
     }
 
@@ -559,6 +598,7 @@ impl ProjectSettingsOperation {
             Self::SetProjectName { to, .. } => format!("rename_project {to}"),
             Self::SetProjectDescription { .. } => "set_project_description".to_owned(),
             Self::SetProjectCover { .. } => "set_project_cover".to_owned(),
+            Self::SetNodeTypeGroup { node_type, .. } => format!("set_node_type_group {node_type}"),
         }
     }
 }

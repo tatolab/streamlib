@@ -88,6 +88,7 @@ fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_b
             "display_name": "main",
             "location": the_location_of_the_stream(&machine_root.project_directory(), "main"),
             "state": "running",
+            "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []},
             "node_count": 1,
             "failed_because": null,
             "capture_devices_whose_access_was_never_asked_for": [],

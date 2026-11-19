@@ -518,6 +518,7 @@ fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
         },
         components: Default::default(),
         input_values: serde_json::Map::new(),
+        live: None,
         pins: serde_json::Map::new(),
         exposed_config_fields: Vec::new(),
         studio: serde_json::Map::new(),

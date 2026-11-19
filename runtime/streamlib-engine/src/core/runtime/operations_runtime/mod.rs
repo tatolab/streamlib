@@ -37,7 +37,8 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
 pub(super) use link_connected_between_two_ports::{
-    connect_impl, the_verdict_connect_takes_on_a_link,
+    ALinkEndTheGraphHolds, ANodeTypesPortToJudge, connect_impl,
+    the_verdict_connect_takes_on_a_link, the_verdicts_connect_takes_on_links_with_node_types_ports,
 };
 
 // =============================================================================
@@ -578,7 +579,8 @@ impl LoadedStreamInThisRuntime {
 
     /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
     /// or Image formats alone refuse it is kept when its ports' families take it, and one an
-    /// island cannot take is left to the commit that builds the stream to refuse.
+    /// island cannot take, or one feeding an island into the app process, is left to the commit
+    /// that builds the stream to refuse.
     pub(crate) fn connect_a_link_of_a_saved_graph(
         &self,
         from: OutputLinkPortRef,
@@ -663,6 +665,18 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn hold_an_edit_its_document_holds_not_live(
+        &self,
+        graph_operation: &streamlib_project_repository::StreamGraphOperation,
+        refusal: &str,
+    ) {
+        LoadedStreamInThisRuntime::hold_an_edit_its_document_holds_not_live(
+            self,
+            graph_operation,
+            refusal,
+        );
+    }
+
     fn what_a_live_connect_makes_of_the_link(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,
@@ -682,15 +696,22 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         from: crate::core::runtime::PortOfANodeOfAType<'_>,
         to: crate::core::runtime::PortOfANodeOfAType<'_>,
     ) -> Option<crate::core::descriptors::PinLinkVerdict> {
-        let node_types = self.node_types_this_stream_resolves();
-        let ports_of =
-            |node_type: &str| node_types.port_info(&NodeClassImportPath::new(node_type).ok()?);
-        let (output_ports, input_ports) = (ports_of(from.node_type)?, ports_of(to.node_type)?);
-        crate::core::graph::the_verdict_of_a_link_between_declared_ports(
-            (from.node_name, output_ports.output_named(from.port)?),
-            (to.node_name, input_ports.input_named(to.port)?),
-            &node_types.pin_conversions(),
-        )
+        self.the_verdict_of_a_link_between_two_node_types(from, to)
+    }
+
+    fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+        &'a self,
+        held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,
+        held_direction: crate::core::PortDirection,
+        node_types_ports: &'a [crate::core::runtime::ANodeTypesPort<'a>],
+    ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>> {
+        self.in_this_streams_log_route(async move {
+            self.what_a_connect_makes_of_links_with_node_types_ports(
+                held,
+                held_direction,
+                node_types_ports,
+            )
+        })
     }
 
     fn the_name_a_node_added_with_none_takes(
@@ -851,6 +872,10 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
     }
 
+    fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+        Box::pin(async move { LoadedStreamInThisRuntime::the_graph_as_answered(self) })
+    }
+
     fn open_a_viewer_of_an_output_port(
         &self,
         node_id: String,
@@ -959,7 +984,13 @@ mod connect_wires_a_matching_link_in_silence_tests;
 mod connect_refuses_ports_whose_families_do_not_match_tests;
 
 #[cfg(test)]
+mod connect_on_a_test_thread;
+
+#[cfg(test)]
 mod connect_judges_two_typed_pins_by_their_verdict_tests;
 
 #[cfg(test)]
 mod connect_refuses_an_island_into_the_app_process_tests;
+
+#[cfg(test)]
+mod connect_resolves_a_pin_type_found_another_way_tests;

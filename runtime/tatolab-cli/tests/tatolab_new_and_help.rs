@@ -95,6 +95,7 @@ fn help_lists_exactly_the_served_verbs() {
             "clock",
             "graph",
             "call",
+            "check",
             "logs",
             "mcp",
             "enable-virtual-camera"

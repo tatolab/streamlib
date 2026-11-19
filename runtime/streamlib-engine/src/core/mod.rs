@@ -34,6 +34,7 @@ pub mod machine_global_unique_name;
 pub mod media_clock;
 pub mod nodes;
 pub(crate) mod output_port_stream_facts;
+pub mod pin_value_packing;
 pub mod prelude;
 pub mod pubsub;
 pub mod rhi;
@@ -131,7 +132,7 @@ pub use graph::{
     NodeReadyBarrierHandle, NodeRunId, NodeState, NodeStateComponent, NodeTraversal,
     NodeTraversalMut, ObservableGraphReadiness, ObservableNodeState, OutOfProcessLinkWireProgress,
     OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent, OutputLinkPortRef,
-    OutputPortMarker, PendingDeletionComponent, PortInfo, PortMarker,
+    OutputPortMarker, PendingDeletionComponent, PinTypeAsDeclared, PortInfo, PortMarker,
     ProcessRaisingBecauseComponent, ReadOfALinkByTheReaderOfAFunctionNodeIsland,
     ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent,
     StateComponent, StepProgressCallbackInFlight, StepProgressOfOneNode,
@@ -164,11 +165,13 @@ pub use runtime::{
     NodeDisplayNameAndId, NodeInTheGraph, OpenDescriptorSoftLimitRaise,
     OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
     OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen,
-    PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE, PendingStreamActionKind,
-    PendingStreamActionOnTheRecord, ProjectCreationQueued,
+    PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE, PYTHON_NODE_DECLARATION_CHECK_ENTRY_MODULE,
+    PendingStreamActionKind, PendingStreamActionOnTheRecord, ProjectCreationQueued,
     ProjectHistoryRecordingFirstPartyPackageMoves, ProjectOpenOrReloadRequest,
     ProjectPausedOrResumed, ProjectVenvSyncPackage, ProjectVenvSyncPackageKind,
     ProjectVenvSyncPackageState, ProjectVenvSyncPhase, ProjectVenvSyncProgress,
+    PythonModuleChecked, PythonNodeDeclarationCheck, PythonNodeDeclarationCheckNotFinished,
+    PythonNodeDeclarationFinding, PythonNodeDeclarationFindingSeverity,
     RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM,
     RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, Runner, RunnerConstructionOptions,
     RuntimeOperations, RuntimeRunInProgressRecord, RuntimeShutdownEscalation, RuntimeStatus,
@@ -179,7 +182,8 @@ pub use runtime::{
     StreamRecordAsRead, StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure,
     StreamRecordsInTheStateDirectory, StreamReloadAtTheStart, StreamsToReadOrEdit,
     TeardownProgressNoteOfOneStream, TheStoreOfEachNodeOfAStream,
-    deregister_a_helper_process_group, is_the_machines_shutdown_requested,
+    check_a_projects_python_node_declarations, deregister_a_helper_process_group,
+    is_the_machines_shutdown_requested,
     list_a_projects_node_types_and_graph_generators_from_source,
     note_what_the_engine_teardown_is_waiting_on,
     pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread,

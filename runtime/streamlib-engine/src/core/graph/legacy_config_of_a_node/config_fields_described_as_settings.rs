@@ -3,7 +3,8 @@
 
 //! What the node catalog says of the config of a node type not yet typed: each field its config
 //! schema lists is an input that takes no wire, read when the node is set up, with the default
-//! the schema states and a pin type only where the schema states one exactly.
+//! the schema states, a pin type only where the schema states one exactly, and the field's own
+//! schema as the schema of a value it takes.
 
 use std::borrow::Cow;
 
@@ -11,8 +12,8 @@ use serde_json::Value;
 
 use super::{the_description_of, the_properties_of_a_config_schema};
 use crate::core::descriptors::{
-    IntegerSize, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinProjectAssetAnnotation,
-    PinType,
+    IntegerSize, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinNumberRange,
+    PinProjectAssetAnnotation, PinType,
 };
 use crate::core::error::{Error, Result};
 use crate::core::nodes::is_a_natively_compiled_node_type;
@@ -35,8 +36,11 @@ pub(crate) struct ConfigFieldDescribedAsASetting {
     /// may be null, or states a type no pin type holds exactly.
     pub(crate) pin_type: Option<PinType>,
     /// What the schema states of the field besides its type: on a String holding a project
-    /// asset's UUID, the assets it is picked from.
+    /// asset's UUID, the assets it is picked from; on a number, the range it holds.
     pub(crate) annotations: PinAnnotations,
+    /// The JSON Schema of a value the field takes: its own schema, standing alone, the config
+    /// schema's definitions it refers to carried beside it.
+    pub(crate) field_value_json_schema: Value,
 }
 
 /// Each field the config schema of `descriptor` lists, in the order it lists them, described as
@@ -62,6 +66,12 @@ pub(crate) fn the_config_fields_described_as_settings(
                     .as_ref()
                     .filter(|pin_type| matches!(pin_type, PinType::String {}))
                     .and_then(|_| the_project_asset_annotation_of(&field_schema)),
+                range: pin_type
+                    .as_ref()
+                    .filter(|pin_type| {
+                        matches!(pin_type, PinType::Integer { .. } | PinType::Float { .. })
+                    })
+                    .and_then(|_| the_number_range_of(&field_schema)),
                 ..PinAnnotations::default()
             };
             ConfigFieldDescribedAsASetting {
@@ -74,11 +84,59 @@ pub(crate) fn the_config_fields_described_as_settings(
                     })
                     .filter(|default| !default.is_null())
                     .cloned(),
+                field_value_json_schema: the_field_schema_standing_alone(
+                    config_schema,
+                    &field_schema,
+                ),
                 pin_type,
                 annotations,
             }
         })
         .collect()
+}
+
+/// The keywords a config schema holds the definitions its fields refer to under.
+const DEFINITIONS_KEYWORDS: [&str; 2] = ["$defs", "definitions"];
+
+/// `field_schema`, a field of `config_schema` with its own reference resolved, as a schema that
+/// stands alone: each set of definitions the config schema holds is carried beside it when it
+/// still refers to one, so a `#/$defs/...` inside it resolves as it did in the config schema.
+fn the_field_schema_standing_alone(config_schema: &Value, field_schema: &Value) -> Value {
+    let mut standing_alone = field_schema.clone();
+    if !refers_to_a_definition(field_schema) {
+        return standing_alone;
+    }
+    if let Value::Object(keywords) = &mut standing_alone {
+        for definitions_keyword in DEFINITIONS_KEYWORDS {
+            if let Some(definitions) = config_schema.get(definitions_keyword) {
+                keywords
+                    .entry(definitions_keyword)
+                    .or_insert_with(|| definitions.clone());
+            }
+        }
+    }
+    standing_alone
+}
+
+/// Whether `schema` holds a `$ref` anywhere inside it.
+fn refers_to_a_definition(schema: &Value) -> bool {
+    match schema {
+        Value::Object(keywords) => keywords
+            .iter()
+            .any(|(keyword, value)| keyword == "$ref" || refers_to_a_definition(value)),
+        Value::Array(members) => members.iter().any(refers_to_a_definition),
+        _ => false,
+    }
+}
+
+/// The range a number field's schema holds it within, by its `minimum` and `maximum`; `None`
+/// when it states neither.
+fn the_number_range_of(field_schema: &Value) -> Option<PinNumberRange> {
+    let range = PinNumberRange {
+        minimum: field_schema.get("minimum").and_then(Value::as_f64),
+        maximum: field_schema.get("maximum").and_then(Value::as_f64),
+    };
+    (range.minimum.is_some() || range.maximum.is_some()).then_some(range)
 }
 
 /// The config fields a node of `node_type`, whose config schema is `config_schema`, can expose

@@ -13,6 +13,9 @@ use super::input_values::{
 };
 use super::{Graph, GraphNodePorts, InputLinkPortRef, OutputLinkPortRef, PortInfo};
 use crate::core::descriptors::NodeClassImportPath;
+use crate::core::error::Error;
+use crate::core::node_interpreter::PythonNodeDeclaration;
+use crate::core::nodes::HowANodeOfADescribedTypeRuns;
 use crate::core::nodes::NODE_REGISTRY;
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::test_support::{MockPinTypedNode, ensure_test_mocks_registered};
@@ -393,4 +396,98 @@ fn an_input_holding_values_under_several_names_reads_the_current_then_the_first_
     assert_eq!(moved.len(), 1);
     assert_eq!(moved[0].name_read, "gain");
     assert_eq!(moved[0].other_names_held, ["volume"]);
+}
+
+/// What the Python node `Hum` declares under bare `@node`, as `tatolab-stream`'s own test reads
+/// it off the decorator: its input `frequency` was `frequency_hz` and, before that, `Pitch`; its
+/// input `detune` may be unset; its output `result` was `level`.
+const RENAMED_PYTHON_PIN_DECLARATION: &str =
+    include_str!("../../../tests/fixtures/renamed_python_pin_declaration.json");
+
+/// `node_types`, holding `Hum` as a project's interpreter describes it, under `import_path`.
+fn node_types_holding_the_renamed_python_node(import_path: &str) -> NodeTypesOneStreamResolves {
+    let declared: Value =
+        serde_json::from_str(RENAMED_PYTHON_PIN_DECLARATION).expect("the fixture is JSON");
+    let described = json!({
+        "import_path": import_path,
+        "short_name": "Hum",
+        "description": "",
+        "kind": "function",
+        "language": "python",
+        "runs_as_python": true,
+        "state_fields": [],
+        "config_schema": {"type": "object"},
+        "input_ports": declared["input_ports"],
+        "output_ports": declared["output_ports"],
+        "function_signature": declared["function_signature"],
+    });
+    let declaration = PythonNodeDeclaration::read_from_described_node_type(
+        &described,
+        &NodeClassImportPath::new(import_path).expect("the import path names a class"),
+    )
+    .expect("the engine reads what the decorator declares");
+    let node_types = NodeTypesOneStreamResolves::new();
+    node_types
+        .register_a_type_described_in_this_streams_node_interpreter(
+            declaration.descriptor,
+            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                node_once_promoted_to_its_own_process: Box::new(|node| {
+                    Err(Error::Configuration(format!(
+                        "`{}` builds no node in this test",
+                        node.id
+                    )))
+                }),
+            },
+        )
+        .expect("the stream registers the described type");
+    node_types
+}
+
+/// A document saved before a Python node's pins were renamed loads onto the node that declares
+/// their new names: the value saved under `frequency_hz` lands on `frequency`, a link into
+/// `pitch` and out of `level` joins `frequency` and `result`, and `detune`, which may be unset,
+/// holds no value.
+///
+/// Mental-revert: dropping `former_names` from what the Python reader declares leaves
+/// `frequency_hz` among the hum's values and the links naming ports the node does not have,
+/// which validation refuses.
+#[test]
+fn a_document_saved_under_the_names_a_python_nodes_pins_had_loads_under_their_names() {
+    let hum = "project_nodes.hum:Hum";
+    let node_types = node_types_holding_the_renamed_python_node(hum);
+    let document = json!({
+        "nodes": [
+            { "name": "hum", "type": hum, "config": {}, "pins": { "frequency_hz": 220.0 } },
+            { "name": "hum-2", "type": hum, "config": {} },
+        ],
+        "links": [
+            { "source": { "node": "hum", "port": "level" },
+              "target": { "node": "hum-2", "port": "Pitch" } },
+        ],
+    });
+    let resolution = GraphSnapshot::from_graph_document(document)
+        .expect("the document reads")
+        .with_graph_only_nodes_resolved(&node_types)
+        .expect("its graph-only nodes resolve");
+    resolution
+        .validate(&node_types)
+        .expect("the graph under the pins' current names validates");
+
+    let graph = &resolution.graph_the_runtime_runs;
+    let input_values_of = |name: &str| {
+        let node = graph
+            .nodes
+            .iter()
+            .find(|node| node.name == name)
+            .expect("the node is held");
+        Value::Object(node.input_values.clone())
+    };
+    assert_eq!(input_values_of("hum"), json!({ "frequency": 220.0 }));
+    assert_eq!(input_values_of("hum-2"), json!({}));
+    let link_ends: Vec<(&str, &str)> = graph
+        .links
+        .iter()
+        .map(|link| (link.source.port.as_str(), link.target.port.as_str()))
+        .collect();
+    assert_eq!(link_ends, [("result", "frequency")]);
 }

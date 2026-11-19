@@ -472,3 +472,6 @@ fn lowercase_hex_sha256(bytes: &[u8]) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

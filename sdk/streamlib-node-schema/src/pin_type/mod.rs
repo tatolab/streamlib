@@ -12,9 +12,11 @@ mod pin_declaration;
 mod pin_flows;
 mod pin_link_verdict;
 mod pin_type_in_words;
+mod pin_type_validation;
 mod pin_type_variants;
 mod stored_pin_values;
 mod stored_value_check;
+mod value_json_schema;
 
 pub use built_in_pin_types::{
     BuiltInPinTypeName, PinAnnotationName, PinTypeDescription, built_in_pin_type,
@@ -49,4 +51,8 @@ mod pin_flows_tests;
 #[cfg(test)]
 mod pin_link_verdict_tests;
 #[cfg(test)]
+mod pin_type_validation_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod value_json_schema_tests;

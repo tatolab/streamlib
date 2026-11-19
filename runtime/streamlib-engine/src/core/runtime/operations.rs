@@ -47,6 +47,18 @@ pub enum WhatALiveConnectMakesOfALink {
     /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
     /// graph judges it only as it is reconciled to a document holding it.
     JudgesItOnlyAsItIsMade,
+    /// The link reaches a port of a node type the stream has not described yet, which only an
+    /// add of a node of the type describes, so it is judged only once one is placed.
+    JudgesItOnlyOnceItsNodeTypeIsDescribed,
+}
+
+/// A port of a node type, by the type's import path and the port's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ANodeTypesPort<'a> {
+    /// The node type's import path, as an add takes it.
+    pub node_type: &'a str,
+    /// The port's name, as the node type declares it.
+    pub port: &'a str,
 }
 
 pub trait RuntimeOperations: Send + Sync {
@@ -83,6 +95,15 @@ pub trait RuntimeOperations: Send + Sync {
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
 
+    /// Hold `graph_operation`, which this stream's graph document holds and its live graph
+    /// refused in the runtime's words `refusal`, as an edit not live yet: listed among the
+    /// stream's diagnostics and drawn in its `graph` until its playback stops.
+    fn hold_an_edit_its_document_holds_not_live(
+        &self,
+        graph_operation: &streamlib_project_repository::StreamGraphOperation,
+        refusal: &str,
+    );
+
     /// What a live connect of `link`, each node by its UUID, would make of it on this stream's
     /// live graph, judged as [`Self::apply_a_stream_graph_operation_live`] judges a connect and
     /// made nowhere; refused as the connect is refused, but for a link that connects through a
@@ -108,6 +129,21 @@ pub trait RuntimeOperations: Send + Sync {
         from: PortOfANodeOfAType<'_>,
         to: PortOfANodeOfAType<'_>,
     ) -> Option<crate::core::descriptors::PinLinkVerdict>;
+
+    /// What a live connect would make of each link between `held`, an end of this stream's
+    /// live graph by its node's UUID and of `held_direction`, and one of `node_types_ports`, in
+    /// their order, were a node of the type placed as an add with no input values places it:
+    /// judged as [`Self::what_a_live_connect_makes_of_the_link`] judges a link, the port by what
+    /// it declares, and made nowhere; each refused as its connect would be refused. Nothing is
+    /// described: a node type the stream has not described yet is answered
+    /// [`WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed`]. The judgement
+    /// runs in this stream's log route, so what it logs reaches the stream's log.
+    fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+        &'a self,
+        held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,
+        held_direction: crate::core::PortDirection,
+        node_types_ports: &'a [ANodeTypesPort<'a>],
+    ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>>;
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.
@@ -199,6 +235,11 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
+
+    /// This stream's graph as `graph` answers it: its running graph, or, while its graph
+    /// document holds edits the running graph did not take, the document's graph over it, each
+    /// part not live yet carrying `live: false`. Every edit and check reads `to_json_async`.
+    fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 
     /// Hold output port `port_name` of the node whose UUID, as `graph` lists it under `id`, is
     /// `node_id` open for a viewer,

@@ -68,6 +68,7 @@ use crate::core::test_support::{
 };
 
 use serial_test::serial;
+use streamlib_runtime_client_contract::local_api_wire_contract::StreamHealthOnTheWire;
 
 use std::collections::BTreeMap;
 
@@ -187,6 +188,7 @@ impl ProjectWithGraphDocuments {
             cover: None,
             created_with_runtime: None,
             dependencies: Vec::new(),
+            node_type_groups: Default::default(),
         };
         std::fs::write(
             project_directory.join(PROJECT_FILE_NAME),

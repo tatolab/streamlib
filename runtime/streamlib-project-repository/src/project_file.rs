@@ -34,6 +34,11 @@ pub struct TatolabProjectFile {
     /// Each project copied into this one's `imports/` folder.
     #[serde(default)]
     pub dependencies: Vec<ProjectImport>,
+    /// The group the project files each node type it moved under, by the node type as `add_node`
+    /// takes it, overriding the group its author declared: a path where the group is inside
+    /// another, as `Effects/Stylize`. Display only; it never changes what a node does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub node_type_groups: BTreeMap<String, String>,
 }
 
 /// Another project copied whole into `imports/<folder>/` and referenced there.
@@ -65,6 +70,7 @@ impl TatolabProjectFile {
             cover: None,
             created_with_runtime: Some(THIS_RUNTIME_VERSION.to_owned()),
             dependencies: Vec::new(),
+            node_type_groups: BTreeMap::new(),
         }
     }
 
@@ -96,6 +102,12 @@ impl TatolabProjectFile {
                 why: error.to_string(),
             }
         })
+    }
+
+    /// Whether `group` can file a node type: a path of one or more names split by `/`, none of
+    /// them blank, as `Effects/Stylize`.
+    pub fn is_a_node_type_group(group: &str) -> bool {
+        group.split('/').all(|name| !name.trim().is_empty())
     }
 
     /// The file's canonical bytes, as the runtime writes and history records them.

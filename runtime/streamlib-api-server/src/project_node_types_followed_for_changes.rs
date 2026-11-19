@@ -25,8 +25,10 @@ use crate::control_operation_dispatcher::{
 };
 
 /// The project files whose change can alter the node types a project offers, by file name:
-/// node code, and what uv installs the project's distributions from.
-const FILE_NAMES_THAT_CAN_CHANGE_THE_NODE_TYPES: [&str; 2] = ["pyproject.toml", "uv.lock"];
+/// node code, what uv installs the project's distributions from, and the project file, whose
+/// imports and `node_type_groups` change what it offers and the group each is filed under.
+const FILE_NAMES_THAT_CAN_CHANGE_THE_NODE_TYPES: [&str; 3] =
+    ["pyproject.toml", "uv.lock", "tatolab-project.json"];
 const PYTHON_SOURCE_FILE_SUFFIX: &str = ".py";
 
 /// Each node type a listing offers, by its `type`; a `type` two sources declare is the first's,
@@ -452,6 +454,7 @@ mod tests {
             kind: Some("process".to_owned()),
             description: description.to_owned(),
             category: Some("camera".to_owned()),
+            category_from: None,
             inputs: None,
             outputs: None,
             path: None,
@@ -561,12 +564,17 @@ mod tests {
     }
 
     #[test]
-    fn node_code_and_what_uv_installs_from_can_change_the_node_types_and_other_files_cannot() {
+    fn node_code_what_uv_installs_from_and_the_project_file_can_change_the_node_types_and_other_files_cannot()
+     {
         assert!(can_a_file_change_the_node_types("nodes/looks.py"));
         assert!(can_a_file_change_the_node_types(
             "imports/camera/pyproject.toml"
         ));
         assert!(can_a_file_change_the_node_types("uv.lock"));
+        assert!(can_a_file_change_the_node_types("tatolab-project.json"));
+        assert!(can_a_file_change_the_node_types(
+            "imports/robot-arm/tatolab-project.json"
+        ));
         assert!(!can_a_file_change_the_node_types("media/intro.mp4"));
         assert!(!can_a_file_change_the_node_types("streams/main.json"));
     }

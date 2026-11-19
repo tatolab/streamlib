@@ -4,8 +4,8 @@
 """Read the node types and graph generators a module declares from its source, never running it.
 
 A module is parsed with `ast` and its decorators are matched against the names it imports
-from `tatolab.stream`: `@node.process` classes, `@node.function` and `@node.shader`
-functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
+from `tatolab.stream`: `@node.process` classes, `@node.function`, bare `@node` and
+`@node.shader` functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
 node's `@node.meta` beside its kind decorator. A
 port is listed where the declaration states it in source; one whose family is computed at
 import is listed with no family, and a node whose ports only its native half knows is listed
@@ -22,14 +22,17 @@ from pathlib import PurePosixPath
 from typing import Any, Optional
 
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
+from ._retired_declarations import RETIRED_DECLARATIONS, RetiredDeclaration
 
 __all__ = [
     "module_name_of_a_source_path",
     "read_node_types_and_graph_generators_from_module_sources",
+    "read_retired_declarations_from_module_source",
 ]
 
 SDK_MODULE_NAME = "tatolab.stream"
 
+TYPED_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node"
 PROCESS_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.process"
 FUNCTION_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.function"
 SHADER_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.shader"
@@ -65,6 +68,10 @@ _PORT_FAMILY_BY_ANNOTATED_TYPE = {
 }
 
 _NODE_META_KEYS = ("category", "description")
+
+_RETIRED_DECLARATIONS_BY_DECORATOR: dict[str, RetiredDeclaration] = {
+    retired.decorator: retired for retired in RETIRED_DECLARATIONS
+}
 
 # Annotations a function node's signature reads that are never pins.
 _FUNCTION_NODE_NON_PIN_ANNOTATIONS = ("Time", "State")
@@ -151,6 +158,23 @@ def read_node_types_and_graph_generators_from_module_sources(
     }
 
 
+def read_retired_declarations_from_module_source(
+    module_name: str, listed_path: str, source_text: str
+) -> list[dict[str, Any]]:
+    """Each node the module declares in a retired form: `{"node_type", "retired", "line", "column"}`.
+
+    `retired` is the `RetiredDeclaration`, and the place is its decorator's `@`, line and column
+    from 1. A module that does not import the SDK or does not parse declares none here.
+    """
+    if SDK_IMPORT_MARKER not in source_text:
+        return []
+    try:
+        module_tree = ast.parse(source_text, filename=listed_path)
+    except (SyntaxError, ValueError):
+        return []
+    return _ModuleDeclarationReading(module_name, listed_path, module_tree).retired_declarations
+
+
 class _ModuleDeclarationReading:
     """One module's node types and graph generators, read from its parsed tree."""
 
@@ -166,6 +190,7 @@ class _ModuleDeclarationReading:
         }
         self.node_types: list[dict[str, Any]] = []
         self.graph_generators: list[dict[str, Any]] = []
+        self.retired_declarations: list[dict[str, Any]] = []
         self._read_statements(module_tree.body, qualname_prefix="", at_module_scope=True)
 
     def _read_statements(
@@ -174,8 +199,10 @@ class _ModuleDeclarationReading:
         for statement in statements:
             if isinstance(statement, ast.ClassDef):
                 qualname = f"{qualname_prefix}{statement.name}"
-                if self._decorated_with(statement, PROCESS_NODE_DECORATOR) is not None:
+                decorator = self._decorated_with(statement, PROCESS_NODE_DECORATOR)
+                if decorator is not None:
                     self.node_types.append(self._process_node_type(statement, qualname))
+                    self._note_a_retired_form(decorator, PROCESS_NODE_DECORATOR, qualname)
                 self._read_statements(
                     statement.body, qualname_prefix=f"{qualname}.", at_module_scope=False
                 )
@@ -193,15 +220,34 @@ class _ModuleDeclarationReading:
         qualname = f"{qualname_prefix}{function.name}"
         if at_module_scope and self._decorated_with(function, GRAPH_GENERATOR_DECORATOR) is not None:
             self.graph_generators.append(self._graph_generator(function, qualname))
-        for decorator_name, kind in (
-            (FUNCTION_NODE_DECORATOR, "function"),
-            (SHADER_NODE_DECORATOR, "shader"),
+        for decorator_name, kind, reads_pin_types in (
+            (FUNCTION_NODE_DECORATOR, "function", False),
+            (TYPED_NODE_DECORATOR, "function", True),
+            (SHADER_NODE_DECORATOR, "shader", False),
         ):
             decorator = self._decorated_with(function, decorator_name)
             if decorator is not None:
                 self.node_types.append(
-                    self._function_or_shader_node_type(function, qualname, kind)
+                    self._function_or_shader_node_type(
+                        function, qualname, kind, reads_pin_types=reads_pin_types
+                    )
                 )
+                self._note_a_retired_form(decorator, decorator_name, qualname)
+
+    def _note_a_retired_form(self, decorator: ast.expr, sdk_name: str, qualname: str) -> None:
+        retired = _RETIRED_DECLARATIONS_BY_DECORATOR.get(sdk_name)
+        if retired is None:
+            return
+        self.retired_declarations.append(
+            {
+                "node_type": f"{self._module_name}:{qualname}",
+                "retired": retired,
+                "line": decorator.lineno,
+                # A decorator's expression starts just after its `@`, so its 0-based offset is
+                # the `@`'s column from 1.
+                "column": decorator.col_offset,
+            }
+        )
 
     def _decorated_with(
         self, declaration: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef, sdk_name: str
@@ -265,6 +311,8 @@ class _ModuleDeclarationReading:
         function: ast.FunctionDef | ast.AsyncFunctionDef,
         qualname: str,
         kind: str,
+        *,
+        reads_pin_types: bool,
     ) -> dict[str, Any]:
         inputs = [
             self._function_port(parameter.arg, parameter.annotation, pin_default=default)
@@ -277,10 +325,12 @@ class _ModuleDeclarationReading:
             kind,
             declaration=function,
             inputs=inputs,
-            outputs=self._function_outputs(function.returns),
+            outputs=self._function_outputs(function.returns, reads_pin_types=reads_pin_types),
         )
 
-    def _function_outputs(self, return_annotation: Optional[ast.expr]) -> Optional[list[dict[str, Any]]]:
+    def _function_outputs(
+        self, return_annotation: Optional[ast.expr], *, reads_pin_types: bool
+    ) -> Optional[list[dict[str, Any]]]:
         if return_annotation is None:
             return None
         output_annotation = return_annotation
@@ -292,7 +342,12 @@ class _ModuleDeclarationReading:
             if not stateful_arguments:
                 return None
             output_annotation = stateful_arguments[0]
-        record_of_outputs = self._classes_by_name.get(_annotated_type_name(output_annotation) or "")
+        # Under the family grammar a returned dataclass is one output per field.
+        record_of_outputs = (
+            None
+            if reads_pin_types
+            else self._classes_by_name.get(_annotated_type_name(output_annotation) or "")
+        )
         if record_of_outputs is not None:
             return [
                 self._function_port(field.target.id, field.annotation)

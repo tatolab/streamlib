@@ -498,7 +498,9 @@ fn each_type_takes_the_example_it_gives_and_refuses_a_value_of_another_form() {
             let refused = pin_type
                 .check_value(&json!(1.0))
                 .expect_err("holds no value");
-            assert_eq!(refused.takes, "no value, only a link", "{name:?}");
+            if name != BuiltInPinTypeName::Trigger {
+                assert_eq!(refused.takes, "no value, only a link", "{name:?}");
+            }
             continue;
         }
         let refused = pin_type
@@ -507,6 +509,23 @@ fn each_type_takes_the_example_it_gives_and_refuses_a_value_of_another_form() {
         pin_type
             .check_value(&refused.example)
             .unwrap_or_else(|not_taken| panic!("{name:?} refuses its own example: {not_taken:?}"));
+    }
+}
+
+#[test]
+fn a_trigger_takes_only_null_which_fires_it() {
+    let trigger = PinDeclaration::exactly(PinType::Trigger {});
+
+    assert!(trigger.check_value(&json!(null)).is_ok());
+    for value in [json!(true), json!(1), json!({}), json!("now")] {
+        let refused = trigger
+            .check_value(&value)
+            .expect_err("a Trigger holds no value");
+        assert_eq!(
+            refused.takes,
+            "no value: a live set with no value, or `null`, fires it once"
+        );
+        assert_eq!(refused.example, json!(null));
     }
 }
 

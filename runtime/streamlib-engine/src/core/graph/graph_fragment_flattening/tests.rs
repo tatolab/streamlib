@@ -292,6 +292,7 @@ fn a_render_of(graph: &GraphSnapshot) -> GraphResponse {
         display_name: None,
         stream: None,
         clock: Default::default(),
+        condition: None,
         nodes: graph.nodes.iter().map(rendered_as_running).collect(),
         links: graph
             .links

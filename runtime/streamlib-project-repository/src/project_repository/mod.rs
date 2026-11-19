@@ -305,6 +305,17 @@ fn refuse_project_settings_the_project_cannot_hold(
     if project_file.name.trim().is_empty() {
         return Err(ProjectRepositoryRefusal::BlankProjectName);
     }
+    for (node_type, group) in &project_file.node_type_groups {
+        if node_type.trim().is_empty() {
+            return Err(ProjectRepositoryRefusal::BlankNodeTypeMovedIntoAGroup);
+        }
+        if !TatolabProjectFile::is_a_node_type_group(group) {
+            return Err(ProjectRepositoryRefusal::NodeTypeGroupIsNotAPath {
+                node_type: node_type.clone(),
+                group: group.clone(),
+            });
+        }
+    }
     let Some(cover) = project_file.cover else {
         return Ok(());
     };

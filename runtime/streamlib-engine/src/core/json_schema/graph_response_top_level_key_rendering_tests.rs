@@ -28,6 +28,7 @@ fn a_graph_renders_no_extensions_key_and_its_schema_declares_none() {
         [
             "asset",
             "clock",
+            "condition",
             "display_name",
             "function_node_pool",
             "groups",
