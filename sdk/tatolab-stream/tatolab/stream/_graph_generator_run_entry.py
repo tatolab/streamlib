@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import _graph_generator_detection, _stream_builder, _stream_graph_builder
+from ._entry_standard_output import carry_every_later_stdout_write_to_stderr
 from ._stream_graph_builder import is_graph_generator, place_graph_generator
 
 __all__ = ["main"]
@@ -143,21 +144,11 @@ def run_the_named_generator(
     return {GENERATOR_DOCUMENT_KEY: generator, PLACED_FRAGMENT_NODE_DOCUMENT_KEY: placed}
 
 
-def _carry_every_later_stdout_write_to_stderr() -> int:
-    """Point fd 1 and `sys.stdout` at stderr for the rest of the process, returning a
-    descriptor on the real stdout, the only way the document reaches it."""
-    sys.stdout.flush()
-    document_stdout_descriptor = os.dup(sys.stdout.fileno())
-    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
-    sys.stdout = sys.stderr
-    return document_stdout_descriptor
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the requested generator and write its document to stdout; return the exit code."""
     arguments = build_argument_parser().parse_args(argv)
     sys.path.insert(0, str(Path.cwd()))
-    document_stdout_descriptor = _carry_every_later_stdout_write_to_stderr()
+    document_stdout_descriptor = carry_every_later_stdout_write_to_stderr()
     try:
         document = run_the_named_generator(
             arguments.generator,

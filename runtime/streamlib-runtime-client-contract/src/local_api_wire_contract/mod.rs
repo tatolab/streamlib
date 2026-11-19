@@ -12,6 +12,7 @@ mod graph_wire_types;
 mod link_check_wire_types;
 mod log_wire_types;
 mod node_type_wire_types;
+mod project_code_check_wire_types;
 mod project_wire_types;
 mod runtime_health_wire_types;
 mod stream_clock_spec;
@@ -54,6 +55,10 @@ pub use node_type_wire_types::{
     NodeTypeInputDescribed, NodeTypeInputMode, NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed,
     NodeTypePortDescribed, NodeTypePortPin, NodeTypeSourceListed, NodeTypeSourceListedOrigin,
     PinTypeConversionListed, PinTypeListed,
+};
+pub use project_code_check_wire_types::{
+    ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,
+    ProjectCodeCheckSeverity, ProjectCodeCheckState, ProjectCodeCheckVerdict, ProjectFileChecked,
 };
 pub use project_wire_types::{
     AssetAudioFactsOnTheWire, AssetImageFactsOnTheWire, AssetLutFactsOnTheWire,

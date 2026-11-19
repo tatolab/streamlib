@@ -484,6 +484,9 @@ pub enum ControlOperationRefusalCode {
     /// The file changed, or was taken out, since it was read, so the write was not made;
     /// `refused_file` names it. Read it again to see what it holds now.
     FileChangedSinceItWasRead,
+    /// A check of the project's code was still running at its bound and was killed; the
+    /// runtime's words give the bound, and `refused_file` the file it was checking.
+    CheckRanOutOfTime,
     /// The request was understood and not done; changing it can help. The runtime's words say
     /// what to change.
     // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.

@@ -289,7 +289,8 @@ async fn a_projects_node_types_are_listed_by_source_with_the_runtimes_own_last()
 
 /// A built-in node type is described from the runtime's own description: a typed input with its
 /// mode, lifetime and value schema, an Image input as the Texture its family resolves to taking
-/// a link only, its config field as a setting read at setup, and its typed outputs.
+/// a link only, its config field as a setting read at setup with its field's schema, and its
+/// typed outputs.
 ///
 /// Mental-revert: describing a built-in from source answers `not_described_because`.
 #[tokio::test(flavor = "multi_thread")]
@@ -330,7 +331,11 @@ async fn a_built_in_node_type_is_described_with_each_input_mode_value_schema_and
               "pin_type": { "kind": "is", "pin_type": { "type": "texture" } }, "flow": "stream",
               "mode": "wire_only", "lifetime": "kept" },
             { "name": "frame_width", "documentation": "", "mode": "setting_only",
-              "read": "at_setup", "lifetime": "kept" },
+              "read": "at_setup", "lifetime": "kept",
+              "value_json_schema": {
+                  "type": ["integer", "null"], "format": "uint32", "minimum": 0.0,
+                  "default": null,
+              } },
         ])
     );
     assert_eq!(

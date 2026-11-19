@@ -284,6 +284,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   write_project_file(params: ControlOperations["write_project_file"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_project_file"]["result"]>;
   /**
+   * Check a project's code on disk without running a stream, answering each finding as data.
+   */
+  check_project_code(params: ControlOperations["check_project_code"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["check_project_code"]["result"]>;
+  /**
    * List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.
    */
   list_project_node_types(params: ControlOperations["list_project_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_types"]["result"]>;

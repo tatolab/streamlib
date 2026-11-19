@@ -274,6 +274,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("write_project_file", params, callOptions);
   }
 
+  check_project_code(params, callOptions) {
+    return this.call("check_project_code", params, callOptions);
+  }
+
   list_project_node_types(params, callOptions) {
     return this.call("list_project_node_types", params, callOptions);
   }

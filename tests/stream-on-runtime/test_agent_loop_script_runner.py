@@ -8,7 +8,9 @@ what the committed `contract.json` says the runtime serves to agents."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
+import hashlib
 import json
 import tomllib
 import uuid
@@ -125,6 +127,8 @@ class ContractBackedAgentSession:
         self.refused_operations: "set[str]" = set()
         self.operations_left_undescribed: "set[str]" = set()
         self.undo_reverses_nothing = False
+        #: The project's files by path, as the file operations read and write them.
+        self.project_files: "dict[str, str]" = {}
 
     def a_schema(self, component_reference: Any) -> Any:
         """A contract component reference as a document of its own, with `$defs`."""
@@ -183,6 +187,11 @@ class ContractBackedAgentSession:
                 for name in arguments["operations"]
                 if name not in self.operations_left_undescribed
             ]}
+        if operation in FILE_OPERATIONS:
+            assert arguments["project_directory"] == self.project_directory, arguments
+            return self.checked_against_the_result_schema(
+                operation, self.answered_on_the_project_files(operation, arguments)
+            )
         if operation == "list_streams":
             return self.checked_against_the_result_schema(operation, {"streams": [{
                 "stream": self.stream_id, "display_name": "main",
@@ -287,6 +296,54 @@ class ContractBackedAgentSession:
             })
         raise AssertionError(f"the stand-in session does not answer `{operation}`")
 
+    def answered_on_the_project_files(
+        self, operation: str, arguments: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        """A file operation on the stand-in project, whose declaration check refuses a typed
+        input written with no default, as the declaration reader does: at the line of the
+        decorator above it, where the refusal is raised."""
+        if operation == "check_project_code":
+            paths = arguments.get("paths") or sorted(self.project_files)
+            findings = [
+                {"check": "python_node_declarations", "finding_code": "value_input_has_no_default",
+                 "severity": "error", "words": "`level` has no default. To fix: give it one.",
+                 "path": path, "line": line_number - 1, "node_type": the_node_type_at(path, "Tremolo"),
+                 "port": "level"}
+                for path in paths
+                for line_number, line in enumerate(self.project_files[path].splitlines(), start=1)
+                if "(level: float," in line
+            ]
+            return {
+                "verdict": "failed" if findings else "passed",
+                "checks": [{"check": "python_node_declarations",
+                            "state": "failed" if findings else "passed"}],
+                "findings": findings,
+                "files_checked": [
+                    {"path": path, "content_sha256": sha256_of(self.project_files[path])}
+                    for path in paths
+                ],
+            }
+        path = arguments["path"]
+        if operation == "create_node_file":
+            if path in self.project_files:
+                raise StandInRefusal(f"`{path}` already holds a file")
+            self.project_files[path] = "# the runtime's node template\n"
+            return {"path": path, "node_type": the_node_type_at(path, "Template"),
+                    "transaction": str(uuid.uuid4()), "commit": "c0"}
+        if path not in self.project_files:
+            raise StandInRefusal(f"the project holds no file `{path}`")
+        if operation == "read_project_file":
+            content = self.project_files[path].encode("utf-8")
+            return {"path": path, "byte_len": len(content),
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "content_sha256": sha256_of(self.project_files[path])}
+        expected_sha256 = arguments.get("expected_sha256")
+        if expected_sha256 is not None and expected_sha256 != sha256_of(self.project_files[path]):
+            raise StandInRefusal(f"`{path}` changed since it was read")
+        self.project_files[path] = arguments["content"]
+        return {"path": path, "content_sha256": sha256_of(arguments["content"]),
+                "transaction": str(uuid.uuid4()), "commit": "c1"}
+
     def the_node_of_the_id(self, node_id: str) -> "dict[str, Any]":
         [node] = [node for node in self.nodes if node["id"] == node_id]
         return node
@@ -332,6 +389,19 @@ class ContractBackedAgentSession:
         self.links += added_links
         self.transactions.append((answer["transaction"], added_nodes, added_links))
         return answer
+
+
+#: The project file operations the stand-in session answers on its own files.
+FILE_OPERATIONS = ("create_node_file", "read_project_file", "write_project_file", "check_project_code")
+
+
+def sha256_of(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def the_node_type_at(path: str, name: str) -> str:
+    """The node type a node `name` declared in the module at `path` is named by."""
+    return f"{path.removesuffix('.py').replace('/', '.')}:{name}"
 
 
 def build_a_graph_document() -> "dict[str, Any]":
