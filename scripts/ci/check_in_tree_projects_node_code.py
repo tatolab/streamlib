@@ -11,7 +11,8 @@ project's, so `UV_FIND_LINKS` reaches a `tatolab-stream` built from this checkou
 
 The unit's `tatolabd` is started once, and `tatolab check --json --dir <project>` asked of it
 for each project. A project fails when its check fails, or when its Python node declarations
-were not checked to their end. Each declaration in a retired form is a `declaration_retired`
+were not checked to their end. A finding in a module under a `tests/` folder is left out: a
+project's tests import what only its test environment holds, and no test ships. Each declaration in a retired form is a `declaration_retired`
 warning, which passes; the run prints them by project with their total, which says when the
 last node is typed and the retired forms can be deleted.
 
@@ -33,7 +34,7 @@ import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import tomllib
@@ -55,6 +56,9 @@ RETIRED_DECLARATION_FINDING_CODE = "declaration_retired"
 
 DIRECTORY_NAMES_NEVER_READ = frozenset({".venv", "__pycache__", "node_modules", "target", "tests", "imports"})
 """Folders whose Python is not a project's own node code."""
+
+DIRECTORY_NAME_OF_TESTS = "tests"
+"""The folder whose modules' findings are left out: a project's tests ship in no module or sample."""
 
 DIRECTORY_NAMES_A_SCRATCH_COPY_LEAVES_OUT = (".venv", "__pycache__", "node_modules", "target", "tests", "streams")
 """What a module's scratch project does not copy from its package."""
@@ -149,10 +153,13 @@ def holds_python_of_its_own(project: InTreeProject) -> bool:
 
 
 def judge_a_check_answer(project: InTreeProject, answer: dict[str, Any]) -> ProjectCheckOutcome:
-    """What `tatolab check --json` answered of `project`, judged: every error fails it, as does a
-    Python node declaration check that did not run to its end; a retired declaration is counted."""
+    """What `tatolab check --json` answered of `project`, judged: every error outside its tests fails
+    it, as does a Python node declaration check that did not run to its end; a retired declaration
+    outside its tests is counted."""
     outcome = ProjectCheckOutcome(project)
     for finding in answer.get("findings", []):
+        if DIRECTORY_NAME_OF_TESTS in PurePosixPath(finding.get("path", "")).parts[:-1]:
+            continue
         place = f"{finding.get('path', '?')}:{finding.get('line') or '?'}"
         if finding.get("severity") == "error":
             words = (finding.get("words") or "").replace("\n", "\n    ")
@@ -171,7 +178,9 @@ def judge_a_check_answer(project: InTreeProject, answer: dict[str, Any]) -> Proj
                 f"{PYTHON_NODE_DECLARATIONS_CHECK}: not checked: {why.get('refusal_code', '?')}: "
                 f"{why.get('runtime_words', 'no reason given')}"
             )
-    if answer.get("verdict") == "failed" and not outcome.failed_because:
+    if answer.get("verdict") == "failed" and not any(
+        finding.get("severity") == "error" for finding in answer.get("findings", [])
+    ):
         outcome.failed_because.append("the check failed with no error finding")
     return outcome
 

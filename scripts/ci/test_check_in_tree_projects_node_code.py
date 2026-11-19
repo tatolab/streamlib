@@ -131,6 +131,23 @@ class JudgeACheckAnswerTest(unittest.TestCase):
         )
         self.assertEqual(outcome.failed_because, ["nodes/a.py:4: value_input_has_no_default: what was found"])
 
+    def test_a_finding_in_a_tests_folder_is_left_out(self) -> None:
+        outcome = judge_a_check_answer(
+            A_PROJECT,
+            {
+                "verdict": "failed",
+                "checks": [python_node_declarations_run("failed")],
+                "findings": [
+                    finding("module_does_not_import", "error", path="tests/test_nodes.py"),
+                    finding("declaration_retired", "warning", path="tests/live/sink.py", node_type="Sink"),
+                    finding("declaration_retired", "warning", path="python/tests_of_mine.py", node_type="Kept"),
+                ],
+            },
+        )
+        self.assertEqual(
+            (outcome.failed_because, outcome.retired_declarations), ([], ["python/tests_of_mine.py:4: Kept"])
+        )
+
     def test_a_python_node_declaration_check_that_did_not_finish_fails(self) -> None:
         for state in ["not_checked", "a_state_added_later"]:
             with self.subTest(state=state):

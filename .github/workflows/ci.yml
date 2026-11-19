@@ -766,7 +766,8 @@ jobs:
 
       # What the modules' build scripts reach for: bindgen's libclang, cmake's
       # C toolchain, and for tatolab-rive clang, libuuid's headers,
-      # glslangValidator and spirv-opt.
+      # glslangValidator and spirv-opt; and libEGL, which skia-python loads
+      # as camera-python-effects imports it.
       # `timeout-minutes` is the backstop the composite action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 15
@@ -781,6 +782,7 @@ jobs:
             uuid-dev
             glslang-tools
             spirv-tools
+            libegl1
 
       - name: Cache Rust dependencies
         uses: ./.github/actions/cache-rust-dependencies
