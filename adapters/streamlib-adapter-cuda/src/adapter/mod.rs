@@ -35,8 +35,7 @@ const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
 
 /// CUDA-targeted [`SurfaceAdapter`](streamlib_surface_adapter::SurfaceAdapter)
 /// implementation. Generic over the device flavor — instantiate as
-/// `CudaSurfaceAdapter<HostVulkanDevice>` host-side; future cdylib work
-/// (#589/#590) will add a consumer-flavor instantiation.
+/// `CudaSurfaceAdapter<HostVulkanDevice>` host-side.
 pub struct CudaSurfaceAdapter<D: VulkanRhiDevice> {
     device: Arc<D>,
     surfaces: Registry<SurfaceState<D::Privilege>>,
@@ -55,7 +54,7 @@ pub struct CudaSurfaceAdapter<D: VulkanRhiDevice> {
     submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
     /// Counts how many times the persistent submit context was
     /// (re)created — used by tests to lock the amortisation invariant
-    /// from #620 (steady-state submits must not grow live pools).
+    /// (steady-state submits must not grow live pools).
     submit_ctx_create_count: AtomicUsize,
 }
 
@@ -79,7 +78,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     /// submit.
     ///
     /// Hidden from the public docs because callers shouldn't depend
-    /// on it; tests use it to lock #620's amortisation invariant.
+    /// on it; tests use it to lock its amortisation invariant.
     #[doc(hidden)]
     pub fn submit_pool_create_count(&self) -> usize {
         self.submit_ctx_create_count.load(Ordering::Relaxed)

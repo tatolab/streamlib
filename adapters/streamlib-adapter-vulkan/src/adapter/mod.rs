@@ -74,7 +74,7 @@ pub struct VulkanSurfaceAdapter<D: VulkanRhiDevice> {
     submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
     /// Counts how many times the persistent submit context was
     /// (re)created — used by tests to lock the amortisation invariant
-    /// from #620 / #640 (steady-state acquires must not grow live
+    /// (steady-state acquires must not grow live
     /// pools).
     submit_ctx_create_count: AtomicUsize,
 }
@@ -97,7 +97,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     /// subsequent acquire.
     ///
     /// Hidden from the public docs because callers shouldn't depend
-    /// on it; tests use it to lock #620 / #640's amortisation
+    /// on it; tests use it to lock its amortisation
     /// invariant.
     #[doc(hidden)]
     pub fn submit_pool_create_count(&self) -> usize {
@@ -153,7 +153,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         self.surfaces.unregister(id).is_some()
     }
 
-    /// Producer-side QFOT release for cross-process publishing (#633).
+    /// Producer-side QFOT release for cross-process publishing.
     ///
     /// Issues a queue-family-ownership-transfer release barrier on the
     /// adapter's device queue, transitioning the surface from its
@@ -285,11 +285,9 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     ///
     /// Synchronous: blocks on the per-submit fence until the GPU has
     /// executed the barrier, because the next consumer needs the new
-    /// layout to be visible. Pre-#640 this used `vkQueueWaitIdle` —
-    /// queue-wide drain; #640 narrowed it to a fence on the submit
-    /// itself, which composes correctly with concurrent unrelated
-    /// activity sharing the same queue (mirrors the cpu-readback
-    /// `vkQueueWaitIdle` → fence migration in #532).
+    /// layout to be visible. The wait is on the submit's own fence, not
+    /// the whole queue, so concurrent unrelated activity sharing the
+    /// queue is not drained.
     fn transition_layout_sync(
         &self,
         image: vk::Image,
@@ -375,9 +373,8 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
 
         // Block until the GPU has executed the barrier — the next
         // consumer's view assumes the new layout is visible. The wait
-        // is per-submit (not queue-wide like the pre-#640
-        // `vkQueueWaitIdle`), so concurrent unrelated submits on the
-        // same queue aren't drained.
+        // is per-submit, so concurrent unrelated submits on the same
+        // queue aren't drained.
         unsafe { device.wait_for_fences(&[submit_ctx.fence], true, u64::MAX) }.map_err(|e| {
             AdapterError::BackendRejected {
                 reason: format!("wait_for_fences (transition_layout_sync): {e}"),
@@ -704,8 +701,7 @@ mod adapter_persistent_submit_context_tests;
 /// `vkDestroyCommandPool` on every layout transition. Same shape
 /// lives in `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
 /// and `streamlib-adapter-cuda::adapter::AdapterPersistentSubmitContext`;
-/// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
-/// Notes — `streamlib-surface-adapter` deliberately does not depend on
+/// fix ALL THREE if you change ANY: `streamlib-surface-adapter` deliberately does not depend on
 /// `vulkanalia`, so duplication is the project pattern here).
 ///
 /// The fence is created signaled so the first submit doesn't block.
