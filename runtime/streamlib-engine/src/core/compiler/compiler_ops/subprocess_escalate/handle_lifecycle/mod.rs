@@ -266,10 +266,8 @@ impl EscalateHandleRegistry {
             .remove(acceleration_structure_id);
     }
 
-    fn drain_acceleration_structures_built_for_the_helper(&self) -> Vec<String> {
-        self.locked_acceleration_structures_built_for_the_helper()
-            .drain()
-            .collect()
+    fn take_acceleration_structures_built_for_the_helper(&self) -> HashSet<String> {
+        std::mem::take(&mut *self.locked_acceleration_structures_built_for_the_helper())
     }
 
     /// Taken for one insert, removal or drain, so it recovers rather than
@@ -357,8 +355,11 @@ pub(super) fn handle_release_handle(
     // rather than against the per-subprocess handle registry, so its id
     // reaches the same release verb through the device gate.
     let released = removed || {
-        registry.forget_acceleration_structure_the_helper_released(&handle_id);
-        release_acceleration_structure(sandbox, &handle_id)
+        let released_a_structure = release_acceleration_structure(sandbox, &handle_id);
+        if released_a_structure {
+            registry.forget_acceleration_structure_the_helper_released(&handle_id);
+        }
+        released_a_structure
     };
     if released {
         EscalateResponse::Ok(EscalateResponseOk {
@@ -443,7 +444,7 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
             .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
         release_node_output_pool_slot(sandbox, released_slot);
     }
-    for acceleration_structure_id in registry.drain_acceleration_structures_built_for_the_helper() {
+    for acceleration_structure_id in registry.take_acceleration_structures_built_for_the_helper() {
         release_acceleration_structure(sandbox, &acceleration_structure_id);
     }
 }

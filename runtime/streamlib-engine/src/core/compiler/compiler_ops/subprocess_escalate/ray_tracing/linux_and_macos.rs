@@ -154,15 +154,12 @@ pub(in super::super) fn handle_register_acceleration_structure_blas(
     let registered = sandbox.escalate(|full| {
         refuse_a_device_without_ray_tracing(full, "register_acceleration_structure_blas")?;
         let blas = full.build_triangles_blas(&req.label, &vertices, &indices)?;
-        Ok(full.register_acceleration_structure(blas))
+        Ok(register_a_structure_held_for_the_helper(
+            full, registry, blas,
+        ))
     });
 
-    answer_a_structure_built_for_the_helper(
-        registry,
-        rid,
-        "register_acceleration_structure_blas",
-        registered,
-    )
+    answer_a_structure_build(rid, "register_acceleration_structure_blas", registered)
 }
 
 /// Build a TLAS over previously-registered BLASes, against `GpuContext`.
@@ -257,36 +254,40 @@ pub(in super::super) fn handle_register_acceleration_structure_tlas(
         }
 
         let tlas = full.build_tlas(&req.label, &instances)?;
-        Ok(full.register_acceleration_structure(tlas))
+        Ok(register_a_structure_held_for_the_helper(
+            full, registry, tlas,
+        ))
     });
 
-    answer_a_structure_built_for_the_helper(
-        registry,
-        rid,
-        "register_acceleration_structure_tlas",
-        registered,
-    )
+    answer_a_structure_build(rid, "register_acceleration_structure_tlas", registered)
 }
 
-/// Answer a structure build with the new structure's id, held for the helper
-/// so the structure goes with it, or with the build's failure.
-fn answer_a_structure_built_for_the_helper(
+/// Register a built structure and hold its id for the helper, inside the
+/// escalate: its trailing device-idle wait can fail after the structure is
+/// registered, which would leave the structure registered but unheld.
+fn register_a_structure_held_for_the_helper(
+    full: &crate::core::context::GpuContextFullAccess,
     registry: &EscalateHandleRegistry,
+    acceleration_structure: crate::vulkan::rhi::VulkanAccelerationStructure,
+) -> String {
+    let acceleration_structure_id = full.register_acceleration_structure(acceleration_structure);
+    registry.hold_acceleration_structure_built_for_the_helper(acceleration_structure_id.clone());
+    acceleration_structure_id
+}
+
+/// Answer a structure build with the new structure's id, or with the build's
+/// failure.
+fn answer_a_structure_build(
     rid: String,
     op: &str,
     registered: crate::core::error::Result<String>,
 ) -> EscalateResponse {
     match registered {
-        Ok(acceleration_structure_id) => {
-            registry.hold_acceleration_structure_built_for_the_helper(
-                acceleration_structure_id.clone(),
-            );
-            EscalateResponse::Ok(EscalateResponseOk {
-                request_id: rid,
-                handle_id: acceleration_structure_id,
-                ..Default::default()
-            })
-        }
+        Ok(acceleration_structure_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: acceleration_structure_id,
+            ..Default::default()
+        }),
         Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
             message: format!("{op} failed: {e}"),
