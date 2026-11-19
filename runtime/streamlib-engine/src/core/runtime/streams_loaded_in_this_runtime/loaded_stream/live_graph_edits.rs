@@ -744,6 +744,18 @@ fn set_the_saved_value(
         refuse_a_pin_value_a_process_node_cannot_read(node, input, value)?;
     }
     let saved_value_before = set_the_pin(node, input, value);
+    if let Err(refused) =
+        crate::core::graph::refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
+            graph,
+            node_run_id,
+            input,
+        )
+    {
+        if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
+            set_the_pin(node, input, saved_value_before);
+        }
+        return Err(refused);
+    }
     let live_value_before = graph
         .live_input_values()
         .set(node_uuid, input, None, lifetime);
