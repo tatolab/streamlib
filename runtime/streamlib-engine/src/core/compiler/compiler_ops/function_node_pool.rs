@@ -315,7 +315,7 @@ fn add_a_link_carrying(
              function node pool"
             ))
         })?;
-    link.insert(LinkCarriedThroughTheFunctionNodePoolComponent {
+    link.insert_component_without_rendering_it(LinkCarriedThroughTheFunctionNodePoolComponent {
         carried_link_id: carried_link_id.clone(),
     });
     Ok(link.id.clone())
@@ -539,7 +539,8 @@ pub(crate) mod tests {
             (name_of(&reader).as_str(), "in1")
         );
         assert_eq!(
-            carried.components["carried_through_the_function_node_pool"],
+            serde_json::to_value(&carried.components.carried_through_the_function_node_pool)
+                .unwrap(),
             serde_json::json!({"input_port": "island_0", "output_port": "island_0_output"})
         );
     }

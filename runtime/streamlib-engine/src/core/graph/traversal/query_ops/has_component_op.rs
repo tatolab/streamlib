@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Component, GraphEdgeWithComponents, GraphNodeWithComponents, LinkTraversal, LinkTraversalMut,
-    NodeTraversal, NodeTraversalMut,
+    GraphEdgeWithComponents, GraphNodeWithComponents, LinkTraversal, LinkTraversalMut,
+    NodeTraversal, NodeTraversalMut, StorableComponent,
 };
 
 impl<'a> NodeTraversal<'a> {
     /// Filter to nodes that have the specified component.
-    pub fn has_component<C: Component>(self) -> Self {
+    pub fn has_component<C: StorableComponent>(self) -> Self {
         let ids = self
             .ids
             .into_iter()
@@ -29,7 +29,7 @@ impl<'a> NodeTraversal<'a> {
 
 impl<'a> LinkTraversal<'a> {
     /// Filter to links that have the specified component.
-    pub fn has_component<C: Component>(self) -> Self {
+    pub fn has_component<C: StorableComponent>(self) -> Self {
         let ids = self
             .ids
             .into_iter()
@@ -50,7 +50,7 @@ impl<'a> LinkTraversal<'a> {
 
 impl<'a> NodeTraversalMut<'a> {
     /// Filter to nodes that have the specified component.
-    pub fn has_component<C: Component>(self) -> Self {
+    pub fn has_component<C: StorableComponent>(self) -> Self {
         let ids = self
             .ids
             .into_iter()
@@ -71,7 +71,7 @@ impl<'a> NodeTraversalMut<'a> {
 
 impl<'a> LinkTraversalMut<'a> {
     /// Filter to links that have the specified component.
-    pub fn has_component<C: Component>(self) -> Self {
+    pub fn has_component<C: StorableComponent>(self) -> Self {
         let ids = self
             .ids
             .into_iter()

@@ -108,9 +108,9 @@ fn rendered_metrics_in(graph: &mut Graph, proc_id: &str) -> Option<serde_json::V
         .v(proc_id)
         .first()
         .expect("the node's node must be in the graph")
-        .serialize_components()
-        .get("metrics")
-        .cloned()
+        .render_components()
+        .metrics
+        .map(|metrics| serde_json::to_value(metrics).unwrap())
 }
 
 /// Create a helper stub's board as its spawn would, and open its writer as

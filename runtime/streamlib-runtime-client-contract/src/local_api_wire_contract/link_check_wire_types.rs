@@ -73,6 +73,39 @@ impl LinkCheckResult {
     }
 }
 
+/// What a link made between two typed ends converts and warns of, as the judgement of those
+/// ends says: the marks a link carries in `graph` and in a transaction's answer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct PinLinkMarksOnTheWire {
+    /// `true` when the input reads what the output carries as its own type at no cost: Boolean,
+    /// Integer and Float among themselves, a Vector into a Vector or a Color, one number into a
+    /// Vector or a Color, or a Menu into a String. Absent on every other link.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub free_conversion: bool,
+    /// What the link does that a person may not expect, as the judgement of its two ends' pin
+    /// types says; none of these blocks it. Absent when it warns of nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<PinLinkWarningOnTheWire>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl PinLinkMarksOnTheWire {
+    /// The marks of a link `connect` makes as `verdict` judges it; with no verdict, a link with
+    /// an end untyped, neither.
+    pub fn of(verdict: Option<&PinLinkVerdict>) -> Self {
+        let answered = LinkCheckResult::of_a_link_connect_makes(verdict);
+        Self {
+            free_conversion: answered.outcome
+                == PinLinkOutcomeOnTheWire::ConnectsWithFreeConversion,
+            warnings: answered.warnings,
+        }
+    }
+}
+
 /// Whether and how a link connects. The set grows: an outcome a client does not know reads as
 /// `refused`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

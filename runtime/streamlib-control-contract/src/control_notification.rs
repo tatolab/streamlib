@@ -6,6 +6,7 @@
 
 use schemars::{JsonSchema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+pub use streamlib_runtime_client_contract::local_api_wire_contract::NodeStateOnTheWire;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     InputValueComesFromOnTheWire, NodeTypeOfOneProjectSource, ProjectTransactionOnTheWire,
 };
@@ -158,27 +159,6 @@ pub enum StreamGraphChangeKindOnTheWire {
     /// The connection missed changes, or the stream was loaded again or unloaded, and the client
     /// reads the graph again.
     Missed,
-}
-
-/// A node's state as `graph` renders it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum NodeStateOnTheWire {
-    /// Waiting to be started.
-    Pending,
-    /// Prepared, its `setup` not yet run.
-    Idle,
-    /// Running.
-    Running,
-    /// Paused with its stream.
-    Paused,
-    /// Shutting down.
-    Stopping,
-    /// Stopped.
-    Stopped,
-    /// Failed; `graph` says why.
-    Error,
-    /// Its helper process died on its own and a new one starts after a backoff.
-    Restarting,
 }
 
 /// `stream_graph_changed`'s params.
