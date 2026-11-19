@@ -874,8 +874,7 @@ fn the_node_catalog_of_a_stream_this_runtime_does_not_hold_is_refused_naming_it(
 
     let refusal = runner
         .node_catalog_of_the_stream_a_call_names("nowhere")
-        .err()
-        .expect("a stream this runtime does not hold is refused");
+        .expect_err("a stream this runtime does not hold is refused");
 
     assert!(matches!(refusal, Error::NotFound(_)), "{refusal}");
     assert!(
