@@ -157,6 +157,16 @@ class LocalApiClient:
             return self.get_json("/api/graph")
         return self.get_json(f"/api/graph?stream={urllib.parse.quote(stream, safe='')}")
 
+    def graph_of_a_stream_holding_one(self, stream: str) -> "dict[str, Any] | None":
+        """`stream`'s graph, as `graph` answers it; `None` when the runtime holds no graph for it,
+        as for a stream recorded failed before its graph loaded."""
+        try:
+            return self.graph(stream)
+        except LocalApiRefusedTheRequest as refusal:
+            if " answered 404:" in str(refusal):
+                return None
+            raise
+
     def list_streams(self) -> "list[dict[str, Any]]":
         """MCP `list_streams`: each stream the runtime holds, `{stream, display_name, location,
         state, condition, node_count, failed_because, capture_devices_whose_access_was_never_asked_for, action,

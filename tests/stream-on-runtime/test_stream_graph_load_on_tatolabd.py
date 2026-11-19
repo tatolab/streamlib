@@ -433,14 +433,24 @@ def test_a_graph_naming_an_unknown_type_is_refused(
 # ---- links: a port no node has, and an end naming a stream or a machine -----
 
 
-def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
+def test_a_link_from_a_port_its_node_lacks_is_set_aside_by_load_naming_the_port(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    refusal = refused_naming(
-        run_stream_on_tatolabd_with_no_vulkan_driver(pattern_linked_from_a_port_it_lacks_into_an_encoder)
+    """A saved graph's link its validation refuses is held as drawn and never wired: the stream
+    loads both nodes and plays without it, and its graph shows the link failed, naming the port."""
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
+        pattern_linked_from_a_port_it_lacks_into_an_encoder
     )
 
-    assert "`no_such_port`" in refusal
+    assert loaded_with(run_outcome) == 2
+    assert run_outcome.loaded_stream_id is not None
+    served_graph = run_outcome.graphs_of_the_streams_it_took_in[run_outcome.loaded_stream_id]
+    links_from_the_port = [
+        link for link in served_graph["links"] if link["source"]["port"] == "no_such_port"
+    ]
+    assert len(links_from_the_port) == 1, served_graph["links"]
+    assert links_from_the_port[0]["state"] == "error", links_from_the_port[0]
+    assert "`no_such_port`" in (links_from_the_port[0].get("error_reason") or ""), links_from_the_port[0]
 
 
 @pytest.mark.parametrize("end", ["source", "target"])
