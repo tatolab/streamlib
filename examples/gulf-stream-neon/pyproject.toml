@@ -8,7 +8,7 @@ dependencies = ["tatolab-stream>=0.54.3", "numpy>=2.1", "tatolab-compositor", "t
 find-links = [".tatolab/carried-wheels"]
 
 [tool.uv.sources]
-tatolab-compositor = { path = ".tatolab/first-party-imports/tatolab_compositor-0.69.113-py3-none-any.whl" }
-tatolab-stream = { path = ".tatolab/first-party-imports/tatolab_stream-0.69.113-py3-none-any.whl" }
-tatolab-testpattern = { path = ".tatolab/first-party-imports/tatolab_testpattern-0.69.113-py3-none-any.whl" }
+tatolab-compositor = { path = ".tatolab/first-party-imports/tatolab_compositor-0.69.118-py3-none-any.whl" }
+tatolab-stream = { path = ".tatolab/first-party-imports/tatolab_stream-0.69.118-py3-none-any.whl" }
+tatolab-testpattern = { path = ".tatolab/first-party-imports/tatolab_testpattern-0.69.118-py3-none-any.whl" }
 tatolab-core-nodes = { path = "imports/core-nodes", package = false }

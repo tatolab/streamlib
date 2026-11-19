@@ -14,7 +14,7 @@ const OPEN_PROJECT_WATCH_ID = 2;
 const STATION_WATCH_ID = 5;
 // A live edit is a project transaction; a few a second keeps the runtime with the hand.
 const CONTROL_SEND_EVERY_MS = 250;
-const SEND_EVERY_MS = 33;
+const SEND_EVERY_MS = 16;
 const DEGREES_PER_PIXEL = 0.25;
 const CLICK_SLOP_PX = 4;
 
@@ -37,18 +37,18 @@ const PLACES = [
 // Each control sets one or more node inputs live, by the node's name in the graph.
 const CONTROLS = [
   { group: "The reveal" },
-  { label: "Real map ↔ Neon", hero: true, min: 0, max: 1, step: 0.01, value: 0, sets: [["neon_horizon", "morph"]], local: "morph" },
+  { label: "Real map ↔ Neon", hero: true, min: 0, max: 1, step: 0.01, value: 0, sets: [["smooth_morph", "x"]], local: "morph" },
   { group: "Sky" },
-  { label: "Time of day", min: 0, max: 1, step: 0.01, value: 0.3, sets: [["neon_horizon", "time_of_day"], ["stage_sun", "time_of_day"]] },
+  { label: "Time of day", min: 0, max: 1, step: 0.01, value: 0.3, sets: [["smooth_time_of_day", "x"]] },
   { group: "Ocean · live data" },
   { label: "Data", options: ["Logged snapshot (19 Nov 2026)", "Live NOAA feed"], value: 0, sets: [["noaa_virginia_key", "mode", (v) => (v === 1 ? "live" : "replay")]] },
-  { label: "Current speed", min: 0.2, max: 3, step: 0.05, value: 1, sets: [["hycom_gulf_stream", "time_lapse", (v) => v * 9000]] },
+  { label: "Current speed", min: 0.2, max: 3, step: 0.05, value: 1, sets: [["smooth_current_speed", "x"]] },
   { label: "Turbulence", min: 0, max: 4, step: 0.05, value: 1, sets: [["hycom_gulf_stream", "turbulence"]] },
   { label: "Particles (millions)", min: 0.1, max: 4, step: 0.1, value: 2, sets: [["hycom_gulf_stream", "active_particles", (v) => Math.round(v * 1048576)]] },
   { group: "Neon" },
-  { label: "Neon intensity", min: 0, max: 2.5, step: 0.05, value: 1, sets: [["neon_horizon", "glow"]] },
+  { label: "Neon intensity", min: 0, max: 2.5, step: 0.05, value: 1, sets: [["smooth_neon", "x"]] },
   { label: "Bloom", min: 0, max: 1.2, step: 0.02, value: 0.25, sets: [["bloom_from_kick", "to_low"], ["bloom_from_kick", "to_high", (v) => v * 2]] },
-  { label: "Skyline height", min: 0, max: 0.12, step: 0.002, value: 0.055, sets: [["neon_horizon", "skyline_height"]] },
+  { label: "Skyline height", min: 0, max: 0.12, step: 0.002, value: 0.055, sets: [["smooth_skyline_height", "x"]] },
   { label: "Exposure", min: 0.4, max: 1.8, step: 0.02, value: 1, sets: [["exposure_through_drop", "a"], ["exposure_through_drop", "b"]] },
 ];
 
@@ -178,22 +178,32 @@ function throttled(control) {
 
 // ---------------------------------------------------------------- the mouse and keys
 
+// The hand's motion carries on after release and eases out, and scrolling glides to its zoom.
+const spin = { yaw: 0, pitch: 0 };
+let zoomTarget = camera.distance;
 let drag = null;
 canvas.addEventListener("pointerdown", (event) => {
+  spin.yaw = 0;
+  spin.pitch = 0;
   canvas.setPointerCapture(event.pointerId);
   canvas.focus();
-  drag = { x: event.clientX, y: event.clientY, moved: 0 };
+  drag = { x: event.clientX, y: event.clientY, moved: 0, at: performance.now() };
   canvas.classList.add("is-dragging");
 });
 canvas.addEventListener("pointermove", (event) => {
   if (drag === null) return;
   const dx = event.clientX - drag.x;
   const dy = event.clientY - drag.y;
+  const now = performance.now();
+  const dt = Math.max((now - drag.at) / 1000, 1 / 240);
   drag.x = event.clientX;
   drag.y = event.clientY;
+  drag.at = now;
   drag.moved += Math.abs(dx) + Math.abs(dy);
   camera.yaw_degrees -= dx * DEGREES_PER_PIXEL;
   camera.pitch_degrees = Math.max(3, Math.min(89.5, camera.pitch_degrees + dy * DEGREES_PER_PIXEL));
+  spin.yaw = spin.yaw * 0.6 + (-dx * DEGREES_PER_PIXEL / dt) * 0.4;
+  spin.pitch = spin.pitch * 0.6 + (dy * DEGREES_PER_PIXEL / dt) * 0.4;
   sendTheCamera();
 });
 function endTheDrag(event) {
@@ -222,8 +232,7 @@ canvas.addEventListener("pointerup", endTheDrag);
 canvas.addEventListener("pointercancel", endTheDrag);
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
-  camera.distance = Math.max(0.03, Math.min(4.5, camera.distance * Math.exp(event.deltaY * 0.0015)));
-  sendTheCamera();
+  zoomTarget = Math.max(0.03, Math.min(4.5, zoomTarget * Math.exp(event.deltaY * 0.0015)));
 }, { passive: false });
 window.addEventListener("keydown", (event) => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
@@ -245,6 +254,9 @@ function flyWithTheKeys(seconds) {
 
 document.querySelector(".stage-home").addEventListener("click", () => {
   Object.assign(camera, STAGE_HOME);
+  zoomTarget = camera.distance;
+  spin.yaw = 0;
+  spin.pitch = 0;
   sendTheCamera();
 });
 
@@ -412,8 +424,27 @@ function drawTheLabels() {
 }
 
 let lastTick = performance.now();
+function glide(seconds) {
+  let moved = false;
+  if (drag === null && Math.abs(spin.yaw) + Math.abs(spin.pitch) > 0.5) {
+    camera.yaw_degrees += spin.yaw * seconds;
+    camera.pitch_degrees = Math.max(3, Math.min(89.5, camera.pitch_degrees + spin.pitch * seconds));
+    const keep = Math.exp(-seconds / 0.35);
+    spin.yaw *= keep;
+    spin.pitch *= keep;
+    moved = true;
+  }
+  if (Math.abs(zoomTarget - camera.distance) > 1e-4) {
+    camera.distance += (zoomTarget - camera.distance) * (1 - Math.exp(-seconds / 0.12));
+    moved = true;
+  }
+  if (moved) sendTheCamera();
+}
+
 function tick(now) {
-  flyWithTheKeys(Math.min(0.1, (now - lastTick) / 1000));
+  const seconds = Math.min(0.1, (now - lastTick) / 1000);
+  flyWithTheKeys(seconds);
+  glide(seconds);
   lastTick = now;
   drawTheLabels();
   fpsText.textContent = `${frameTimes.length} FPS · ${canvas.width}×${canvas.height} · LIVE ON THE GPU`;

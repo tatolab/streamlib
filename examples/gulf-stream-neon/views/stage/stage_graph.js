@@ -33,5 +33,12 @@ export const NODE_IDS = {
   "neon_grade": "dd28435b-95a7-5421-8406-cbd757d67850",
   "film_finish": "9780eeab-6413-5185-a1e1-459bc38f0122",
   "vignette": "2b6b780b-b287-5045-9e6e-4c248f68bce9",
-  "stage": "271e5c66-0178-5594-89c7-2c6dc0710f7a"
+  "stage": "271e5c66-0178-5594-89c7-2c6dc0710f7a",
+  "smooth_morph": "591adecd-91d8-5ff4-a3b2-eac2c159ee9a",
+  "smooth_time_of_day": "e60fd662-6339-517a-8507-4e47067c777a",
+  "smooth_skyline_height": "1c3f57f2-e2c7-5b54-ad9b-0ea0a05350e7",
+  "smooth_neon": "5d1c19e5-8c7c-5431-96c1-dea886be22b5",
+  "smooth_current_speed": "7bb05b8f-bad8-5f12-94ec-1be071a894d1",
+  "stage_look": "4e28ead1-5693-5665-acbc-c82e5947bee9",
+  "smooth_camera": "047ac7a1-8e99-58ab-b9bf-21327b27dbbd"
 };

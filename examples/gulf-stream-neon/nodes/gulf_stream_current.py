@@ -171,7 +171,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     float fade = sin(PI * saturate(age / life));
     float lit = (0.0002 + 0.0028 * speed01 * speed01 * speed01) * fade * (1.0 + 1.8 * dials.beat * speed01) * dials.brightness;
     float3 colour = streak_colour(speed01, seed) * lit;
-    float burst_glow = (bursting ? 1.0 : 0.0) * exp(-dials.eddy_age * 0.45) * step(dials.eddy_age, 6.0) * dials.eddy_strength;
+    // An eddy eases in over its first quarter second rather than popping, then fades.
+    float burst_glow = (bursting ? 1.0 : 0.0) * smoothstep(0.0, 0.25, dials.eddy_age) * exp(-dials.eddy_age * 0.45) * step(dials.eddy_age, 6.0) * dials.eddy_strength;
     colour += lerp(TATO_MINT, TATO_CREAM, 0.3) * burst_glow * 0.035 * fade;
 
     // The streak spans this step and the one before, so it reads as motion.
@@ -227,6 +228,7 @@ class GulfStreamCurrent:
     soundtrack = Input(Records, delivery="newest", description="beat, energy: from SoundtrackPulse")
     station = Input(Records, delivery="newest", description="wind_speed_mps, wind_from_degrees: from NoaaStationFeed")
     stage = Input(Records, delivery="newest", description="The stage view: its camera, and where it was clicked to drop an eddy")
+    look = Input(Records, delivery="newest", description="The stage's smoothed look: current_speed scales the time-lapse")
     trails = Output(Image, description="The particle trails in world space, HDR")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -246,6 +248,7 @@ class GulfStreamCurrent:
         self.latest_soundtrack: dict = {}
         self.latest_station: dict = {}
         self.latest_stage: dict = {}
+        self.latest_look: dict = {}
         self.bursts_seen: float | None = None
         self.eddy = (0.0, 0.0)
         self.eddy_age = 99.0
@@ -294,6 +297,9 @@ class GulfStreamCurrent:
         stage = ctx.inputs.read(self.stage)
         if stage is not None:
             self.latest_stage = stage
+        look = ctx.inputs.read(self.look)
+        if look is not None:
+            self.latest_look = look
         burst_now = self._follow_the_eddy()
         seconds = self.take_clock.seconds_at(ctx)
         moment = take_moment_at(seconds)
@@ -324,7 +330,7 @@ class GulfStreamCurrent:
                 self.config.turbulence,
                 beat,
                 self.frame_index,
-                self.config.time_lapse / METRES_PER_WORLD_UNIT,
+                self.config.time_lapse * float(self.latest_look.get("current_speed", 1.0)) / METRES_PER_WORLD_UNIT,
                 wind_east,
                 wind_north,
                 # Light per step, so the trails glow the same at any frame rate.

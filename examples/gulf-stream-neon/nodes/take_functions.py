@@ -14,9 +14,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from tatolab.stream import node
+from tatolab.stream import State, Stateful, Time, node
 
-from nodes.neon_world import TakeMoment, camera_basis, project_to_frame, smoothstep, stage_moment, sun_direction, take_moment_at
+from nodes.neon_world import STAGE_HOME, TakeMoment, camera_basis, project_to_frame, smoothstep, stage_moment, sun_direction, take_moment_at
 from nodes.soundtrack_analysis import soundtrack_curves
 
 
@@ -119,3 +119,92 @@ def StageSunOnScreen(  # noqa: N802
 ) -> ScreenPlacement:
     """The sun's and the horizon's place in the frame for the stage's camera at `time_of_day`."""
     return _placement_of(stage_moment(stage, time_of_day, 0.0), aspect, vertical_fov_degrees)
+
+
+@node.meta(
+    category="Gulf Stream Neon",
+    description="The stage's look as one record: the real map to neon morph, the time of day, the skyline, the neon and the current, each already smoothed upstream.",
+)
+@node.function
+def StageLook(  # noqa: N802
+    morph: float = 0.0,
+    time_of_day: float = 0.3,
+    skyline_height: float = 0.055,
+    neon: float = 1.0,
+    current_speed: float = 1.0,
+) -> dict:
+    """The five stage values as one record, for the renderer and the current."""
+    return {
+        "morph": morph,
+        "time_of_day": time_of_day,
+        "skyline_height": skyline_height,
+        "neon": neon,
+        "current_speed": current_speed,
+    }
+
+
+@dataclass(frozen=True)
+class FollowedCamera:
+    """Where `SmoothCamera`'s camera is, and the stream time it last moved."""
+
+    target_x: float = STAGE_HOME["target_x"]
+    target_y: float = STAGE_HOME["target_y"]
+    distance: float = STAGE_HOME["distance"]
+    yaw_degrees: float = STAGE_HOME["yaw_degrees"]
+    pitch_degrees: float = STAGE_HOME["pitch_degrees"]
+    last_evaluated_at_ns: int = 0
+    started: bool = False
+
+
+CAMERA_KEYS = ("target_x", "target_y", "distance", "yaw_degrees", "pitch_degrees")
+
+
+@node.meta(
+    category="Gulf Stream Neon",
+    description="Glides the stage's camera after the hand: an exponential follow of orbit, zoom and fly that is the same at any frame rate. Clicks and eddy drops pass straight through.",
+)
+@node.function
+def SmoothCamera(  # noqa: N802
+    stage: dict, seconds: float = 0.18, *, now: Time, previous: State[FollowedCamera]
+) -> Stateful[dict, FollowedCamera]:
+    """The camera eased toward the stage's record, with `seconds` as the time constant."""
+    wanted = {key: float((stage or {}).get(key, getattr(previous, key))) for key in CAMERA_KEYS}
+    if not previous.started or seconds <= 0.0:
+        followed = wanted
+    else:
+        keep = math.exp(-max(now - previous.last_evaluated_at_ns, 0) * 1e-9 / seconds)
+        followed = {key: wanted[key] + (getattr(previous, key) - wanted[key]) * keep for key in CAMERA_KEYS}
+    record = dict(stage or {})
+    record.update(followed)
+    return record, FollowedCamera(**followed, last_evaluated_at_ns=now, started=True)
+
+
+@dataclass(frozen=True)
+class GlideState:
+    """Where a `Glide` is, how fast it is moving, and the stream time it last moved."""
+
+    value: float = 0.0
+    velocity: float = 0.0
+    last_evaluated_at_ns: int = 0
+    started: bool = False
+
+
+@node.meta(
+    category="Gulf Stream Neon",
+    description="Glides after a number like a critically damped spring: no overshoot, no corners, the same at any frame rate. Put it between a slider and what it drives, so a few edits a second play out as a smooth 60 fps move.",
+)
+@node.function
+def Glide(  # noqa: N802
+    x: float = 0.0, seconds: float = 0.2, *, now: Time, previous: State[GlideState]
+) -> Stateful[float, GlideState]:
+    """`x`, followed by a critically damped spring that settles in about `seconds`."""
+    if not previous.started or seconds <= 0.0:
+        return x, GlideState(x, 0.0, now, True)
+    dt = max(now - previous.last_evaluated_at_ns, 0) * 1e-9
+    omega = 2.0 / seconds
+    offset = previous.value - x
+    carry = (previous.velocity + omega * offset) * dt
+    decay = math.exp(-omega * dt)
+    value = x + (offset + carry) * decay
+    velocity = (previous.velocity - omega * carry) * decay
+    return value, GlideState(value, velocity, now, True)

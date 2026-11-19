@@ -33,6 +33,9 @@ TRAIL_DECAY = round(0.86 ** (30 / FPS), 4)
 GRAPH_ASSET = "9e1f3a5c-7b9d-4e2f-8a4c-6e8f0a2c4e61"
 CORE = "imports/core-nodes/core_nodes"
 NAMESPACE = uuid.UUID("5b0f6c2e-8d7a-4f1e-9c3b-2a6e4d8f1c70")
+# The stage values the view's sliders set, each eased by a Glide settling in this time.
+SMOOTHED_STAGE_VALUES = {"morph": 0.0, "time_of_day": 0.3, "skyline_height": 0.055, "neon": 1.0, "current_speed": 1.0}
+SMOOTHING_SECONDS = 0.25
 COLUMN = 430
 ROW = 230
 
@@ -127,6 +130,12 @@ def graph(
     add("vignette", f"{CORE}.filters:Vignette", 11, 1.5, amount=0.42, size=0.62, softness=0.55)
     if stage:
         add("stage", "Gulf Stream Neon:stage", 12, 0.5)
+        # The stage's hand, smoothed in the graph: every slider eases through a Glide spring, the
+        # camera through SmoothCamera, so a few edits a second arrive as a 60 fps glide.
+        for row, (name, value) in enumerate(SMOOTHED_STAGE_VALUES.items()):
+            add(f"smooth_{name}", "nodes.take_functions:Glide", 0.9, 7 + row, x=value, seconds=SMOOTHING_SECONDS)
+        add("stage_look", "nodes.take_functions:StageLook", 2.0, 8.5)
+        add("smooth_camera", "nodes.take_functions:SmoothCamera", 11, 3.2, seconds=0.18)
     else:
         add("program", "Core Nodes:program", 12, 0.5)
 
@@ -185,9 +194,15 @@ def graph(
     if stage:
         wire("vignette", "result", "stage", "video")
         wire("noaa_virginia_key", "station", "stage", "station")
-        wire("stage", "camera", "neon_horizon", "stage")
-        wire("stage", "camera", "hycom_gulf_stream", "stage")
-        wire("stage", "camera", "stage_sun", "stage")
+        wire("stage", "camera", "smooth_camera", "stage")
+        wire("smooth_camera", "result", "neon_horizon", "stage")
+        wire("smooth_camera", "result", "hycom_gulf_stream", "stage")
+        wire("smooth_camera", "result", "stage_sun", "stage")
+        for name in SMOOTHED_STAGE_VALUES:
+            wire(f"smooth_{name}", "result", "stage_look", name)
+        wire("smooth_time_of_day", "result", "stage_sun", "time_of_day")
+        wire("stage_look", "result", "neon_horizon", "look")
+        wire("stage_look", "result", "hycom_gulf_stream", "look")
     else:
         wire("vignette", "result", "program", "video")
 

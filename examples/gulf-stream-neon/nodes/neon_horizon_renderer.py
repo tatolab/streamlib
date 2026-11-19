@@ -500,6 +500,7 @@ class NeonHorizonRenderer:
     soundtrack = Input(Records, delivery="newest", description="beat, energy: from SoundtrackPulse")
     station = Input(Records, delivery="newest", description="wind: from NoaaStationFeed")
     stage = Input(Records, delivery="newest", description="The stage view's camera: orbit, zoom and fly")
+    look = Input(Records, delivery="newest", description="The stage's smoothed look: morph, time of day, skyline, neon")
     scene = Output(Image, description="The HDR picture, rgba16_float, distance in alpha")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -513,6 +514,7 @@ class NeonHorizonRenderer:
         self.latest_soundtrack: dict = {}
         self.latest_station: dict = {}
         self.latest_stage: dict = {}
+        self.latest_look: dict = {}
         self.last_rendered_ns: int | None = None
 
     def configure(self, config: NeonHorizonRendererConfig) -> None:
@@ -534,6 +536,9 @@ class NeonHorizonRenderer:
         stage = ctx.inputs.read(self.stage)
         if stage is not None:
             self.latest_stage = stage
+        look = ctx.inputs.read(self.look)
+        if look is not None:
+            self.latest_look = look
         if any(frame is None for frame in self.latest.values()):
             return
         frame_ns = self.latest["trails"].timestamp_ns
@@ -548,7 +553,13 @@ class NeonHorizonRenderer:
         seconds = self.take_clock.seconds_at(ctx, frame_ns)
         on_stage = self.config.mode == "stage"
         if on_stage:
-            moment = stage_moment(self.latest_stage, self.config.time_of_day, 1.0 - self.config.morph)
+            # A wired look (smoothed in the graph) leads; the settings are the fallback.
+            look = self.latest_look
+            moment = stage_moment(
+                self.latest_stage,
+                float(look.get("time_of_day", self.config.time_of_day)),
+                1.0 - float(look.get("morph", self.config.morph)),
+            )
         else:
             moment = take_moment_at(seconds, width / height)
         forward, right, up = camera_basis(
@@ -578,7 +589,7 @@ class NeonHorizonRenderer:
                 moment.camera_altitude,
                 self.focal,
                 *forward,
-                self.config.glow * (1.0 + 0.4 * moment.drop + 0.3 * energy),
+                float(self.latest_look.get("neon", self.config.glow)) * (1.0 + 0.4 * moment.drop + 0.3 * energy),
                 *right,
                 beat,
                 *up,
@@ -587,7 +598,7 @@ class NeonHorizonRenderer:
                 moment.drop,
                 -wind_speed * math.sin(wind_from),
                 -wind_speed * math.cos(wind_from),
-                self.config.skyline_height,
+                float(self.latest_look.get("skyline_height", self.config.skyline_height)),
                 self.config.exposure,
             ),
         )
