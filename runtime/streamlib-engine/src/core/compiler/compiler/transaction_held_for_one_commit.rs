@@ -30,35 +30,29 @@ impl Compiler {
     }
 
     /// The operations the transaction logged under its hold for one commit, which the commit
-    /// that releases it compiles.
+    /// that releases it compiles; `None` once the hold is gone, taken back by a stop its
+    /// stream's forced shutdown would not wait for.
     pub(crate) fn the_operations_logged_under_the_hold_for_one_commit(
         &self,
-    ) -> Vec<PendingOperation> {
-        let logged_before = *self.transaction_held_for_one_commit.lock();
-        debug_assert!(
-            logged_before.is_some(),
-            "the operations logged under a hold are read while it is held"
-        );
+    ) -> Option<Vec<PendingOperation>> {
+        let logged_before = (*self.transaction_held_for_one_commit.lock())?;
         let transaction = self.transaction.lock();
-        transaction[logged_before
-            .unwrap_or(transaction.len())
-            .min(transaction.len())..]
-            .to_vec()
+        Some(transaction[logged_before.min(transaction.len())..].to_vec())
     }
 
     /// Release the transaction's hold for one commit, for a stream no commit builds, which
     /// compiles nothing of what was logged under it.
     pub(crate) fn release_the_transaction_held_for_one_commit(&self) {
-        let released = self.transaction_held_for_one_commit.lock().take();
-        debug_assert!(released.is_some(), "a hold is released once");
+        self.transaction_held_for_one_commit.lock().take();
     }
 
     /// Take back every operation the transaction logged under its hold for one commit, and
     /// what each did to the graph, as [`Self::take_back_what_operations_did_to_the_graph`] does,
-    /// then release the hold. A promotion a crash asked for meanwhile stays logged.
-    pub(crate) fn take_back_the_transaction_held_for_one_commit(&self) {
+    /// then release the hold; whether there was a hold to take back. A promotion a crash asked
+    /// for meanwhile stays logged.
+    pub(crate) fn take_back_the_transaction_held_for_one_commit(&self) -> bool {
         let Some(logged_before) = self.transaction_held_for_one_commit.lock().take() else {
-            return;
+            return false;
         };
         let logged_under_the_hold: Vec<PendingOperation> = {
             let mut transaction = self.transaction.lock();
@@ -73,6 +67,7 @@ impl Compiler {
                 .collect()
         };
         self.take_back_what_operations_did_to_the_graph(&logged_under_the_hold);
+        true
     }
 
     /// Take back what each of `operations` did to the graph that is still there to take back:

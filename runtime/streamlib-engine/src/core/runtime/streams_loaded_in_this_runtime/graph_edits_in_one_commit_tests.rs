@@ -495,21 +495,75 @@ fn a_batch_whose_commit_fails_after_a_removal_says_it_was_not_taken_back_whole()
     stream.stop().expect("the stream stops");
 }
 
-/// A forced shutdown of a playing stream ends it even while a batch stays open: the stop stops
-/// waiting for the batch once the shutdown is forced.
+/// A forced shutdown of a playing stream ends it even while a batch stays open: the stop gives
+/// up waiting for the batch, takes it back on its writer's behalf and tears every node down,
+/// and the batch's later close or drop leaves the stopped stream as it is.
 ///
-/// Mental-revert: a stop that waits for the stream's one writer whatever the shutdown's
-/// escalation leaves a wedged batch holding the stream past its forced shutdown.
+/// Mental-revert: a stop that gives up while the batch still holds the compiler's transaction
+/// commits nothing under that hold, so every node keeps running, and the batch's later close
+/// compiles its edits onto the stopped stream.
 #[test]
 #[serial]
 fn a_forced_shutdown_ends_a_stream_whose_batch_stays_open() {
-    let (_runner, stream, _project) = a_stream_whose_windowed_port_one_source_feeds();
-    play(&stream);
+    for closed in [true, false] {
+        let (_runner, stream, _project) = a_stream_whose_windowed_port_one_source_feeds();
+        play(&stream);
+        let async_runtime = an_async_runtime();
 
-    let batch = a_graph_edit_batch_of(&stream);
-    stream.force_this_streams_shutdown("a batch stays open");
-    let ended = stream.wait_for_this_streams_end_within(Duration::from_secs(10));
-    drop(batch);
+        let batch = a_graph_edit_batch_of(&stream);
+        apply_each(
+            &async_runtime,
+            batch.as_ref(),
+            [StreamGraphOperation::Disconnect {
+                link: a_document_link(("one", AUDIO), ("windowed", AUDIO)),
+            }],
+        )
+        .expect("the disconnect waits for the close");
+        stream.force_this_streams_shutdown("a batch stays open");
+        let ended = stream.wait_for_this_streams_end_within(Duration::from_secs(10));
+        let the_stopped_stream = || {
+            (
+                stream.status(),
+                stream.compiler.scope_reading(|graph| {
+                    (
+                        graph.traversal().v(()).iter().count(),
+                        graph.traversal().e(()).iter().count(),
+                    )
+                }),
+                stream.compiler.logged_pending_operations().len(),
+                stream.compiler.the_transaction_is_held_for_one_commit(),
+            )
+        };
+        let stopped = the_stopped_stream();
+        let closed_or_dropped = if closed {
+            batch.close().map_err(|refused| refused.to_string())
+        } else {
+            drop(batch);
+            Ok(())
+        };
+        let after_the_batch_let_go = the_stopped_stream();
 
-    assert!(ended, "the forced shutdown ended the stream");
+        assert!(
+            ended,
+            "the forced shutdown ended the stream (closed: {closed})"
+        );
+        assert_eq!(
+            stopped,
+            (RuntimeStatus::Stopped, (0, 0), 0, false),
+            "the stop tore every node down and left nothing logged (closed: {closed})"
+        );
+        assert_eq!(
+            after_the_batch_let_go, stopped,
+            "the batch letting go left the stopped stream as it was (closed: {closed}, \
+             close: {closed_or_dropped:?})"
+        );
+        if closed {
+            assert!(
+                closed_or_dropped
+                    .as_ref()
+                    .is_err_and(|refusal| refusal.contains("forced")),
+                "the close says the forced shutdown took the batch back: {closed_or_dropped:?}"
+            );
+        }
+    }
 }

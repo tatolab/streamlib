@@ -203,12 +203,18 @@ impl LoadedStreamInThisRuntime {
         &self,
         held: &GraphEditsHeldForOneCommit,
     ) -> std::result::Result<(), GraphEditBatchRefused> {
+        if !self.compiler.the_transaction_is_held_for_one_commit() {
+            return Err(self.the_refusal_of_edits_a_forced_stop_took_back(held));
+        }
         if let Err(refusal) = self.refuse_a_reactive_reader_only_islands_feed() {
             return Err(self.take_back_whole(held, refusal));
         }
-        let logged = self
+        let Some(logged) = self
             .compiler
-            .the_operations_logged_under_the_hold_for_one_commit();
+            .the_operations_logged_under_the_hold_for_one_commit()
+        else {
+            return Err(self.the_refusal_of_edits_a_forced_stop_took_back(held));
+        };
         if logged.is_empty() {
             self.compiler.release_the_transaction_held_for_one_commit();
         } else if let Err(failed) =
@@ -261,6 +267,23 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
+    /// The refusal of closing `held`, whose edits a stop of this stream took back as its
+    /// shutdown was forced: its events are dropped, and the stopped stream is left as it is.
+    fn the_refusal_of_edits_a_forced_stop_took_back(
+        &self,
+        held: &GraphEditsHeldForOneCommit,
+    ) -> GraphEditBatchRefused {
+        held.events_held.lock().clear();
+        GraphEditBatchRefused {
+            refusal: Error::Runtime(format!(
+                "the stream `{}` stopped while these graph edits were open, as its shutdown was \
+                 forced, and took them back: none of them was made",
+                self.stream_id()
+            )),
+            taken_back: HowFarARefusedBatchWasTakenBack::Whole,
+        }
+    }
+
     /// Announce each event `held` kept of what stands once its edits compiled.
     fn announce_each_event_of_what_stands(&self, held: &GraphEditsHeldForOneCommit) {
         let events_held = std::mem::take(&mut *held.events_held.lock());
@@ -294,11 +317,17 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Take `held` back: each edit logged under the hold, as far as nothing built or wired
-    /// holds it, and the stream as drawn before it; announce none of its events.
+    /// holds it, and the stream as drawn before it; announce none of its events. Once a stop
+    /// took the hold back as the stream's shutdown was forced, only its events are dropped.
     fn take_back_the_graph_edits_held_for_one_commit(&self, held: &GraphEditsHeldForOneCommit) {
-        self.compiler
-            .take_back_the_transaction_held_for_one_commit();
-        self.restore_what_was_drawn_and_drop_the_events(held);
+        if self
+            .compiler
+            .take_back_the_transaction_held_for_one_commit()
+        {
+            self.restore_what_was_drawn_and_drop_the_events(held);
+        } else {
+            held.events_held.lock().clear();
+        }
     }
 
     /// Put the stream as drawn back as it was before `held`, and drop each event it kept.
@@ -327,7 +356,8 @@ impl LoadedStreamInThisRuntime {
     /// graph edits open on another thread to close or be taken back; refused on the thread
     /// that holds the batch, or inside graph edits held for one commit, which would wait for
     /// themselves. A stop notes it waits on an open graph edit, and stops waiting once the
-    /// stream's shutdown is forced, answering no writer held.
+    /// stream's shutdown is forced: it takes the open edits back, so its teardown compiles,
+    /// and answers no writer held.
     pub(in crate::core::runtime) fn hold_the_one_writer_for_a_lifecycle_change(
         &self,
         change: ALifecycleChange,
@@ -357,9 +387,14 @@ impl LoadedStreamInThisRuntime {
                 && self.this_streams_shutdown_escalation().is_forced()
             {
                 tracing::warn!(
-                    "the stream `{}` stops with a graph edit still open: its shutdown was forced",
+                    "the stream `{}` stops with a graph edit still open, taking it back: its \
+                     shutdown was forced",
                     self.stream_id()
                 );
+                // So the stop's teardown compiles past the hold the open edits keep, and their
+                // later close or drop finds it gone and leaves the stopped stream as it is.
+                self.compiler
+                    .take_back_the_transaction_held_for_one_commit();
                 return Ok(None);
             }
             match Arc::clone(one_writer).try_lock_owned() {
@@ -405,6 +440,16 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
         &self,
         graph_operation: StreamGraphOperation,
     ) -> BoxFuture<'_, Result<StreamGraphOperation>> {
+        if !self
+            .stream
+            .compiler
+            .the_transaction_is_held_for_one_commit()
+        {
+            let refusal = self
+                .stream
+                .the_refusal_of_edits_a_forced_stop_took_back(&self.held);
+            return Box::pin(std::future::ready(Err(refusal.refusal)));
+        }
         self.stream.in_this_streams_log_route(
             THE_GRAPH_EDITS_THIS_TASK_HOLDS.scope(
                 Arc::clone(&self.held),
