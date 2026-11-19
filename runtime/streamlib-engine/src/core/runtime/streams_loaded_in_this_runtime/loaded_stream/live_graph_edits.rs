@@ -32,7 +32,7 @@ use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::RuntimeOperations;
 use crate::core::runtime::operations_runtime::{
-    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl, disconnect_impl,
+    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
 };
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::LoadedStreamHolding;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
@@ -370,12 +370,25 @@ impl LoadedStreamInThisRuntime {
     /// name as a saved graph's link, each from a function node after the
     /// others. A link the engine cannot wire is set aside, so the stream opens
     /// and plays without it.
+    ///
+    /// The load is made as graph edits held for one commit, so it is compiled and announced
+    /// once every node and link stands.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
         lend_directory: Option<&Path>,
     ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
+        self.in_one_commit_on_this_thread(|_| {
+            self.load_graph_snapshot_within_the_graph_edits_held(graph, lend_directory)
+        })
+    }
+
+    fn load_graph_snapshot_within_the_graph_edits_held(
+        &self,
+        graph: &GraphSnapshot,
+        lend_directory: Option<&Path>,
+    ) -> Result<()> {
         crate::core::context::refuse_a_stream_clock_this_runtime_cannot_run(
             &graph.clock,
             self.stream_id(),
@@ -489,21 +502,18 @@ impl LoadedStreamInThisRuntime {
         }
         // The rule a reader that runs reactively sets is judged once every link is made, so the
         // order the graph lists its links in never sets one aside.
-        for (link_id, why_the_engine_cannot_wire_it) in self
-            .compiler
-            .scope_reading(the_island_links_into_a_reactive_reader_only_islands_feed)
-        {
-            self.block_on_the_engines_tokio_runtime(disconnect_impl(
-                self.live_graph_change(),
-                link_id.clone(),
-            ))?;
-            if let Some(link) = drawn_link_of_each_link_made.get(&link_id) {
-                links_the_engine_cannot_wire.push(LinkSetAside::because_of(
-                    (*link).clone(),
-                    &why_the_engine_cannot_wire_it,
-                ));
-            }
-        }
+        let island_links_the_engine_cannot_wire: Vec<(LinkUniqueId, Error)> =
+            self.compiler.scope_reading(|graph| {
+                the_island_links_into_a_reactive_reader_only_islands_feed(graph).collect()
+            });
+        links_the_engine_cannot_wire.extend(self.set_aside_each_link_the_engine_cannot_wire(
+            island_links_the_engine_cannot_wire,
+            |link_id| {
+                drawn_link_of_each_link_made
+                    .get(link_id)
+                    .map(|link| (*link).clone())
+            },
+        )?);
         resolution
             .graph_only_nodes_as_drawn
             .links_set_aside

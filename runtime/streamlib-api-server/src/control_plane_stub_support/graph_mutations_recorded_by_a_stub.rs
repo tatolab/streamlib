@@ -137,6 +137,13 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<bool> {
             Ok(true)
         }
+        fn open_a_graph_edit_batch(
+            self: ::std::sync::Arc<Self>,
+        ) -> ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch> {
+            ::std::boxed::Box::new(
+                $crate::control_plane_stub_support::GraphEditsOfAStubAppliedOneByOne(self),
+            )
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -226,3 +233,25 @@ macro_rules! graph_mutation_ops_record_the_call {
 }
 
 pub(crate) use graph_mutation_ops_record_the_call;
+
+/// A batch of graph edits on a stub runtime: each edit applied as the stub applies one, and
+/// the batch closed with nothing left to judge.
+pub(crate) struct GraphEditsOfAStubAppliedOneByOne<Stub>(pub(crate) ::std::sync::Arc<Stub>);
+
+impl<Stub: ::streamlib::sdk::runtime::RuntimeOperations + 'static>
+    ::streamlib::sdk::runtime::GraphEditBatch for GraphEditsOfAStubAppliedOneByOne<Stub>
+{
+    fn apply_a_stream_graph_operation_live(
+        &self,
+        graph_operation: ::streamlib_project_repository::StreamGraphOperation,
+    ) -> ::streamlib::sdk::runtime::BoxFuture<
+        '_,
+        ::streamlib::sdk::error::Result<::streamlib_project_repository::StreamGraphOperation>,
+    > {
+        self.0.apply_a_stream_graph_operation_live(graph_operation)
+    }
+
+    fn close(self: ::std::boxed::Box<Self>) -> ::streamlib::sdk::error::Result<()> {
+        Ok(())
+    }
+}

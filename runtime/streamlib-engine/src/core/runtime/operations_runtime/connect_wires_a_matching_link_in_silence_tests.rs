@@ -42,6 +42,7 @@ fn a_fixture_graph_change(compiler: Arc<Compiler>) -> LiveGraphChangeOnOneStream
         compiler,
         live: None,
         stream: the_fixtures_stream(),
+        held_for_one_commit: None,
     }
 }
 

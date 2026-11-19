@@ -3,12 +3,12 @@
 
 //! The rule a reader that runs reactively sets for an edit of its stream: that something other
 //! than a function node island feeds it, judged at each removal and connect made on its own, and
-//! once for a batch of graph operations as it closes.
+//! once as graph edits held for one commit close.
 
 use super::WhenTheEngineCannotWireALink;
+use super::graph_edits_in_one_commit::GraphEditsHeldForOneCommit;
 use crate::core::Result;
 use crate::core::compiler::compiler_ops::function_node_island::{
-    runs_inside_the_read_of_each_node_it_feeds,
     the_island_links_into_a_reactive_reader_only_islands_feed, the_reader_a_removal_strands,
     the_refusal_of_a_removal_stranding,
 };
@@ -34,56 +34,65 @@ pub(super) fn refuse_a_removal_that_strands_a_reactive_reader(
         })
         .map(|link| link.id.clone())
         .collect();
-    let Some(reader_id) = the_reader_a_removal_strands(graph, &links_removed, |reader_id| {
-        !matches!(removal, ARemoval::OfANode(node_run_id) if node_run_id == reader_id)
-            && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
-    })?
+    // The readers a removed link reaches never run inside an island, so only a removed reader
+    // is left out of the judgement.
+    let Some(reader_id) = the_reader_a_removal_strands(
+        graph,
+        &links_removed,
+        |reader_id| !matches!(removal, ARemoval::OfANode(node_run_id) if node_run_id == reader_id),
+    )?
     else {
         return Ok(());
     };
-    let removal_named = match removal {
-        ARemoval::OfANode(node_run_id) => format!("node `{node_run_id}`"),
-        ARemoval::OfALink(link_id) => format!("link `{link_id}`"),
-    };
     Err(the_refusal_of_a_removal_stranding(
-        &removal_named,
+        &removal.to_string(),
         &reader_id,
     ))
 }
 
 /// One edit that takes something out of a stream's graph.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum ARemoval<'removed> {
     OfANode(&'removed NodeRunId),
     OfALink(&'removed LinkUniqueId),
 }
 
+impl std::fmt::Display for ARemoval<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OfANode(node_run_id) => write!(formatter, "node `{node_run_id}`"),
+            Self::OfALink(link_id) => write!(formatter, "link `{link_id}`"),
+        }
+    }
+}
+
+/// Whether the rule a reader that runs reactively sets is left to the close of the graph edits
+/// this task holds for one commit, rather than judged at each edit: the one place an edit asks.
+pub(in crate::core::runtime) fn the_reader_rule_is_left_to_the_close() -> bool {
+    GraphEditsHeldForOneCommit::the_ones_this_task_holds().is_some()
+}
+
 impl LoadedStreamInThisRuntime {
     /// Refuse `removal` when it leaves a reader it does not take out that runs reactively, fed
-    /// only by function node islands, which have no source to wake it; while a batch of graph
-    /// operations is open, that is judged as the batch closes.
+    /// only by function node islands, which have no source to wake it; judged as the graph
+    /// edits this task holds close, when it holds some.
     pub(super) fn refuse_a_removal_this_stream_cannot_take(
         &self,
         removal: ARemoval<'_>,
     ) -> Result<()> {
-        if self.a_batch_of_graph_operations_is_open() {
+        if the_reader_rule_is_left_to_the_close() {
             return Ok(());
         }
         self.compiler
             .scope_reading(|graph| refuse_a_removal_that_strands_a_reactive_reader(graph, removal))
     }
 
-    /// Whether a batch of graph operations is open on this stream.
-    pub(in crate::core::runtime) fn a_batch_of_graph_operations_is_open(&self) -> bool {
-        self.batches_of_graph_operations_open
-            .load(std::sync::atomic::Ordering::SeqCst)
-            > 0
-    }
-
     /// What a connect an edit makes does with a link the engine cannot wire: refused whole now,
-    /// or, while a batch of graph operations is open, the reader rule judged as it closes.
-    pub(super) fn the_connect_an_edit_makes(&self) -> WhenTheEngineCannotWireALink {
-        if self.a_batch_of_graph_operations_is_open() {
+    /// or with the reader rule left to the close of the graph edits this task holds.
+    pub(in crate::core::runtime) fn the_connect_an_edit_makes(
+        &self,
+    ) -> WhenTheEngineCannotWireALink {
+        if the_reader_rule_is_left_to_the_close() {
             WhenTheEngineCannotWireALink::RefuseLeavingTheReaderRuleToASweep
         } else {
             WhenTheEngineCannotWireALink::Refuse
@@ -96,10 +105,7 @@ impl LoadedStreamInThisRuntime {
         &self,
     ) -> Result<()> {
         self.compiler.scope_reading(|graph| {
-            match the_island_links_into_a_reactive_reader_only_islands_feed(graph)
-                .into_iter()
-                .next()
-            {
+            match the_island_links_into_a_reactive_reader_only_islands_feed(graph).next() {
                 Some((_, why_the_engine_cannot_wire_it)) => Err(why_the_engine_cannot_wire_it),
                 None => Ok(()),
             }

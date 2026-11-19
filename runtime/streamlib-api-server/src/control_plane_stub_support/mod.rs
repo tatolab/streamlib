@@ -204,6 +204,11 @@ macro_rules! graph_mutation_ops_are_unreachable {
         > {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn open_a_graph_edit_batch(
+            self: ::std::sync::Arc<Self>,
+        ) -> ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn add_node(
             &self,
             _spec: ::streamlib::sdk::nodes::NodeSpec,
@@ -667,7 +672,7 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 
 mod graph_mutations_recorded_by_a_stub;
 pub(crate) use graph_mutations_recorded_by_a_stub::{
-    ArmedAddNodeRefusal, graph_mutation_ops_record_the_call,
+    ArmedAddNodeRefusal, GraphEditsOfAStubAppliedOneByOne, graph_mutation_ops_record_the_call,
 };
 
 /// The target of every tracing span and event raised on the calling thread

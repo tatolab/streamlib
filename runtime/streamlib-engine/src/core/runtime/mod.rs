@@ -74,7 +74,9 @@ pub(crate) use node_interpreters::open_descriptor_soft_limit::{
     start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
     the_open_descriptor_limit,
 };
-pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink};
+pub use operations::{
+    BoxFuture, GraphEditBatch, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
+};
 pub use projects_and_their_venv::project_first_party_packages_moved_to_the_runtime_version::ProjectHistoryRecordingFirstPartyPackageMoves;
 pub use projects_and_their_venv::project_venv_sync_progress::{
     ProjectVenvSyncPackage, ProjectVenvSyncPackageKind, ProjectVenvSyncPackageState,

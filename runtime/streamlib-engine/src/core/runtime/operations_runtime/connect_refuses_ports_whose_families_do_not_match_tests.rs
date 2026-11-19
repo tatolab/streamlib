@@ -161,6 +161,7 @@ fn connect_on_this_thread(
                     stream_id: "main".to_string(),
                     stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
                 },
+                held_for_one_commit: None,
             },
             from,
             to,

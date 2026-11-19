@@ -59,6 +59,8 @@ use crate::core::nodes::{NodeState, NodeTypesOneStreamResolves};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
+mod transaction_held_for_one_commit;
+
 pub(crate) struct Compiler {
     // Graph ownership (moved from Runtime)
     graph: Arc<RwLock<Graph>>,
@@ -70,6 +72,10 @@ pub(crate) struct Compiler {
     /// interleave their spawn and wire phases against one graph.
     one_commit_at_a_time: Mutex<()>,
     abandoned_node_threads: Mutex<Vec<AbandonedNodeThreadStillRunning>>,
+    /// While held, how many operations the transaction logged before the hold: a commit asked
+    /// for meanwhile compiles nothing, so the operations logged under the hold are compiled
+    /// together, as one commit, once it is released.
+    transaction_held_for_one_commit: Mutex<Option<usize>>,
 }
 
 impl Default for Compiler {
@@ -102,6 +108,7 @@ impl Compiler {
             configs_a_commit_is_applying: Arc::new(Mutex::new(HashMap::new())),
             one_commit_at_a_time: Mutex::new(()),
             abandoned_node_threads: Mutex::new(Vec::new()),
+            transaction_held_for_one_commit: Mutex::new(None),
         }
     }
 
@@ -158,7 +165,13 @@ impl Compiler {
             runtime_ctx.loaded_stream_identity(),
         );
         let _one_commit_at_a_time = self.one_commit_at_a_time.lock();
-        let operations = self.take_the_logged_operations_to_compile();
+        let held_since = *self.transaction_held_for_one_commit.lock();
+        let operations = match held_since {
+            Some(logged_before) => {
+                self.take_the_config_updates_logged_under_the_hold(logged_before)
+            }
+            None => self.take_the_logged_operations_to_compile(),
+        };
         if operations.is_empty() {
             tracing::info!("[commit] No pending operations");
             return Ok(());

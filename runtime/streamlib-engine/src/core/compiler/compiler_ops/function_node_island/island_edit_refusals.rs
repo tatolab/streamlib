@@ -12,8 +12,8 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link, LinkUniqueId,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link,
+    LinkUniqueId, OutOfProcessLinkWiringComponent, OutputLinkPortRef, PendingDeletionComponent,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
@@ -340,26 +340,48 @@ pub(crate) fn refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands(
 
 /// Each link `graph` holds from a function node into a reader that runs reactively and that
 /// only islands feed, with why the engine cannot wire it: judged once every link of a saved
-/// graph or a batch of edits is made, so the order they are made in never matters.
+/// graph or a batch of edits is made, so the order they are made in never matters, against the
+/// graph left once each node and link pending deletion leaves.
 pub(crate) fn the_island_links_into_a_reactive_reader_only_islands_feed(
     graph: &Graph,
-) -> Vec<(LinkUniqueId, Error)> {
-    graph
-        .traversal()
-        .e(())
+) -> impl Iterator<Item = (LinkUniqueId, Error)> + '_ {
+    let links: Vec<&Link> = graph.traversal().e(()).iter().collect();
+    let links_leaving: Vec<LinkUniqueId> = links
         .iter()
-        .filter(|link| {
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
-                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().node_run_id())
-                && is_a_reactive_reader_only_islands_feed(graph, link.to_port().node_run_id())
-        })
-        .map(|link| {
+        .filter(|link| leaves_with_what_is_pending_deletion(graph, link))
+        .map(|link| link.id.clone())
+        .collect();
+    links.into_iter().filter_map(move |link| {
+        let reader_id = link.to_port().node_run_id();
+        let strands_its_reader = !links_leaving.contains(&link.id)
+            && runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
+            && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
+            && if links_leaving.is_empty() {
+                is_a_reactive_reader_only_islands_feed(graph, reader_id)
+            } else {
+                is_reactive_and_left_fed_only_by_islands(graph, reader_id, &links_leaving)
+            };
+        strands_its_reader.then(|| {
             (
                 link.id.clone(),
-                the_refusal_of_a_reactive_reader_fed_only_by_islands(link.to_port().node_run_id()),
+                the_refusal_of_a_reactive_reader_fed_only_by_islands(reader_id),
             )
         })
-        .collect()
+    })
+}
+
+/// Whether `link` leaves `graph` with what is pending deletion: itself, or a node it joins.
+fn leaves_with_what_is_pending_deletion(graph: &Graph, link: &Link) -> bool {
+    let is_pending_deletion = |node_run_id: &NodeRunId| {
+        graph
+            .traversal()
+            .v(node_run_id)
+            .first()
+            .is_some_and(|node| node.has::<PendingDeletionComponent>())
+    };
+    link.has::<PendingDeletionComponent>()
+        || is_pending_deletion(link.source().node_run_id())
+        || is_pending_deletion(link.to_port().node_run_id())
 }
 
 /// Whether `reader_id` runs reactively and only function node islands feed it, so no source

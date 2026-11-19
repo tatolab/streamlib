@@ -28,7 +28,6 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe, the_ends_a_link_is_judged_by,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
-use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
     ALinkConnectedOrSetAside, ConfigReferencesOfTheAddedNode, WhenTheEngineCannotWireALink,
@@ -143,6 +142,22 @@ impl LoadedStreamInThisRuntime {
     /// the engine cannot wire it; so is a link the stream held set aside before, and a link the
     /// live graph keeps that the engine cannot wire once the reconcile made its links.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
+        &self,
+        graph_document: Value,
+        links_it_makes: LinksAReconcileMakes,
+    ) -> Result<()> {
+        self.in_one_commit(
+            self.reconcile_the_live_graph_within_the_graph_edits_held(
+                graph_document,
+                links_it_makes,
+            ),
+        )
+        .await
+    }
+
+    /// Reconcile the live graph to `graph_document` within the graph edits the running task
+    /// holds for one commit.
+    async fn reconcile_the_live_graph_within_the_graph_edits_held(
         &self,
         mut graph_document: Value,
         links_it_makes: LinksAReconcileMakes,
@@ -421,9 +436,8 @@ impl LoadedStreamInThisRuntime {
             &document_links,
             &live_links,
             &links_made_now,
-        )
-        .await?;
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        )?;
+        self.announce_the_graph_changed();
         saved_values_handed_over
     }
 
@@ -521,7 +535,7 @@ impl LoadedStreamInThisRuntime {
     /// islands feed. Refused when the sweep meets one of `links_made_now`, which are judged as
     /// `connect` judges a link made now. A link carried through the function node pool is
     /// judged as the pool wires it, and left as it is.
-    async fn set_aside_each_link_the_engine_cannot_wire_now(
+    fn set_aside_each_link_the_engine_cannot_wire_now(
         &self,
         document_links: &[LinkOfAGraphDocument],
         live_links_before: &HashSet<RunningLinkBetweenTwoNodesByUuid>,
@@ -558,36 +572,53 @@ impl LoadedStreamInThisRuntime {
             }
             Ok::<_, Error>(kept_links_the_engine_cannot_wire)
         })?;
-        for (link_id, _) in &kept_links_the_engine_cannot_wire {
-            disconnect_impl(self.live_graph_change(), link_id.clone()).await?;
-        }
-        let mut island_links_the_engine_cannot_wire = self
-            .compiler
-            .scope_reading(the_island_links_into_a_reactive_reader_only_islands_feed);
+        let mut island_links_the_engine_cannot_wire: Vec<(LinkUniqueId, Error)> =
+            self.compiler.scope_reading(|graph| {
+                the_island_links_into_a_reactive_reader_only_islands_feed(graph).collect()
+            });
         if let Some(made_now) = island_links_the_engine_cannot_wire
             .iter()
             .position(|(link_id, _)| links_made_now.contains(link_id))
         {
             return Err(island_links_the_engine_cannot_wire.swap_remove(made_now).1);
         }
-        for (link_id, _) in &island_links_the_engine_cannot_wire {
-            disconnect_impl(self.live_graph_change(), link_id.clone()).await?;
-        }
-        let mut graph_only_nodes_as_drawn = self.graph_only_nodes_as_drawn.lock();
-        for (link_id, why_the_engine_cannot_wire_it) in kept_links_the_engine_cannot_wire
-            .into_iter()
-            .chain(island_links_the_engine_cannot_wire)
-        {
-            if let Some(link) = drawn_link_of_each_link_held.get(&link_id) {
-                graph_only_nodes_as_drawn
-                    .links_set_aside
-                    .push(LinkSetAside::because_of(
-                        (*link).clone(),
-                        &why_the_engine_cannot_wire_it,
-                    ));
+        let links_set_aside = self.set_aside_each_link_the_engine_cannot_wire(
+            kept_links_the_engine_cannot_wire
+                .into_iter()
+                .chain(island_links_the_engine_cannot_wire),
+            |link_id| {
+                drawn_link_of_each_link_held
+                    .get(link_id)
+                    .map(|link| (*link).clone())
+            },
+        )?;
+        self.graph_only_nodes_as_drawn
+            .lock()
+            .links_set_aside
+            .extend(links_set_aside);
+        Ok(())
+    }
+
+    /// Set aside each of `links_the_engine_cannot_wire`, beside why the engine cannot wire it:
+    /// disconnected within the graph edits held for one commit, and answered as drawn, as
+    /// `drawn_link_of` answers it, among the links to draw set aside.
+    pub(in crate::core::runtime) fn set_aside_each_link_the_engine_cannot_wire(
+        &self,
+        links_the_engine_cannot_wire: impl IntoIterator<Item = (LinkUniqueId, Error)>,
+        drawn_link_of: impl Fn(&LinkUniqueId) -> Option<GraphSnapshotLink>,
+    ) -> Result<Vec<LinkSetAside>> {
+        let mut links_set_aside = Vec::new();
+        for (link_id, why_the_engine_cannot_wire_it) in links_the_engine_cannot_wire {
+            let drawn_link = drawn_link_of(&link_id);
+            self.disconnect_within_the_graph_edits_held(&link_id)?;
+            if let Some(link) = drawn_link {
+                links_set_aside.push(LinkSetAside::because_of(
+                    link,
+                    &why_the_engine_cannot_wire_it,
+                ));
             }
         }
-        Ok(())
+        Ok(links_set_aside)
     }
 
     /// Each node the live graph holds as it was given, as a reconcile compares it.
@@ -602,29 +633,50 @@ impl LoadedStreamInThisRuntime {
     pub(in crate::core::runtime) fn the_links_set_aside_by_node_uuid(
         &self,
     ) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
+        let by_node_uuid = self.the_link_set_aside_by_node_uuid();
+        self.graph_only_nodes_as_drawn
+            .lock()
+            .links_set_aside
+            .iter()
+            .filter_map(by_node_uuid)
+            .collect()
+    }
+
+    /// Take `link`, each end its node's UUID, off the links this stream's graph holds set aside.
+    pub(in crate::core::runtime) fn forget_the_link_set_aside(
+        &self,
+        link: &RunningLinkBetweenTwoNodesByUuid,
+    ) {
+        let by_node_uuid = self.the_link_set_aside_by_node_uuid();
+        self.graph_only_nodes_as_drawn
+            .lock()
+            .links_set_aside
+            .retain(|set_aside| by_node_uuid(set_aside).as_ref() != Some(link));
+    }
+
+    /// A link set aside, each end its node's UUID; `None` when it names a node the graph no
+    /// longer holds.
+    fn the_link_set_aside_by_node_uuid(
+        &self,
+    ) -> impl Fn(&LinkSetAside) -> Option<RunningLinkBetweenTwoNodesByUuid> {
         let node_uuid_of_each_name: HashMap<String, Uuid> = self
             .the_live_nodes()
             .into_iter()
             .map(|live_node| (live_node.display_name, live_node.node_uuid))
             .collect();
-        let node_uuid_named = |node_name: &str| {
-            cast_name(node_name)
-                .ok()
-                .and_then(|cast| node_uuid_of_each_name.get(&cast).copied())
-        };
-        self.graph_only_nodes_as_drawn
-            .lock()
-            .links_set_aside
-            .iter()
-            .filter_map(|set_aside| {
-                Some(RunningLinkBetweenTwoNodesByUuid {
-                    source_node: node_uuid_named(&set_aside.link.source.node)?,
-                    source_port: cast_name(&set_aside.link.source.port).ok()?,
-                    target_node: node_uuid_named(&set_aside.link.target.node)?,
-                    target_port: cast_name(&set_aside.link.target.port).ok()?,
-                })
+        move |set_aside| {
+            let node_uuid_named = |node_name: &str| {
+                cast_name(node_name)
+                    .ok()
+                    .and_then(|cast| node_uuid_of_each_name.get(&cast).copied())
+            };
+            Some(RunningLinkBetweenTwoNodesByUuid {
+                source_node: node_uuid_named(&set_aside.link.source.node)?,
+                source_port: cast_name(&set_aside.link.source.port).ok()?,
+                target_node: node_uuid_named(&set_aside.link.target.node)?,
+                target_port: cast_name(&set_aside.link.target.port).ok()?,
             })
-            .collect()
+        }
     }
 
     /// Each link the live graph holds as it was given, by node UUID.

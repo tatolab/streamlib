@@ -169,6 +169,7 @@ fn a_change_on_a_stopped_stream(compiler: &Arc<Compiler>) -> LiveGraphChangeOnOn
             stream_id: "main".to_string(),
             stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
         },
+        held_for_one_commit: None,
     }
 }
 
@@ -451,7 +452,9 @@ fn an_island_into_a_reactive_reader_only_islands_feed_is_caught_at_the_edit() {
     .expect("a saved graph's link leaves the reader rule to the sweep")
     .connected()
     .expect("the link is made");
-    let swept = compiler.scope_reading(the_island_links_into_a_reactive_reader_only_islands_feed);
+    let swept: Vec<_> = compiler.scope_reading(|graph| {
+        the_island_links_into_a_reactive_reader_only_islands_feed(graph).collect()
+    });
     assert_eq!(swept.len(), 1);
     assert_eq!(swept[0].0, made);
     assert_eq!(swept[0].1.to_string(), refused.to_string());
@@ -626,6 +629,50 @@ fn the_function_node_pool_past_its_inbound_cap_is_caught_at_the_edit() {
             "the stream's function node pool would hold {} inbound links",
             (islands_the_pool_takes + 1) * READS_OF_EACH_ISLAND
         ),
+    );
+}
+
+/// The function node pool's cap is judged on a link into an island too: an island linked into
+/// its reader before the sources it reads are linked into it is caught at the source link that
+/// takes the pool past its cap.
+///
+/// Mental-revert: judging the pool's cap only on a link out of an island takes every source
+/// link, and the start refuses the pool.
+#[test]
+fn the_function_node_pool_past_its_inbound_cap_is_caught_at_a_link_into_an_island() {
+    const READS_OF_EACH_ISLAND: usize = 30;
+    let compiler = a_stopped_stream_resolving_a_function_node_type();
+    let islands_the_pool_takes =
+        streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION / READS_OF_EACH_ISLAND;
+    let mut refused = None;
+    'islands: for _ in 0..=islands_the_pool_takes {
+        let switch = a_node_of(&compiler, FUNCTION_NODE);
+        connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(switch.clone(), "result"),
+            InputLinkPortRef::new(a_node_of(&compiler, HELPER_PROCESS_MANUAL_READER), "in1"),
+        )
+        .expect("an island that reads nothing yet holds the pool no link");
+        for _ in 0..READS_OF_EACH_ISLAND {
+            let source = a_node_of(&compiler, HELPER_PROCESS_SOURCE);
+            if let Err(refusal) = connect_on_this_thread(
+                &compiler,
+                OutputLinkPortRef::new(source, "out"),
+                InputLinkPortRef::new(switch.clone(), "x"),
+            ) {
+                refused = Some(refusal);
+                break 'islands;
+            }
+        }
+    }
+
+    let refused = refused.expect("a link into an island takes the pool past its cap");
+    assert!(
+        refused.to_string().contains(&format!(
+            "the stream's function node pool would hold {} inbound links",
+            streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION + 1
+        )),
+        "{refused}"
     );
 }
 

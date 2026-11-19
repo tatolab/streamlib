@@ -10,7 +10,7 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     EXPOSED_NAME_MAXIMUM_LENGTH, GraphNode, GraphNodePorts, GraphNodeWithComponents, Link,
     NodeFailureReasonComponent, NodeNotReadyBecauseComponent, NodeRunId, NodeTraversalMut,
-    ProcessRaisingBecauseComponent, StateComponent, TraversalSourceMut,
+    PendingDeletionComponent, ProcessRaisingBecauseComponent, StateComponent, TraversalSourceMut,
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, the_input_ports_of_the_exposed_config_fields,
 };
@@ -74,7 +74,7 @@ impl<'a> TraversalSourceMut<'a> {
             && let Some(holder) = self
                 .graph
                 .node_weights()
-                .find(|node| node.node_uuid == node_uuid)
+                .find(|node| node.node_uuid == node_uuid && !node.has::<PendingDeletionComponent>())
         {
             return Err(Error::GraphError(format!(
                 "node `{name}` cannot take the UUID {node_uuid}: node `{}` of the graph holds it",
@@ -147,7 +147,7 @@ impl TraversalSourceMut<'_> {
             || self
                 .graph
                 .node_weights()
-                .any(|node| node.display_name == cast)
+                .any(|node| holds_the_name(node, &cast))
         {
             return Err(Error::NodeNameTaken {
                 name: requested_name.to_string(),
@@ -198,6 +198,12 @@ fn default_display_name_for(
         .unwrap_or_else(|| node_class_import_path.as_str().to_string())
 }
 
+/// Whether `node` holds `name`: one pending deletion, which leaves with the commit that takes
+/// it out, holds none.
+fn holds_the_name(node: &GraphNode, name: &str) -> bool {
+    node.display_name == name && !node.has::<PendingDeletionComponent>()
+}
+
 /// `requested_name` cast, or [`Error::NodeNameTaken`] when a node in `graph`
 /// or a graph-only node already has that name — a name the author typed is an
 /// address.
@@ -208,7 +214,7 @@ fn the_requested_node_name_unless_taken(
 ) -> Result<String> {
     let cast = cast_exposed_name_to_url_safe(requested_name)?;
     if node_names_the_graph_only_nodes_hold.contains(cast.as_ref())
-        || graph.node_weights().any(|node| node.display_name == cast)
+        || graph.node_weights().any(|node| holds_the_name(node, &cast))
     {
         return Err(Error::NodeNameTaken {
             name: requested_name.to_string(),
@@ -238,7 +244,7 @@ pub(crate) fn the_name_a_new_node_takes(
         node_names_the_graph_only_nodes_hold.contains(candidate)
             || graph
                 .node_weights()
-                .any(|node| node.display_name == candidate)
+                .any(|node| holds_the_name(node, candidate))
     };
 
     if let Some(requested_name) = requested_name {

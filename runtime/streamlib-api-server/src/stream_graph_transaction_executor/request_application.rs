@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::live_application_and_reversal::{
-    close_the_batch_open_on_each_stream, open_a_batch_on_each_stream,
+    close_the_graph_edits_of_each_stream, take_back_the_graph_edits_of_each_stream,
 };
 use super::*;
 use streamlib::sdk::graph::input_values::InputValueToSetLive;
@@ -83,6 +83,10 @@ impl StreamGraphTransactionExecutor<'_> {
             streams.insert(
                 stream_id.clone(),
                 StreamATransactionEdits {
+                    graph_edit_batch: Some(
+                        Arc::clone(&stream_operations).open_a_graph_edit_batch(),
+                    ),
+                    its_graph_edits_were_taken_back: false,
                     stream_operations,
                     stream_location,
                     staged_graph,
@@ -111,7 +115,6 @@ impl StreamGraphTransactionExecutor<'_> {
             &requests_and_the_stream_id_each_names,
             &staged,
         )?;
-        open_a_batch_on_each_stream(&staged.streams);
 
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
@@ -127,7 +130,7 @@ impl StreamGraphTransactionExecutor<'_> {
             let applied = match self.apply_one_action(request, &stream_id, &mut staged) {
                 Ok(applied) => applied,
                 Err(refusal) => {
-                    let _ = close_the_batch_open_on_each_stream(&staged.streams);
+                    take_back_the_graph_edits_of_each_stream(&mut staged.streams);
                     self.reverse_what_was_applied_live(&staged.streams, applied_live);
                     return Err(GraphTransactionRefusal::of_the_operation(
                         request_index,
@@ -148,7 +151,7 @@ impl StreamGraphTransactionExecutor<'_> {
             }
         }
 
-        if let Err(refusal) = close_the_batch_open_on_each_stream(&staged.streams) {
+        if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut staged.streams) {
             self.reverse_what_was_applied_live(&staged.streams, applied_live);
             return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
         }
@@ -434,9 +437,15 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
                 _ => None,
             };
+            let graph_edit_batch = streams
+                .get(stream_id)
+                .and_then(|stream| stream.graph_edit_batch.as_deref())
+                .ok_or_else(|| {
+                    format!("stream `{stream_id}` holds no batch of graph edits open to apply to")
+                })?;
             let applied = self
                 .async_runtime
-                .block_on(stream_operations.apply_a_stream_graph_operation_live(edit_as_drawn))?;
+                .block_on(graph_edit_batch.apply_a_stream_graph_operation_live(edit_as_drawn))?;
             let applied_on_the_running_stream = match (&applied, value_the_running_input_held) {
                 (
                     StreamGraphOperation::SetNodeInputValue {

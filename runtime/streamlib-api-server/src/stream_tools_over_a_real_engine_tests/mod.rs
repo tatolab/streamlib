@@ -60,6 +60,7 @@ mod project_log_tests;
 mod project_node_type_listing_tests;
 mod project_view_and_graph_input_tests;
 mod project_zip_import_tests;
+mod reactive_reader_rule_of_a_transaction_tests;
 mod renamed_pin_tests;
 mod stream_input_of_a_playing_stream_tests;
 mod stream_listing_actions_and_record_tests;

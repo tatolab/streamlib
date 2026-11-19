@@ -53,6 +53,7 @@ mod former_port_names;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
+use live_application_and_reversal::StreamATransactionEdits;
 mod request_application;
 mod request_to_graph_operation;
 mod streams_each_operation_names;
@@ -170,14 +171,6 @@ fn what_a_graph_action_names<Stream>(
         | StreamGraphAction::RemoveNote { .. } => WhatAGraphOperationNames::default(),
     }
 }
-/// One loaded stream a transaction edits: its operations, where it lives, and its graph as the
-/// transaction has staged it.
-struct StreamATransactionEdits {
-    stream_operations: Arc<dyn RuntimeOperations>,
-    stream_location: StreamLocation,
-    staged_graph: StreamGraphDocument,
-}
-
 /// One graph operation applied: the operation its answer reports, as the stream it names draws
 /// it; what it made on that running stream; the project operations it records, in order; each
 /// operation a loaded stream takes once the project's documents hold it; and the link that

@@ -5,7 +5,7 @@
 
 use crate::core::NodeRunId;
 use crate::core::compiler::compiler_ops::function_node_island::{
-    runs_inside_the_read_of_each_node_it_feeds,
+    link_in, runs_inside_the_read_of_each_node_it_feeds,
     the_links_an_island_link_reads_from_outside_any_island,
     the_reader_input_ports_a_function_node_feeds, the_readers_a_link_into_reaches,
 };
@@ -129,9 +129,10 @@ pub(crate) fn refuse_a_link_a_channel_cannot_carry(graph: &Graph, link: &Link) -
     if an_island_is_read_through_it {
         for read_link_id in the_links_an_island_link_reads_from_outside_any_island(graph, &link.id)
         {
-            if let Some(read_link) = graph.traversal().e(&read_link_id).first() {
-                refuse_an_output_port_past_its_destination_cap(graph, read_link.source())?;
-            }
+            refuse_an_output_port_past_its_destination_cap(
+                graph,
+                link_in(graph, &read_link_id)?.source(),
+            )?;
         }
     } else {
         refuse_an_output_port_past_its_destination_cap(graph, link.source())?;
@@ -142,7 +143,9 @@ pub(crate) fn refuse_a_link_a_channel_cannot_carry(graph: &Graph, link: &Link) -
             the_inbound_links_a_destination_holds_once_wired(graph, &reader_id),
         )?;
     }
-    if an_island_is_read_through_it {
+    if an_island_is_read_through_it
+        || runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
+    {
         refuse_a_destination_past_its_inbound_cap(
             "the stream's function node pool",
             the_inbound_links_the_function_node_pool_holds_once_wired(graph),

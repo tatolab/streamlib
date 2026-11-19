@@ -37,6 +37,24 @@ pub enum WhatALiveConnectMakesOfALink {
     JudgesItOnlyAsItIsMade,
 }
 
+/// One writer's batch of graph edits on one stream, from
+/// [`RuntimeOperations::open_a_graph_edit_batch`].
+#[must_use = "a batch of graph edits is closed, or taken back when it is dropped"]
+pub trait GraphEditBatch: Send {
+    /// Apply `graph_operation` to the stream's live graph inside the batch, as
+    /// [`RuntimeOperations::apply_a_stream_graph_operation_live`] applies it on its own, the rule
+    /// a reactive reader sets left to the close.
+    fn apply_a_stream_graph_operation_live(
+        &self,
+        graph_operation: streamlib_project_repository::StreamGraphOperation,
+    ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
+
+    /// Close the batch: refused, and taken back, when the graph it leaves holds a reader that
+    /// runs reactively fed only by function node islands, or when its one commit is refused;
+    /// otherwise compiled in one commit, and each event of what stands announced.
+    fn close(self: Box<Self>) -> Result<()>;
+}
+
 pub trait RuntimeOperations: Send + Sync {
     // =========================================================================
     // Async Methods (primary implementation - safe from any context)
@@ -231,19 +249,11 @@ pub trait RuntimeOperations: Send + Sync {
     /// from within a tokio task - use the async variant instead.
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
 
-    /// Open a batch of graph operations on this stream: until it closes, the rule a reader that
-    /// runs reactively sets, that something other than a function node island feeds it, is not
-    /// judged edit by edit, so a batch taking out a source, its islands and their reader is
-    /// judged by the graph it leaves. Batches nest.
-    fn open_a_batch_of_graph_operations(&self) {}
-
-    /// Close the batch [`Self::open_a_batch_of_graph_operations`] opened, judging, once the
-    /// outermost closes, that rule against the graph the batch leaves: refused when it holds a
-    /// link from a function node into a reader that runs reactively and that only islands feed,
-    /// and the batch is then to be taken back.
-    fn close_a_batch_of_graph_operations(&self) -> Result<()> {
-        Ok(())
-    }
+    /// Open a batch of graph edits on this stream for one writer, once no other writer's are
+    /// open on it: each operation applied through it is logged into one compiler transaction,
+    /// and closing it judges the graph the batch leaves and compiles it in one commit. Dropped
+    /// open, the batch is taken back as far as nothing built or wired holds it.
+    fn open_a_graph_edit_batch(self: std::sync::Arc<Self>) -> Box<dyn GraphEditBatch>;
 
     // =========================================================================
     // Lifecycle

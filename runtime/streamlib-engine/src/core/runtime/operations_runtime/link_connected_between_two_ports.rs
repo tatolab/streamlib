@@ -9,9 +9,10 @@ use std::sync::Arc;
 use super::link_ends_this_graph_cannot_take::{
     refuse_a_destination_this_graph_cannot_take, refuse_a_source_this_graph_cannot_take,
 };
-use super::{LiveGraphChangeOnOneStream, commit_live_graph_change};
+use super::{LiveGraphChangeOnOneStream, announce_or_hold, commit_live_graph_change};
 use crate::core::compiler::compiler_ops::function_node_island::{
-    refuse_a_link_an_island_cannot_take, refuse_a_link_feeding_an_island_into_the_app_process,
+    link_in, refuse_a_link_an_island_cannot_take,
+    refuse_a_link_feeding_an_island_into_the_app_process,
     refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands,
 };
 use crate::core::compiler::compiler_ops::refuse_a_link_a_channel_cannot_carry;
@@ -86,6 +87,7 @@ pub(in crate::core::runtime) async fn connect_impl(
         compiler,
         live,
         stream,
+        held_for_one_commit,
     } = live_graph_change;
     let (from, to) = the_ends_connect_links(&compiler, from, to)?;
 
@@ -99,19 +101,34 @@ pub(in crate::core::runtime) async fn connect_impl(
         ALinkConnectedOrSetAside::Connected(link_id) => link_id,
         set_aside @ ALinkConnectedOrSetAside::SetAside(_) => return Ok(set_aside),
     };
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: from.clone(),
-        to: to.clone(),
-    });
+    announce_or_hold(
+        &stream,
+        &held_for_one_commit,
+        Some(&link_id),
+        RuntimeEvent::RuntimeWillConnect {
+            from: from.clone(),
+            to: to.clone(),
+        },
+    );
 
     commit_live_graph_change(&compiler, live).await?;
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
-        link_id: link_id.to_string(),
-        from,
-        to,
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+    announce_or_hold(
+        &stream,
+        &held_for_one_commit,
+        Some(&link_id),
+        RuntimeEvent::RuntimeDidConnect {
+            link_id: link_id.to_string(),
+            from,
+            to,
+        },
+    );
+    announce_or_hold(
+        &stream,
+        &held_for_one_commit,
+        None,
+        RuntimeEvent::GraphDidChange,
+    );
 
     Ok(ALinkConnectedOrSetAside::Connected(link_id))
 }
@@ -191,11 +208,7 @@ fn add_a_link_unless_the_engine_cannot_wire_it(
         .first()
         .map(|link| link.id.clone())
         .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
-    let link = graph
-        .traversal()
-        .e(&link_id)
-        .first()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    let link = link_in(graph, &link_id)?;
     let judged = refuse_a_held_link_the_engine_cannot_wire(graph, link).and_then(|()| {
         if when_the_engine_cannot_wire_it.judges_the_reader_rule_now() {
             refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands(graph, link)
