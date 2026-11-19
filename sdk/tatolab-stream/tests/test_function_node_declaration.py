@@ -506,7 +506,7 @@ def test_a_stateful_output_is_described_inside_stateful():
     "float4 tinted(ImageInput image, float amount) { return image.pixel * amount; }"
 )
 def tinted(
-    image: Annotated[ImageFrame, Description("The picture tinted.")], amount: float
+    image: Annotated[ImageFrame, Description("The picture tinted.")], amount: float = 1.0
 ) -> Annotated[ImageFrame, Description("The tinted picture.")]: ...
 
 

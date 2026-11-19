@@ -9,19 +9,45 @@ pub(crate) fn shader_program(
     image_ports: &[&str],
     float_ports: &[&str],
 ) -> ShaderNodeProgram {
+    let float_ports: Vec<(&str, &str, serde_json::Value)> = float_ports
+        .iter()
+        .map(|port| (*port, "float", serde_json::Value::Null))
+        .collect();
+    shader_program_taking_values(function_name, slang_body, image_ports, &float_ports)
+}
+
+/// A shader program taking `image_ports`, then each of `value_ports` as its port, its Slang
+/// type and the pin type its signature states, a Float stated by its value type alone when that
+/// pin type is null.
+pub(crate) fn shader_program_taking_values(
+    function_name: &str,
+    slang_body: &str,
+    image_ports: &[&str],
+    value_ports: &[(&str, &str, serde_json::Value)],
+) -> ShaderNodeProgram {
     let parameters: Vec<String> = image_ports
         .iter()
         .map(|port| format!("ImageInput {port}"))
-        .chain(float_ports.iter().map(|port| format!("float {port}")))
+        .chain(
+            value_ports
+                .iter()
+                .map(|(port, slang_type, _)| format!("{slang_type} {port}")),
+        )
         .collect();
     let inputs: Vec<serde_json::Value> = image_ports
         .iter()
         .map(|port| serde_json::json!({"port": port, "value_type": "image_frame"}))
-        .chain(
-            float_ports
-                .iter()
-                .map(|port| serde_json::json!({"port": port, "value_type": "float"})),
-        )
+        .chain(value_ports.iter().map(|(port, _, pin_type)| {
+            if pin_type.is_null() {
+                serde_json::json!({"port": port, "value_type": "float"})
+            } else {
+                serde_json::json!({
+                    "port": port,
+                    "value_type": pin_type["type"],
+                    "pin_type": pin_type,
+                })
+            }
+        }))
         .collect();
     ShaderNodeProgram::read_from_described_shader(
         &serde_json::json!(format!(
@@ -90,10 +116,35 @@ fn read_at(input_port: &str) -> ShaderNodeIslandMemberInput {
 }
 
 fn float_at(input_port: &str) -> ShaderNodeIslandMemberInput {
-    ShaderNodeIslandMemberInput::FloatReadAt {
+    numbers_at(input_port, vec![0.5])
+}
+
+fn numbers_at(
+    input_port: &str,
+    numbers_until_one_is_read: Vec<f32>,
+) -> ShaderNodeIslandMemberInput {
+    ShaderNodeIslandMemberInput::NumbersReadAt {
         input_port: input_port.into(),
-        value_until_one_is_read: 0.5,
+        numbers_until_one_is_read,
     }
+}
+
+/// A shader tinting its Image by a Color and shifting it by a Vector2.
+fn tint_by_a_color_and_shift() -> ShaderNodeProgram {
+    shader_program_taking_values(
+        "tint_and_shift",
+        "return image.sample(image.uv + shift) * tint_color * amount;",
+        &["image"],
+        &[
+            ("tint_color", "float4", serde_json::json!({"type": "color"})),
+            (
+                "shift",
+                "float2",
+                serde_json::json!({"type": "vector", "component_count": "two"}),
+            ),
+            ("amount", "float", serde_json::json!({"type": "float"})),
+        ],
+    )
 }
 
 fn from_member(member_index: usize) -> ShaderNodeIslandMemberInput {
@@ -113,9 +164,10 @@ fn chain_of(programs: Vec<(&str, ShaderNodeProgram)>) -> ShaderNodeIslandProgram
                         read_at("source_image")
                     }
                     ShaderNodeInputValueType::ImageFrame => from_member(member_index - 1),
-                    ShaderNodeInputValueType::Float => {
-                        float_at(&format!("{node_name}_{}", input.port))
-                    }
+                    ShaderNodeInputValueType::Numbers(_) => numbers_at(
+                        &format!("{node_name}_{}", input.port),
+                        vec![0.5; input.value_type.number_count()],
+                    ),
                 })
                 .collect();
             member(node_name, program, inputs)
@@ -160,7 +212,7 @@ fn a_point_wise_chain_fuses_into_one_kernel() {
         kernels[0].image_arguments,
         [ShaderNodeKernelImageArgument::ReadAt("source_image".into())]
     );
-    assert_eq!(kernels[0].float_arguments().len(), 2);
+    assert_eq!(kernels[0].number_arguments().len(), 2);
 }
 
 #[test]
@@ -357,13 +409,80 @@ fn a_fused_kernel_declares_each_function_once_and_hands_each_member_the_pixel_be
     assert!(
         source.contains(
             "float4 member_2_pixel = tint(member_2_input_0, \
-                 streamlib_shader_node_push_constants.float_1);"
+                 streamlib_shader_node_push_constants.number_1_0);"
         ),
         "{source}"
     );
     assert!(
         source.contains("void streamlib_shader_node_kernel_0("),
         "{source}"
+    );
+}
+
+#[test]
+fn a_color_and_a_vector_carry_one_push_constant_per_part_and_reach_the_shader_whole() {
+    let island = chain_of(vec![("tint_and_shift", tint_by_a_color_and_shift())]);
+    let kernel = &kernels_at_one_extent(&island)[0];
+    assert_eq!(
+        kernel
+            .number_arguments()
+            .iter()
+            .map(|argument| argument.number_count)
+            .collect::<Vec<_>>(),
+        [4, 2, 1]
+    );
+    assert_eq!(kernel.push_constant_byte_len(), 4 * (2 + 3 + 4 + 2 + 1));
+    let extent = ShaderNodeImageInputExtent {
+        width: 64,
+        height: 16,
+        row_pitch_in_pixels: 64,
+    };
+    let numbers = [1.0, 0.5, 0.25, 1.0, 0.125, -0.125, 2.0];
+    let push_constants = kernel.push_constants((64, 16), &[extent], &numbers);
+    assert_eq!(push_constants.len(), kernel.push_constant_byte_len());
+    for (index, number) in numbers.iter().enumerate() {
+        let start = 20 + 4 * index;
+        assert_eq!(&push_constants[start..start + 4], &number.to_le_bytes());
+    }
+    let source = kernel.compute_kernel_slang_source(
+        &island,
+        0,
+        &[ShaderNodeImageInputBacking::Rgba8PixelBuffer],
+    );
+    assert!(source.contains("    float number_0_3;\n"), "{source}");
+    assert!(source.contains("    float number_1_1;\n"), "{source}");
+    let constant = |argument: usize, part: usize| {
+        format!("streamlib_shader_node_push_constants.number_{argument}_{part}")
+    };
+    let expected_call = format!(
+        "tint_and_shift(member_0_input_0, float4({}, {}, {}, {}), float2({}, {}), {})",
+        constant(0, 0),
+        constant(0, 1),
+        constant(0, 2),
+        constant(0, 3),
+        constant(1, 0),
+        constant(1, 1),
+        constant(2, 0),
+    );
+    assert!(source.contains(&expected_call), "{source}");
+}
+
+#[test]
+fn an_island_reading_a_value_as_the_wrong_count_of_numbers_is_refused() {
+    let refusal = ShaderNodeIslandProgram::of_the_members(vec![member(
+        "tint_and_shift",
+        tint_by_a_color_and_shift(),
+        vec![
+            read_at("image"),
+            numbers_at("tint_color", vec![1.0]),
+            numbers_at("shift", vec![0.0, 0.0]),
+            float_at("amount"),
+        ],
+    )])
+    .unwrap_err();
+    assert!(
+        refusal.contains("reads input `tint_color` as the wrong value type"),
+        "{refusal}"
     );
 }
 
@@ -386,12 +505,22 @@ fn every_kernel_compiles_for_every_backing_and_reflects_the_bindings_it_declares
             blend(),
             vec![from_member(1), read_at("foreground")],
         ),
+        member(
+            "tint_and_shift",
+            tint_by_a_color_and_shift(),
+            vec![
+                from_member(2),
+                numbers_at("tint_color", vec![1.0, 0.5, 0.25, 1.0]),
+                numbers_at("shift", vec![0.0, 0.0]),
+                float_at("amount"),
+            ],
+        ),
     ])
     .unwrap();
     let kernels = kernels_at_one_extent(&island);
     assert_eq!(
         member_names_of_each_kernel(&island, &kernels),
-        [vec!["tint"], vec!["blur", "blend"]]
+        [vec!["tint"], vec!["blur", "blend"], vec!["tint_and_shift"]]
     );
     let compiler = SlangShaderSourceCompiler::new();
     for backing in [

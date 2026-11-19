@@ -34,7 +34,7 @@ PROJECT_NODE_SOURCE = (
 from dataclasses import dataclass
 from typing import Annotated
 
-from tatolab.stream import Description, Image, Input, Output, State, Stateful, Time, node
+from tatolab.stream import Color, Description, Image, Input, Output, State, Stateful, Time, Vector2, node
 
 
 INVERSE_KINEMATICS_DESCRIPTION = "Solves joint angles for a target pose."
@@ -85,8 +85,10 @@ def ramp(rate: float, previous: State[Phase]) -> Stateful[Annotated[float, Descr
     description="Scales every channel by `amount`.",
 )
 @node.meta(category="Effects")
-@node.shader("float4 tint(ImageInput image, float amount) { return image.pixel * amount; }")
-def tint(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...
+@node.shader("float4 tint(ImageInput image, float amount, float4 hue, float2 shift) { return image.pixel * amount; }")
+def tint(
+    image: ImageFrame, amount: float = 1.0, hue: Color = Color(1, 1, 1), shift: Vector2 = Vector2(0, 0)
+) -> ImageFrame: ...
 
 
 def not_a_node(x: float) -> float:
@@ -271,7 +273,7 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     tint = node_types["nodes.inverse_kinematics:tint"]
     assert tint["kind"] == "shader"
     assert (tint["category"], tint["description"]) == ("Color", "Scales every channel by `amount`.")
-    assert [port["family"] for port in tint["inputs"]] == ["image", "channels"]
+    assert [port["family"] for port in tint["inputs"]] == ["image", "channels", "channels", "channels"]
     assert tint["outputs"] == [{"name": "result", "family": "image", "description": "", "annotation": "ImageFrame"}]
 
     assert project["graph_generators"] == [
