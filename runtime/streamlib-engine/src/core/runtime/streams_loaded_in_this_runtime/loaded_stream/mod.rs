@@ -567,10 +567,7 @@ impl LoadedStreamInThisRuntime {
                 .zip(state.state_values)
                 .map(|(state_field, state_value)| (state_field, serde_json::json!(state_value)))
                 .collect();
-            node.components.insert(
-                "function_node_state".to_string(),
-                serde_json::Value::Object(state_by_field),
-            );
+            node.components.function_node_state = Some(state_by_field);
         }
     }
 
@@ -662,21 +659,16 @@ fn render_the_value_of_each_graph_input_into(
     mut value_of_each_graph_input: HashMap<String, ValueOfAGraphInputRendered>,
 ) {
     use crate::core::graph::graph_interface_resolution::{
-        GRAPH_INTERFACE_COMPONENT_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME,
-        render_the_saved_value_of_a_graph_input_as_its_default,
+        GRAPH_INTERFACE_VALUE_PORT_NAME, render_the_saved_value_of_a_graph_input_as_its_default,
     };
     for node in nodes {
         let Some(rendered) = value_of_each_graph_input.remove(&node.id) else {
             continue;
         };
-        if let Some(serde_json::Value::Object(graph_interface)) =
-            node.components.get_mut(GRAPH_INTERFACE_COMPONENT_KEY)
+        if let Some(graph_interface) = &mut node.components.graph_interface
             && let Some(current_value) = rendered.current_value
         {
-            graph_interface.insert(
-                GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD.to_string(),
-                current_value,
-            );
+            graph_interface.current_value = Some(current_value);
         }
         match &rendered.saved_value {
             Some(saved_value) => node.input_values.insert(
@@ -693,7 +685,3 @@ fn render_the_value_of_each_graph_input_into(
         }
     }
 }
-
-/// The field of a `GraphInput`'s `graph_interface` component holding the value its `value` input
-/// reads now: the one set live, else its saved one.
-pub(crate) const GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD: &str = "current_value";

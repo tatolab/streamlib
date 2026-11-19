@@ -445,10 +445,23 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             },
             "input_values": {"frame_width": 640, "trim": 0.5},
             "pins": {"trim": 0.5},
-            "components": {"state": "Running"},
+            "components": {
+                "state": "Running",
+                "failed_because": null,
+                "process_raising_because": null,
+                "not_ready_because": null,
+                "metrics": {"frames_dropped": 2, "dropped_bags_by_link": {"L1": 2},
+                            "refused_bags_by_output_port": {},
+                            "written_bags_by_output_port": {"out": 40}},
+                "host": {"inside_the_read_of": ["reader"]},
+            },
         }],
         "links": [{"id": "L1", "source": {"node": "a", "port": "out"},
-                   "target": {"node": "mixer", "port": "level"}}],
+                   "target": {"node": "mixer", "port": "level"}, "capacity": 4,
+                   "state": "wired", "free_conversion": true,
+                   "warnings": [{"warning": "vector_read_as_a_color"}],
+                   "components": {"state": "Wired"}}],
+        "clock": {"mode": "stepped", "step_ns": 1000, "pace": null, "stop_after_steps": 3},
         "machine": "rig",
     });
     let every_stream = serde_json::json!({ "machine": "rig", "streams": [one_stream.clone()] });
@@ -510,6 +523,20 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         "a declared null default reads apart from no default"
     );
     assert!(inputs[0].pin.is_some() && inputs[1].pin.is_none());
+    let link = &graph.links[0];
+    assert!(
+        link.marks.free_conversion,
+        "a link that converts for free says so: {link:?}"
+    );
+    assert_eq!(
+        link.marks.warnings,
+        [PinLinkWarningOnTheWire::VectorReadAsAColor],
+        "a warned link carries its warnings"
+    );
+    assert_eq!(
+        graph.nodes[0].components.state,
+        Some(NodeStateOnTheWire::Running)
+    );
     assert_eq!(serde_json::to_value(&read_one).unwrap(), one_stream);
 
     let read_every: GraphToolResult = serde_json::from_value(every_stream.clone()).unwrap();

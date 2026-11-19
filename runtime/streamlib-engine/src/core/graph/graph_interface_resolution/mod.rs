@@ -30,12 +30,16 @@ use crate::core::graph::{
     the_refusal_of_a_link_into_a_setting,
 };
 use crate::core::json_schema::{
-    GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse,
-    InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
+    GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire, GraphNodeOutput,
+    GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered,
+    LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 use streamlib_node_schema::output_port_family_resolved_against_config;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    GraphInterfacePortDirectionOnTheWire, GraphInterfacePortOnTheWire,
+};
 
 use interface_node_config::{
     port_and_family_an_interface_nodes_config_declares,
@@ -47,10 +51,6 @@ pub use streamlib_project_repository::{
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, is_a_graph_interface_node_type,
     is_the_graph_input_type,
 };
-
-/// The component key an interface node, and a drawn link with an end on one,
-/// renders what it declares under.
-pub const GRAPH_INTERFACE_COMPONENT_KEY: &str = "graph_interface";
 
 /// The name a top-level `GraphInput`'s `value` input had: a stream saved before it was an input
 /// holds its saved value under this key.
@@ -145,9 +145,10 @@ impl GraphInterfaceNodeAsDrawn {
             .find(|rendered| cast_or_as_written(&rendered.name) == node_cast)
         {
             let mut rendered_as_an_interface_node = self.rendered_as_a_node();
-            let mut components = std::mem::take(&mut running_node.components);
-            components.extend(rendered_as_an_interface_node.components);
-            rendered_as_an_interface_node.components = components;
+            rendered_as_an_interface_node.components = GraphNodeComponentsOnTheWire {
+                graph_interface: rendered_as_an_interface_node.components.graph_interface,
+                ..std::mem::take(&mut running_node.components)
+            };
             rendered_as_an_interface_node.id = std::mem::take(&mut running_node.id);
             rendered_as_an_interface_node.ports.inputs =
                 std::mem::take(&mut running_node.ports.inputs);
@@ -158,10 +159,7 @@ impl GraphInterfaceNodeAsDrawn {
             .iter_mut()
             .filter(|link| cast_or_as_written(&link.source.node) == node_cast)
         {
-            link.components.insert(
-                GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
-                self.declared_port.as_component(),
-            );
+            link.components.graph_interface = Some(self.declared_port.as_component());
         }
     }
 
@@ -179,11 +177,10 @@ impl GraphInterfaceNodeAsDrawn {
             GraphInterfacePortDirection::Output => (vec![value_port], Vec::new()),
             GraphInterfacePortDirection::Input => (Vec::new(), vec![value_port]),
         };
-        let mut components = serde_json::Map::new();
-        components.insert(
-            GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
-            declared.as_component(),
-        );
+        let components = GraphNodeComponentsOnTheWire {
+            graph_interface: Some(declared.as_component()),
+            ..GraphNodeComponentsOnTheWire::default()
+        };
         let values = InputValuesRendered::of_a_node_holding_no_pin_value_whose_config_renders_as(
             &self.node.input_values,
             the_config_a_graph_interface_node_renders(
@@ -743,17 +740,15 @@ impl GraphInterfaceAsDrawn {
             let position = drawn
                 .position_among_the_graphs_links
                 .min(graph_response.links.len());
-            let mut components = serde_json::Map::new();
-            if let Some(declared) = self.port_a_link_meets(&drawn.link) {
-                components.insert(
-                    GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
-                    declared.as_component(),
-                );
-            }
+            let components = GraphLinkComponentsOnTheWire {
+                graph_interface: self
+                    .port_a_link_meets(&drawn.link)
+                    .map(GraphInterfacePort::as_component),
+                ..GraphLinkComponentsOnTheWire::default()
+            };
             graph_response.links.insert(
                 position,
                 LinkOutput {
-                    id: String::new(),
                     source: LinkPortRefOutput {
                         node: cast_or_as_written(&drawn.link.source.node),
                         port: drawn.link.source.port.clone(),
@@ -762,10 +757,8 @@ impl GraphInterfaceAsDrawn {
                         node: cast_or_as_written(&drawn.link.target.node),
                         port: drawn.link.target.port.clone(),
                     },
-                    capacity: Default::default(),
-                    state: Default::default(),
-                    error_reason: None,
                     components,
+                    ..LinkOutput::default()
                 },
             );
         }
@@ -915,15 +908,18 @@ impl GraphInterfacePort {
         }
     }
 
-    fn as_component(&self) -> serde_json::Value {
-        serde_json::json!({
-            "direction": match self.direction {
-                GraphInterfacePortDirection::Input => "input",
-                GraphInterfacePortDirection::Output => "output",
+    /// The port as `graph` renders it under `graph_interface` on its node and each link with an
+    /// end on it.
+    fn as_component(&self) -> GraphInterfacePortOnTheWire {
+        GraphInterfacePortOnTheWire {
+            direction: match self.direction {
+                GraphInterfacePortDirection::Input => GraphInterfacePortDirectionOnTheWire::Input,
+                GraphInterfacePortDirection::Output => GraphInterfacePortDirectionOnTheWire::Output,
             },
-            GRAPH_INTERFACE_PORT_CONFIG_KEY: cast_or_as_written(&self.port),
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY: self.family.map(PortFamily::wire_name),
-        })
+            port: cast_or_as_written(&self.port),
+            family: self.family.map(|family| family.wire_name().to_string()),
+            current_value: None,
+        }
     }
 }
 

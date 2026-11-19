@@ -3,10 +3,9 @@
 
 use std::sync::Arc;
 
-use serde_json::Value as JsonValue;
-
-use super::{Iceoryx2ServicesHeldOpenForLinkComponent, JsonSerializableComponent};
+use super::{GraphRenders, Iceoryx2ServicesHeldOpenForLinkComponent};
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId};
+use crate::core::json_schema::GraphLinkComponentsOnTheWire;
 use crate::core::nodes::OutOfProcessLinkWireReply;
 
 /// Marks a link from a node outside any island into a function node whose
@@ -49,18 +48,16 @@ impl LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
     }
 }
 
-impl JsonSerializableComponent for LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
-    fn json_key(&self) -> &'static str {
-        "read_through_the_reader_of_its_function_node_island"
-    }
-
-    fn to_json(&self) -> JsonValue {
+impl GraphRenders<GraphLinkComponentsOnTheWire>
+    for LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent
+{
+    fn render_onto(&self, components: &mut GraphLinkComponentsOnTheWire) {
         let mut reader_input_ports: Vec<String> = self
             .reads_by_island_link
             .iter()
             .map(|read| read.reader_input_port.to_string())
             .collect();
         reader_input_ports.sort();
-        JsonValue::from(reader_input_ports)
+        components.read_through_the_reader_of_its_function_node_island = Some(reader_input_ports);
     }
 }

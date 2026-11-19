@@ -180,6 +180,9 @@ class ControlContractReader {
     if (typeof schema.minimum === "number" && value < schema.minimum) {
       this.issue("too_small", path, `expected at least ${schema.minimum}, read ${value}`);
     }
+    if (typeof schema.exclusiveMinimum === "number" && value <= schema.exclusiveMinimum) {
+      this.issue("too_small", path, `expected more than ${schema.exclusiveMinimum}, read ${value}`);
+    }
     if (FORMATS_THAT_STATE_NO_CHECK.has(schema.format)) return;
     const range = INTEGER_RANGE_BY_FORMAT.get(schema.format);
     if (range !== undefined && (typeof value === "bigint" || Number.isInteger(value))) {

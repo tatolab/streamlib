@@ -376,9 +376,10 @@ impl LoadedStreamInThisRuntime {
         lend_directory: Option<&Path>,
     ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
-        graph
-            .clock
-            .refusal_unless_this_runtime_runs_it(self.stream_id())?;
+        crate::core::context::refuse_a_stream_clock_this_runtime_cannot_run(
+            &graph.clock,
+            self.stream_id(),
+        )?;
         let graph_whose_every_node_holds_a_uuid =
             graph.with_a_uuid_minted_for_each_node_holding_none();
         let why_its_node_code_did_not_describe = match self

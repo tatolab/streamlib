@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use streamlib::sdk::nodes::NodeState;
+
 use super::*;
 
 /// A connection following a stream's input values alone is sent `missed`, the change that tells
@@ -53,7 +55,7 @@ fn a_node_state_on_the_wire_is_spelled_as_graph_renders_it() {
         NodeState::Restarting,
     ] {
         assert_eq!(
-            serde_json::to_value(node_state_on_the_wire(node_state))
+            serde_json::to_value(NodeStateOnTheWire::from(node_state))
                 .expect("a node state serializes"),
             serde_json::json!(node_state.to_string())
         );

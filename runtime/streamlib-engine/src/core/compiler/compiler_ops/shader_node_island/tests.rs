@@ -294,7 +294,8 @@ fn placing_the_islands_hands_the_island_to_its_host_and_its_group_to_every_membe
         .v(&stream.tint)
         .first()
         .unwrap()
-        .serialize_components();
+        .render_components();
+    let rendered = serde_json::to_value(rendered).unwrap();
     assert_eq!(
         rendered["fused_group"]["evaluated_by"],
         stream

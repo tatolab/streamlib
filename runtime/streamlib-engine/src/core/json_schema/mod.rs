@@ -11,9 +11,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::{
-    DeclaredPinType, NodeInputMode, PinAnnotations, PortFamilyDeclaration, SettingReadTime,
+    DeclaredPinType, NodeInputMode, PinAnnotations, PinLinkVerdict, PortFamilyDeclaration,
+    SettingReadTime,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, ConfigFieldDescribedAsASetting, LegacyConfigOfANodeType,
@@ -23,15 +23,17 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
+use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 pub use streamlib_node_schema::NodeClassImportPath;
 pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
-    GraphNodeKindOnTheWire, GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
+    GraphLinkComponentsOnTheWire, GraphLinkOnTheWire, GraphLinkPortRefOnTheWire,
+    GraphLinkStateOnTheWire, GraphNodeComponentsOnTheWire, GraphNodeKindOnTheWire,
+    GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
-    MachineWideGraphOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+    LinkCarriedThroughTheFunctionNodePoolOnTheWire, MachineWideGraphOnTheWire,
+    PinLinkMarksOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
 };
-
-use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 
 // =============================================================================
 // Graph Response (/api/graph and the `graph` operation)
@@ -40,17 +42,17 @@ use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughT
 /// One stream's graph as `graph` answers it: the control contract's, with each link and the
 /// clock the engine renders, so it loads back as a
 /// [`GraphSnapshot`](crate::core::graph::graph_snapshot::GraphSnapshot).
-pub type GraphResponse = StreamGraphOnTheWire<LinkOutput, StreamClockSpec>;
+pub type GraphResponse = StreamGraphOnTheWire;
 
 /// Every loaded stream's graph under the machine's name, as `graph` answers it when no stream
 /// is named.
-pub type MachineWideGraphResponse = MachineWideGraphOnTheWire<LinkOutput, StreamClockSpec>;
+pub type MachineWideGraphResponse = MachineWideGraphOnTheWire;
 
 /// A node of a stream's graph, as `graph` answers it.
-pub type GraphNodeOutput = GraphNodeOnTheWire<LinkOutput>;
+pub type GraphNodeOutput = GraphNodeOnTheWire;
 
 /// The nodes and links a fragment holds, as `graph` answers them.
-pub type GraphFragmentOutput = GraphFragmentOnTheWire<LinkOutput>;
+pub type GraphFragmentOutput = GraphFragmentOnTheWire;
 
 /// The values a node holds as `graph` renders them: `input_values`, as its graph document holds
 /// them, and what they split into for a client that reads no `input_values`, the `config` with
@@ -125,54 +127,25 @@ pub(crate) fn redraw_a_node_over_its_pins(
     node.config = Some(config);
 }
 
-/// A link (connection) between two node ports.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct LinkOutput {
-    /// Unique identifier for this link.
-    pub id: String,
-    /// Source endpoint (output port).
-    pub source: LinkPortRefOutput,
-    /// Target endpoint (input port).
-    pub target: LinkPortRefOutput,
-    /// Ring buffer capacity for the channel.
-    #[serde(default)]
-    pub capacity: usize,
-    /// Current state of the link.
-    #[serde(default)]
-    pub state: LinkStateOutput,
-    /// Why the link is in the `error` state, in the words of the helper
-    /// process that could not open its port, or of the graph's validation that
-    /// refused it, or the engine that cannot wire it, as its stream loaded.
-    ///
-    /// Absent in every other state, so a reader that finds it knows the link
-    /// carries nothing and will not start to: disconnect it and wire again.
-    /// `state` stays a plain string so a check against `"wired"` is unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_reason: Option<String>,
-    /// Runtime components (dynamic, varies based on link state).
-    pub components: serde_json::Map<String, serde_json::Value>,
-}
+/// A link of a stream's graph, as `graph` answers it.
+pub type LinkOutput = GraphLinkOnTheWire;
 
-/// One end of a link: a port on a node this graph holds. A link's ends are
-/// both in one stream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct LinkPortRefOutput {
-    /// The node's name.
-    pub node: String,
-    /// The port's own name on that node.
-    pub port: String,
-}
+/// One end of a link, a port on a node the graph holds, named by its node's name. A link's ends
+/// are both in one stream.
+pub type LinkPortRefOutput = GraphLinkPortRefOnTheWire;
 
-impl LinkPortRefOutput {
-    fn of_a_port(
-        node_run_id: &crate::core::graph::NodeRunId,
-        port_name: &str,
-        node_names: &NodeNamesByNodeRunId,
-    ) -> Self {
-        Self {
-            node: node_names.name_of(node_run_id),
-            port: port_name.to_string(),
-        }
+/// The state of a link, as `graph` answers it.
+pub type LinkStateOutput = GraphLinkStateOnTheWire;
+
+/// The end of a link at `port_name` of the node `node_run_id`, named by its node's name.
+fn link_end_of_a_port(
+    node_run_id: &crate::core::graph::NodeRunId,
+    port_name: &str,
+    node_names: &NodeNamesByNodeRunId,
+) -> LinkPortRefOutput {
+    LinkPortRefOutput {
+        node: node_names.name_of(node_run_id),
+        port: port_name.to_string(),
     }
 }
 
@@ -206,25 +179,6 @@ impl NodeNamesByNodeRunId {
             .cloned()
             .unwrap_or_else(|| node_run_id.to_string())
     }
-}
-
-/// State of a link in the graph.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkStateOutput {
-    /// Link exists in graph but not yet wired.
-    #[default]
-    Pending,
-    /// Link is actively wired with a ring buffer channel.
-    Wired,
-    /// Link is being disconnected.
-    Disconnecting,
-    /// Link was disconnected.
-    Disconnected,
-    /// Link is in error state.
-    Error,
 }
 
 // =============================================================================
@@ -579,7 +533,7 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             exposed_config_fields: node.exposed_config_fields.clone(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            components: node.serialize_components(),
+            components: node.render_components(),
             fragment: None,
         }
     }
@@ -662,83 +616,98 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
     }
 }
 
-impl LinkOutput {
-    /// Render `link` with each end on this runtime named by its node's name.
-    pub(crate) fn of_a_link(
-        link: &crate::core::graph::Link,
-        node_names: &NodeNamesByNodeRunId,
-    ) -> Self {
-        let rendered = RenderedLinkState::of(link);
-        let mut components = link.serialize_components();
-        // `LinkStateComponent` renders under `components.state` too, and for a
-        // link waiting on a helper it holds the `Pending` the op stamped. Left
-        // alone it would contradict the top-level state a reader was told to
-        // check — the same disagreement the top-level state reads the component
-        // to avoid, in the other direction.
-        let (state, error_reason) = rendered.into_state_and_its_reason();
-        render_the_state_component_as(&mut components, state);
-        Self {
-            id: link.id.to_string(),
-            source: LinkPortRefOutput::of_a_port(
-                link.source.node_run_id(),
-                link.source.port_name(),
-                node_names,
-            ),
-            target: LinkPortRefOutput::of_a_port(
-                link.target.node_run_id(),
-                link.target.port_name(),
-                node_names,
-            ),
-            capacity: link.capacity.get(),
-            state,
-            error_reason,
-            components,
-        }
-    }
+/// `link` as `graph` answers it, each end on this runtime named by its node's name, saying what
+/// it converts and warns of as `verdict`, the judgement of its two typed ends, does.
+pub(crate) fn rendered_link(
+    link: &crate::core::graph::Link,
+    node_names: &NodeNamesByNodeRunId,
+    verdict: Option<&PinLinkVerdict>,
+) -> LinkOutput {
+    let rendered = RenderedLinkState::of(link);
+    let mut components = link.render_components();
+    // `LinkStateComponent` renders under `components.state` too, and for a link waiting on a
+    // helper it holds the `Pending` the op stamped. Left alone it would contradict the
+    // top-level state a reader was told to check — the same disagreement the top-level state
+    // reads the component to avoid, in the other direction.
+    let (state, error_reason) = rendered.into_state_and_its_reason();
+    render_the_state_component_as(&mut components, state);
+    let mut rendered = LinkOutput {
+        id: link.id.to_string(),
+        source: link_end_of_a_port(
+            link.source.node_run_id(),
+            link.source.port_name(),
+            node_names,
+        ),
+        target: link_end_of_a_port(
+            link.target.node_run_id(),
+            link.target.port_name(),
+            node_names,
+        ),
+        capacity: link.capacity.get(),
+        state,
+        error_reason,
+        components,
+        ..LinkOutput::default()
+    };
+    mark_what_a_link_converts_and_warns_of(&mut rendered, verdict);
+    rendered
+}
 
-    /// Render `carried`, a link the graph carries through the function node pool as two links,
-    /// as it was given: from the island to the reader, naming the pool's ports it runs through,
-    /// in the error either of its links is in, else in the state of the link out of the pool.
-    pub(crate) fn of_a_link_carried_through_the_function_node_pool(
-        carried: &LinkCarriedThroughTheFunctionNodePool<'_>,
-        node_names: &NodeNamesByNodeRunId,
-    ) -> Self {
-        let into_the_pool = Self::of_a_link(carried.into_the_function_node_pool, node_names);
-        let out_of_the_pool = Self::of_a_link(carried.out_of_the_function_node_pool, node_names);
-        let (state, error_reason) = if into_the_pool.state == LinkStateOutput::Error {
-            (into_the_pool.state, into_the_pool.error_reason)
-        } else {
-            (out_of_the_pool.state, out_of_the_pool.error_reason)
-        };
-        let mut components = out_of_the_pool.components;
-        components.insert(
-            "carried_through_the_function_node_pool".to_string(),
-            serde_json::json!({
-                "input_port": into_the_pool.target.port,
-                "output_port": out_of_the_pool.source.port,
-            }),
-        );
-        render_the_state_component_as(&mut components, state);
-        Self {
-            id: carried.carried_link_id.to_string(),
-            source: into_the_pool.source,
-            target: out_of_the_pool.target,
-            capacity: out_of_the_pool.capacity,
-            state,
-            error_reason,
-            components,
-        }
-    }
+/// Mark `rendered` with what `verdict`, the judgement of its two typed ends, says it does: a
+/// free conversion, and the warnings it gave. A link no verdict judged, one whose end is untyped,
+/// is marked with neither.
+pub(crate) fn mark_what_a_link_converts_and_warns_of(
+    rendered: &mut LinkOutput,
+    verdict: Option<&PinLinkVerdict>,
+) {
+    rendered.marks = PinLinkMarksOnTheWire::of(verdict);
+}
+
+/// `carried`, a link the graph carries through the function node pool as two links, as it was
+/// given: from the island to the reader, naming the pool's ports it runs through, in the error
+/// either of its links is in, else in the state of the link out of the pool, saying what it
+/// converts and warns of as `verdict` does.
+pub(crate) fn rendered_link_carried_through_the_function_node_pool(
+    carried: &LinkCarriedThroughTheFunctionNodePool<'_>,
+    node_names: &NodeNamesByNodeRunId,
+    verdict: Option<&PinLinkVerdict>,
+) -> LinkOutput {
+    let into_the_pool = rendered_link(carried.into_the_function_node_pool, node_names, None);
+    let out_of_the_pool = rendered_link(carried.out_of_the_function_node_pool, node_names, None);
+    let (state, error_reason) = if into_the_pool.state == LinkStateOutput::Error {
+        (into_the_pool.state, into_the_pool.error_reason)
+    } else {
+        (out_of_the_pool.state, out_of_the_pool.error_reason)
+    };
+    let mut components = out_of_the_pool.components;
+    components.carried_through_the_function_node_pool =
+        Some(LinkCarriedThroughTheFunctionNodePoolOnTheWire {
+            input_port: into_the_pool.target.port,
+            output_port: out_of_the_pool.source.port,
+        });
+    render_the_state_component_as(&mut components, state);
+    let mut rendered = LinkOutput {
+        id: carried.carried_link_id.to_string(),
+        source: into_the_pool.source,
+        target: out_of_the_pool.target,
+        capacity: out_of_the_pool.capacity,
+        state,
+        error_reason,
+        components,
+        ..LinkOutput::default()
+    };
+    mark_what_a_link_converts_and_warns_of(&mut rendered, verdict);
+    rendered
 }
 
 /// Set a link's `components.state`, which `LinkStateComponent` renders, to the state the link
 /// reports, so the two never disagree.
 fn render_the_state_component_as(
-    components: &mut serde_json::Map<String, serde_json::Value>,
+    components: &mut GraphLinkComponentsOnTheWire,
     state: LinkStateOutput,
 ) {
-    if let Some(rendered_state) = components.get_mut("state") {
-        *rendered_state = serde_json::json!(format!("{state:?}"));
+    if let Some(rendered_state) = &mut components.state {
+        *rendered_state = state.into();
     }
 }
 

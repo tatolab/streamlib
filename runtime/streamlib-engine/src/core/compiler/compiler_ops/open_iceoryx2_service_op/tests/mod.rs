@@ -387,9 +387,9 @@ impl NativeLinkWiredForLossCounting {
             .v(proc_id)
             .first()
             .expect("the node's node must be in the graph")
-            .serialize_components()
-            .get("metrics")
-            .cloned()
+            .render_components()
+            .metrics
+            .map(|metrics| serde_json::to_value(metrics).unwrap())
     }
 
     fn write_bags(&self, bag_count: usize) {
@@ -516,8 +516,10 @@ impl NativeLinkIntoAWindowedPort {
             .v(&self.dest_id)
             .first()
             .expect("the destination's node must be in the graph")
-            .serialize_components()["metrics"]
-            .clone()
+            .render_components()
+            .metrics
+            .map(|metrics| serde_json::to_value(metrics).unwrap())
+            .unwrap_or_default()
     }
 }
 

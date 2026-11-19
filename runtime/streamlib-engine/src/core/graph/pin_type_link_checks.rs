@@ -10,8 +10,9 @@ use super::port_family_link_checks::{
 };
 use super::{Graph, GraphNode, InputLinkPortRef, OutputLinkPortRef, PortInfo};
 use crate::core::descriptors::{
-    PinLinkEnd, PinLinkInputEnd, PinLinkRefusal, PinLinkVerdict, PinType, PortFamilyDeclaration,
-    PortFamilyLinkEndpoint, pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
+    PinConversion, PinLinkEnd, PinLinkInputEnd, PinLinkRefusal, PinLinkVerdict, PinType,
+    PortFamilyDeclaration, PortFamilyLinkEndpoint, pin_link_verdict,
+    refusal_of_the_names_and_codec_a_link_carries,
 };
 use crate::core::{Error, Result};
 
@@ -116,6 +117,18 @@ pub(crate) fn the_ends_a_link_is_judged_by(
         input_pin_type: input_port.pin.as_ref().map(|pin| pin.pin_type.clone()),
         input_family: input_port.family.clone(),
     })
+}
+
+/// The judgement of a link from `from` to `to` by its two ends' pin types, among
+/// `conversions`; `None` when either end is no node of `graph`, or either port is untyped.
+pub(crate) fn the_verdict_on_a_link_between_typed_ends(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    conversions: &[PinConversion],
+) -> Option<PinLinkVerdict> {
+    the_typed_ends_of(graph, from, to)
+        .map(|ends| pin_link_verdict(ends.output, ends.input, conversions))
 }
 
 /// Whether `connect` would refuse a link from `from` to `to` made now in `graph`.
