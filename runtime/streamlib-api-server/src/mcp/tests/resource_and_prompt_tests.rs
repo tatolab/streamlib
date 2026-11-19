@@ -260,7 +260,10 @@ async fn the_graph_resource_renders_every_loaded_streams_graph_as_it_stands_at_e
     let after = resource_document(runtime, "streamlib://graph").await;
     assert_eq!(
         after,
-        json!({ "machine": STUB_MACHINE_NAME, "streams": [two_linked_nodes_graph()] })
+        json!({
+            "machine": STUB_MACHINE_NAME,
+            "streams": [as_a_graph_call_answers_it(two_linked_nodes_graph())],
+        })
     );
 }
 

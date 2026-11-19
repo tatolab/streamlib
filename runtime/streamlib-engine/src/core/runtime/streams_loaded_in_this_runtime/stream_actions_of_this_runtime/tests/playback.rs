@@ -47,10 +47,11 @@ fn a_stop_of_a_project_stops_each_running_stream_and_leaves_a_failed_one_as_it_i
         state_directory.path(),
         &a_record_of(&project, "microphone"),
     );
-    let failed = StreamRecord {
-        failed_because: Some("it crashed the runtime".to_string()),
-        ..a_record_of(&project, "preview")
-    };
+    let mut failed = a_record_of(&project, "preview");
+    failed.fail_as(
+        StreamFailureKind::KeepsCrashingTheRuntime,
+        "it crashed the runtime".to_string(),
+    );
     records_in(state_directory.path()).write(&failed).unwrap();
 
     let stop = runner.stop_playback(project.path()).unwrap();
