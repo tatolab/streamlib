@@ -86,13 +86,13 @@ def test_a_generator_run_answers_the_fragment_node_it_is_stored_as(
         "placed": {
             "name": "front-look",
             "type": "generators.looks:look",
-            "config": {"port": "camera"},
+            "input_values": {"port": "camera"},
             "fragment": {
                 "nodes": [
                     {"name": "graphinput", "type": "tatolab.stream:GraphInput",
-                     "config": {"port": "camera", "family": "packets"}},
+                     "input_values": {"port": "camera", "family": "packets"}},
                     {"name": "graphoutput", "type": "tatolab.stream:GraphOutput",
-                     "config": {"port": "camera", "family": "packets"}},
+                     "input_values": {"port": "camera", "family": "packets"}},
                 ],
                 "links": [
                     {"source": {"node": "graphinput", "port": "value"},
