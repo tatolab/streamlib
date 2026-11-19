@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 13
+    "x-contract-revision": 14
   },
   "methods": [
     {
@@ -4395,6 +4395,67 @@
       ],
       "x-effect": "reads_only",
       "x-agent-tool-listing": "listed_as_a_tool"
+    },
+    {
+      "name": "set_node_type_group",
+      "summary": "File a node type under a group of the project's own, or put it back where its author files it, as one transaction on its history.",
+      "description": "File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types`, `describe_node_types` and `list_project_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SetNodeTypeGroupRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "set_node_type_group_result",
+        "schema": {
+          "$ref": "#/components/schemas/SetNodeTypeGroupToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "node_type",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "list_project_views",
@@ -14831,7 +14892,19 @@
               "string",
               "null"
             ],
-            "description": "The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it."
+            "description": "The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it."
+          },
+          "category_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeCategoryFrom"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who filed it under `category`; null when nothing files it.",
+            "default": null
           },
           "inputs": {
             "type": [
@@ -14875,6 +14948,26 @@
           "description"
         ],
         "description": "One node type as its declaration states it in source."
+      },
+      "NodeTypeCategoryFrom": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "project",
+            "description": "The project moved it there with `set_node_type_group`; clearing that puts it back where\nan import or its author files it."
+          },
+          {
+            "type": "string",
+            "const": "import",
+            "description": "A project the project imports moved it there, and the project has not."
+          },
+          {
+            "type": "string",
+            "const": "declaration",
+            "description": "Its author declared it, with `@node.meta(category=…)` or `#[meta(category = …)]`."
+          }
+        ],
+        "description": "Who filed a node type under the group it is listed in."
       },
       "NodeTypePortReadFromSource": {
         "type": "object",
@@ -15494,7 +15587,19 @@
               "string",
               "null"
             ],
-            "description": "The group it is filed under, a path where the group is inside another, as\n`Effects/Stylize`; null when it declares none, or where its declaration source does not\nshow it."
+            "description": "The group it is filed under, a path where the group is inside another, as\n`Effects/Stylize`: the project's own, else an import's, else the one its author declared;\nnull when none files it, or where its declaration source does not show it."
+          },
+          "category_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeCategoryFrom"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who filed it under `category`; null when nothing files it.",
+            "default": null
           },
           "kind": {
             "anyOf": [
@@ -15669,7 +15774,19 @@
               "string",
               "null"
             ],
-            "description": "The group it is filed under; null when it declares none."
+            "description": "The group it is filed under: the project's own, else an import's, else the one its author\ndeclared; null when none files it."
+          },
+          "category_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeCategoryFrom"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who filed it under `category`; null when nothing files it.",
+            "default": null
           },
           "kind": {
             "anyOf": [
@@ -16446,6 +16563,85 @@
           }
         ],
         "description": "A node type named that the runtime could not describe."
+      },
+      "SetNodeTypeGroupRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents."
+          },
+          "node_type": {
+            "type": "string",
+            "description": "The node type to move, as `list_node_types` names it under `node_type`: the project's own, an import's, an installed distribution's or a built-in."
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group to file it under, a path where the group is inside another, as `Effects/Stylize`; a group no node type is filed under yet is made by filing one there. `null` puts it back where an import or its author files it."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "project_directory",
+          "node_type"
+        ],
+        "description": "`set_node_type_group`'s params."
+      },
+      "SetNodeTypeGroupToolResult": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "The project's UUID."
+          },
+          "node_type": {
+            "type": "string",
+            "description": "The node type, as `list_node_types` names it."
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group the project now files it under; null when the project files it nowhere of its\nown, so an import's group or its author's stands."
+          },
+          "transaction": {
+            "type": "string",
+            "description": "The transaction's UUID."
+          },
+          "commit": {
+            "type": "string",
+            "description": "The commit on the project history's `main` that records it."
+          }
+        },
+        "required": [
+          "project",
+          "node_type",
+          "transaction",
+          "commit"
+        ],
+        "description": "`set_node_type_group`'s answer: the group the project now files the node type under, and the\ntransaction that filed it."
       },
       "ListProjectViewsRequest": {
         "type": "object",
@@ -17411,7 +17607,19 @@
               "string",
               "null"
             ],
-            "description": "The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it."
+            "description": "The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it."
+          },
+          "category_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeCategoryFrom"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who filed it under `category`; null when nothing files it.",
+            "default": null
           },
           "inputs": {
             "type": [

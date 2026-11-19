@@ -51,10 +51,10 @@ pub use link_check_wire_types::{
 pub use log_wire_types::LogsToolResult;
 pub use node_type_wire_types::{
     DescribeNodeTypesToolResult, GraphGeneratorListed, ListNodeTypesToolResult,
-    ListPinTypesToolResult, NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot, NodeTypeDescription,
-    NodeTypeInputDescribed, NodeTypeInputMode, NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed,
-    NodeTypePortDescribed, NodeTypePortPin, NodeTypeSourceListed, NodeTypeSourceListedOrigin,
-    PinTypeConversionListed, PinTypeListed,
+    ListPinTypesToolResult, NodeTypeCategoryFrom, NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot,
+    NodeTypeDescription, NodeTypeInputDescribed, NodeTypeInputMode, NodeTypeKind, NodeTypeListed,
+    NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortPin, NodeTypeSourceListed,
+    NodeTypeSourceListedOrigin, PinTypeConversionListed, PinTypeListed, SetNodeTypeGroupToolResult,
 };
 pub use project_code_check_wire_types::{
     ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,

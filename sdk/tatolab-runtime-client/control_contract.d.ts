@@ -4682,9 +4682,13 @@ export interface NodeTypeReadFromSource {
    */
   description: string;
   /**
-   * The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
+   * The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * The input ports, `None` where only the node's native half states them.
    */
@@ -4702,6 +4706,11 @@ export interface NodeTypeReadFromSource {
    */
   line?: number | null;
 }
+
+/**
+ * Who filed a node type under the group it is listed in.
+ */
+export type NodeTypeCategoryFrom = "project" | "import" | "declaration";
 
 /**
  * One port as its declaration states it in source.
@@ -4993,10 +5002,14 @@ export interface NodeTypeListed {
   documentation: string;
   /**
    * The group it is filed under, a path where the group is inside another, as
-   * `Effects/Stylize`; null when it declares none, or where its declaration source does not
-   * show it.
+   * `Effects/Stylize`: the project's own, else an import's, else the one its author declared;
+   * null when none files it, or where its declaration source does not show it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * How its code runs; null for an entry point whose declaration source does not show it.
    */
@@ -5089,9 +5102,14 @@ export type NodeTypeDescription = {
    */
   documentation: string;
   /**
-   * The group it is filed under; null when it declares none.
+   * The group it is filed under: the project's own, else an import's, else the one its author
+   * declared; null when none files it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * How its code runs; null where its declaration source does not show it.
    */
@@ -5308,6 +5326,60 @@ export type NodeTypeNotDescribed = {
 } | {
   source: "built_in";
 });
+
+/**
+ * `set_node_type_group`'s params.
+ */
+export interface SetNodeTypeGroupRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+  /**
+   * The node type to move, as `list_node_types` names it under `node_type`: the project's own, an import's, an installed distribution's or a built-in.
+   */
+  node_type: string;
+  /**
+   * The group to file it under, a path where the group is inside another, as `Effects/Stylize`; a group no node type is filed under yet is made by filing one there. `null` puts it back where an import or its author files it.
+   */
+  group?: string | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_node_type_group`'s answer: the group the project now files the node type under, and the
+ * transaction that filed it.
+ */
+export interface SetNodeTypeGroupToolResult {
+  /**
+   * The project's UUID.
+   */
+  project: string;
+  /**
+   * The node type, as `list_node_types` names it.
+   */
+  node_type: string;
+  /**
+   * The group the project now files it under; null when the project files it nowhere of its
+   * own, so an import's group or its author's stands.
+   */
+  group?: string | null;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
 
 /**
  * `list_project_views`'s params.
@@ -5893,9 +5965,13 @@ export type NodeTypeOfOneProjectSource = {
    */
   description: string;
   /**
-   * The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
+   * The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
    */
   category?: string | null;
+  /**
+   * Who filed it under `category`; null when nothing files it.
+   */
+  category_from?: NodeTypeCategoryFrom | null;
   /**
    * The input ports, `None` where only the node's native half states them.
    */
@@ -6470,6 +6546,7 @@ export interface ControlContractComponents {
   ListProjectNodeTypesToolResult: ListProjectNodeTypesToolResult;
   NodeTypeSourceReadWithoutRunningIt: NodeTypeSourceReadWithoutRunningIt;
   NodeTypeReadFromSource: NodeTypeReadFromSource;
+  NodeTypeCategoryFrom: NodeTypeCategoryFrom;
   NodeTypePortReadFromSource: NodeTypePortReadFromSource;
   GraphGeneratorReadFromSource: GraphGeneratorReadFromSource;
   GraphGeneratorPromotedSettingReadFromSource: GraphGeneratorPromotedSettingReadFromSource;
@@ -6506,6 +6583,8 @@ export interface ControlContractComponents {
   NodeValueLifetime: NodeValueLifetime;
   NodeTypePortDescribed: NodeTypePortDescribed;
   NodeTypeNotDescribed: NodeTypeNotDescribed;
+  SetNodeTypeGroupRequest: SetNodeTypeGroupRequest;
+  SetNodeTypeGroupToolResult: SetNodeTypeGroupToolResult;
   ListProjectViewsRequest: ListProjectViewsRequest;
   ListProjectViewsToolResult: ListProjectViewsToolResult;
   ProjectViewListed: ProjectViewListed;
@@ -7368,6 +7447,17 @@ export interface ControlOperations {
     result: DescribeNodeTypesToolResult;
   };
   /**
+   * File a node type under a group of the project's own, or put it back where its author files it, as one transaction on its history.
+   *
+   * File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types`, `describe_node_types` and `list_project_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.
+   *
+   * Since contract version 3, experimental.
+   */
+  set_node_type_group: {
+    params: SetNodeTypeGroupRequest;
+    result: SetNodeTypeGroupToolResult;
+  };
+  /**
    * List the Tato Studio views a project brings.
    *
    * List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project name>:<view folder>`, which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, a `family`, a `description` and an Array port's `range`; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists.
@@ -7556,7 +7646,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 13;
+export declare const CONTROL_CONTRACT_REVISION: 14;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

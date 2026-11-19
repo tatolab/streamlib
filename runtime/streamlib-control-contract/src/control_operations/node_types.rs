@@ -3,6 +3,7 @@
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DescribeNodeTypesToolResult, ListNodeTypesToolResult, ListPinTypesToolResult,
+    SetNodeTypeGroupToolResult,
 };
 
 use super::EVERY_SURFACE;
@@ -11,7 +12,7 @@ use crate::control_operation::{
     ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
 };
 use crate::control_operation_requests::{
-    DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest,
+    DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest, SetNodeTypeGroupRequest,
 };
 
 /// `list_pin_types`: every built-in pin type, how each is written, and what converts it.
@@ -70,4 +71,23 @@ impl ControlOperation for DescribeNodeTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+}
+
+/// `set_node_type_group`: file a node type under a group of the project's own, or put it back
+/// where its author files it, as one transaction on its history.
+pub struct SetNodeTypeGroup;
+
+impl ControlOperation for SetNodeTypeGroup {
+    type Request = SetNodeTypeGroupRequest;
+    type Result = SetNodeTypeGroupToolResult;
+    const METHOD_NAME: &'static str = "set_node_type_group";
+    const ONE_LINE_DOC: &'static str = "File a node type under a group of the project's own, or put it back where its author files it, as one transaction on its history.";
+    const AGENT_USAGE_NOTE: &'static str = "File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types`, `describe_node_types` and `list_project_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::NodeType;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }

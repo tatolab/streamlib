@@ -97,6 +97,13 @@ pub enum ProjectRepositoryRefusal {
     },
     #[error("a project's name cannot be blank")]
     BlankProjectName,
+    #[error("a node type moved into a group must be named; got a blank one")]
+    BlankNodeTypeMovedIntoAGroup,
+    #[error(
+        "{group:?} cannot file `{node_type}`: a group is one or more names split by `/`, none of \
+         them blank, as `Effects/Stylize`"
+    )]
+    NodeTypeGroupIsNotAPath { node_type: String, group: String },
     #[error("the cover must be a media asset, and {asset} is a {kind} asset")]
     CoverIsNotAMediaAsset { asset: Uuid, kind: &'static str },
     #[error("the asset {0} cannot be deleted while it is the project's cover")]

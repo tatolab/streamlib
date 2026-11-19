@@ -32,6 +32,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
+use crate::node_type_groups_of_a_project::NodeTypeGroupsOfAProject;
 
 /// The operation that checks a project's code, which a node type that cannot be described
 /// suggests once the runtime serves it.
@@ -98,8 +99,8 @@ impl ControlOperationDispatcher {
         &self,
         ListNodeTypesRequest { project_directory }: ListNodeTypesRequest,
     ) -> Result<ListNodeTypesToolResult, ControlOperationRefusal> {
-        let listing = self
-            .the_node_types_the_project_offers_read_from_source(
+        let (listing, node_type_groups) = self
+            .the_node_types_the_project_offers_and_its_groups(
                 ListNodeTypes::METHOD_NAME,
                 project_directory,
             )
@@ -124,6 +125,7 @@ impl ControlOperationDispatcher {
                         node_type: read.node_type.clone(),
                         documentation: the_first_line_of(&read.description),
                         category: read.category.clone(),
+                        category_from: read.category_from,
                         kind: read.kind.as_deref().and_then(the_kind_named),
                         described_from: if described.contains_key(&read.node_type) {
                             NodeTypeDescribedFrom::Interpreter
@@ -140,7 +142,7 @@ impl ControlOperationDispatcher {
                 unreadable_modules: source.unreadable_modules,
             })
             .collect();
-        sources.push(the_built_in_source());
+        sources.push(the_built_in_source(&node_type_groups));
         Ok(ListNodeTypesToolResult {
             project_directory,
             project,
@@ -156,8 +158,8 @@ impl ControlOperationDispatcher {
             node_types,
         }: DescribeNodeTypesRequest,
     ) -> Result<DescribeNodeTypesToolResult, ControlOperationRefusal> {
-        let listing = self
-            .the_node_types_the_project_offers_read_from_source(
+        let (listing, node_type_groups) = self
+            .the_node_types_the_project_offers_and_its_groups(
                 DescribeNodeTypes::METHOD_NAME,
                 project_directory,
             )
@@ -190,21 +192,28 @@ impl ControlOperationDispatcher {
                         described.get(node_type),
                     ));
                 }
-                NODE_REGISTRY
-                    .list_registered()
-                    .into_iter()
-                    .find(|descriptor| descriptor.node_class_import_path.as_str() == node_type)
+                the_built_in_node_type(node_type)
                     .map(|descriptor| {
-                        NodeTypeDescribedOrWhyNot::Described(Box::new(
-                            a_registered_node_type_described(
-                                &descriptor,
-                                NodeTypeSourceListedOrigin::BuiltIn,
-                                NodeTypeDescribedFrom::BuiltIn,
-                                None,
-                            ),
-                        ))
+                        let mut description = a_registered_node_type_described(
+                            &descriptor,
+                            NodeTypeSourceListedOrigin::BuiltIn,
+                            NodeTypeDescribedFrom::BuiltIn,
+                            None,
+                        );
+                        node_type_groups.file(
+                            &description.node_type,
+                            &mut description.category,
+                            &mut description.category_from,
+                        );
+                        NodeTypeDescribedOrWhyNot::Described(Box::new(description))
                     })
-                    .ok_or_else(|| the_refusal_of_a_node_type_not_offered(&listing, node_type))
+                    .ok_or_else(|| {
+                        the_refusal_of_a_node_type_not_offered(
+                            DescribeNodeTypes::METHOD_NAME,
+                            &listing,
+                            node_type,
+                        )
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(DescribeNodeTypesToolResult { node_types })
@@ -317,8 +326,9 @@ fn the_listed_origin_of(origin: NodeTypeSourceOrigin) -> NodeTypeSourceListedOri
     }
 }
 
-/// The node types the runtime brings itself, by import path.
-fn the_built_in_source() -> NodeTypeSourceListed {
+/// The node types the runtime brings itself, by import path, each filed under the group the
+/// project's and its imports' `node_type_groups` put it in, else the one it declares.
+fn the_built_in_source(node_type_groups: &NodeTypeGroupsOfAProject) -> NodeTypeSourceListed {
     let mut registered = NODE_REGISTRY.list_registered();
     registered.sort_by(|one, other| {
         one.node_class_import_path
@@ -329,12 +339,21 @@ fn the_built_in_source() -> NodeTypeSourceListed {
         origin: NodeTypeSourceListedOrigin::BuiltIn,
         node_types: registered
             .iter()
-            .map(|descriptor| NodeTypeListed {
-                node_type: descriptor.node_class_import_path.to_string(),
-                documentation: the_first_line_of(&descriptor.description),
-                category: descriptor.category.clone(),
-                kind: Some(the_kind_of(descriptor.node_kind)),
-                described_from: NodeTypeDescribedFrom::BuiltIn,
+            .map(|descriptor| {
+                let mut listed = NodeTypeListed {
+                    node_type: descriptor.node_class_import_path.to_string(),
+                    documentation: the_first_line_of(&descriptor.description),
+                    category: descriptor.category.clone(),
+                    category_from: None,
+                    kind: Some(the_kind_of(descriptor.node_kind)),
+                    described_from: NodeTypeDescribedFrom::BuiltIn,
+                };
+                node_type_groups.file(
+                    &listed.node_type,
+                    &mut listed.category,
+                    &mut listed.category_from,
+                );
+                listed
             })
             .collect(),
         graph_generators: Vec::new(),
@@ -369,12 +388,17 @@ pub(crate) fn the_project_node_type_described(
         column: None,
     });
     if let Some(descriptor) = described {
-        return NodeTypeDescribedOrWhyNot::Described(Box::new(a_registered_node_type_described(
-            descriptor,
-            origin,
-            NodeTypeDescribedFrom::Interpreter,
-            declared_at,
-        )));
+        return NodeTypeDescribedOrWhyNot::Described(Box::new(NodeTypeDescription {
+            // Filed as the listing filed it.
+            category: read.category.clone(),
+            category_from: read.category_from,
+            ..a_registered_node_type_described(
+                descriptor,
+                origin,
+                NodeTypeDescribedFrom::Interpreter,
+                declared_at,
+            )
+        }));
     }
     let (Some(inputs), Some(outputs)) = (&read.inputs, &read.outputs) else {
         return NodeTypeDescribedOrWhyNot::NotDescribed(Box::new(NodeTypeNotDescribed {
@@ -391,6 +415,7 @@ pub(crate) fn the_project_node_type_described(
         described_from: NodeTypeDescribedFrom::Source,
         documentation: read.description.clone(),
         category: read.category.clone(),
+        category_from: read.category_from,
         kind: read.kind.as_deref().and_then(the_kind_named),
         declared_at,
         inputs: inputs.iter().map(an_input_read_from_source).collect(),
@@ -399,7 +424,8 @@ pub(crate) fn the_project_node_type_described(
     }))
 }
 
-/// A registered node type, from the source `origin`, described from `described_from`.
+/// A registered node type, from the source `origin`, described from `described_from`, under the
+/// group it declares, which no one has filed yet.
 fn a_registered_node_type_described(
     descriptor: &NodeDescriptor,
     origin: NodeTypeSourceListedOrigin,
@@ -417,12 +443,21 @@ fn a_registered_node_type_described(
         described_from,
         documentation: descriptor.description.clone(),
         category: descriptor.category.clone(),
+        category_from: None,
         kind: Some(the_kind_of(descriptor.node_kind)),
         declared_at,
         inputs,
         outputs,
         exposable_config_fields,
     }
+}
+
+/// The node type the runtime brings itself by the import path `node_type`.
+pub(crate) fn the_built_in_node_type(node_type: &str) -> Option<NodeDescriptor> {
+    NODE_REGISTRY
+        .list_registered()
+        .into_iter()
+        .find(|descriptor| descriptor.node_class_import_path.as_str() == node_type)
 }
 
 /// A port as its declaration states it in source: by its family alone, a pin type not being
@@ -488,9 +523,10 @@ fn the_refusal_of_a_node_type_source_does_not_describe(
     }
 }
 
-/// The refusal of a call naming `node_type`, which neither the project nor the runtime offers,
-/// suggesting the call that lists what they do.
-fn the_refusal_of_a_node_type_not_offered(
+/// The refusal of a `method_name` call naming `node_type`, which neither the project nor the
+/// runtime offers, suggesting the call that lists what they do.
+pub(crate) fn the_refusal_of_a_node_type_not_offered(
+    method_name: &'static str,
     listing: &ListProjectNodeTypesToolResult,
     node_type: &str,
 ) -> ControlOperationRefusal {
@@ -503,12 +539,11 @@ fn the_refusal_of_a_node_type_not_offered(
             )]),
         ),
         ..ProjectActionRefusalOnTheWire::of_the_action(
-            DescribeNodeTypes::METHOD_NAME,
+            method_name,
             ControlOperationRefusalCode::NodeTypeNotFound,
             format!(
-                "{} failed: neither the project `{}` nor the runtime offers a node type \
-                 `{node_type}`; `{}` lists the ones they do",
-                DescribeNodeTypes::METHOD_NAME,
+                "{method_name} failed: neither the project `{}` nor the runtime offers a node \
+                 type `{node_type}`; `{}` lists the ones they do",
                 listing.project_name,
                 ListNodeTypes::METHOD_NAME
             ),

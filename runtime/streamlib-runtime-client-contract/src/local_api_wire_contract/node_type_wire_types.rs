@@ -145,13 +145,48 @@ pub struct NodeTypeListed {
     /// The first line of its description; empty when it declares none.
     pub documentation: String,
     /// The group it is filed under, a path where the group is inside another, as
-    /// `Effects/Stylize`; null when it declares none, or where its declaration source does not
-    /// show it.
+    /// `Effects/Stylize`: the project's own, else an import's, else the one its author declared;
+    /// null when none files it, or where its declaration source does not show it.
     pub category: Option<String>,
+    /// Who filed it under `category`; null when nothing files it.
+    #[serde(default)]
+    pub category_from: Option<NodeTypeCategoryFrom>,
     /// How its code runs; null for an entry point whose declaration source does not show it.
     pub kind: Option<NodeTypeKind>,
     /// Where the runtime's description of it comes from.
     pub described_from: NodeTypeDescribedFrom,
+}
+
+/// Who filed a node type under the group it is listed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum NodeTypeCategoryFrom {
+    /// The project moved it there with `set_node_type_group`; clearing that puts it back where
+    /// an import or its author files it.
+    Project,
+    /// A project the project imports moved it there, and the project has not.
+    Import,
+    /// Its author declared it, with `@node.meta(category=…)` or `#[meta(category = …)]`.
+    Declaration,
+}
+
+/// `set_node_type_group`'s answer: the group the project now files the node type under, and the
+/// transaction that filed it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct SetNodeTypeGroupToolResult {
+    /// The project's UUID.
+    pub project: String,
+    /// The node type, as `list_node_types` names it.
+    pub node_type: String,
+    /// The group the project now files it under; null when the project files it nowhere of its
+    /// own, so an import's group or its author's stands.
+    pub group: Option<String>,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
 }
 
 /// How a node type's code runs.
@@ -230,8 +265,12 @@ pub struct NodeTypeDescription {
     pub described_from: NodeTypeDescribedFrom,
     /// What it does, as it describes itself.
     pub documentation: String,
-    /// The group it is filed under; null when it declares none.
+    /// The group it is filed under: the project's own, else an import's, else the one its author
+    /// declared; null when none files it.
     pub category: Option<String>,
+    /// Who filed it under `category`; null when nothing files it.
+    #[serde(default)]
+    pub category_from: Option<NodeTypeCategoryFrom>,
     /// How its code runs; null where its declaration source does not show it.
     pub kind: Option<NodeTypeKind>,
     /// Where it is declared, its path relative to its source's root; absent on a built-in.

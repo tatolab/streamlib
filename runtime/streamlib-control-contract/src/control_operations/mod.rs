@@ -25,13 +25,13 @@ use crate::control_operation_requests::{
     RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest,
     RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
     SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
-    SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
-    SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
-    SetStudioFieldsRequest, SubscribeInputValueChangesRequest, SubscribeProjectChangesRequest,
-    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
-    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
-    WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest, SetPinValueRequest,
+    SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
+    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
+    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
+    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
+    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 
 mod assets_and_streams;
@@ -62,7 +62,7 @@ pub use graph_edits::{
     RenameNode, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue,
     SetNoteFields, SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
 };
-pub use node_types::{DescribeNodeTypes, ListNodeTypes, ListPinTypes};
+pub use node_types::{DescribeNodeTypes, ListNodeTypes, ListPinTypes, SetNodeTypeGroup};
 pub use playback_and_stream_actions::{
     CancelStreamAction, DescribeStreamAction, PausePlayback, ResumePlayback, SetStreamClockScale,
     StartPlayback, StopPlayback,
@@ -81,7 +81,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 13;
+pub const CONTROL_CONTRACT_REVISION: u32 = 14;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -168,6 +168,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<ListPinTypes>(),
     ControlOperationDeclaration::of::<ListNodeTypes>(),
     ControlOperationDeclaration::of::<DescribeNodeTypes>(),
+    ControlOperationDeclaration::of::<SetNodeTypeGroup>(),
     ControlOperationDeclaration::of::<ListProjectViews>(),
     ControlOperationDeclaration::of::<WriteStudioViewOutput>(),
     ControlOperationDeclaration::of::<WriteGraphInput>(),
@@ -331,6 +332,8 @@ pub enum ControlOperationCall {
     ListNodeTypes(ListNodeTypesRequest),
     /// A `describe_node_types` call.
     DescribeNodeTypes(DescribeNodeTypesRequest),
+    /// A `set_node_type_group` call.
+    SetNodeTypeGroup(SetNodeTypeGroupRequest),
     /// A `list_project_views` call.
     ListProjectViews(ListProjectViewsRequest),
     /// A `write_studio_view_output` call.
@@ -603,6 +606,9 @@ impl ControlOperationCall {
             DescribeNodeTypes::METHOD_NAME => {
                 the_request_of::<DescribeNodeTypes>(params).map(Self::DescribeNodeTypes)
             }
+            SetNodeTypeGroup::METHOD_NAME => {
+                the_request_of::<SetNodeTypeGroup>(params).map(Self::SetNodeTypeGroup)
+            }
             ListProjectViews::METHOD_NAME => {
                 the_request_of::<ListProjectViews>(params).map(Self::ListProjectViews)
             }
@@ -715,6 +721,7 @@ impl ControlOperationCall {
             Self::ListPinTypes(_) => ListPinTypes::METHOD_NAME,
             Self::ListNodeTypes(_) => ListNodeTypes::METHOD_NAME,
             Self::DescribeNodeTypes(_) => DescribeNodeTypes::METHOD_NAME,
+            Self::SetNodeTypeGroup(_) => SetNodeTypeGroup::METHOD_NAME,
             Self::ListProjectViews(_) => ListProjectViews::METHOD_NAME,
             Self::WriteStudioViewOutput(_) => WriteStudioViewOutput::METHOD_NAME,
             Self::WriteGraphInput(_) => WriteGraphInput::METHOD_NAME,
