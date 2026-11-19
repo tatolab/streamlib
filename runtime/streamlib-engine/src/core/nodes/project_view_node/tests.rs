@@ -4,10 +4,6 @@
 use std::path::PathBuf;
 
 use serde_json::json;
-use streamlib_ipc_types::{
-    ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, DataChannelPayloadDescriptorKind,
-    array_frame_attribute_table_of,
-};
 use streamlib_project_repository::{
     ProjectBringingAView, ProjectViewFolderRead, read_tatolab_view_manifest,
 };
@@ -187,144 +183,6 @@ fn a_view_that_does_not_open_or_is_placed_in_an_area_is_no_node_type_and_says_wh
 }
 
 #[test]
-fn a_record_written_onto_a_records_output_is_its_msgpack_map() {
-    let (descriptor, payload) = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Records,
-        &json!({ "cue": "drop", "beat": 33 }),
-        0,
-    )
-    .unwrap();
-    assert_eq!(
-        descriptor.known_kind().ok(),
-        Some(DataChannelPayloadDescriptorKind::RecordsMessage)
-    );
-    let read_back: JsonValue = rmp_serde::from_slice(&payload).unwrap();
-    assert_eq!(read_back, json!({ "cue": "drop", "beat": 33 }));
-
-    let refusal = the_message_a_value_written_onto_an_output_is(PortFamily::Records, &json!(3), 0)
-        .unwrap_err();
-    assert!(refusal.contains("JSON object"), "{refusal}");
-}
-
-#[test]
-fn a_number_or_nested_list_written_onto_an_array_output_is_its_values_attribute() {
-    let (descriptor, payload) = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Array,
-        &json!([[0.5, -1.0], [0.25, 1.0], [0.0, 0.0]]),
-        0,
-    )
-    .unwrap();
-    let rows = array_frame_attribute_table_of(
-        ArrayFrameDescriptorBody::from_descriptor_body(&descriptor.body),
-        &payload,
-    )
-    .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].name, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME);
-    assert_eq!(rows[0].dtype, "float64");
-    assert_eq!(rows[0].shape, vec![3, 2]);
-    let ArrayFrameAttributeResidency::Cpu {
-        payload_byte_offset,
-        byte_len,
-    } = rows[0].residency
-    else {
-        panic!("a CPU attribute");
-    };
-    let elements: Vec<f64> = payload
-        [payload_byte_offset as usize..(payload_byte_offset + byte_len) as usize]
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|element| f64::from_le_bytes(*element))
-        .collect();
-    assert_eq!(elements, [0.5, -1.0, 0.25, 1.0, 0.0, 0.0]);
-
-    let (descriptor, payload) =
-        the_message_a_value_written_onto_an_output_is(PortFamily::Array, &json!(0.75), 0).unwrap();
-    let rows = array_frame_attribute_table_of(
-        ArrayFrameDescriptorBody::from_descriptor_body(&descriptor.body),
-        &payload,
-    )
-    .unwrap();
-    assert_eq!(rows[0].shape, vec![1]);
-
-    let (descriptor, payload) = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Array,
-        &json!({ "left": [1, 2], "right": 3 }),
-        0,
-    )
-    .unwrap();
-    let rows = array_frame_attribute_table_of(
-        ArrayFrameDescriptorBody::from_descriptor_body(&descriptor.body),
-        &payload,
-    )
-    .unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|row| (row.name.as_str(), row.shape.clone()))
-            .collect::<Vec<_>>(),
-        [("left", vec![2]), ("right", vec![1])]
-    );
-
-    let refusal =
-        the_message_a_value_written_onto_an_output_is(PortFamily::Array, &json!([[1, 2], [3]]), 0)
-            .unwrap_err();
-    assert!(refusal.contains("differ in length"), "{refusal}");
-}
-
-#[test]
-fn a_number_written_onto_a_channels_output_is_one_control_value_and_a_block_runs_on() {
-    let (descriptor, payload) =
-        the_message_a_value_written_onto_an_output_is(PortFamily::Channels, &json!(0.5), 96)
-            .unwrap();
-    assert_eq!(
-        ChannelsBlockDescriptorBody::from_descriptor_body(&descriptor.body),
-        ChannelsBlockDescriptorBody {
-            start_sample: 96,
-            sample_rate: 0,
-            channel_count: 1,
-            samples_per_channel: 1,
-            sample_type: ChannelsBlockSampleType::F32 as u32,
-        }
-    );
-    assert_eq!(payload, 0.5f32.to_le_bytes());
-
-    let (descriptor, payload) = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Channels,
-        &json!({ "samples": [[0.0, 0.5], [1.0, -1.0]], "sample_rate": 48000 }),
-        0,
-    )
-    .unwrap();
-    let body = ChannelsBlockDescriptorBody::from_descriptor_body(&descriptor.body);
-    assert_eq!(
-        (
-            body.sample_rate,
-            body.channel_count,
-            body.samples_per_channel
-        ),
-        (48_000, 2, 2)
-    );
-    assert_eq!(body.planar_payload_byte_len(), Some(payload.len()));
-
-    let refusal = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Channels,
-        &json!({ "samples": [[0.0], [1.0, 2.0]] }),
-        0,
-    )
-    .unwrap_err();
-    assert!(refusal.contains("same number of samples"), "{refusal}");
-}
-
-#[test]
-fn an_image_or_packets_value_is_never_written_from_a_panel() {
-    for family in [PortFamily::Image, PortFamily::Packets] {
-        let refusal =
-            the_message_a_value_written_onto_an_output_is(family, &json!({}), 0).unwrap_err();
-        assert!(refusal.contains("never"), "{refusal}");
-    }
-}
-
-#[test]
 fn an_image_or_packets_output_has_no_input_of_its_name_and_is_no_value() {
     let mut manifest = the_deck_manifest();
     manifest["outputs"] = json!([
@@ -355,10 +213,6 @@ fn a_panel_writes_array_channels_and_records_outputs_alone() {
             .filter(|family| a_panel_writes(*family))
             .collect::<Vec<_>>(),
         [PortFamily::Array, PortFamily::Channels, PortFamily::Records]
-    );
-    assert_eq!(
-        why_a_panel_never_writes(PortFamily::Packets),
-        "a client writes Array, Channels and Records values, never Packets"
     );
 }
 

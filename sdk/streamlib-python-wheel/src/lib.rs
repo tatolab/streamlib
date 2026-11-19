@@ -127,6 +127,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        python_function_node_island::read_the_parts_at_an_input_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_function_node_island::hand_an_unread_message_on,
         module
     )?)?;

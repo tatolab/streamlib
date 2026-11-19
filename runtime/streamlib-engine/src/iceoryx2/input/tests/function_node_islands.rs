@@ -14,7 +14,7 @@ impl FunctionNodeIslandEvaluatedAtEachRead for IslandAnsweringOneHalf {
         &self,
     ) -> Result<FunctionNodeIslandOutputForOneRead> {
         Ok(FunctionNodeIslandOutputForOneRead {
-            value: FunctionNodeIslandOutputValue::ControlValue(0.5),
+            value: FunctionNodeIslandOutputValue::ControlValue(vec![0.5]),
             evaluated_at_ns: 0,
         })
     }
@@ -39,7 +39,7 @@ impl FunctionNodeIslandEvaluatedAtEachRead for IslandRunningOneNodeAsPython {
         &self,
     ) -> Result<FunctionNodeIslandOutputForOneRead> {
         Ok(FunctionNodeIslandOutputForOneRead {
-            value: FunctionNodeIslandOutputValue::ControlValue(0.5),
+            value: FunctionNodeIslandOutputValue::ControlValue(vec![0.5]),
             evaluated_at_ns: 0,
         })
     }

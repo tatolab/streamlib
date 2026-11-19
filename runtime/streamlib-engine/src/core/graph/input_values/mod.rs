@@ -230,7 +230,7 @@ fn refuse_a_value_a_setting_of_a_family_does_not_carry(
     value: &Value,
 ) -> Result<(), InputValueRefusal> {
     let family = port.family.family;
-    crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, value, 0)
+    crate::core::pin_value_packing::the_message_a_value_written_onto_an_output_is(family, value, 0)
         .map(|_| ())
         .map_err(|why| {
             InputValueRefusal::of(

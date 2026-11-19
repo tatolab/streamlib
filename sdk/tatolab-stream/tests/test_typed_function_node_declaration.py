@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal, NamedTuple
 import pytest
 
 from tatolab.stream import (
+    Color,
     Description,
     Float32,
     ImageFrame,
@@ -22,9 +23,13 @@ from tatolab.stream import (
     NumberUnit,
     PinControl,
     PinMeaning,
+    Rectangle,
     State,
     Stateful,
     Time,
+    Transform,
+    Vector2,
+    Vector3,
     node,
 )
 from tatolab.stream._function_node_declaration import NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
@@ -62,6 +67,17 @@ def Smooth(
 ) -> Stateful[Annotated[float, PinMeaning("level")], Smoothed]:
     halfway = previous.value + (x - previous.value) / 2
     return halfway, Smoothed(halfway)
+
+
+@node
+def Place(
+    tint: Annotated[Color, PinControl("color")] = Color(1.0, 0.5, 0.2),
+    offset: Vector2 = Vector2(0.0, 0.0),
+    origin: Vector3 = Vector3(0.0, 0.0, 1.0),
+    area: Rectangle = Rectangle(0.0, 0.0, 640.0, 360.0),
+    move: Transform = Transform.identity(),
+) -> Annotated[Color, PinMeaning("tint")]:
+    return tint
 
 
 def input_port(declared: Any, name: str) -> dict[str, Any]:
@@ -122,6 +138,44 @@ def test_time_and_state_are_read_as_under_the_family_grammar_and_a_stateful_outp
     assert signature["state_parameter"] == "previous"
     (result,) = getattr(Smooth, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
     assert result["pin_declaration"]["annotations"] == {"meaning": "level"}
+
+
+def test_a_value_class_input_declares_its_type_and_defaults_to_its_stored_form() -> None:
+    tint = input_port(Place, "tint")
+    assert tint["pin_declaration"] == {
+        "pin_type": {"kind": "is", "pin_type": {"type": "color"}},
+        "flow": "value",
+        "annotations": {"control": "color"},
+    }
+    assert tint["pin_default"] == {"red": 1.0, "green": 0.5, "blue": 0.2, "alpha": 1.0}
+    assert input_port(Place, "offset")["pin_declaration"]["pin_type"]["pin_type"] == {
+        "type": "vector",
+        "component_count": "two",
+    }
+    assert input_port(Place, "origin")["pin_default"] == {"x": 0.0, "y": 0.0, "z": 1.0}
+    assert input_port(Place, "area")["pin_default"] == {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 640.0,
+        "height": 360.0,
+    }
+    assert input_port(Place, "move")["pin_default"] == Transform.identity().stored_value()
+
+
+def test_a_value_class_is_handed_to_the_body_by_its_value_type_and_its_output_names_its_parts() -> None:
+    signature = getattr(Place, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
+    assert [entry["value_type"] for entry in signature["inputs"]] == [
+        "color",
+        "vector2",
+        "vector3",
+        "rectangle",
+        "transform",
+    ]
+    assert signature["outputs"][0]["value_type"] == "color"
+    (result,) = getattr(Place, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    assert result["family"]["names"] == {"stated": ["red", "green", "blue", "alpha"]}
+    assert result["pin_declaration"]["annotations"] == {"meaning": "tint"}
+    assert Place() == Color(1.0, 0.5, 0.2)
 
 
 def refusal_of(function: Any) -> NodeDeclarationRefusal:
@@ -206,6 +260,14 @@ def Fields(value: dict[str, float] | None = None) -> float:
     return 0.0
 
 
+def TintDefaultingToAVector(tint: Color = Vector2(0.0, 0.0)) -> Color:  # pyright: ignore[reportArgumentType]
+    return tint
+
+
+def TintWithARange(tint: Annotated[Color, NumberRange(minimum=0.0, maximum=1.0)] = Color(0, 0, 0)) -> Color:
+    return tint
+
+
 class Corners(NamedTuple):
     low: float
     high: float
@@ -285,6 +347,15 @@ def test_a_type_the_runtime_cannot_carry_yet_is_refused_by_name() -> None:
         refusal = refusal_of(function)
         assert refusal.finding_code == "pin_type_not_read_yet", function
         assert named in str(refusal)
+
+
+def test_a_value_class_default_of_another_class_or_a_range_on_it_is_refused() -> None:
+    refusal = refusal_of(TintDefaultingToAVector)
+    assert refusal.finding_code == "pin_default_not_of_its_type"
+    assert "which is not a Color" in str(refusal)
+    refusal = refusal_of(TintWithARange)
+    assert refusal.finding_code == "pin_annotation_not_taken"
+    assert "which a Color pin does not take" in str(refusal)
 
 
 def test_a_wide_integer_any_and_an_unknown_type_are_refused() -> None:

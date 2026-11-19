@@ -17,15 +17,26 @@ from typing import Any, Callable, Optional
 #: string is the wire contract both sides hold.
 UNREAD_MESSAGE_VALUE_TYPE = "unread_message"
 
+#: The value types a function node signature gives a Color, a Vector of each size, a Rectangle
+#: and a Transform, each carried as its parts: a `tuple` of numbers in the order the type packs
+#: them. Spelled here for the reason `UNREAD_MESSAGE_VALUE_TYPE` is: the strings are the wire
+#: contract both sides hold.
+PART_VALUE_TYPES = ("color", "vector2", "vector3", "vector4", "rectangle", "transform")
+
+#: A value an input reads while nothing links into it, as the island carries it: a number as an
+#: f64, or a value of parts as the `tuple` of its parts.
+PinValueCarried = typing.Union[float, "tuple[float, ...]"]
+
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
 
-# The value types a body run as Python takes and gives: the scalars, a `dict` as Records, and a
-# message it hands on unread.
+# The value types a body run as Python takes and gives: the scalars, a value of parts, a `dict`
+# as Records, and a message it hands on unread.
 _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = (
     "float",
     "int",
     "bool",
+    *PART_VALUE_TYPES,
     "records",
     UNREAD_MESSAGE_VALUE_TYPE,
 )
@@ -81,7 +92,7 @@ class FunctionNodeCompiledToItsEvaluateEntry:
 
     evaluate_entry_address: int
     input_ports: "tuple[str, ...]"
-    pin_defaults_by_input_port: "dict[str, float]"
+    pin_defaults_by_input_port: "dict[str, PinValueCarried]"
     output_ports: "tuple[str, ...]"
     config_fields: "tuple[str, ...]"
     config_field_defaults: "dict[str, float]"
@@ -104,7 +115,7 @@ class FunctionNodeRunAsPythonInItsReader:
     body: Callable[..., Any]
     function_signature: "dict[str, Any]"
     input_ports: "tuple[str, ...]"
-    pin_defaults_by_input_port: "dict[str, float]"
+    pin_defaults_by_input_port: "dict[str, PinValueCarried]"
     output_ports: "tuple[str, ...]"
     ports_carrying_records: "frozenset[str]"
     config_class: Optional[type]
@@ -124,14 +135,40 @@ FunctionNodeReadyToEvaluate = typing.Union[
 ]
 
 
-def _pin_defaults_by_input_port(import_path: str, function_signature: "dict[str, Any]") -> "dict[str, float]":
+def _pin_defaults_by_input_port(
+    import_path: str, function_signature: "dict[str, Any]"
+) -> "dict[str, PinValueCarried]":
     return {
-        each_input["port"]: _exactly_as_f64(
-            each_input["default"], f"{import_path}'s input `{each_input['parameter']}` default"
+        each_input["port"]: pin_value_carried(
+            each_input["value_type"],
+            each_input["default"],
+            f"{import_path}'s input `{each_input['parameter']}` default",
         )
         for each_input in function_signature["inputs"]
         if each_input.get("default") is not None
     }
+
+
+
+def pin_value_carried(value_type: str, stored_value: Any, what_it_is: str) -> PinValueCarried:
+    """`stored_value`, the stored JSON form of a value of `value_type`, as the island carries it."""
+    if value_type not in PART_VALUE_TYPES:
+        return _exactly_as_f64(stored_value, what_it_is)
+    try:
+        return value_class_of_a_part_value_type(value_type).from_stored_value(stored_value).parts
+    except (TypeError, ValueError) as not_of_its_type:
+        raise FunctionNodeDoesNotCompile(f"{what_it_is}: {not_of_its_type}") from not_of_its_type
+
+
+def value_class_of_a_part_value_type(value_type: str) -> Any:
+    """The `tatolab.stream` value class a function node's signature names `value_type`, one of `PART_VALUE_TYPES`.
+
+    Imported here, not at the top, because the `tatolab-stream` in a project's venv may predate
+    the value classes; only a node that declares one names its value type.
+    """
+    from tatolab.stream._pin_types import PIN_VALUE_CLASSES
+
+    return next(value_class for value_class in PIN_VALUE_CLASSES if value_class.value_type == value_type)
 
 
 def _initial_state_values(
