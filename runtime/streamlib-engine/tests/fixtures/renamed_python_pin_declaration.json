@@ -1,0 +1,112 @@
+{
+  "input_ports": [
+    {
+      "name": "frequency",
+      "description": "",
+      "family": {
+        "family": "channels"
+      },
+      "pin_declaration": {
+        "pin_type": {
+          "kind": "is",
+          "pin_type": {
+            "type": "float"
+          }
+        },
+        "flow": "value",
+        "annotations": {
+          "unit": "Hz"
+        },
+        "former_names": [
+          "frequency_hz",
+          "pitch"
+        ]
+      },
+      "pin_default": 440.0
+    },
+    {
+      "name": "detune",
+      "description": "",
+      "family": {
+        "family": "channels"
+      },
+      "pin_declaration": {
+        "pin_type": {
+          "kind": "is",
+          "pin_type": {
+            "type": "float"
+          }
+        },
+        "flow": "value",
+        "may_be_unset": true
+      },
+      "pin_default": null
+    }
+  ],
+  "output_ports": [
+    {
+      "name": "result",
+      "description": "",
+      "family": {
+        "family": "channels",
+        "names": {
+          "stated": [
+            "result"
+          ]
+        },
+        "dtype": "f64"
+      },
+      "pin_declaration": {
+        "pin_type": {
+          "kind": "is",
+          "pin_type": {
+            "type": "float"
+          }
+        },
+        "flow": "value",
+        "former_names": [
+          "level"
+        ]
+      }
+    }
+  ],
+  "function_signature": {
+    "inputs": [
+      {
+        "parameter": "frequency",
+        "port": "frequency",
+        "value_type": "float",
+        "pin_type": {
+          "type": "float"
+        },
+        "optional": false,
+        "default": 440.0
+      },
+      {
+        "parameter": "detune",
+        "port": "detune",
+        "value_type": "float",
+        "pin_type": {
+          "type": "float"
+        },
+        "optional": true,
+        "default": null
+      }
+    ],
+    "outputs": [
+      {
+        "port": "result",
+        "field": null,
+        "value_type": "float",
+        "pin_type": {
+          "type": "float"
+        },
+        "may_hand_out_nothing": false
+      }
+    ],
+    "time_parameter": null,
+    "state_parameter": null,
+    "state_record_class": null,
+    "config_parameter": null
+  }
+}
