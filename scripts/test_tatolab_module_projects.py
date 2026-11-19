@@ -3,6 +3,7 @@
 
 """The archives and catalog `tatolab_module_projects.py` writes: an import of one syncs offline, and the catalog lists what the runtime's listing reads."""
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -23,15 +24,26 @@ LINUX_X86_64_PLATFORM_TAG = "manylinux_2_28_x86_64"
 MACOS_ARM64_PLATFORM_TAG = "macosx_26_0_arm64"
 
 NODE_MODULE_SOURCE = '''
-from tatolab.stream import node
+from tatolab.stream import Image, Input, Output, node
 
 
 @node.meta(description="Makes frames out of nothing.\\n\\nA second paragraph.")
 @node.process
 class FrameMaker:
+    pattern = Input(Image, description="A picture to tile")
+    video = Output(Image, description="The frames it makes")
+
     def process(self, ctx):
         pass
 '''
+
+PROGRAM_VIEW_MANIFEST = {
+    "contract": "1.0",
+    "title": "Program",
+    "description": "The show as the audience gets it.",
+    "entry": "index.html",
+    "placement": "node",
+}
 
 
 def write_a_module_wheel(directory, distribution_name, platform_tag, entry_points, runtime_requirement=f"tatolab-stream>={RELEASE_VERSION}"):
@@ -64,11 +76,13 @@ def write_a_module_wheel(directory, distribution_name, platform_tag, entry_point
     return wheel_path
 
 
-def write_a_module_package(workspace_root, directory_name, distribution_name, title):
-    """`packages/<directory_name>/` as a module project: a pyproject naming the distribution, a project file, a README and one stream."""
+def write_a_module_package(workspace_root, directory_name, distribution_name, title, catalog_table='category = "Sources"\n'):
+    """`packages/<directory_name>/` as a module project: a pyproject naming the distribution and `catalog_table` under `[tool.tatolab.catalog]`, a project file, a README and one stream."""
     module_directory = Path(workspace_root) / "packages" / directory_name
     (module_directory / "streams").mkdir(parents=True)
-    (module_directory / "pyproject.toml").write_text(f'[project]\nname = "{distribution_name}"\nversion = "0.0.0"\n')
+    (module_directory / "pyproject.toml").write_text(
+        f'[project]\nname = "{distribution_name}"\nversion = "0.0.0"\n\n[tool.tatolab.catalog]\n{catalog_table}'
+    )
     (module_directory / "tatolab-project.json").write_text(
         json.dumps(
             {"dependencies": [], "description": f"{title} for a stream.", "name": title, "project": "8b0a5a52-3d5d-4f43-8f43-0b6c7b0d1e2f"}
@@ -137,8 +151,10 @@ class ModuleProjectArchives(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.working_directory)
 
-    def assemble_the_camera(self, entry_points=None, runtime_requirements=(f"tatolab-stream>={RELEASE_VERSION}",) * 2):
-        write_a_module_package(self.workspace_root, "tatolab-camera", "tatolab-camera", "Camera")
+    def assemble_the_camera(self, entry_points=None, runtime_requirements=(f"tatolab-stream>={RELEASE_VERSION}",) * 2, before_assembling=None):
+        module_directory = write_a_module_package(self.workspace_root, "tatolab-camera", "tatolab-camera", "Camera")
+        if before_assembling is not None:
+            before_assembling(module_directory)
         for platform_tag, runtime_requirement in zip((LINUX_X86_64_PLATFORM_TAG, MACOS_ARM64_PLATFORM_TAG), runtime_requirements, strict=True):
             write_a_module_wheel(
                 self.wheels_directory,
@@ -201,13 +217,51 @@ class ModuleProjectArchives(unittest.TestCase):
         self.assertEqual(entry["title"], "Camera")
         self.assertEqual(entry["download_url"], f"https://get.tatolab.com/modules/tatolab-camera-{RELEASE_VERSION}.zip")
         self.assertEqual(entry["download_sha256"], tatolab_module_projects.sha256_of_file(self.output_root / "modules" / f"tatolab-camera-{RELEASE_VERSION}.zip"))
-        self.assertEqual(entry["nodes"], [{"name": "FrameMaker", "import_path": "tatolab.camera:FrameMaker", "summary": "Makes frames out of nothing."}])
+        self.assertEqual(
+            entry["nodes"],
+            [
+                {
+                    "name": "FrameMaker",
+                    "import_path": "tatolab.camera:FrameMaker",
+                    "summary": "Makes frames out of nothing.",
+                    "inputs": [{"name": "pattern", "family": "image", "description": "A picture to tile"}],
+                    "outputs": [{"name": "video", "family": "image", "description": "The frames it makes"}],
+                }
+            ],
+        )
+        self.assertEqual(entry["category"], "Sources")
+        self.assertEqual(entry["download_size"], (self.output_root / "modules" / f"tatolab-camera-{RELEASE_VERSION}.zip").stat().st_size)
+        self.assertEqual(entry["views"], [])
+        self.assertNotIn("gallery", entry)
+        self.assertNotIn("release_notes", entry)
         self.assertEqual(
             entry["platforms"],
             [{"sys_platform": "darwin", "platform_machine": "arm64"}, {"sys_platform": "linux", "platform_machine": "x86_64"}],
         )
         self.assertEqual(entry["streams"], [{"name": "Loop", "import_path": "1f9d2c3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f", "summary": ""}])
         self.assertEqual(entry["lowest_runtime_version"], RELEASE_VERSION)
+
+    def test_an_archive_carries_the_modules_views_and_the_catalog_lists_each(self):
+        def write_a_view(module_directory):
+            view_directory = module_directory / "views" / "program"
+            view_directory.mkdir(parents=True)
+            (view_directory / "tatolab_view.json").write_text(json.dumps(PROGRAM_VIEW_MANIFEST))
+            (view_directory / "index.html").write_text("<!doctype html>\n")
+            (view_directory / "node_modules").mkdir()
+            (view_directory / "node_modules" / "left-out.js").write_text("")
+            (view_directory / ".DS_Store").write_text("")
+
+        [archive_path] = self.assemble_the_camera(before_assembling=write_a_view)
+        with zipfile.ZipFile(archive_path) as archive:
+            self.assertEqual(
+                sorted(name for name in archive.namelist() if name.startswith("views/")),
+                ["views/program/index.html", "views/program/tatolab_view.json"],
+            )
+        [entry] = json.loads(tatolab_module_projects.write_the_catalog(self.output_root, self.uv, self.tatolab_stream_wheel).read_text())["entries"]
+        self.assertEqual(
+            entry["views"],
+            [{"view_type": "Camera:program", "title": "Program", "description": "The show as the audience gets it.", "placement": "node"}],
+        )
 
     def test_the_catalog_names_the_lowest_runtime_the_modules_wheels_require(self):
         self.assemble_the_camera(runtime_requirements=("tatolab-stream (>=0.69.44)", "tatolab-stream>=0.69.44,<1; python_version >= '3.12'"))
@@ -242,7 +296,126 @@ class ModuleProjectArchives(unittest.TestCase):
             tatolab_module_projects.write_the_catalog(self.output_root, self.uv, self.tatolab_stream_wheel)
 
 
+class ModuleProjectListingDetails(unittest.TestCase):
+    def setUp(self):
+        self.working_directory = Path(tempfile.mkdtemp())
+        self.workspace_root = self.working_directory / "workspace"
+        self.wheels_directory = self.working_directory / "wheels"
+        self.wheels_directory.mkdir()
+        self.output_root = self.working_directory / "published"
+
+    def tearDown(self):
+        shutil.rmtree(self.working_directory)
+
+    def assemble(self, catalog_table='category = "Sources"\n', before_assembling=None):
+        module_directory = write_a_module_package(self.workspace_root, "tatolab-camera", "tatolab-camera", "Camera", catalog_table)
+        if before_assembling is not None:
+            before_assembling(module_directory)
+        write_a_module_wheel(self.wheels_directory, "tatolab-camera", LINUX_X86_64_PLATFORM_TAG, {"FrameMaker": "tatolab.camera:FrameMaker"})
+        return tatolab_module_projects.assemble_every_module_project(self.workspace_root, self.wheels_directory, RELEASE_VERSION, self.output_root)
+
+    def listing_sidecar_of(self, archive_path):
+        return json.loads(Path(str(archive_path) + ".entry.json").read_text())
+
+    def test_a_module_naming_no_category_the_catalog_takes_is_left_out(self):
+        for catalog_table in ("", 'category = "Gadgets"\n'):
+            with self.subTest(catalog_table=catalog_table):
+                shutil.rmtree(self.workspace_root, ignore_errors=True)
+                self.assertEqual(self.assemble(catalog_table), [])
+
+    def test_the_gallery_is_published_beside_the_archive_cover_first(self):
+        def write_the_pictures(module_directory):
+            (module_directory / "catalog").mkdir()
+            (module_directory / "catalog" / "cover.png").write_bytes(b"cover")
+            (module_directory / "catalog" / "in-use.webp").write_bytes(b"in use")
+
+        [archive_path] = self.assemble('category = "Sources"\ngallery = ["catalog/cover.png", "catalog/in-use.webp"]\n', write_the_pictures)
+        gallery_directory = self.output_root / "modules" / f"tatolab-camera-{RELEASE_VERSION}" / "gallery"
+        self.assertEqual((gallery_directory / "cover.png").read_bytes(), b"cover")
+        self.assertEqual(
+            self.listing_sidecar_of(archive_path)["gallery"],
+            [
+                f"https://get.tatolab.com/modules/tatolab-camera-{RELEASE_VERSION}/gallery/cover.png",
+                f"https://get.tatolab.com/modules/tatolab-camera-{RELEASE_VERSION}/gallery/in-use.webp",
+            ],
+        )
+
+    def test_a_gallery_naming_a_missing_or_outside_or_unpictured_file_is_left_out(self):
+        def write_a_text_file(module_directory):
+            (module_directory / "notes.txt").write_text("not a picture")
+
+        for gallery in ('["catalog/missing.png"]', '["../outside.png"]', '["notes.txt"]', '"catalog/cover.png"'):
+            with self.subTest(gallery=gallery):
+                shutil.rmtree(self.workspace_root, ignore_errors=True)
+                (self.working_directory / "workspace" / "packages").mkdir(parents=True)
+                (self.working_directory / "workspace" / "packages" / "outside.png").write_bytes(b"outside")
+                self.assertEqual(self.assemble(f'category = "Sources"\ngallery = {gallery}\n', write_a_text_file), [])
+
+    def test_the_release_notes_are_the_changelogs_section_for_the_release(self):
+        self.workspace_root.mkdir(parents=True)
+        (self.workspace_root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n"
+            f"## [{RELEASE_VERSION}](https://example.invalid/compare) (2026-11-19)\n\n\n### Features\n\n* **camera:** sharper frames\n\n"
+            "## [0.70.0](https://example.invalid/compare) (2026-11-18)\n\n### Bug Fixes\n\n* older\n"
+        )
+        [archive_path] = self.assemble()
+        self.assertEqual(self.listing_sidecar_of(archive_path)["release_notes"], "### Features\n\n* **camera:** sharper frames")
+
+    def test_the_copy_version_is_the_one_add_dependency_records_for_the_archives_files(self):
+        [archive_path] = self.assemble()
+        with zipfile.ZipFile(archive_path) as archive:
+            copied_files = {name: hashlib.sha256(archive.read(name)).hexdigest() for name in archive.namelist()}
+        expected = hashlib.sha256((json.dumps(copied_files, indent=2, sort_keys=True) + "\n").encode()).hexdigest()
+        self.assertEqual(self.listing_sidecar_of(archive_path)["copy_version"], expected)
+
+    def test_the_copy_version_follows_the_runtimes_rule_pinned_beside_it(self):
+        # The same value `an_imports_version_is_the_sha256_of_its_files_hashes_as_canonical_json`
+        # pins in streamlib-project-repository: change both or neither.
+        self.assertEqual(
+            tatolab_module_projects.copy_version_of({"tatolab-project.json": b"{}\n", "wheels/a.whl": b"wheel", ".tatolab/left-out": b"", "streams/.DS_Store": b""}),
+            "e26dca00880b66fe5d7f2f49e2a238ec7c9d881b48793ba29f09dd77d1c397a9",
+        )
+
+
 class CatalogMerge(unittest.TestCase):
+    def test_a_new_release_names_each_earlier_releases_copy_version(self):
+        catalog = tatolab_module_projects.catalog_with_these_entries(
+            [{"kind": "package", "name": "tatolab-camera", "version": "0.70.1", "copy_version": "c3"}],
+            {
+                "catalog_version": 1,
+                "entries": [
+                    {
+                        "kind": "package",
+                        "name": "tatolab-camera",
+                        "version": "0.70.0",
+                        "copy_version": "c2",
+                        "earlier_versions": [{"version": "0.69.9", "copy_version": "c1"}],
+                    }
+                ],
+            },
+        )
+        [entry] = catalog["entries"]
+        self.assertEqual(entry["earlier_versions"], [{"version": "0.69.9", "copy_version": "c1"}, {"version": "0.70.0", "copy_version": "c2"}])
+
+    def test_a_rerun_of_one_release_keeps_its_earlier_versions_and_names_itself_in_none(self):
+        catalog = tatolab_module_projects.catalog_with_these_entries(
+            [{"kind": "package", "name": "tatolab-camera", "version": "0.70.1", "copy_version": "c3"}],
+            {
+                "catalog_version": 1,
+                "entries": [
+                    {
+                        "kind": "package",
+                        "name": "tatolab-camera",
+                        "version": "0.70.1",
+                        "copy_version": "c3",
+                        "earlier_versions": [{"version": "0.70.0", "copy_version": "c2"}],
+                    }
+                ],
+            },
+        )
+        [entry] = catalog["entries"]
+        self.assertEqual(entry["earlier_versions"], [{"version": "0.70.0", "copy_version": "c2"}])
+
     def test_an_entry_this_run_did_not_assemble_is_kept_from_the_catalog_it_replaces(self):
         catalog = tatolab_module_projects.catalog_with_these_entries(
             [{"kind": "package", "name": "tatolab-camera", "version": "0.70.1"}],
@@ -276,6 +449,13 @@ class TheWorkspacesModuleProjects(unittest.TestCase):
                 "tatolab-webrtc",
             ],
         )
+
+
+    def test_every_module_project_names_a_category_the_catalog_takes(self):
+        for directory in tatolab_module_projects.every_module_project_directory_in(WORKSPACE_ROOT):
+            with self.subTest(module_project=directory.name):
+                category, _ = tatolab_module_projects.catalog_declaration_of_the_module_in(directory)
+                self.assertIn(category, tatolab_module_projects.CATALOG_CATEGORIES)
 
 
 if __name__ == "__main__":

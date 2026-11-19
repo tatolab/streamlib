@@ -415,6 +415,22 @@ jobs:
             put_object "$archive_path" "$archive_key" application/zip "public, max-age=31536000, immutable"
             put_object "$archive_path.sha256" "$archive_key.sha256" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
           done
+          # Each gallery picture sits beside its release's archive, under a key no other release writes.
+          for picture_path in module-projects/modules/*/gallery/*; do
+            [ -e "$picture_path" ] || continue
+            picture_key="${picture_path#module-projects/}"
+            picture_suffix="$(printf '%s' "${picture_path##*.}" | tr '[:upper:]' '[:lower:]')"
+            case "$picture_suffix" in
+              png) picture_type=image/png ;;
+              jpg | jpeg) picture_type=image/jpeg ;;
+              webp) picture_type=image/webp ;;
+              *) echo "::error::$picture_key is no picture the catalog's gallery takes"; exit 1 ;;
+            esac
+            if curl -fsSI "$GET_TATOLAB_COM_URL/$picture_key" > /dev/null 2>&1; then
+              continue
+            fi
+            put_object "$picture_path" "$picture_key" "$picture_type" "public, max-age=31536000, immutable"
+          done
           put_object module-projects/catalog/v1.json catalog/v1.json "application/json" "public, max-age=0, must-revalidate"
 
       - name: get.tatolab.com serves every archive the catalog lists
