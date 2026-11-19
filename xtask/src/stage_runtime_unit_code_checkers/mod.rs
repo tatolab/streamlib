@@ -8,8 +8,8 @@
 //! archive for the host's target at one pinned version, checked against its
 //! pinned sha256 and kept under `target/`, so a second run whose archive still
 //! matches downloads nothing. `build-runtime` places `oxlint` in the unit's
-//! `bin/` beside `tatolabd`, and `tsc` with its library files in
-//! `bin/typescript/`.
+//! `bin/` beside `tatolabd`, and `tsc` with its library files, its `LICENSE`
+//! and its `NOTICE.txt` in `bin/typescript/`.
 
 use crate::stage_runtime_unit_carried_packages::the_kept_download_pinned_by;
 use anyhow::{Context, Result, bail};
@@ -34,6 +34,11 @@ const TYPESCRIPT_PACKAGE_COMPILER_DIRECTORY_IN_THE_ARCHIVE: &str = "package/lib"
 
 /// The compiler's file name in its folder.
 const TYPESCRIPT_COMPILER_FILE_NAME: &str = "tsc";
+
+/// The terms TypeScript's platform package carries at its root, which travel
+/// with the compiler into its folder.
+const TYPESCRIPT_PACKAGE_TERMS_IN_THE_ARCHIVE: [&str; 2] =
+    ["package/LICENSE", "package/NOTICE.txt"];
 
 /// One target's archives of the two programs and the sha256 each is checked
 /// against.
@@ -203,18 +208,32 @@ fn unpack_into_an_empty_directory(
 
 /// Unpack the compiler's folder of TypeScript's platform package from
 /// `archive` into `unpacked_directory` and return the folder, which holds
-/// `tsc` and its library files side by side.
+/// `tsc` and its library files side by side, with the package's `LICENSE`
+/// and `NOTICE.txt` moved in beside them.
 pub fn unpack_the_typescript_compiler(
     archive: &Path,
     unpacked_directory: &Path,
 ) -> Result<PathBuf> {
-    unpack_into_an_empty_directory(
-        archive,
-        unpacked_directory,
-        &[TYPESCRIPT_PACKAGE_COMPILER_DIRECTORY_IN_THE_ARCHIVE],
-    )?;
+    let mut members = vec![TYPESCRIPT_PACKAGE_COMPILER_DIRECTORY_IN_THE_ARCHIVE];
+    members.extend(TYPESCRIPT_PACKAGE_TERMS_IN_THE_ARCHIVE);
+    unpack_into_an_empty_directory(archive, unpacked_directory, &members)?;
     let compiler_directory =
         unpacked_directory.join(TYPESCRIPT_PACKAGE_COMPILER_DIRECTORY_IN_THE_ARCHIVE);
+    for terms in TYPESCRIPT_PACKAGE_TERMS_IN_THE_ARCHIVE {
+        let unpacked_terms = unpacked_directory.join(terms);
+        let placed_terms = compiler_directory.join(
+            unpacked_terms
+                .file_name()
+                .with_context(|| format!("{terms} names no file"))?,
+        );
+        std::fs::rename(&unpacked_terms, &placed_terms).with_context(|| {
+            format!(
+                "moving {} to {}",
+                unpacked_terms.display(),
+                placed_terms.display()
+            )
+        })?;
+    }
     if !compiler_directory
         .join(TYPESCRIPT_COMPILER_FILE_NAME)
         .is_file()

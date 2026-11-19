@@ -78,6 +78,8 @@ fn the_compiler_is_unpacked_with_its_library_files_beside_it_and_nothing_else_of
         &archive,
         &[
             ("package/package.json", "{}"),
+            ("package/LICENSE", "Apache-2.0"),
+            ("package/NOTICE.txt", "notices"),
             ("package/lib/tsc", "the compiler"),
             ("package/lib/lib.d.ts", "/// lib"),
             ("package/lib/lib.dom.d.ts", "/// dom"),
@@ -94,7 +96,10 @@ fn the_compiler_is_unpacked_with_its_library_files_beside_it_and_nothing_else_of
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     placed.sort();
-    assert_eq!(placed, ["lib.d.ts", "lib.dom.d.ts", "tsc"]);
+    assert_eq!(
+        placed,
+        ["LICENSE", "NOTICE.txt", "lib.d.ts", "lib.dom.d.ts", "tsc"]
+    );
     assert!(!unpacked.join("left-by-an-earlier-run").exists());
     assert!(!unpacked.join("package/package.json").exists());
 }
@@ -103,7 +108,14 @@ fn the_compiler_is_unpacked_with_its_library_files_beside_it_and_nothing_else_of
 fn a_compiler_archive_without_its_library_files_is_refused() {
     let scratch = tempfile::tempdir().unwrap();
     let archive = scratch.path().join("typescript.tgz");
-    archive_holding(&archive, &[("package/lib/tsc", "the compiler")]);
+    archive_holding(
+        &archive,
+        &[
+            ("package/LICENSE", "Apache-2.0"),
+            ("package/NOTICE.txt", "notices"),
+            ("package/lib/tsc", "the compiler"),
+        ],
+    );
 
     let refusal = unpack_the_typescript_compiler(&archive, &scratch.path().join("unpacked"))
         .unwrap_err()
