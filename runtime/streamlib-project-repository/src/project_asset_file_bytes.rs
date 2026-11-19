@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// Where a client's upload to a project lands before its import, relative to the project: one
 /// file per SHA-256, which the import moves to the asset's path.
@@ -54,7 +55,7 @@ pub(crate) fn copy_the_file_into_the_uploads_hashing_it(
     };
     let mut source_file = File::open(source).map_err(unreadable)?;
     let uploads_directory = project_directory.join(PROJECT_UPLOADS_DIRECTORY);
-    std::fs::create_dir_all(&uploads_directory)?;
+    create_directory_and_its_missing_parents_at_the_process_umask(&uploads_directory)?;
     let copy_path = uploads_directory.join(format!(".incoming-{}", Uuid::new_v4()));
     let mut copy_file = std::fs::OpenOptions::new()
         .write(true)

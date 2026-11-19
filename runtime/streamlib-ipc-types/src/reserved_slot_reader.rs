@@ -12,6 +12,7 @@ use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::with_the_process_umask_held;
 
 use crate::engine_owned_iceoryx2_domain::{
     ChannelDataServiceOpenError, ChannelDataServicePortFactory, ChannelDataServiceSubscriber,
@@ -212,15 +213,17 @@ impl OutputPortViewerReader {
                      `{channel_service_name}`: {failure:?}"
                 ))
             })?;
-        let wake_listener = wake_service
-            .listener_builder()
-            .create()
-            .map_err(|failure| {
-                OutputPortViewerSubscribeRefusal::Transport(format!(
-                    "a viewer could not listen on the wake `{wake_service_name}` of channel \
+        // The bind swaps the process umask, so it waits for every child start
+        // and directory creation of a runtime process sharing this one.
+        let wake_listener =
+            with_the_process_umask_held(|| wake_service.listener_builder().create()).map_err(
+                |failure| {
+                    OutputPortViewerSubscribeRefusal::Transport(format!(
+                        "a viewer could not listen on the wake `{wake_service_name}` of channel \
                  `{channel_service_name}`: {failure:?}"
-                ))
-            })?;
+                    ))
+                },
+            )?;
         let ring_depth = match viewer_reads {
             OutputPortViewerReads::LatestMessage => OUTPUT_PORT_VIEWER_RING_DEPTH,
             OutputPortViewerReads::EveryMessage => {

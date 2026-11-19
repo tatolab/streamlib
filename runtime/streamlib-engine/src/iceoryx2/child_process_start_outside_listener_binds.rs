@@ -4,20 +4,17 @@
 //! Keeps a child process from being started while iceoryx2 binds a listener.
 //!
 //! iceoryx2 binds each listener's unix datagram socket under a process-wide
-//! `umask(!permission)` — 0o177 from 0.10 — and restores it after `bind()`. A
+//! `umask(!permission)`, 0o177 from 0.10, and restores it after `bind()`. A
 //! child forked inside that window inherits 0o177 and keeps it for its whole
 //! life, so every directory it goes on to create has no owner search bit.
 //! Unlike a directory, a child's umask cannot be set after the fact to a value
-//! the parent does not know, so the two are kept apart instead.
+//! the parent does not know, so the two are kept apart by the one lock in
+//! [`streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds`].
 
 use iceoryx2::port::listener::{Listener, ListenerCreateError};
 use iceoryx2::prelude::*;
 use iceoryx2::service::port_factory::event::PortFactory as EventServicePortFactory;
-
-/// Held across every iceoryx2 listener bind the engine makes and every child
-/// process it starts.
-static ICEORYX2_LISTENER_BIND_OR_CHILD_PROCESS_START: parking_lot::Mutex<()> =
-    parking_lot::const_mutex(());
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::with_the_process_umask_held;
 
 /// Spawn `command` while no iceoryx2 listener is being bound in this process,
 /// so the child inherits this process's own umask. The lock covers the spawn
@@ -26,17 +23,15 @@ static ICEORYX2_LISTENER_BIND_OR_CHILD_PROCESS_START: parking_lot::Mutex<()> =
 pub fn spawn_outside_every_iceoryx2_listener_bind(
     command: &mut std::process::Command,
 ) -> std::io::Result<std::process::Child> {
-    let _no_listener_is_being_bound = ICEORYX2_LISTENER_BIND_OR_CHILD_PROCESS_START.lock();
-    command.spawn()
+    with_the_process_umask_held(|| command.spawn())
 }
 
 /// Bind a listener on `notify_service` while no child process is being
-/// started in this process.
+/// started, and no directory made at the process umask, in this process.
 pub(crate) fn bind_an_iceoryx2_listener_outside_every_child_process_start(
     notify_service: &EventServicePortFactory<ipc_threadsafe::Service>,
 ) -> Result<Listener<ipc_threadsafe::Service>, ListenerCreateError> {
-    let _no_child_process_is_starting = ICEORYX2_LISTENER_BIND_OR_CHILD_PROCESS_START.lock();
-    notify_service.listener_builder().create()
+    with_the_process_umask_held(|| notify_service.listener_builder().create())
 }
 
 #[cfg(test)]
@@ -48,12 +43,14 @@ mod tests {
     /// This process's own umask, read while no listener can be binding, as
     /// `sh -c umask` prints one.
     fn this_processs_own_umask() -> String {
-        let _no_listener_is_being_bound = ICEORYX2_LISTENER_BIND_OR_CHILD_PROCESS_START.lock();
         // SAFETY: `umask` only swaps the process's file-creation mask, and it
         // is put straight back; the lock keeps every listener bind and child
         // start away from the moment it reads 0.
-        let umask = unsafe { libc::umask(0) };
-        unsafe { libc::umask(umask) };
+        let umask = with_the_process_umask_held(|| unsafe {
+            let umask = libc::umask(0);
+            libc::umask(umask);
+            umask
+        });
         format!("{umask:04o}")
     }
 

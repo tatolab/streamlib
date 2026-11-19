@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 impl Runner {
     /// The kind of the last action under way on the project in `project_directory` that
@@ -401,7 +402,8 @@ impl Runner {
                         project_directory.display()
                     )));
                 }
-                std::fs::create_dir_all(&project_directory).map_err(|not_created| {
+                create_directory_and_its_missing_parents_at_the_process_umask(&project_directory)
+                    .map_err(|not_created| {
                     Error::Configuration(format!(
                         "{} could not be created, so no project was created there: {not_created}",
                         project_directory.display()
