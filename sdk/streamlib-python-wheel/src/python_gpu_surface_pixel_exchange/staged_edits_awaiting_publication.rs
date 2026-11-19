@@ -18,6 +18,7 @@ use parking_lot::Mutex;
 use pyo3::PyResult;
 use pyo3::exceptions::PyRuntimeError;
 
+use super::gpu_surface_owned_memory::GpuSurfaceOwnedMemory;
 use super::pending_staged_write_back_to_surface::StagedWriteBackSource;
 
 /// Which surface handle staged an edit: the address of the memory it and
@@ -26,7 +27,16 @@ use super::pending_staged_write_back_to_surface::StagedWriteBackSource;
 pub(crate) struct SurfaceHandleIdentity(usize);
 
 impl SurfaceHandleIdentity {
-    pub(crate) fn of<T>(shared_memory: &Arc<T>) -> Self {
+    pub(crate) fn of(shared_memory: &Arc<GpuSurfaceOwnedMemory>) -> Self {
+        Self::of_the_memory_at(shared_memory)
+    }
+
+    #[cfg(test)]
+    pub(super) fn of_a_stand_in<T>(stand_in_memory: &Arc<T>) -> Self {
+        Self::of_the_memory_at(stand_in_memory)
+    }
+
+    fn of_the_memory_at<T>(shared_memory: &Arc<T>) -> Self {
         Self(Arc::as_ptr(shared_memory) as usize)
     }
 }
@@ -54,29 +64,27 @@ pub(crate) struct StagedEditsAwaitingPublication {
 }
 
 impl StagedEditsAwaitingPublication {
-    /// Hold `pool_slot_key` for the edit `staged_by` stages through
-    /// `staged_through`, until the returned hold drops. `frame_read_in` says
-    /// whether the staging already holds the frame, as the device door's
-    /// does by the time it stages; the CPU door stages first and reads in
-    /// after. A slot another handle already holds stays that handle's.
+    /// Hold the pool slot of `surface_id` for the edit `staged_by` stages
+    /// through `staged_through`, until the returned hold drops. A slot
+    /// another handle already holds stays that handle's.
     pub(crate) fn hold_until_the_edit_settles(
         self: &Arc<Self>,
-        pool_slot_key: &str,
+        surface_id: &str,
         staged_by: SurfaceHandleIdentity,
         staged_through: StagedWriteBackSource,
-        frame_read_in: bool,
     ) -> StagedEditAwaitingPublication {
+        let pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id).to_owned();
         self.by_pool_slot
             .lock()
-            .entry(pool_slot_key.to_string())
+            .entry(pool_slot_key.clone())
             .or_insert(StagedEdit {
                 staged_by,
                 staged_through,
-                frame_read_in,
+                frame_read_in: staged_through.reads_the_frame_in_before_it_stages(),
             });
         StagedEditAwaitingPublication {
             staged_edits: Arc::clone(self),
-            pool_slot_key: pool_slot_key.to_string(),
+            pool_slot_key,
             staged_by,
         }
     }
@@ -114,6 +122,7 @@ impl StagedEditsAwaitingPublication {
 
 /// One pool slot held for one handle's unpublished edit; dropping it, when
 /// the edit is published or discarded or the handle goes, frees the slot.
+#[must_use = "dropping the hold frees the pool slot"]
 pub(crate) struct StagedEditAwaitingPublication {
     staged_edits: Arc<StagedEditsAwaitingPublication>,
     pool_slot_key: String,

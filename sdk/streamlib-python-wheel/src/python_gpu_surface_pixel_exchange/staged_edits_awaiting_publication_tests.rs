@@ -32,14 +32,10 @@ impl TwoHandlesOverOneSurface {
         let inner_memory = Arc::new(());
         Self {
             staged_edits: Arc::default(),
-            outer: SurfaceHandleIdentity::of(&outer_memory),
-            inner: SurfaceHandleIdentity::of(&inner_memory),
+            outer: SurfaceHandleIdentity::of_a_stand_in(&outer_memory),
+            inner: SurfaceHandleIdentity::of_a_stand_in(&inner_memory),
             _memory_each_handle_shares: (outer_memory, inner_memory),
         }
-    }
-
-    fn pool_slot_key() -> &'static str {
-        streamlib::sdk::rhi::pool_slot_key_of_surface_id(A_FRAME_OF_THE_SLOT)
     }
 }
 
@@ -59,10 +55,9 @@ fn every_frame_of_one_pool_slot_shares_the_hold() {
 fn an_inner_scopes_read_in_over_an_outer_scopes_unpublished_edit_is_refused_by_name() {
     let handles = TwoHandlesOverOneSurface::new();
     let _outer_edit = handles.staged_edits.hold_until_the_edit_settles(
-        TwoHandlesOverOneSurface::pool_slot_key(),
+        A_FRAME_OF_THE_SLOT,
         handles.outer,
         StagedWriteBackSource::CpuReadbackStaging,
-        true,
     );
 
     for door in [
@@ -85,10 +80,9 @@ fn an_inner_scopes_read_in_over_an_outer_scopes_unpublished_edit_is_refused_by_n
 fn the_staging_handle_reads_the_frame_in_once_then_keeps_its_edit() {
     let handles = TwoHandlesOverOneSurface::new();
     let _cpu_door_edit = handles.staged_edits.hold_until_the_edit_settles(
-        TwoHandlesOverOneSurface::pool_slot_key(),
+        A_FRAME_OF_THE_SLOT,
         handles.outer,
         StagedWriteBackSource::CpuReadbackStaging,
-        false,
     );
     let read_in = || {
         handles
@@ -109,10 +103,9 @@ fn the_staging_handle_reads_the_frame_in_once_then_keeps_its_edit() {
 fn the_staging_handle_reading_through_its_other_door_is_refused() {
     let handles = TwoHandlesOverOneSurface::new();
     let _device_door_edit = handles.staged_edits.hold_until_the_edit_settles(
-        TwoHandlesOverOneSurface::pool_slot_key(),
+        A_FRAME_OF_THE_SLOT,
         handles.outer,
         StagedWriteBackSource::DeviceExportStaging,
-        true,
     );
 
     let refusal = handles
@@ -131,10 +124,9 @@ fn the_staging_handle_reading_through_its_other_door_is_refused() {
 fn a_settled_edit_frees_the_slot_and_another_slot_is_never_held() {
     let handles = TwoHandlesOverOneSurface::new();
     let outer_edit = handles.staged_edits.hold_until_the_edit_settles(
-        TwoHandlesOverOneSurface::pool_slot_key(),
+        A_FRAME_OF_THE_SLOT,
         handles.outer,
         StagedWriteBackSource::CpuReadbackStaging,
-        true,
     );
     assert_eq!(
         handles
@@ -167,17 +159,15 @@ fn a_settled_edit_frees_the_slot_and_another_slot_is_never_held() {
 fn an_inner_hold_that_drops_leaves_the_outer_edit_held() {
     let handles = TwoHandlesOverOneSurface::new();
     let _outer_edit = handles.staged_edits.hold_until_the_edit_settles(
-        TwoHandlesOverOneSurface::pool_slot_key(),
+        A_FRAME_OF_THE_SLOT,
         handles.outer,
         StagedWriteBackSource::CpuReadbackStaging,
-        true,
     );
 
     drop(handles.staged_edits.hold_until_the_edit_settles(
-        TwoHandlesOverOneSurface::pool_slot_key(),
+        A_FRAME_OF_THE_SLOT,
         handles.inner,
         StagedWriteBackSource::CpuReadbackStaging,
-        false,
     ));
 
     assert!(
@@ -201,10 +191,9 @@ fn an_armed_edit_holds_its_slot_until_it_is_discarded() {
     let hold = || {
         holds_taken.set(holds_taken.get() + 1);
         Some(handles.staged_edits.hold_until_the_edit_settles(
-            TwoHandlesOverOneSurface::pool_slot_key(),
+            A_FRAME_OF_THE_SLOT,
             handles.outer,
             StagedWriteBackSource::CpuReadbackStaging,
-            true,
         ))
     };
     outer_cell

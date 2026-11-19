@@ -77,31 +77,29 @@ impl GpuSurfaceOwnedMemory {
         &self.pending_staged_write_back
     }
 
-    /// Hold this surface's pool slot for the edit this handle is staging
-    /// through `door`, so no other handle reads a frame in over it until the
-    /// edit settles; `None` for a surface with no id, which no staged door
-    /// serves.
-    pub(crate) fn hold_the_pool_slot_for_an_edit_staged_through(
+    /// Arm this surface's staged write-back through `door`, holding its
+    /// pool slot so no other handle reads a frame in over the edit until it
+    /// settles.
+    pub(crate) fn arm_staged_write_back(
+        self: &Arc<Self>,
+        door: StagedWriteBackSource,
+    ) -> PyResult<()> {
+        self.pending_staged_write_back.arm(door, || {
+            self.hold_the_pool_slot_for_an_edit_staged_through(door)
+        })
+    }
+
+    /// `None` for a surface with no id, which no staged door serves.
+    fn hold_the_pool_slot_for_an_edit_staged_through(
         self: &Arc<Self>,
         door: StagedWriteBackSource,
     ) -> Option<StagedEditAwaitingPublication> {
         let surface_id = self.minted_surface_id.as_deref()?;
-        let frame_read_in = match door {
-            // The device door refilled its staging before it stages.
-            StagedWriteBackSource::DeviceExportStaging => true,
-            // The CPU door stages before its read-in.
-            StagedWriteBackSource::CpuReadbackStaging => false,
-        };
         Some(
             self.checked_out_surface
                 .exchange_client()
                 .staged_edits_awaiting_publication()
-                .hold_until_the_edit_settles(
-                    streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id),
-                    SurfaceHandleIdentity::of(self),
-                    door,
-                    frame_read_in,
-                ),
+                .hold_until_the_edit_settles(surface_id, SurfaceHandleIdentity::of(self), door),
         )
     }
 

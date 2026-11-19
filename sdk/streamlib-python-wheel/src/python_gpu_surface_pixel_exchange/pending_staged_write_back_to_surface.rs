@@ -38,6 +38,16 @@ impl StagedWriteBackSource {
             Self::CpuReadbackStaging => "the CPU array",
         }
     }
+
+    /// Whether this door has read the frame into its staging by the time it
+    /// stages an edit: the device door refills before it arms, the CPU door
+    /// arms before its read-in.
+    pub(super) fn reads_the_frame_in_before_it_stages(self) -> bool {
+        match self {
+            Self::DeviceExportStaging => true,
+            Self::CpuReadbackStaging => false,
+        }
+    }
 }
 
 /// The armed-until-settled state a writable staged export leaves behind:

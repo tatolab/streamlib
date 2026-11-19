@@ -292,15 +292,8 @@ impl PythonGpuSurfaceDeviceTensorScope {
             // the surface's cell is shared with the handle that minted this
             // scope, so a CPU staged edit already outstanding is refused
             // here instead of being overwritten at this scope's exit.
-            self.owned_memory.pending_staged_write_back().arm(
-                StagedWriteBackSource::DeviceExportStaging,
-                || {
-                    self.owned_memory
-                        .hold_the_pool_slot_for_an_edit_staged_through(
-                            StagedWriteBackSource::DeviceExportStaging,
-                        )
-                },
-            )?;
+            self.owned_memory
+                .arm_staged_write_back(StagedWriteBackSource::DeviceExportStaging)?;
             let capsule = device_dlpack_capsule(
                 python,
                 &self.owned_memory,
