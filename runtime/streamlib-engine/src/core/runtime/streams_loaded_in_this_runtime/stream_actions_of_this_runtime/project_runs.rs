@@ -530,7 +530,7 @@ impl Runner {
         let (graph, failed_because_its_document_gave_no_graph) = match graph_or_why_none {
             Ok(graph) => (Some(graph), None),
             Err(failed_because) => {
-                stream_record.failed_because = Some(failed_because.clone());
+                stream_record.fail_as(StreamFailureKind::LoadRefused, failed_because.clone());
                 (None, Some(failed_because))
             }
         };
@@ -563,6 +563,7 @@ impl Runner {
                 record_a_stream_held_from_its_document_failed(
                     stream_records,
                     &mut stream_record,
+                    StreamFailureKind::ProjectVenvNotMade,
                     why_the_venv_was_not_made.to_string(),
                 )?
             }

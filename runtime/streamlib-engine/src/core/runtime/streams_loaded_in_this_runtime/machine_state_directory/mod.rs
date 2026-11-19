@@ -26,6 +26,24 @@ pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 9;
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
+/// What a recorded stream's failure is, as its record keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamFailureKind {
+    /// Its project's venv was not made.
+    ProjectVenvNotMade,
+    /// Its code gave no graph, or its load was refused.
+    LoadRefused,
+    /// It loaded, and its start was refused.
+    StartRefused,
+    /// A node of a type its node code did not describe is held as a placeholder.
+    NodeTypeNotDescribed,
+    /// A link its graph's validation refused is held as drawn.
+    LinkRefused,
+    /// It was implicated in too many of the runtime's crashes in a row.
+    KeepsCrashingTheRuntime,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamRecord {
@@ -49,6 +67,10 @@ pub struct StreamRecord {
     /// Why the stream is failed, so the runtime's start skips it until
     /// an `open_project` or `reload_project` retries it; `None` when it is not failed.
     pub failed_because: Option<String>,
+    /// What its failure is, while it is failed; `None` on a failure recorded before the runtime
+    /// typed them, which reads as [`StreamFailureKind::LoadRefused`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_as: Option<StreamFailureKind>,
     /// How many of the runtime's crashes in a row, the last included, the
     /// stream was implicated in.
     pub runtime_crashes_in_a_row_implicating_it: u32,
@@ -98,9 +120,26 @@ impl StreamRecord {
             closed: false,
             paused: false,
             failed_because: None,
+            failed_as: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             pending_stream_actions: Vec::new(),
         }
+    }
+
+    /// Record the stream failed as `kind`, in the runtime's `words`.
+    pub fn fail_as(&mut self, kind: StreamFailureKind, words: String) {
+        self.failed_because = Some(words);
+        self.failed_as = Some(kind);
+    }
+
+    /// What the stream's failure is and why, while it is failed.
+    pub fn failure(&self) -> Option<(StreamFailureKind, &str)> {
+        self.failed_because.as_deref().map(|words| {
+            (
+                self.failed_as.unwrap_or(StreamFailureKind::LoadRefused),
+                words,
+            )
+        })
     }
 
     /// Whether the stream is failed.
@@ -150,6 +189,7 @@ impl StreamRecord {
         self.closed = false;
         self.paused = false;
         self.failed_because = None;
+        self.failed_as = None;
         self.runtime_crashes_in_a_row_implicating_it = 0;
         changed
     }

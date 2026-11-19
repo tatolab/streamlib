@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 8
+    "x-contract-revision": 9
   },
   "methods": [
     {
@@ -6143,7 +6143,11 @@
           },
           "state": {
             "$ref": "#/components/schemas/ListedStreamState",
-            "description": "Whether it is running, stopped or failed."
+            "description": "Whether it is running, stopped or failed, in one word; `condition` answers its load,\nplayback and health apart."
+          },
+          "condition": {
+            "$ref": "#/components/schemas/StreamConditionOnTheWire",
+            "description": "Whether its graph is loaded, whether it plays and whether it is healthy, apart, with\neach diagnostic behind its health."
           },
           "node_count": {
             "type": [
@@ -6159,7 +6163,7 @@
               "string",
               "null"
             ],
-            "description": "Why it is failed; `null` when it is not."
+            "description": "Why it is failed; `null` when it is not. `condition.diagnostics` types it."
           },
           "capture_devices_whose_access_was_never_asked_for": {
             "type": "array",
@@ -6191,6 +6195,7 @@
           "stream",
           "display_name",
           "state",
+          "condition",
           "capture_devices_whose_access_was_never_asked_for"
         ],
         "description": "One stream of a [`ListStreamsToolResult`]."
@@ -6259,6 +6264,314 @@
           }
         ],
         "description": "The state of one stream `list_streams` lists."
+      },
+      "StreamConditionOnTheWire": {
+        "type": "object",
+        "properties": {
+          "load": {
+            "$ref": "#/components/schemas/StreamLoadOnTheWire",
+            "description": "Whether its graph is loaded in the runtime."
+          },
+          "playback": {
+            "$ref": "#/components/schemas/StreamPlaybackOnTheWire",
+            "description": "Whether it plays."
+          },
+          "health": {
+            "$ref": "#/components/schemas/StreamHealthOnTheWire",
+            "description": "Whether it is healthy."
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticOnTheWire"
+            },
+            "description": "Each problem behind its health: the stream's own, then each of its nodes'. Empty while it\nis `healthy`."
+          }
+        },
+        "required": [
+          "load",
+          "playback",
+          "health",
+          "diagnostics"
+        ],
+        "description": "A stream's load, playback and health, and every diagnostic that explains its health."
+      },
+      "StreamLoadOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "not_loaded",
+            "description": "Not loaded: its project is closed, or it was never loaded or did not load. `graph` reads\nit from its saved document."
+          },
+          {
+            "type": "string",
+            "const": "loading",
+            "description": "A stream action of its project loads it, or loads it again."
+          },
+          {
+            "type": "string",
+            "const": "loaded",
+            "description": "Loaded: its graph is held in the runtime to read and edit, whatever its playback and\nhealth. A failed stream that is loaded holds its graph from its document."
+          },
+          {
+            "type": "string",
+            "const": "unloading",
+            "description": "A stream action of its project unloads it."
+          }
+        ],
+        "description": "Whether a stream's graph is loaded in the runtime. The set grows: a value a client does not\nknow reads as `not_loaded`.",
+        "x-may-grow": true
+      },
+      "StreamPlaybackOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "stopped",
+            "description": "Stopped: its nodes run nothing until `start_playback`."
+          },
+          {
+            "type": "string",
+            "const": "starting",
+            "description": "A stream action of its project starts its playback."
+          },
+          {
+            "type": "string",
+            "const": "playing",
+            "description": "Playing; or recorded playing, and played again once it loads at the runtime's start."
+          },
+          {
+            "type": "string",
+            "const": "paused",
+            "description": "Paused: its nodes process nothing until `resume_playback`."
+          },
+          {
+            "type": "string",
+            "const": "stopping",
+            "description": "A stream action of its project stops its playback."
+          }
+        ],
+        "description": "Whether a stream plays. The set grows: a value a client does not know reads as `stopped`.",
+        "x-may-grow": true
+      },
+      "StreamHealthOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "healthy",
+            "description": "Nothing is wrong with it."
+          },
+          {
+            "type": "string",
+            "const": "degraded",
+            "description": "It plays, but a node of it fails, keeps raising or is not ready."
+          },
+          {
+            "type": "string",
+            "const": "failed",
+            "description": "It cannot play until the recovery its diagnostic names is made."
+          }
+        ],
+        "description": "Whether a stream is healthy. The set grows: a value a client does not know reads as\n`failed`.",
+        "x-may-grow": true
+      },
+      "DiagnosticOnTheWire": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DiagnosticKindOnTheWire",
+            "description": "What the problem is."
+          },
+          "place": {
+            "$ref": "#/components/schemas/DiagnosticPlaceOnTheWire",
+            "description": "Where it applies."
+          },
+          "words": {
+            "type": "string",
+            "description": "The runtime's words for it, never rewritten."
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/DiagnosticRecoveryOnTheWire",
+            "description": "What recovers from it."
+          }
+        },
+        "required": [
+          "kind",
+          "place",
+          "words",
+          "recovery"
+        ],
+        "description": "One problem a stream or a node has."
+      },
+      "DiagnosticKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "project_venv_not_made",
+            "description": "The project's venv could not be made from its `pyproject.toml`."
+          },
+          {
+            "type": "string",
+            "const": "load_refused",
+            "description": "The stream's code gave no graph, or its load was refused."
+          },
+          {
+            "type": "string",
+            "const": "start_refused",
+            "description": "The stream loaded, and its start was refused."
+          },
+          {
+            "type": "string",
+            "const": "node_type_not_described",
+            "description": "A node's type is not one its project's node code describes, so the node is held as its\ndocument writes it and runs nothing."
+          },
+          {
+            "type": "string",
+            "const": "link_refused",
+            "description": "A link the graph's validation refused is held as drawn and never wired."
+          },
+          {
+            "type": "string",
+            "const": "keeps_crashing_the_runtime",
+            "description": "The stream was implicated in the runtime's crashes too many times in a row."
+          },
+          {
+            "type": "string",
+            "const": "recorded_by_an_earlier_runtime",
+            "description": "An earlier runtime recorded the stream in a form this one does not load."
+          },
+          {
+            "type": "string",
+            "const": "node_failed",
+            "description": "A node failed."
+          },
+          {
+            "type": "string",
+            "const": "node_raising",
+            "description": "A node's `process()` or function body keeps raising."
+          },
+          {
+            "type": "string",
+            "const": "node_not_ready",
+            "description": "A running node says it is not ready yet."
+          }
+        ],
+        "description": "What a problem is. The set grows: a kind a client does not know is shown by its `words` and\nrecovered by its `recovery`.",
+        "x-may-grow": true
+      },
+      "DiagnosticPlaceOnTheWire": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string",
+                "const": "stream"
+              }
+            },
+            "required": [
+              "on"
+            ],
+            "description": "The stream as a whole."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "description": "The node's id, as `graph` lists it."
+              },
+              "node_name": {
+                "type": "string",
+                "description": "The node's name: its label, not its identity."
+              },
+              "on": {
+                "type": "string",
+                "const": "node"
+              }
+            },
+            "required": [
+              "on",
+              "node_id",
+              "node_name"
+            ],
+            "description": "One node of the stream."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "from_node": {
+                "type": "string",
+                "description": "The name of the node the link leaves."
+              },
+              "from_port": {
+                "type": "string",
+                "description": "The output port the link leaves."
+              },
+              "to_node": {
+                "type": "string",
+                "description": "The name of the node the link enters."
+              },
+              "to_port": {
+                "type": "string",
+                "description": "The input port the link enters."
+              },
+              "on": {
+                "type": "string",
+                "const": "link"
+              }
+            },
+            "required": [
+              "on",
+              "from_node",
+              "from_port",
+              "to_node",
+              "to_port"
+            ],
+            "description": "One link of the stream's graph, by the node names and ports its document draws it\nbetween."
+          }
+        ],
+        "description": "Where a problem applies."
+      },
+      "DiagnosticRecoveryOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "retry_the_load",
+            "description": "Load the stream again with `reload_project`, or play it, which retries it."
+          },
+          {
+            "type": "string",
+            "const": "fix_the_code",
+            "description": "Fix the code the words name; a saved node file reloads it, and `reload_project` retries\nthe stream."
+          },
+          {
+            "type": "string",
+            "const": "fix_the_dependencies",
+            "description": "Fix the project's dependencies in its `pyproject.toml`, then `reload_project`."
+          },
+          {
+            "type": "string",
+            "const": "fix_the_link",
+            "description": "Remove or reconnect the link the place names."
+          },
+          {
+            "type": "string",
+            "const": "restart_the_playback",
+            "description": "Stop the stream's playback and start it again."
+          },
+          {
+            "type": "string",
+            "const": "remove_the_stream",
+            "description": "Remove the stream with `remove_project`; this runtime never loads it."
+          },
+          {
+            "type": "string",
+            "const": "wait_for_the_node",
+            "description": "Nothing: the node reports itself ready once it is."
+          }
+        ],
+        "description": "What recovers from a problem. The set grows: a recovery a client does not know reads as\n`retry_the_load`.",
+        "x-may-grow": true
       },
       "CaptureDeviceOnTheWire": {
         "oneOf": [
@@ -6407,6 +6720,17 @@
               }
             ],
             "description": "The stream's function node pool, rendered as a node is: a live key, absent when no\nisland runs in it. It is no node of the graph, so it is never a link's end; each link it\ncarries renders as the link it was given, naming the pool's ports under\n`carried_through_the_function_node_pool`."
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StreamConditionOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the stream's graph is loaded, whether it plays and whether it is healthy, apart,\nwith each diagnostic behind its health: a live key, absent where the graph is no\nstream's the runtime holds."
           }
         },
         "required": [
@@ -7442,6 +7766,24 @@
             ],
             "description": "Why a running node is not ready, in its own words, while it says so; null once it\nreports itself ready."
           },
+          "health": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeHealthOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the node is healthy, read from its state and why; absent where the node keeps\nno state."
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticOnTheWire"
+            },
+            "description": "Each problem behind the node's health, placed on the node; absent while it is healthy."
+          },
           "helper_process_restarts": {
             "anyOf": [
               {
@@ -7633,6 +7975,32 @@
           }
         ],
         "description": "A node's state as `graph` renders it."
+      },
+      "NodeHealthOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "healthy",
+            "description": "Nothing is wrong with it."
+          },
+          {
+            "type": "string",
+            "const": "not_ready",
+            "description": "It runs, and says it is not ready yet."
+          },
+          {
+            "type": "string",
+            "const": "raising",
+            "description": "It runs, and its `process()` or function body keeps raising."
+          },
+          {
+            "type": "string",
+            "const": "failed",
+            "description": "It failed, or runs nothing."
+          }
+        ],
+        "description": "Whether a node is healthy, as `graph` answers it. The set grows: a value a client does not\nknow reads as `failed`.",
+        "x-may-grow": true
       },
       "HelperProcessRestartsOnTheWire": {
         "type": "object",

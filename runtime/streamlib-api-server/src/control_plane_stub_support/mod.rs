@@ -628,6 +628,12 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     state: ::streamlib::sdk::runtime::StreamListingState::Running,
                     node_count: None,
                     failed_because: None,
+                    condition: ::streamlib_runtime_client_contract::local_api_wire_contract::StreamConditionOnTheWire {
+                        load: ::streamlib_runtime_client_contract::local_api_wire_contract::StreamLoadOnTheWire::Loaded,
+                        playback: ::streamlib_runtime_client_contract::local_api_wire_contract::StreamPlaybackOnTheWire::Playing,
+                        health: ::streamlib_runtime_client_contract::local_api_wire_contract::StreamHealthOnTheWire::Healthy,
+                        diagnostics: Vec::new(),
+                    },
                     capture_devices_whose_access_was_never_asked_for: Vec::new(),
                     stream_action_under_way: None,
                 }]

@@ -376,24 +376,57 @@ fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loa
         .write(&a_record_of(&project, "d-not-re-loaded"))
         .unwrap();
 
-    let listing_of = |function_name: &str, state, node_count| StreamListing {
+    let listing_of = |function_name: &str, state, node_count, condition| StreamListing {
         stream_id: project.stream_id_of(function_name),
         display_name: function_name.to_string(),
         stream_location: Some(project.location_of(function_name)),
         state,
         node_count,
         failed_because: None,
+        condition,
         capture_devices_whose_access_was_never_asked_for: Vec::new(),
         stream_action_under_way: None,
     };
     let mut expected = [
         StreamListing {
             display_name: project.stream_id_of("a-hosted"),
-            ..listing_of("a-hosted", StreamListingState::Running, Some(1))
+            ..listing_of(
+                "a-hosted",
+                StreamListingState::Running,
+                Some(1),
+                a_healthy_condition(
+                    StreamLoadOnTheWire::Loaded,
+                    StreamPlaybackOnTheWire::Playing,
+                ),
+            )
         },
-        listing_of("b-recorded", StreamListingState::Running, Some(1)),
-        listing_of("c-stopped", StreamListingState::Stopped, None),
-        listing_of("d-not-re-loaded", StreamListingState::Running, None),
+        listing_of(
+            "b-recorded",
+            StreamListingState::Running,
+            Some(1),
+            a_healthy_condition(
+                StreamLoadOnTheWire::Loaded,
+                StreamPlaybackOnTheWire::Playing,
+            ),
+        ),
+        listing_of(
+            "c-stopped",
+            StreamListingState::Stopped,
+            None,
+            a_healthy_condition(
+                StreamLoadOnTheWire::NotLoaded,
+                StreamPlaybackOnTheWire::Stopped,
+            ),
+        ),
+        listing_of(
+            "d-not-re-loaded",
+            StreamListingState::Running,
+            None,
+            a_healthy_condition(
+                StreamLoadOnTheWire::NotLoaded,
+                StreamPlaybackOnTheWire::Playing,
+            ),
+        ),
     ];
     expected.sort_by(|first, second| first.stream_id.cmp(&second.stream_id));
     assert_eq!(runner.list_streams(), expected);
@@ -609,6 +642,10 @@ fn a_run_starts_the_stream_under_its_locations_id_and_records_it() {
             state: StreamListingState::Running,
             node_count: Some(1),
             failed_because: None,
+            condition: a_healthy_condition(
+                StreamLoadOnTheWire::Loaded,
+                StreamPlaybackOnTheWire::Playing,
+            ),
             capture_devices_whose_access_was_never_asked_for: Vec::new(),
             stream_action_under_way: None,
         },
@@ -619,6 +656,10 @@ fn a_run_starts_the_stream_under_its_locations_id_and_records_it() {
             state: StreamListingState::Running,
             node_count: Some(1),
             failed_because: None,
+            condition: a_healthy_condition(
+                StreamLoadOnTheWire::Loaded,
+                StreamPlaybackOnTheWire::Playing,
+            ),
             capture_devices_whose_access_was_never_asked_for: Vec::new(),
             stream_action_under_way: None,
         },

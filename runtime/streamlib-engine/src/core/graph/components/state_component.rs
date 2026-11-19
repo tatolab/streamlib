@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use parking_lot::{Condvar, Mutex};
-use streamlib_runtime_client_contract::local_api_wire_contract::HelperProcessRestartsOnTheWire;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire,
+    HelperProcessRestartsOnTheWire, NodeHealthOnTheWire,
+};
 
 use super::GraphRenders;
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
@@ -18,6 +22,9 @@ pub struct ObservableNodeState {
     current: Mutex<NodeState>,
     changed: Condvar,
     failure_reason: Mutex<Option<String>>,
+    /// Whether the node is held as its document writes it, its type not described by its
+    /// project's node code, so it runs nothing.
+    held_as_a_placeholder: AtomicBool,
     /// The capture device whose access was never asked for, when that is why
     /// `setup()` refused.
     capture_device_access_never_asked_for: Mutex<Option<PrivacyGatedCaptureDevice>>,
@@ -48,6 +55,7 @@ impl ObservableNodeState {
             current: Mutex::new(initial),
             changed: Condvar::new(),
             failure_reason: Mutex::new(None),
+            held_as_a_placeholder: AtomicBool::new(false),
             capture_device_access_never_asked_for: Mutex::new(None),
             helper_process_restarts: Mutex::new(HelperProcessRestartRecord::default()),
             process_raising_because: Mutex::new(None),
@@ -104,6 +112,48 @@ impl ObservableNodeState {
 
     pub fn fail_with(&self, reason: impl Into<String>) {
         self.fail_with_reason_and_capture_device(reason.into(), None);
+    }
+
+    /// Fail the node for good as a placeholder, its type not described by its project's node
+    /// code, for `reason`.
+    pub fn hold_as_a_placeholder(&self, reason: impl Into<String>) {
+        self.held_as_a_placeholder.store(true, Ordering::Release);
+        self.fail_with(reason);
+    }
+
+    /// The node's health, read from its state and why, and each diagnostic behind it, placed
+    /// at `place`: failed while its state is `Error`, as a placeholder or for its failure;
+    /// otherwise raising while its `process()` keeps raising, and not ready while it says so.
+    pub fn the_health_of_the_node(
+        &self,
+        place: &DiagnosticPlaceOnTheWire,
+    ) -> (NodeHealthOnTheWire, Vec<DiagnosticOnTheWire>) {
+        let diagnostic = |kind, words: String| DiagnosticOnTheWire::of(kind, place.clone(), words);
+        if self.current() == NodeState::Error {
+            let kind = if self.held_as_a_placeholder.load(Ordering::Acquire) {
+                DiagnosticKindOnTheWire::NodeTypeNotDescribed
+            } else {
+                DiagnosticKindOnTheWire::NodeFailed
+            };
+            let words = self
+                .failure_reason()
+                .unwrap_or_else(|| "it failed, and gave no reason".to_owned());
+            return (NodeHealthOnTheWire::Failed, vec![diagnostic(kind, words)]);
+        }
+        let raising = self
+            .why_process_is_raising()
+            .map(|words| diagnostic(DiagnosticKindOnTheWire::NodeRaising, words));
+        let not_ready = self
+            .why_the_node_is_not_ready()
+            .map(|words| diagnostic(DiagnosticKindOnTheWire::NodeNotReady, words));
+        let health = if raising.is_some() {
+            NodeHealthOnTheWire::Raising
+        } else if not_ready.is_some() {
+            NodeHealthOnTheWire::NotReady
+        } else {
+            NodeHealthOnTheWire::Healthy
+        };
+        (health, raising.into_iter().chain(not_ready).collect())
     }
 
     pub fn fail_with_the_setup_refusal(&self, setup_refusal: &Error) {
@@ -236,6 +286,19 @@ impl StateComponent {
 
     pub fn fail_with(&self, reason: impl Into<String>) {
         self.0.fail_with(reason);
+    }
+
+    /// [`ObservableNodeState::hold_as_a_placeholder`].
+    pub fn hold_as_a_placeholder(&self, reason: impl Into<String>) {
+        self.0.hold_as_a_placeholder(reason);
+    }
+
+    /// [`ObservableNodeState::the_health_of_the_node`].
+    pub fn the_health_of_the_node(
+        &self,
+        place: &DiagnosticPlaceOnTheWire,
+    ) -> (NodeHealthOnTheWire, Vec<DiagnosticOnTheWire>) {
+        self.0.the_health_of_the_node(place)
     }
 
     pub fn transition_to_only_from(&self, only_from: NodeState, state: NodeState) -> bool {

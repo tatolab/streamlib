@@ -533,10 +533,23 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             exposed_config_fields: node.exposed_config_fields.clone(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            components: node.render_components(),
+            components: the_components_of_a_node_with_its_health(node),
             fragment: None,
         }
     }
+}
+
+/// Every component of `node` `graph` renders, with the node's health and each diagnostic
+/// behind it.
+fn the_components_of_a_node_with_its_health(
+    node: &crate::core::graph::GraphNode,
+) -> GraphNodeComponentsOnTheWire {
+    let mut components = node.render_components();
+    if let Some((health, diagnostics)) = node.health_and_diagnostics() {
+        components.health = Some(health);
+        components.diagnostics = diagnostics;
+    }
+    components
 }
 
 /// The ports of `node`, each output with the stream facts it carries now and each input with a

@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::StreamConditionOnTheWire;
+
 /// Where a stream lives, as the local API reports it: its project directory, resolved, its
 /// project's UUID and its stream asset's UUID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,11 +58,15 @@ pub struct ListStreamsToolResultStream {
     pub display_name: String,
     /// Where the stream's code lives; `null` for a record an earlier runtime wrote.
     pub location: Option<StreamLocationOnTheWire>,
-    /// Whether it is running, stopped or failed.
+    /// Whether it is running, stopped or failed, in one word; `condition` answers its load,
+    /// playback and health apart.
     pub state: ListedStreamState,
+    /// Whether its graph is loaded, whether it plays and whether it is healthy, apart, with
+    /// each diagnostic behind its health.
+    pub condition: StreamConditionOnTheWire,
     /// How many nodes its loaded graph holds; `null` when it is not loaded.
     pub node_count: Option<usize>,
-    /// Why it is failed; `null` when it is not.
+    /// Why it is failed; `null` when it is not. `condition.diagnostics` types it.
     pub failed_because: Option<String>,
     /// Each capture device a node of the loaded stream refused because nobody has asked the user
     /// for its access — the runtime re-loaded it on its own at its start — once each; a

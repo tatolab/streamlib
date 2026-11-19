@@ -112,7 +112,7 @@ impl<'a> TraversalSourceMut<'a> {
                 NodeState::Pending
             });
             if let Some(placeholder) = &placeholder_of_its_type {
-                state.fail_with(format!(
+                state.hold_as_a_placeholder(format!(
                     "its type `{}` was not described, so the node is held as written and runs \
                      nothing: {}",
                     node_mut.node_type, placeholder.why_its_node_code_did_not_describe_it

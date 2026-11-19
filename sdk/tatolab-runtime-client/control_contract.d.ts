@@ -443,15 +443,21 @@ export interface ListStreamsToolResultStream {
    */
   location?: StreamLocationOnTheWire | null;
   /**
-   * Whether it is running, stopped or failed.
+   * Whether it is running, stopped or failed, in one word; `condition` answers its load,
+   * playback and health apart.
    */
   state: ListedStreamState;
+  /**
+   * Whether its graph is loaded, whether it plays and whether it is healthy, apart, with
+   * each diagnostic behind its health.
+   */
+  condition: StreamConditionOnTheWire;
   /**
    * How many nodes its loaded graph holds; `null` when it is not loaded.
    */
   node_count?: number | null;
   /**
-   * Why it is failed; `null` when it is not.
+   * Why it is failed; `null` when it is not. `condition.diagnostics` types it.
    */
   failed_because?: string | null;
   /**
@@ -495,6 +501,115 @@ export interface StreamLocationOnTheWire {
  * The state of one stream `list_streams` lists.
  */
 export type ListedStreamState = "running" | "stopped" | "paused" | "closed" | "failed" | "preparing" | "stopping";
+
+/**
+ * A stream's load, playback and health, and every diagnostic that explains its health.
+ */
+export interface StreamConditionOnTheWire {
+  /**
+   * Whether its graph is loaded in the runtime.
+   */
+  load: StreamLoadOnTheWire;
+  /**
+   * Whether it plays.
+   */
+  playback: StreamPlaybackOnTheWire;
+  /**
+   * Whether it is healthy.
+   */
+  health: StreamHealthOnTheWire;
+  /**
+   * Each problem behind its health: the stream's own, then each of its nodes'. Empty while it
+   * is `healthy`.
+   */
+  diagnostics: Array<DiagnosticOnTheWire>;
+}
+
+/**
+ * Whether a stream's graph is loaded in the runtime. The set grows: a value a client does not
+ * know reads as `not_loaded`.
+ */
+export type StreamLoadOnTheWire = "not_loaded" | "loading" | "loaded" | "unloading";
+
+/**
+ * Whether a stream plays. The set grows: a value a client does not know reads as `stopped`.
+ */
+export type StreamPlaybackOnTheWire = "stopped" | "starting" | "playing" | "paused" | "stopping";
+
+/**
+ * Whether a stream is healthy. The set grows: a value a client does not know reads as
+ * `failed`.
+ */
+export type StreamHealthOnTheWire = "healthy" | "degraded" | "failed";
+
+/**
+ * One problem a stream or a node has.
+ */
+export interface DiagnosticOnTheWire {
+  /**
+   * What the problem is.
+   */
+  kind: DiagnosticKindOnTheWire;
+  /**
+   * Where it applies.
+   */
+  place: DiagnosticPlaceOnTheWire;
+  /**
+   * The runtime's words for it, never rewritten.
+   */
+  words: string;
+  /**
+   * What recovers from it.
+   */
+  recovery: DiagnosticRecoveryOnTheWire;
+}
+
+/**
+ * What a problem is. The set grows: a kind a client does not know is shown by its `words` and
+ * recovered by its `recovery`.
+ */
+export type DiagnosticKindOnTheWire = "project_venv_not_made" | "load_refused" | "start_refused" | "node_type_not_described" | "link_refused" | "keeps_crashing_the_runtime" | "recorded_by_an_earlier_runtime" | "node_failed" | "node_raising" | "node_not_ready";
+
+/**
+ * Where a problem applies.
+ */
+export type DiagnosticPlaceOnTheWire = {
+  on: "stream";
+} | {
+  /**
+   * The node's id, as `graph` lists it.
+   */
+  node_id: string;
+  /**
+   * The node's name: its label, not its identity.
+   */
+  node_name: string;
+  on: "node";
+} | {
+  /**
+   * The name of the node the link leaves.
+   */
+  from_node: string;
+  /**
+   * The output port the link leaves.
+   */
+  from_port: string;
+  /**
+   * The name of the node the link enters.
+   */
+  to_node: string;
+  /**
+   * The input port the link enters.
+   */
+  to_port: string;
+  on: "link";
+};
+
+/**
+ * What recovers from a problem. The set grows: a recovery a client does not know reads as
+ * `retry_the_load`.
+ */
+export type DiagnosticRecoveryOnTheWire = "retry_the_load" | "fix_the_code" | "fix_the_dependencies" | "fix_the_link" | "restart_the_playback" | "remove_the_stream" | "wait_for_the_node";
 
 /**
  * A capture device the platform gates behind a privacy prompt, as `list_streams` spells it.
@@ -578,6 +693,12 @@ export interface StreamGraphOnTheWire {
    * `carried_through_the_function_node_pool`.
    */
   function_node_pool?: GraphNodeOnTheWire | null;
+  /**
+   * Whether the stream's graph is loaded, whether it plays and whether it is healthy, apart,
+   * with each diagnostic behind its health: a live key, absent where the graph is no
+   * stream's the runtime holds.
+   */
+  condition?: StreamConditionOnTheWire | null;
 }
 
 /**
@@ -815,6 +936,15 @@ export interface GraphNodeComponentsOnTheWire {
    */
   not_ready_because: string | null;
   /**
+   * Whether the node is healthy, read from its state and why; absent where the node keeps
+   * no state.
+   */
+  health?: NodeHealthOnTheWire | null;
+  /**
+   * Each problem behind the node's health, placed on the node; absent while it is healthy.
+   */
+  diagnostics?: Array<DiagnosticOnTheWire>;
+  /**
    * On a node in a helper process of its own, the helper processes started for it since its
    * stream loaded.
    */
@@ -879,6 +1009,12 @@ export interface GraphNodeComponentsOnTheWire {
  * A node's state as `graph` renders it.
  */
 export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
+
+/**
+ * Whether a node is healthy, as `graph` answers it. The set grows: a value a client does not
+ * know reads as `failed`.
+ */
+export type NodeHealthOnTheWire = "healthy" | "not_ready" | "raising" | "failed";
 
 /**
  * The helper processes started for a node since its stream loaded.
@@ -5382,6 +5518,14 @@ export interface ControlContractComponents {
   ListStreamsToolResultStream: ListStreamsToolResultStream;
   StreamLocationOnTheWire: StreamLocationOnTheWire;
   ListedStreamState: ListedStreamState;
+  StreamConditionOnTheWire: StreamConditionOnTheWire;
+  StreamLoadOnTheWire: StreamLoadOnTheWire;
+  StreamPlaybackOnTheWire: StreamPlaybackOnTheWire;
+  StreamHealthOnTheWire: StreamHealthOnTheWire;
+  DiagnosticOnTheWire: DiagnosticOnTheWire;
+  DiagnosticKindOnTheWire: DiagnosticKindOnTheWire;
+  DiagnosticPlaceOnTheWire: DiagnosticPlaceOnTheWire;
+  DiagnosticRecoveryOnTheWire: DiagnosticRecoveryOnTheWire;
   CaptureDeviceOnTheWire: CaptureDeviceOnTheWire;
   StreamActionStepOnTheWire: StreamActionStepOnTheWire;
   GraphRequest: GraphRequest;
@@ -5406,6 +5550,7 @@ export interface ControlContractComponents {
   InputValueComesFromOnTheWire: InputValueComesFromOnTheWire;
   GraphNodeComponentsOnTheWire: GraphNodeComponentsOnTheWire;
   NodeStateOnTheWire: NodeStateOnTheWire;
+  NodeHealthOnTheWire: NodeHealthOnTheWire;
   HelperProcessRestartsOnTheWire: HelperProcessRestartsOnTheWire;
   NodeMetricsOnTheWire: NodeMetricsOnTheWire;
   FunctionNodePromotionOnTheWire: FunctionNodePromotionOnTheWire;
@@ -6550,7 +6695,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 8;
+export declare const CONTROL_CONTRACT_REVISION: 9;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

@@ -97,7 +97,8 @@ impl Runner {
 
     /// Show each stream an action under way works on `preparing` — or
     /// `stopping`, for an action that unloads it — with the action and its
-    /// step and no `failed_because`, the earliest action on a stream winning:
+    /// step, no `failed_because` and its condition as the action changes it, the earliest
+    /// action on a stream winning:
     /// the streams the action names, else the project's listed ones.
     pub(super) fn show_the_streams_actions_under_way_prepare(
         &self,
@@ -172,6 +173,10 @@ impl Runner {
                     Some(listing) => {
                         listing.state = state_it_shows;
                         listing.failed_because = None;
+                        listing.condition = the_condition_while_an_action_works_on_it(
+                            action.kind,
+                            &listing.condition,
+                        );
                         listing.stream_action_under_way = Some(working_on_it.clone());
                     }
                     None => listings.push(StreamListing {
@@ -181,6 +186,15 @@ impl Runner {
                         state: state_it_shows,
                         node_count: None,
                         failed_because: None,
+                        condition: the_condition_while_an_action_works_on_it(
+                            action.kind,
+                            &the_condition_of_a_stream(
+                                StreamLoadOnTheWire::NotLoaded,
+                                StreamPlaybackOnTheWire::Stopped,
+                                None,
+                                Vec::new(),
+                            ),
+                        ),
                         capture_devices_whose_access_was_never_asked_for: Vec::new(),
                         stream_action_under_way: Some(working_on_it.clone()),
                     }),

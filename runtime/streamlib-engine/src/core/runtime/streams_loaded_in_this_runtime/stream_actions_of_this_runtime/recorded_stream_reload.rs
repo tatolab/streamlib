@@ -313,7 +313,7 @@ impl Runner {
                     if let Err(not_written) =
                         stream_records.change_the_record(&stream_id, |recorded| {
                             recorded.mark_open_with_its_playback_stopped();
-                            recorded.failed_because = Some(failed_because);
+                            recorded.fail_as(StreamFailureKind::StartRefused, failed_because);
                         })
                     {
                         tracing::error!(
@@ -325,6 +325,9 @@ impl Runner {
                 Ok((stream, None)) => {
                     let why_it_cannot_play = why_its_venv_was_not_made
                         .clone()
+                        .map(|why| {
+                            StreamFailure::of_the_stream(StreamFailureKind::ProjectVenvNotMade, why)
+                        })
                         .or_else(|| stream.why_its_graph_as_held_keeps_this_stream_from_playing());
                     if let Some(why_it_cannot_play) = why_it_cannot_play
                         && !record.is_failed()
@@ -335,7 +338,7 @@ impl Runner {
                         );
                         if let Err(not_written) =
                             stream_records.change_the_record(&stream_id, |recorded| {
-                                recorded.failed_because = Some(why_it_cannot_play);
+                                recorded.fail_as(why_it_cannot_play.kind, why_it_cannot_play.words);
                             })
                         {
                             tracing::error!(
@@ -394,7 +397,7 @@ impl Runner {
                         format!("it did not re-load at the runtime's start: {reload_refusal}");
                     match stream_records.change_the_record(&stream_id, |recorded| {
                         if !recorded.is_failed() {
-                            recorded.failed_because = Some(failed_because);
+                            recorded.fail_as(StreamFailureKind::LoadRefused, failed_because);
                         }
                     }) {
                         Ok(_) => tracing::error!(
@@ -479,10 +482,13 @@ impl Runner {
                     record.runtime_crashes_in_a_row_implicating_it += 1;
                     let crashes_in_a_row = record.runtime_crashes_in_a_row_implicating_it;
                     if crashes_in_a_row >= RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM {
-                        record.failed_because = Some(format!(
-                            "it was implicated in the runtime's last {crashes_in_a_row} crashes \
-                             in a row, the last: {cause}"
-                        ));
+                        record.fail_as(
+                            StreamFailureKind::KeepsCrashingTheRuntime,
+                            format!(
+                                "it was implicated in the runtime's last {crashes_in_a_row} \
+                                 crashes in a row, the last: {cause}"
+                            ),
+                        );
                     }
                 }
                 None if crashes_in_a_row_before == 0 => continue,
@@ -491,12 +497,14 @@ impl Runner {
             let counted = (
                 record.runtime_crashes_in_a_row_implicating_it,
                 record.failed_because.clone(),
+                record.failed_as,
             );
             if let Err(not_written) =
                 stream_records.change_the_record(&record.stream_id, |recorded| {
                     (
                         recorded.runtime_crashes_in_a_row_implicating_it,
                         recorded.failed_because,
+                        recorded.failed_as,
                     ) = counted;
                 })
             {
@@ -547,7 +555,12 @@ impl Runner {
                 load_refusal,
             }) => (stream, Some(load_refusal)),
             Err(load_refusal) => {
-                return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
+                return record_a_refused_load_failed(
+                    stream_records,
+                    stream_record,
+                    StreamFailureKind::LoadRefused,
+                    load_refusal,
+                );
             }
         };
         if record_it_once_loaded
@@ -561,7 +574,12 @@ impl Runner {
         if let Some(load_refusal) = load_refusal {
             stream.hold_stopped_without_a_start();
             stream_record.mark_open_with_its_playback_stopped();
-            return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
+            return record_a_refused_load_failed(
+                stream_records,
+                stream_record,
+                StreamFailureKind::LoadRefused,
+                load_refusal,
+            );
         }
         if let Some(why_it_cannot_play) =
             stream.why_its_graph_as_held_keeps_this_stream_from_playing()
@@ -570,7 +588,8 @@ impl Runner {
             return record_a_stream_held_from_its_document_failed(
                 stream_records,
                 stream_record,
-                why_it_cannot_play,
+                why_it_cannot_play.kind,
+                why_it_cannot_play.words,
             );
         }
         if playback_after_the_load == ProjectPlaybackAfterItsLoad::HeldStopped {
@@ -581,7 +600,12 @@ impl Runner {
             if !stream.has_ended() {
                 stream_record.mark_open_with_its_playback_stopped();
             }
-            return record_a_refused_load_failed(stream_records, stream_record, start_refusal);
+            return record_a_refused_load_failed(
+                stream_records,
+                stream_record,
+                StreamFailureKind::StartRefused,
+                start_refusal,
+            );
         }
         Ok(StreamStateAfterItsRun::Running {
             stream_tag: stream.stream_tag(),
@@ -804,12 +828,13 @@ pub(super) fn the_project_directory_whose_venv_holds(interpreter: &Path) -> Opti
     venv.parent().map(Path::to_path_buf)
 }
 
-/// Record `stream_record` failed for `refusal`, its load or start refused, and
+/// Record `stream_record` failed as `kind` for `refusal`, its load or start refused, and
 /// answer it failed — unless a machine shutdown abandoned it, when the refusal
 /// is returned and the record left as it was.
 pub(super) fn record_a_refused_load_failed(
     stream_records: &StreamRecordsInTheStateDirectory,
     stream_record: &mut StreamRecord,
+    kind: StreamFailureKind,
     refusal: Error,
 ) -> Result<StreamStateAfterItsRun> {
     if is_the_machines_shutdown_requested() {
@@ -818,6 +843,7 @@ pub(super) fn record_a_refused_load_failed(
     record_a_stream_held_from_its_document_failed(
         stream_records,
         stream_record,
+        kind,
         refusal.to_string(),
     )
 }

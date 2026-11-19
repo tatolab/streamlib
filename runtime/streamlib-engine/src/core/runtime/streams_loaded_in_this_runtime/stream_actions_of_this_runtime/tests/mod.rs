@@ -68,6 +68,7 @@ use crate::core::test_support::{
 };
 
 use serial_test::serial;
+use streamlib_runtime_client_contract::local_api_wire_contract::StreamHealthOnTheWire;
 
 use std::collections::BTreeMap;
 
@@ -382,6 +383,19 @@ impl ProjectWithGraphDocuments {
             playback_after_the_load: ProjectPlaybackAfterItsLoad::Playing,
             keeps_each_loaded_stream_whose_node_code_is_unchanged: false,
         }
+    }
+}
+
+/// The condition of a healthy stream with `load` and `playback`.
+fn a_healthy_condition(
+    load: StreamLoadOnTheWire,
+    playback: StreamPlaybackOnTheWire,
+) -> StreamConditionOnTheWire {
+    StreamConditionOnTheWire {
+        load,
+        playback,
+        health: StreamHealthOnTheWire::Healthy,
+        diagnostics: Vec::new(),
     }
 }
 

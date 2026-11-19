@@ -270,8 +270,20 @@ fn a_stream_whose_graph_holds_a_link_its_validation_refuses_is_held_with_that_li
         .why_its_graph_as_held_keeps_this_stream_from_playing()
         .expect("a link set aside keeps it from playing");
     assert!(
-        why_it_cannot_play.contains("`source/out2` -> `sink/no_such_input` is refused"),
+        why_it_cannot_play
+            .words
+            .contains("`source/out2` -> `sink/no_such_input` is refused"),
         "{why_it_cannot_play}"
+    );
+    assert_eq!(why_it_cannot_play.kind, StreamFailureKind::LinkRefused);
+    assert_eq!(
+        why_it_cannot_play.place,
+        DiagnosticPlaceOnTheWire::Link {
+            from_node: "source".to_owned(),
+            from_port: "out2".to_owned(),
+            to_node: "sink".to_owned(),
+            to_port: "no_such_input".to_owned(),
+        }
     );
     let listed = runner
         .list_streams()
@@ -281,7 +293,12 @@ fn a_stream_whose_graph_holds_a_link_its_validation_refuses_is_held_with_that_li
     assert_eq!(listed.state, StreamListingState::Failed);
     assert_eq!(
         listed.failed_because.as_deref(),
-        Some(why_it_cannot_play.as_str())
+        Some(why_it_cannot_play.words.as_str())
+    );
+    assert_eq!(listed.condition.health, StreamHealthOnTheWire::Failed);
+    assert_eq!(
+        listed.condition.diagnostics,
+        vec![why_it_cannot_play.diagnostic()]
     );
 
     let queued = runner.start_playback(project.path()).unwrap();
@@ -492,7 +509,9 @@ fn a_recorded_stream_linking_into_a_graph_inputs_value_is_held_with_that_link_se
         .why_its_graph_as_held_keeps_this_stream_from_playing()
         .expect("a link set aside keeps it from playing");
     assert!(
-        why_it_cannot_play.contains("input `value` of `echo`, a setting, which takes no wire"),
+        why_it_cannot_play
+            .words
+            .contains("input `value` of `echo`, a setting, which takes no wire"),
         "{why_it_cannot_play}"
     );
     let rendered = held.to_json().unwrap();

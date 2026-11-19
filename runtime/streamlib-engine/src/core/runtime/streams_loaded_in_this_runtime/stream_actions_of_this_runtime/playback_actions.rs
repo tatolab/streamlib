@@ -632,7 +632,10 @@ impl Runner {
                             if still_held {
                                 record.mark_open_with_its_playback_stopped();
                             }
-                            record.failed_because = Some(start_refusal.to_string());
+                            record.fail_as(
+                                StreamFailureKind::StartRefused,
+                                start_refusal.to_string(),
+                            );
                         })
                     {
                         tracing::error!("{not_recorded}");
