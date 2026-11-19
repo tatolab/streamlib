@@ -6,7 +6,10 @@
 The decorated function's signature declares the ports and its body is `...`;
 the Slang source passed to the decorator is the node's body, a function named
 for the node. An `ImageFrame` parameter arrives in Slang as an `ImageInput`
-and a `float` as a value; the return is one `ImageFrame`, the output `result`.
+and each value under the typed grammar: a `float` as a `float`, a `Color` as a
+`float4` of red, green, blue and alpha, and a `Vector2`, `Vector3` or `Vector4`
+as a `float2`, `float3` or `float4` of its parts. The return is one
+`ImageFrame`, the output `result`.
 Decorating registers nothing: it reads the signature once and stamps the
 declaration the runtime reads, with the Slang source the runtime compiles.
 No Python runs when the node is evaluated.
@@ -35,7 +38,15 @@ NODE_DECLARATION_SHADER_SOURCE_STAMP = "__tatolab_node_shader_source__"
 NODE_DECLARATION_SHADER_SIGNATURE_STAMP = "__tatolab_node_shader_signature__"
 
 IMAGE_VALUE_TYPE = "image_frame"
-FLOAT_VALUE_TYPE = "float"
+
+# The value types a shader takes beside its Images, each read in Slang as the type named.
+_SLANG_TYPE_OF_EACH_VALUE_TYPE: "dict[str, str]" = {
+    "float": "float",
+    "color": "float4",
+    "vector2": "float2",
+    "vector3": "float3",
+    "vector4": "float4",
+}
 
 
 class ShaderNode(FunctionNode[_ShaderNodeParameters, _ShaderNodeReturn]):
@@ -63,7 +74,9 @@ def declare_shader_node(
     _refuse_what_is_not_a_plain_module_level_function(function)
     declared_meta = take_node_meta_held_for_the_kind_decorator(function)
     name = function.__name__
-    signature_reading = _FunctionNodeSignatureReading(function, reads_pin_types=False)
+    signature_reading = _FunctionNodeSignatureReading(
+        function, reads_pin_types=False, reads_values_typed_beside_images=True
+    )
     signature = signature_reading.function_signature
     _refuse_a_signature_a_shader_cannot_take(name, signature, signature_reading.config_class)
     _refuse_a_source_that_defines_no_function_named(name, shader_source)
@@ -80,16 +93,21 @@ def declare_shader_node(
         NODE_DECLARATION_SHADER_SOURCE_STAMP: shader_source,
         NODE_DECLARATION_SHADER_SIGNATURE_STAMP: {
             "function_name": name,
-            "inputs": [
-                {"port": each["port"], "value_type": each["value_type"]}
-                for each in signature["inputs"]
-            ],
+            "inputs": [_shader_signature_input(each) for each in signature["inputs"]],
             "output_port": signature["outputs"][0]["port"],
         },
     }
     for stamp, value in stamps.items():
         setattr(shader_node, stamp, value)
     return shader_node
+
+
+def _shader_signature_input(signature_input: dict[str, Any]) -> dict[str, Any]:
+    """One input as the runtime's shader reader takes it: its port and value type, and a value's pin type."""
+    shader_input = {"port": signature_input["port"], "value_type": signature_input["value_type"]}
+    if "pin_type" in signature_input:
+        shader_input["pin_type"] = signature_input["pin_type"]
+    return shader_input
 
 
 def _json_schema_for_a_shader_node() -> dict[str, Any]:
@@ -116,8 +134,8 @@ def _refuse_a_signature_a_shader_cannot_take(
 ) -> None:
     if config_class is not None or signature["config_parameter"] is not None:
         raise TypeError(
-            f"{name} takes `config`, and a shader's settings are its `float` inputs, each a "
-            f"push constant. To fix: take each setting as `name: float = default`."
+            f"{name} takes `config`, and a shader's settings are its value inputs, each held "
+            f"in push constants. To fix: take each setting as `name: float = default`."
         )
     if signature["time_parameter"] is not None or signature["state_parameter"] is not None:
         raise TypeError(
@@ -130,11 +148,12 @@ def _refuse_a_signature_a_shader_cannot_take(
                 f"{name}'s input `{signature_input['parameter']}` is optional, and every input "
                 f"of a shader is read on each frame. To fix: drop `| None`."
             )
-        if signature_input["value_type"] not in (IMAGE_VALUE_TYPE, FLOAT_VALUE_TYPE):
+        value_type = signature_input["value_type"]
+        if value_type != IMAGE_VALUE_TYPE and value_type not in _SLANG_TYPE_OF_EACH_VALUE_TYPE:
             raise TypeError(
-                f"{name}'s input `{signature_input['parameter']}` is a "
-                f"{signature_input['value_type']}, and a shader takes `ImageFrame` and `float` "
-                f"inputs only. To fix: type it `ImageFrame` or `float`."
+                f"{name}'s input `{signature_input['parameter']}` is a {value_type}, and a "
+                f"shader takes `ImageFrame` inputs and `float`, `Color`, `Vector2`, `Vector3` "
+                f"and `Vector4` values only. To fix: type it as one of them."
             )
     if not any(each["value_type"] == IMAGE_VALUE_TYPE for each in signature["inputs"]):
         raise TypeError(

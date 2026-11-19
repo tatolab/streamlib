@@ -7,6 +7,7 @@ from tatolab.stream import StreamBuilder, graph_generator
 
 from shader_node_probes import (
     FrameDiscardingSink,
+    HalfRedQuarterGreen,
     KnownPixelsVideoSource,
     QuarterAmount,
     ShadedFramePixelReadingSink,
@@ -17,6 +18,7 @@ from shader_node_shaders import (
     red_ramp_of_the_extent_of,
     swap_red_and_blue,
     tint,
+    tint_by_a_color_and_lift,
 )
 
 #: Frames enough that the source outlasts the start of the stream's function node pool.
@@ -172,3 +174,32 @@ def source_into_a_shader_reading_only_the_extent_of_its_image(
     sink = stream_builder.add(ShadedFramePixelReadingSink)
     stream_builder.connect(source.output("video"), ramp.input("extent_from"))
     stream_builder.connect(ramp.output("result"), sink.input("shaded"))
+
+
+def _source_into_a_color_tint_into_sink(
+    stream_builder: StreamBuilder, *, color_linked_from_a_function_node: bool
+) -> None:
+    source = stream_builder.add(
+        KnownPixelsVideoSource,
+        config={
+            "texture_format": "rgba8_unorm",
+            "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
+        },
+    )
+    tinted = stream_builder.add(tint_by_a_color_and_lift, name="tint")
+    sink = stream_builder.add(ShadedFramePixelReadingSink)
+    stream_builder.connect(source.output("video"), tinted.input("image"))
+    if color_linked_from_a_function_node:
+        color = stream_builder.add(HalfRedQuarterGreen, name="color")
+        stream_builder.connect(color.output("result"), tinted.input("tint_color"))
+    stream_builder.connect(tinted.output("result"), sink.input("shaded"))
+
+
+@graph_generator
+def source_into_a_color_tint_into_sink(stream_builder: StreamBuilder) -> None:
+    _source_into_a_color_tint_into_sink(stream_builder, color_linked_from_a_function_node=False)
+
+
+@graph_generator
+def function_node_into_the_color_of_a_tint(stream_builder: StreamBuilder) -> None:
+    _source_into_a_color_tint_into_sink(stream_builder, color_linked_from_a_function_node=True)

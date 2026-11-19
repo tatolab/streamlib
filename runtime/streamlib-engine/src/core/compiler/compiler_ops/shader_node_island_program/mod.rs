@@ -21,11 +21,11 @@ pub(crate) enum ShaderNodeIslandMemberInput {
     ImageFromTheMember(usize),
     /// The Image frames arriving at this input port of the evaluator.
     ImageReadAt(String),
-    /// The values arriving at this input port of the evaluator, this one until
-    /// the first arrives.
-    FloatReadAt {
+    /// The values of numbers, a Float, a Color or a Vector, arriving at this
+    /// input port of the evaluator, its parts these until the first arrives.
+    NumbersReadAt {
         input_port: String,
-        value_until_one_is_read: f32,
+        numbers_until_one_is_read: Vec<f32>,
     },
 }
 
@@ -61,24 +61,27 @@ pub(crate) enum ShaderNodeKernelImageArgument {
 pub(crate) struct ShaderNodeIslandKernel {
     pub(crate) members: Vec<usize>,
     pub(crate) image_arguments: Vec<ShaderNodeKernelImageArgument>,
-    float_arguments: Vec<ShaderNodeKernelFloatArgument>,
+    number_arguments: Vec<ShaderNodeKernelNumbersArgument>,
 }
 
-/// One float argument of a kernel: the float input at `float_index`, in
-/// signature order among the floats, of the member at `member`.
+/// One argument of numbers of a kernel: the input at `input_index`, in
+/// signature order, of the member at `member`, carrying `number_count`
+/// numbers, one push constant apiece.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ShaderNodeKernelFloatArgument {
+pub(crate) struct ShaderNodeKernelNumbersArgument {
     pub(crate) member: usize,
-    pub(crate) float_index: usize,
+    pub(crate) input_index: usize,
+    pub(crate) number_count: usize,
 }
 
 impl ShaderNodeIslandProgram {
     /// The island of one shader node, every input read at the port of its own
-    /// name, each float starting at `float_value_until_one_is_read`.
+    /// name, each value of numbers starting at what `numbers_until_one_is_read`
+    /// gives for its port and value type.
     pub(crate) fn of_one_node(
         node_name: String,
         program: ShaderNodeProgram,
-        float_value_until_one_is_read: impl Fn(&str) -> f32,
+        numbers_until_one_is_read: impl Fn(&str, &ShaderNodeInputValueType) -> Vec<f32>,
     ) -> Self {
         let inputs = program
             .inputs
@@ -87,10 +90,15 @@ impl ShaderNodeIslandProgram {
                 ShaderNodeInputValueType::ImageFrame => {
                     ShaderNodeIslandMemberInput::ImageReadAt(input.port.clone())
                 }
-                ShaderNodeInputValueType::Float => ShaderNodeIslandMemberInput::FloatReadAt {
-                    input_port: input.port.clone(),
-                    value_until_one_is_read: float_value_until_one_is_read(&input.port),
-                },
+                ShaderNodeInputValueType::Numbers(_) => {
+                    ShaderNodeIslandMemberInput::NumbersReadAt {
+                        input_port: input.port.clone(),
+                        numbers_until_one_is_read: numbers_until_one_is_read(
+                            &input.port,
+                            &input.value_type,
+                        ),
+                    }
+                }
             })
             .collect();
         Self {
@@ -103,8 +111,9 @@ impl ShaderNodeIslandProgram {
     }
 
     /// The island of `members` in evaluation order, refusing one where a
-    /// member reads a later one, an input's value type differs from its
-    /// signature's, or a member other than the last is not read exactly once.
+    /// member reads a later one, an input's value type or count of numbers
+    /// differs from its signature's, or a member other than the last is not
+    /// read exactly once.
     pub(crate) fn of_the_members(
         members: Vec<ShaderNodeIslandMember>,
     ) -> std::result::Result<Self, String> {
@@ -122,10 +131,18 @@ impl ShaderNodeIslandProgram {
                 ));
             }
             for (input, signature_input) in member.inputs.iter().zip(&member.program.inputs) {
+                let numbers_read = match input {
+                    ShaderNodeIslandMemberInput::NumbersReadAt {
+                        numbers_until_one_is_read,
+                        ..
+                    } => numbers_until_one_is_read.len(),
+                    _ => 0,
+                };
                 let input_is_an_image =
-                    !matches!(input, ShaderNodeIslandMemberInput::FloatReadAt { .. });
+                    !matches!(input, ShaderNodeIslandMemberInput::NumbersReadAt { .. });
                 if input_is_an_image
                     != (signature_input.value_type == ShaderNodeInputValueType::ImageFrame)
+                    || numbers_read != signature_input.value_type.number_count()
                 {
                     return Err(format!(
                         "shader node `{}`: its island reads input `{}` as the wrong value type",
@@ -181,7 +198,7 @@ impl ShaderNodeIslandProgram {
                     member_index = *read_member;
                 }
                 ShaderNodeIslandMemberInput::ImageReadAt(input_port) => return input_port,
-                ShaderNodeIslandMemberInput::FloatReadAt { .. } => {
+                ShaderNodeIslandMemberInput::NumbersReadAt { .. } => {
                     unreachable!("a member's first Image input is an Image")
                 }
             }
@@ -193,7 +210,7 @@ impl ShaderNodeIslandProgram {
         member
             .inputs
             .iter()
-            .find(|input| !matches!(input, ShaderNodeIslandMemberInput::FloatReadAt { .. }))
+            .find(|input| !matches!(input, ShaderNodeIslandMemberInput::NumbersReadAt { .. }))
             .unwrap_or_else(|| unreachable!("a shader node takes at least one Image"))
     }
 
@@ -210,7 +227,7 @@ impl ShaderNodeIslandProgram {
                     output_extents[*read_member]
                 }
                 ShaderNodeIslandMemberInput::ImageReadAt(input_port) => extent_read_at(input_port),
-                ShaderNodeIslandMemberInput::FloatReadAt { .. } => unreachable!(),
+                ShaderNodeIslandMemberInput::NumbersReadAt { .. } => unreachable!(),
             };
             output_extents.push(extent);
         }
@@ -280,10 +297,9 @@ impl ShaderNodeIslandProgram {
         debug_assert_eq!(members.last(), Some(&kernel_output_member));
         let fused: HashSet<usize> = members.iter().copied().collect();
         let mut image_arguments = Vec::new();
-        let mut float_arguments = Vec::new();
+        let mut number_arguments = Vec::new();
         for &member in &members {
-            let mut float_index = 0;
-            for input in &self.members[member].inputs {
+            for (input_index, input) in self.members[member].inputs.iter().enumerate() {
                 match input {
                     ShaderNodeIslandMemberInput::ImageFromTheMember(read_member)
                         if fused.contains(read_member) => {}
@@ -291,20 +307,21 @@ impl ShaderNodeIslandProgram {
                         .push(ShaderNodeKernelImageArgument::StoredOutputOf(*read_member)),
                     ShaderNodeIslandMemberInput::ImageReadAt(input_port) => image_arguments
                         .push(ShaderNodeKernelImageArgument::ReadAt(input_port.clone())),
-                    ShaderNodeIslandMemberInput::FloatReadAt { .. } => {
-                        float_arguments.push(ShaderNodeKernelFloatArgument {
-                            member,
-                            float_index,
-                        });
-                        float_index += 1;
-                    }
+                    ShaderNodeIslandMemberInput::NumbersReadAt {
+                        numbers_until_one_is_read,
+                        ..
+                    } => number_arguments.push(ShaderNodeKernelNumbersArgument {
+                        member,
+                        input_index,
+                        number_count: numbers_until_one_is_read.len(),
+                    }),
                 }
             }
         }
         ShaderNodeIslandKernel {
             members,
             image_arguments,
-            float_arguments,
+            number_arguments,
         }
     }
 }
@@ -315,15 +332,23 @@ impl ShaderNodeIslandKernel {
         self.members[self.members.len() - 1]
     }
 
-    /// The float arguments, in the order the push constants carry them.
-    pub(crate) fn float_arguments(&self) -> &[ShaderNodeKernelFloatArgument] {
-        &self.float_arguments
+    /// The arguments of numbers, in the order the push constants carry them.
+    pub(crate) fn number_arguments(&self) -> &[ShaderNodeKernelNumbersArgument] {
+        &self.number_arguments
+    }
+
+    fn number_count(&self) -> usize {
+        self.number_arguments
+            .iter()
+            .map(|argument| argument.number_count)
+            .sum()
     }
 
     /// The bytes of the kernel's push constants: the output extent, each
-    /// Image argument's extent and row pitch, then each float, four bytes apiece.
+    /// Image argument's extent and row pitch, then each number of each
+    /// argument of numbers, four bytes apiece.
     pub(crate) fn push_constant_byte_len(&self) -> usize {
-        4 * (2 + 3 * self.image_arguments.len() + self.float_arguments.len())
+        4 * (2 + 3 * self.image_arguments.len() + self.number_count())
     }
 
     /// The push constants of one dispatch, laid out as
@@ -332,7 +357,7 @@ impl ShaderNodeIslandKernel {
         &self,
         output_extent: (u32, u32),
         image_argument_extents: &[ShaderNodeImageInputExtent],
-        float_values: &[f32],
+        numbers: &[f32],
     ) -> Vec<u8> {
         let mut push_constants = Vec::with_capacity(self.push_constant_byte_len());
         push_constants.extend_from_slice(&output_extent.0.to_le_bytes());
@@ -342,8 +367,8 @@ impl ShaderNodeIslandKernel {
             push_constants.extend_from_slice(&extent.height.to_le_bytes());
             push_constants.extend_from_slice(&extent.row_pitch_in_pixels.to_le_bytes());
         }
-        for float_value in float_values {
-            push_constants.extend_from_slice(&float_value.to_le_bytes());
+        for number in numbers {
+            push_constants.extend_from_slice(&number.to_le_bytes());
         }
         push_constants
     }
@@ -431,8 +456,10 @@ impl ShaderNodeIslandKernel {
                  input_{image_argument_index}_row_pitch_in_pixels;\n"
             );
         }
-        for float_index in 0..self.float_arguments.len() {
-            let _ = writeln!(kernel, "    float float_{float_index};");
+        for (number_argument_index, argument) in self.number_arguments.iter().enumerate() {
+            for part in 0..argument.number_count {
+                let _ = writeln!(kernel, "    float number_{number_argument_index}_{part};");
+            }
         }
         kernel.push_str(
             "};\n[[vk::push_constant]] ConstantBuffer<StreamlibShaderNodePushConstants> \
@@ -490,7 +517,7 @@ impl ShaderNodeIslandKernel {
             Self::entry_point(kernel_index)
         );
         let fused: HashSet<usize> = self.members.iter().copied().collect();
-        let (mut image_argument_index, mut float_argument_index) = (0usize, 0usize);
+        let (mut image_argument_index, mut number_argument_index) = (0usize, 0usize);
         for &member in &self.members {
             let island_member = &island.members[member];
             let mut call_arguments = Vec::with_capacity(island_member.inputs.len());
@@ -522,11 +549,29 @@ impl ShaderNodeIslandKernel {
                         call_arguments.push(image_input);
                         image_argument_index += 1;
                     }
-                    ShaderNodeIslandMemberInput::FloatReadAt { .. } => {
-                        call_arguments.push(format!(
-                            "streamlib_shader_node_push_constants.float_{float_argument_index}"
-                        ));
-                        float_argument_index += 1;
+                    ShaderNodeIslandMemberInput::NumbersReadAt {
+                        numbers_until_one_is_read,
+                        ..
+                    } => {
+                        let parts: Vec<String> = (0..numbers_until_one_is_read.len())
+                            .map(|part| {
+                                format!(
+                                    "streamlib_shader_node_push_constants.\
+                                     number_{number_argument_index}_{part}"
+                                )
+                            })
+                            .collect();
+                        call_arguments.push(match parts.as_slice() {
+                            [number] => number.clone(),
+                            _ => format!(
+                                "{}({})",
+                                island_member.program.inputs[input_index]
+                                    .value_type
+                                    .slang_type_of_its_numbers(),
+                                parts.join(", ")
+                            ),
+                        });
+                        number_argument_index += 1;
                     }
                 }
             }

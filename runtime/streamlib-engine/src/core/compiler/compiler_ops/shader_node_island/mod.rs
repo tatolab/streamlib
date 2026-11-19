@@ -224,11 +224,12 @@ fn add_the_member_after_every_member_it_reads(
                 }
                 _ => ShaderNodeIslandMemberInput::ImageReadAt(read_at),
             },
-            ShaderNodeInputValueType::Float => ShaderNodeIslandMemberInput::FloatReadAt {
+            ShaderNodeInputValueType::Numbers(_) => ShaderNodeIslandMemberInput::NumbersReadAt {
                 input_port: read_at,
-                value_until_one_is_read: pin_value_of_a_shader_node_input(
+                numbers_until_one_is_read: numbers_of_a_shader_node_input(
                     node,
                     &signature_input.port,
+                    &signature_input.value_type,
                 ),
             },
         };
@@ -243,20 +244,21 @@ fn add_the_member_after_every_member_it_reads(
     Ok(members.len() - 1)
 }
 
-/// The value input `port` of shader node `node` takes while nothing arrives
-/// on it: its pin value, else its declared default, else zero.
-pub(crate) fn pin_value_of_a_shader_node_input(node: &GraphNode, port: &str) -> f32 {
-    node.pins
-        .get(port)
-        .or_else(|| {
-            node.ports
-                .inputs
-                .iter()
-                .find(|input| input.name == port)
-                .and_then(|input| input.pin_default.as_ref())
-        })
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(0.0) as f32
+/// The numbers input `port` of shader node `node`, taking values of
+/// `value_type`, holds while nothing arrives on it: those of its pin value,
+/// else of its declared default, else of zero.
+pub(crate) fn numbers_of_a_shader_node_input(
+    node: &GraphNode,
+    port: &str,
+    value_type: &ShaderNodeInputValueType,
+) -> Vec<f32> {
+    value_type.numbers_a_stored_value_holds(node.pins.get(port).or_else(|| {
+        node.ports
+            .inputs
+            .iter()
+            .find(|input| input.name == port)
+            .and_then(|input| input.pin_default.as_ref())
+    }))
 }
 
 /// The shader nodes of a compile placed on the islands that evaluate them.
