@@ -185,7 +185,8 @@ impl<'stream> V4l2DeviceCaptureBufferQueue<'stream> {
     /// Queue every buffer the driver granted and turn streaming on. A failed
     /// initial QBUF is logged and streaming starts with the buffers that
     /// queued; with none of them queued, or a failed STREAMON, capture
-    /// cannot start.
+    /// cannot start. The first wait comes after this: a strict driver
+    /// (v4l2loopback) signals no buffer as filled before STREAMON.
     pub(super) fn queue_every_buffer_and_stream_on(&mut self, camera_name: &str) -> io::Result<()> {
         let mut buffers_queued = 0;
         for buffer_index in 0..self.buffer_count {

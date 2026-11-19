@@ -123,8 +123,6 @@ fn capture_frames(
     sequences
 }
 
-/// The bug was a retry after an empty wait queuing a buffer the driver still
-/// held, which videobuf2 refuses and which ended capture for good.
 #[test]
 fn a_frame_that_comes_after_several_empty_waits_is_captured_and_capture_goes_on() {
     let mut queue = CaptureQueueKeepingVideobuf2sRules::withholding_frames_for([0, 3, 0, 5, 0, 0]);
