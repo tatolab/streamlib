@@ -11,8 +11,10 @@ licence files, its top-level streams, and every wheel the release built for it u
 syncs with no Rust toolchain and no index serving the module. The catalog,
 `catalog/v1.json`, lists each archive with its SHA-256, the `@node`s and `@stream`s it
 brings, read by the `tatolab.stream` listing the runtime runs, never by parsing source here,
-and under `platforms` each machine a wheel of it installs on, left out when its one wheel is
-pure, so an app can say a module brings nothing on a machine its wheels leave out.
+under `platforms` each machine a wheel of it installs on, left out when its one wheel is
+pure, so an app can say a module brings nothing on a machine its wheels leave out, and under
+`lowest_runtime_version` the lowest `tatolab-stream` its wheels require, which is the lowest
+runtime that can resolve it, so an app can say a module needs a newer runtime before adding it.
 
 Stdlib only, beside the uv that makes each listing's venv.
 Commands:
@@ -47,6 +49,13 @@ PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE = "tatolab.stream._project_node_type_list
 INSTALLED_DISTRIBUTION_SOURCE = "installed_distribution"
 # Every archive member's timestamp, so an archive of the same files is the same bytes.
 ARCHIVE_MEMBER_TIMESTAMP = (2025, 1, 1, 0, 0, 0)
+THE_RUNTIMES_DISTRIBUTION_NAME = "tatolab-stream"
+# A wheel's `Requires-Dist` of the runtime's distribution: its name, then a `>=` or `==` version,
+# bare or in parentheses, before any further comma-joined bound or marker.
+RUNTIME_REQUIREMENT_LINE = re.compile(
+    r"^Requires-Dist:\s*tatolab[-_.]stream\s*\(?\s*(?:>=|==)\s*(?P<version>[0-9][0-9A-Za-z.+!-]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 class ModuleProjectNotAssembled(Exception):
@@ -92,6 +101,34 @@ def uv_marker_of_a_wheel_platform_tag(wheel_file_name):
 def toml_basic_string(text):
     """`text` as a TOML basic string."""
     return json.dumps(text)
+
+
+def lowest_runtime_version_the_wheel_requires(wheel_path):
+    """The `tatolab-stream` version the wheel at `wheel_path` requires at the lowest, as its `METADATA` names it."""
+    wheel_path = Path(wheel_path)
+    with zipfile.ZipFile(wheel_path) as wheel_archive:
+        metadata_names = [name for name in wheel_archive.namelist() if re.fullmatch(r"[^/]+\.dist-info/METADATA", name)]
+        if len(metadata_names) != 1:
+            raise ModuleProjectNotAssembled(f"{wheel_path.name} holds no single `.dist-info/METADATA`")
+        metadata = wheel_archive.read(metadata_names[0]).decode()
+    requirements = list(RUNTIME_REQUIREMENT_LINE.finditer(metadata))
+    if len(requirements) != 1:
+        raise ModuleProjectNotAssembled(
+            f"{wheel_path.name} requires {THE_RUNTIMES_DISTRIBUTION_NAME} {'with no `>=` or `==` version' if not requirements else 'more than once'}, "
+            "so the lowest runtime it runs on is unknown"
+        )
+    return requirements[0]["version"]
+
+
+def lowest_runtime_version_the_wheels_require(wheel_paths):
+    """The one lowest `tatolab-stream` version every wheel of a module requires; a module whose wheels differ is refused."""
+    versions = {lowest_runtime_version_the_wheel_requires(wheel_path) for wheel_path in wheel_paths}
+    if len(versions) != 1:
+        raise ModuleProjectNotAssembled(
+            f"the wheels {', '.join(Path(wheel_path).name for wheel_path in wheel_paths)} require different lowest "
+            f"{THE_RUNTIMES_DISTRIBUTION_NAME} versions: {', '.join(sorted(versions))}"
+        )
+    return versions.pop()
 
 
 def module_project_pyproject(distribution_name, version, wheel_file_names):
@@ -172,6 +209,7 @@ def assemble_one_module_project(module_project_directory, wheels_directory, vers
     wheel_paths = sorted(Path(wheels_directory).glob(wheel_file_name_prefix_of(distribution_name, version) + "*.whl"))
     if not wheel_paths:
         raise ModuleProjectNotAssembled(f"{distribution_name} has no wheel at {version} in {wheels_directory}")
+    lowest_runtime_version = lowest_runtime_version_the_wheels_require(wheel_paths)
     project_file = json.loads((module_project_directory / PROJECT_FILE_NAME).read_text())
     for required_key in ("project", "name", "description"):
         if not project_file.get(required_key):
@@ -206,6 +244,7 @@ def assemble_one_module_project(module_project_directory, wheels_directory, vers
         "download_url": f"{GET_TATOLAB_COM_URL}/{MODULES_DIRECTORY_NAME}/{archive_file_name}",
         "download_sha256": archive_sha256,
         "homepage_url": f"{MODULE_SOURCE_URL_PREFIX}/{module_project_directory.name}",
+        "lowest_runtime_version": lowest_runtime_version,
     }
     machines = [machine_of_a_wheel_platform_tag(wheel_path.name) for wheel_path in wheel_paths]
     if None not in machines:

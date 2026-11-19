@@ -34,8 +34,8 @@ class FrameMaker:
 '''
 
 
-def write_a_module_wheel(directory, distribution_name, platform_tag, entry_points):
-    """A wheel of `distribution_name` at the release's version holding one node module, declaring `entry_points` under `tatolab.nodes`."""
+def write_a_module_wheel(directory, distribution_name, platform_tag, entry_points, runtime_requirement=f"tatolab-stream>={RELEASE_VERSION}"):
+    """A wheel of `distribution_name` at the release's version holding one node module, declaring `entry_points` under `tatolab.nodes` and requiring `runtime_requirement`, none when it is `None`."""
     underscored_name = distribution_name.replace("-", "_")
     package_name = distribution_name.split("-", 1)[1]
     wheel_path = Path(directory) / f"{underscored_name}-{RELEASE_VERSION}-cp312-abi3-{platform_tag}.whl"
@@ -44,7 +44,8 @@ def write_a_module_wheel(directory, distribution_name, platform_tag, entry_point
         wheel_archive.writestr(f"tatolab/{package_name}/__init__.py", NODE_MODULE_SOURCE)
         wheel_archive.writestr(
             f"{dist_info}/METADATA",
-            f"Metadata-Version: 2.1\nName: {distribution_name}\nVersion: {RELEASE_VERSION}\nRequires-Python: >=3.12\n",
+            f"Metadata-Version: 2.1\nName: {distribution_name}\nVersion: {RELEASE_VERSION}\nRequires-Python: >=3.12\n"
+            + ("" if runtime_requirement is None else f"Requires-Dist: {runtime_requirement}\n"),
         )
         wheel_archive.writestr(
             f"{dist_info}/WHEEL", f"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: false\nTag: cp312-abi3-{platform_tag}\n"
@@ -136,14 +137,15 @@ class ModuleProjectArchives(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.working_directory)
 
-    def assemble_the_camera(self, entry_points=None):
+    def assemble_the_camera(self, entry_points=None, runtime_requirements=(f"tatolab-stream>={RELEASE_VERSION}",) * 2):
         write_a_module_package(self.workspace_root, "tatolab-camera", "tatolab-camera", "Camera")
-        for platform_tag in (LINUX_X86_64_PLATFORM_TAG, MACOS_ARM64_PLATFORM_TAG):
+        for platform_tag, runtime_requirement in zip((LINUX_X86_64_PLATFORM_TAG, MACOS_ARM64_PLATFORM_TAG), runtime_requirements, strict=True):
             write_a_module_wheel(
                 self.wheels_directory,
                 "tatolab-camera",
                 platform_tag,
                 {"FrameMaker": "tatolab.camera:FrameMaker"} if entry_points is None else entry_points,
+                runtime_requirement,
             )
         return tatolab_module_projects.assemble_every_module_project(self.workspace_root, self.wheels_directory, RELEASE_VERSION, self.output_root)
 
@@ -173,14 +175,16 @@ class ModuleProjectArchives(unittest.TestCase):
         )
 
     def test_an_import_of_the_archive_syncs_offline_installing_the_wheel_its_platform_names(self):
-        [archive_path] = self.assemble_the_camera()
+        the_runtimes_version = self.tatolab_stream_wheel.name.split("-")[1]
+        [archive_path] = self.assemble_the_camera(runtime_requirements=(f"tatolab-stream>={the_runtimes_version}",) * 2)
         importing_project = self.working_directory / "show"
         with zipfile.ZipFile(archive_path) as archive:
             archive.extractall(importing_project / "imports" / "camera")
         (importing_project / "pyproject.toml").write_text(
             '[project]\nname = "show"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
-            'dependencies = ["tatolab-camera-module-project"]\n\n'
+            'dependencies = ["tatolab-camera-module-project", "tatolab-stream"]\n\n'
             '[tool.uv.sources]\ntatolab-camera-module-project = { path = "imports/camera", package = false }\n'
+            f'tatolab-stream = {{ path = "{self.tatolab_stream_wheel}" }}\n'
         )
         synced = subprocess.run([self.uv, "sync", "--offline", "--python", "3.12"], cwd=importing_project, capture_output=True, text=True)
         self.assertEqual(synced.returncode, 0, synced.stderr)
@@ -203,6 +207,21 @@ class ModuleProjectArchives(unittest.TestCase):
             [{"sys_platform": "darwin", "platform_machine": "arm64"}, {"sys_platform": "linux", "platform_machine": "x86_64"}],
         )
         self.assertEqual(entry["streams"], [{"name": "Loop", "import_path": "1f9d2c3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f", "summary": ""}])
+        self.assertEqual(entry["lowest_runtime_version"], RELEASE_VERSION)
+
+    def test_the_catalog_names_the_lowest_runtime_the_modules_wheels_require(self):
+        self.assemble_the_camera(runtime_requirements=("tatolab-stream (>=0.69.44)", "tatolab-stream>=0.69.44,<1; python_version >= '3.12'"))
+        catalog = json.loads(tatolab_module_projects.write_the_catalog(self.output_root, self.uv, self.tatolab_stream_wheel).read_text())
+        [entry] = catalog["entries"]
+        self.assertEqual(entry["lowest_runtime_version"], "0.69.44")
+
+    def test_a_module_whose_lowest_runtime_is_unknown_or_differs_between_its_wheels_is_left_out(self):
+        for runtime_requirements in ((None, None), ("tatolab-stream", "tatolab-stream"), ("tatolab-stream>=0.69.44", "tatolab-stream>=0.69.45")):
+            with self.subTest(runtime_requirements=runtime_requirements):
+                shutil.rmtree(self.workspace_root, ignore_errors=True)
+                for wheel in self.wheels_directory.glob("*.whl"):
+                    wheel.unlink()
+                self.assertEqual(self.assemble_the_camera(runtime_requirements=runtime_requirements), [])
 
     def test_the_catalog_names_only_the_machine_a_linux_only_modules_one_wheel_installs_on(self):
         write_a_module_package(self.workspace_root, "tatolab-browser", "tatolab-browser", "Web page")
