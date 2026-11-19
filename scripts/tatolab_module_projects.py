@@ -22,6 +22,7 @@ Commands:
   `write-catalog <output root> <uv> <tatolab-stream wheel> [<catalog it replaces>]`
 """
 
+import email.parser
 import hashlib
 import json
 import re
@@ -50,12 +51,9 @@ INSTALLED_DISTRIBUTION_SOURCE = "installed_distribution"
 # Every archive member's timestamp, so an archive of the same files is the same bytes.
 ARCHIVE_MEMBER_TIMESTAMP = (2025, 1, 1, 0, 0, 0)
 THE_RUNTIMES_DISTRIBUTION_NAME = "tatolab-stream"
-# A wheel's `Requires-Dist` of the runtime's distribution: its name, then a `>=` or `==` version,
-# bare or in parentheses, before any further comma-joined bound or marker.
-RUNTIME_REQUIREMENT_LINE = re.compile(
-    r"^Requires-Dist:\s*tatolab[-_.]stream\s*\(?\s*(?:>=|==)\s*(?P<version>[0-9][0-9A-Za-z.+!-]*)",
-    re.IGNORECASE | re.MULTILINE,
-)
+# A requirement's name and its `>=` or `==` version, bare or in parentheses, before any further
+# comma-joined bound or marker.
+REQUIREMENT_FLOOR = re.compile(r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*\(?\s*(?:>=|==)\s*(?P<version>[0-9][0-9A-Za-z.+!-]*)")
 
 
 class ModuleProjectNotAssembled(Exception):
@@ -110,8 +108,11 @@ def lowest_runtime_version_the_wheel_requires(wheel_path):
         metadata_names = [name for name in wheel_archive.namelist() if re.fullmatch(r"[^/]+\.dist-info/METADATA", name)]
         if len(metadata_names) != 1:
             raise ModuleProjectNotAssembled(f"{wheel_path.name} holds no single `.dist-info/METADATA`")
-        metadata = wheel_archive.read(metadata_names[0]).decode()
-    requirements = list(RUNTIME_REQUIREMENT_LINE.finditer(metadata))
+        metadata = email.parser.Parser().parsestr(wheel_archive.read(metadata_names[0]).decode(), headersonly=True)
+    floors = (REQUIREMENT_FLOOR.match(requirement) for requirement in metadata.get_all("Requires-Dist") or [])
+    requirements = [
+        floor for floor in floors if floor and normalized_distribution_name(floor["name"]) == normalized_distribution_name(THE_RUNTIMES_DISTRIBUTION_NAME)
+    ]
     if len(requirements) != 1:
         raise ModuleProjectNotAssembled(
             f"{wheel_path.name} requires {THE_RUNTIMES_DISTRIBUTION_NAME} {'with no `>=` or `==` version' if not requirements else 'more than once'}, "
