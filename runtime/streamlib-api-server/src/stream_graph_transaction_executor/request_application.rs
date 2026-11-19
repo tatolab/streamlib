@@ -386,21 +386,29 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let the_stream_takes_its_edits_once_the_documents_hold_them =
             streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
+        let judged_before_commit_because = if !reached.is_the_streams_own_level() {
+            Some(WhyALinkIsJudgedByNodeTypes::TheLinkIsAtAPlacedLevel)
+        } else if the_stream_takes_its_edits_once_the_documents_hold_them {
+            Some(WhyALinkIsJudgedByNodeTypes::TheStreamTakesItsEditsLater)
+        } else {
+            None
+        };
+        let refuse_a_link_judged_before_commit = |link: &StreamGraphDocumentLink| {
+            judged_before_commit_because.map_or(Ok(()), |because| {
+                refuse_a_link_judged_by_the_node_types_of_its_level(
+                    stream_operations.as_ref(),
+                    &level_as_drawn,
+                    link,
+                    because,
+                )
+            })
+        };
         let convert_node_a_link_needs = |link: &StreamGraphDocumentLink| {
-            let because = if !reached.is_the_streams_own_level() {
-                WhyALinkIsJudgedByNodeTypes::TheLinkIsAtAPlacedLevel
-            } else if the_stream_takes_its_edits_once_the_documents_hold_them {
-                WhyALinkIsJudgedByNodeTypes::TheStreamTakesItsEditsLater
-            } else {
-                return the_convert_node_a_live_connect_places(stream_operations.as_ref(), link);
-            };
-            refuse_a_link_judged_by_the_node_types_of_its_level(
-                stream_operations.as_ref(),
-                &level_as_drawn,
-                link,
-                because,
-            )?;
-            Ok(None)
+            if judged_before_commit_because.is_some() {
+                refuse_a_link_judged_before_commit(link)?;
+                return Ok(None);
+            }
+            the_convert_node_a_live_connect_places(stream_operations.as_ref(), link)
         };
         let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
             stream_operations
@@ -420,6 +428,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 family_of_an_output_port: &family_of_an_output_port,
                 function_nodes_of_the_running_stream: &function_nodes_of_the_running_stream,
                 convert_node_a_link_needs: &convert_node_a_link_needs,
+                refuse_a_link_judged_before_commit: &refuse_a_link_judged_before_commit,
                 config_a_node_takes: &config_a_node_takes,
             },
             &mut placed_stream_a_collapse_saves,
@@ -526,10 +535,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 .into());
             }
             record_what_the_answer_names_of_the_node_the_operation_adds(
-                WhatTheAnswerNamesOfAnAddedNode {
-                    label,
-                    inserted_because: node_inserted_because,
-                },
+                label,
+                node_inserted_because,
                 &applied,
                 &|own| own,
                 what_the_answer_names_of_each_added_node,
@@ -573,10 +580,8 @@ impl StreamGraphTransactionExecutor<'_> {
         let operation_answered =
             reached.the_operation_as_drawn(&edit, &placed_document_after_the_edit)?;
         record_what_the_answer_names_of_the_node_the_operation_adds(
-            WhatTheAnswerNamesOfAnAddedNode {
-                label,
-                inserted_because: node_inserted_because,
-            },
+            label,
+            node_inserted_because,
             &edit,
             &|own| reached.the_drawn_uuid_of(own),
             what_the_answer_names_of_each_added_node,

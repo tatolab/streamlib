@@ -55,6 +55,7 @@ mod input_value_lifetime_tests;
 mod input_value_set_live_tests;
 mod input_value_set_tests;
 mod link_checked_before_it_is_made_tests;
+mod loop_closing_link_judged_before_commit_tests;
 mod played_project_end_to_end_tests;
 mod project_create_open_and_cancel_tests;
 mod project_log_tests;

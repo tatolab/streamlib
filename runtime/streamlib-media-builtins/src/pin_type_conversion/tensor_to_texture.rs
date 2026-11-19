@@ -91,13 +91,20 @@ impl Default for TensorToTextureConfig {
                    refused and writes nothing. Each Image frame states no colour."
 )]
 pub struct TensorToTexture {
-    image_format: Option<TextureFormat>,
     output_pixel_buffer_pool: Option<NodeOutputPixelBufferPoolOfOneNativeNode>,
+}
+
+impl TensorToTexture::Node {
+    /// The texture format each Image frame states: the one its config names now, so a config
+    /// taken live is written from the next frame, as a link's verdict reads it.
+    pub fn image_format_it_writes(&self) -> Result<TextureFormat> {
+        image_format_of_the_config(&self.config)
+    }
 }
 
 impl ReactiveNode for TensorToTexture::Node {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.image_format = Some(image_format_of_the_config(&self.config)?);
+        self.image_format_it_writes()?;
         let node_run_id_of_this_node = ctx
             .node_run_id()
             .unwrap_or_else(|| "TensorToTexture".to_string());
@@ -109,9 +116,8 @@ impl ReactiveNode for TensorToTexture::Node {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let (Some(image_format), Some(output_pixel_buffer_pool)) =
-            (self.image_format, self.output_pixel_buffer_pool.as_mut())
-        else {
+        let image_format = self.image_format_it_writes()?;
+        let Some(output_pixel_buffer_pool) = self.output_pixel_buffer_pool.as_mut() else {
             return Err(Error::Runtime(
                 "TensorToTexture: process ran before setup".to_string(),
             ));

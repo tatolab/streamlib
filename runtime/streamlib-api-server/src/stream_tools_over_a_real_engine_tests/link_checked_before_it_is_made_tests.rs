@@ -324,7 +324,7 @@ fn a_node_type_with_a_port_meaning(
 
 /// Register each node type the link check tests below place, `PreviousValue` among them as the
 /// function node a stream's node interpreter describes it as, once per test binary.
-fn register_the_link_check_node_types_once() {
+pub(super) fn register_the_link_check_node_types_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         for descriptor in [

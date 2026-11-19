@@ -50,6 +50,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 (
                     inserted.node,
                     WhatTheAnswerNamesOfAnAddedNode {
+                        node_in_its_document: inserted.node,
                         label: None,
                         inserted_because: Some(inserted.inserted_because),
                     },

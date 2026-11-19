@@ -73,7 +73,8 @@ impl WhatAConnectAsks {
 /// between them, as it is when `staged_graph` already holds it; when it closes a loop of
 /// function nodes no `PreviousValue` node is in, a `PreviousValue` node added on it; and when its
 /// two ends' pin types connect only through a built-in conversion, as `convert_node_a_link_needs`
-/// judges it, that convert node added on it.
+/// judges it, that convert node added on it. A link `refuse_a_link_judged_before_commit` refuses
+/// is refused, a loop-closing one among them, though no conversion is added on that.
 pub(super) fn the_operation_a_connect_asks(
     source: &StreamGraphActionLinkEnd,
     target: &StreamGraphActionLinkEnd,
@@ -81,6 +82,7 @@ pub(super) fn the_operation_a_connect_asks(
     node_by_label: &HashMap<String, Uuid>,
     function_nodes_of_the_running_stream: &FunctionNodesOfTheRunningStream<'_>,
     convert_node_a_link_needs: &ConvertNodeALinkOfTheRunningStreamNeeds<'_>,
+    refuse_a_link_judged_before_commit: &RefusalOfALinkJudgedBeforeCommit<'_>,
 ) -> Result<WhatAConnectAsks, GraphRequestRefusal> {
     let link = the_link_named(source, target, node_by_label)?;
     if staged_graph.links().contains(&link) {
@@ -91,6 +93,7 @@ pub(super) fn the_operation_a_connect_asks(
         &link,
         function_nodes_of_the_running_stream,
     )? {
+        refuse_a_link_judged_before_commit(&link)?;
         return Ok(the_previous_value_node_added_on_the_link(
             staged_graph,
             link,
@@ -135,6 +138,7 @@ pub(super) fn graph_operation_for_the_request(
         family_of_an_output_port,
         function_nodes_of_the_running_stream,
         convert_node_a_link_needs,
+        refuse_a_link_judged_before_commit,
         config_a_node_takes,
     } = what_the_request_reads;
     let label_the_node = |label: Option<String>,
@@ -273,6 +277,7 @@ pub(super) fn graph_operation_for_the_request(
                 node_by_label,
                 function_nodes_of_the_running_stream,
                 convert_node_a_link_needs,
+                refuse_a_link_judged_before_commit,
             )?;
             if let WhatAConnectAsks::ThroughANode { because, .. } = &asked {
                 *node_inserted_because = Some(*because);

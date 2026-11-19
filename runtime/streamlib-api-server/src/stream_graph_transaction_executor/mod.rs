@@ -111,6 +111,7 @@ pub(crate) fn what_a_connect_asks_of_the_running_stream(
         &no_node_by_label,
         &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
         &|link| the_convert_node_a_live_connect_places(stream_operations, link),
+        &|_| Ok(()),
     )?;
     if let WhatAConnectAsks::Link(link) = &asked {
         refuse_a_link_the_graph_already_holds(level_as_drawn, link)?;
@@ -365,6 +366,8 @@ fn the_graph_node_an_edit_adds_or_configures(
 /// What an answer names of a node an operation adds beside its UUID: the `as` its caller gave
 /// it, and why a `connect` inserted it, when one did.
 struct WhatTheAnswerNamesOfAnAddedNode {
+    /// The node's UUID in the document that holds it, which a transaction keeps.
+    node_in_its_document: Uuid,
     label: Option<String>,
     inserted_because: Option<GraphTransactionNodeInsertedBecause>,
 }
@@ -376,10 +379,10 @@ fn the_nodes_inserted_on_links(
 ) -> Vec<ProjectTransactionNodeInsertedOnALink> {
     let mut inserted: Vec<ProjectTransactionNodeInsertedOnALink> =
         what_the_answer_names_of_each_added_node
-            .iter()
-            .filter_map(|(&node, named)| {
+            .values()
+            .filter_map(|named| {
                 Some(ProjectTransactionNodeInsertedOnALink {
-                    node,
+                    node: named.node_in_its_document,
                     inserted_because: named.inserted_because?,
                 })
             })
@@ -388,10 +391,12 @@ fn the_nodes_inserted_on_links(
     inserted
 }
 
-/// Record what the answer names of the node `operation` adds, under the UUID `drawn_uuid_of`
-/// gives it, in `what_the_answer_names_of_each_added_node`, when it names anything.
+/// Record what the answer names of the node `operation` adds, its `label` and why a `connect`
+/// inserted it, under the UUID `drawn_uuid_of` gives it, in
+/// `what_the_answer_names_of_each_added_node`, when it names anything.
 fn record_what_the_answer_names_of_the_node_the_operation_adds(
-    named: WhatTheAnswerNamesOfAnAddedNode,
+    label: Option<String>,
+    inserted_because: Option<GraphTransactionNodeInsertedBecause>,
     operation: &StreamGraphOperation,
     drawn_uuid_of: &dyn Fn(Uuid) -> Uuid,
     what_the_answer_names_of_each_added_node: &mut HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
@@ -401,11 +406,18 @@ fn record_what_the_answer_names_of_the_node_the_operation_adds(
         StreamGraphOperation::FoldIntoFragment { fold } => fold.fragment_node(),
         _ => None,
     };
-    let Some(added_node) = added_node.map(drawn_uuid_of) else {
+    let Some(node_in_its_document) = added_node else {
         return;
     };
-    if named.label.is_some() || named.inserted_because.is_some() {
-        what_the_answer_names_of_each_added_node.insert(added_node, named);
+    if label.is_some() || inserted_because.is_some() {
+        what_the_answer_names_of_each_added_node.insert(
+            drawn_uuid_of(node_in_its_document),
+            WhatTheAnswerNamesOfAnAddedNode {
+                node_in_its_document,
+                label,
+                inserted_because,
+            },
+        );
     }
 }
 
@@ -658,6 +670,11 @@ type FunctionNodesOfTheRunningStream<'stream> =
 type ConvertNodeALinkOfTheRunningStreamNeeds<'stream> = dyn Fn(&StreamGraphDocumentLink) -> Result<Option<ConvertNodeToInsert>, GraphRequestRefusal>
     + 'stream;
 
+/// The refusal, before anything is written, of a link a transaction's `connect` cannot have the
+/// running stream judge as it makes it; `Ok` for any other link, which the stream judges.
+type RefusalOfALinkJudgedBeforeCommit<'stream> =
+    dyn Fn(&StreamGraphDocumentLink) -> Result<(), GraphRequestRefusal> + 'stream;
+
 /// The config a node of a type holding some input values takes whole, as the running stream
 /// resolves the type.
 type ConfigANodeOfTheRunningStreamTakes<'stream> =
@@ -671,6 +688,7 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     family_of_an_output_port: &'reads FamilyOfAnOutputPortOfTheRunningStream<'reads>,
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
     convert_node_a_link_needs: &'reads ConvertNodeALinkOfTheRunningStreamNeeds<'reads>,
+    refuse_a_link_judged_before_commit: &'reads RefusalOfALinkJudgedBeforeCommit<'reads>,
     config_a_node_takes: &'reads ConfigANodeOfTheRunningStreamTakes<'reads>,
 }
 

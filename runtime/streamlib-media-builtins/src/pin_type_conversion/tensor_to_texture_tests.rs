@@ -204,3 +204,28 @@ fn the_texture_written_is_of_the_format_the_node_holds() {
         None
     );
 }
+
+/// A `TensorToTexture` that takes a new config live writes the format that config names from the
+/// next frame, the format a link's verdict reads from the config it holds.
+///
+/// Mental-revert: a format read once at setup keeps writing `rgba8_unorm` after the config names
+/// `bgra8_unorm`.
+#[test]
+fn a_config_taken_live_changes_the_format_written() {
+    use streamlib::sdk::nodes::GeneratedNode;
+    let mut node =
+        <TensorToTexture::Node as GeneratedNode>::from_config(TensorToTextureConfig::default())
+            .expect("a TensorToTexture of the default config");
+    assert_eq!(
+        node.image_format_it_writes().unwrap(),
+        TextureFormat::Rgba8Unorm
+    );
+
+    node.apply_config_json(&streamlib::sdk::serde_json::json!({ "format": "bgra8_unorm" }))
+        .expect("the config is taken live");
+
+    assert_eq!(
+        node.image_format_it_writes().unwrap(),
+        TextureFormat::Bgra8Unorm
+    );
+}
