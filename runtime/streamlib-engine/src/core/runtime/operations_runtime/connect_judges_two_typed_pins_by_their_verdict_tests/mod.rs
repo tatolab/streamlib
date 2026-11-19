@@ -27,6 +27,7 @@ use crate::core::graph::{
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, Result};
 
+mod convert_node_held_settings_tests;
 mod node_types_port_tests;
 mod texture_formats_tests;
 
@@ -51,6 +52,10 @@ const TEXTURE_PASSTHROUGH: &str = "VerdictCheckTexturePassthrough";
 const RGBA_TEXTURE_SINK: &str = "VerdictCheckRgbaTextureSink";
 const ANY_TEXTURE_SINK: &str = "VerdictCheckAnyTextureSink";
 const UNTYPED_RGBA_PICTURE_SINK: &str = "VerdictCheckUntypedRgbaPictureSink";
+const DELISLE_SOURCE: &str = "VerdictCheckDelisleSource";
+const DELISLE_TO_NEWTON_NAMING_IMAGE: &str = "VerdictCheckDelisleToNewtonNamingImage";
+const NEWTON_SINK_NEEDING_IMAGE: &str = "VerdictCheckNewtonSinkNeedingImage";
+const NEWTON_SINK_NEEDING_DEPTH: &str = "VerdictCheckNewtonSinkNeedingDepth";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -298,6 +303,41 @@ fn register_the_verdict_fixture_node_types() {
             vec![a_texture_port("video", &[])],
             Vec::new(),
         ));
+        register(a_node_type(
+            class_path(DELISLE_SOURCE),
+            Vec::new(),
+            vec![a_typed_port("temperature", temperature("Delisle"))],
+        ));
+        register_with_a_constructor(
+            a_node_type(
+                NodeClassImportPath::of_built_in_node(DELISLE_TO_NEWTON_NAMING_IMAGE),
+                vec![a_typed_port("delisle", temperature("Delisle"))],
+                vec![PortDescriptor {
+                    family: PortFamilyDeclaration {
+                        names: Some(OutputPortDeclaredNames::Stated(vec!["image".to_owned()])),
+                        ..of_records()
+                    },
+                    ..a_typed_port("newton", temperature("Newton"))
+                }],
+            )
+            .stating_a_conversion(),
+        );
+        for (sink, required) in [
+            (NEWTON_SINK_NEEDING_IMAGE, "image"),
+            (NEWTON_SINK_NEEDING_DEPTH, "depth"),
+        ] {
+            register(a_node_type(
+                class_path(sink),
+                vec![PortDescriptor {
+                    family: PortFamilyDeclaration {
+                        requires: vec![required.to_owned()],
+                        ..of_records()
+                    },
+                    ..a_typed_port("temperature", temperature("Newton"))
+                }],
+                Vec::new(),
+            ));
+        }
         register(
             a_node_type(
                 NodeClassImportPath::of_built_in_node(DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS),
@@ -444,8 +484,13 @@ fn a_link_a_built_in_conversion_bridges_is_refused_naming_that_conversion() {
         panic!("a refusal by types: {refusal:?}");
     };
     assert_eq!(
-        conversions_that_bridge,
-        &[NodeClassImportPath::of_built_in_node(CELSIUS_TO_FAHRENHEIT)]
+        conversions_that_bridge
+            .iter()
+            .map(|conversion| &conversion.node_type)
+            .collect::<Vec<_>>(),
+        [&NodeClassImportPath::of_built_in_node(
+            CELSIUS_TO_FAHRENHEIT
+        )]
     );
     assert!(
         refusal.to_string().contains(&format!(
@@ -691,12 +736,13 @@ fn a_link_a_conversion_an_installed_module_declares_bridges_is_refused_naming_it
     );
 }
 
-/// The verdict connect takes on a link, made nowhere, is the one connect acts on: a Float into
-/// an Integer connects for free, and each link connect refuses, a link a built-in conversion
-/// bridges among them, is refused in connect's very words; no link is made by any check.
+/// The verdict a transaction's connect takes on a link, made nowhere, is the one connect acts
+/// on: a Float into an Integer connects for free, and each link connect refuses is refused in
+/// connect's very words; but a link a built-in conversion bridges, which connect itself refuses,
+/// answers the convert node a transaction's connect places. No link is made by any check.
 ///
-/// Mental-revert: a check judging by the verdict alone would answer the convert node connect
-/// refuses, and one adding the link would leave it in the graph.
+/// Mental-revert: refusing the link a built-in conversion bridges, as connect does, leaves a
+/// transaction's connect no node to place.
 #[test]
 fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing() {
     register_the_verdict_fixture_node_types();
@@ -727,16 +773,81 @@ fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing
             OutputLinkPortRef::new(float_source.clone(), "value"),
             InputLinkPortRef::new(number_sink.clone(), "gain"),
         ),
-        (
-            OutputLinkPortRef::new(celsius_source.clone(), "temperature"),
-            InputLinkPortRef::new(fahrenheit_sink.clone(), "temperature"),
-        ),
     ] {
         let checked = the_verdict_connect_takes_on_a_link(&compiler, output.clone(), input.clone())
             .expect_err("connect refuses the link");
         let refused =
             connect_on_this_thread(&compiler, output, input).expect_err("connect refuses the link");
         assert_eq!(checked.to_string(), refused.to_string());
+    }
+
+    let celsius_into_fahrenheit = (
+        OutputLinkPortRef::new(celsius_source.clone(), "temperature"),
+        InputLinkPortRef::new(fahrenheit_sink.clone(), "temperature"),
+    );
+    let verdict = the_verdict_connect_takes_on_a_link(
+        &compiler,
+        celsius_into_fahrenheit.0.clone(),
+        celsius_into_fahrenheit.1.clone(),
+    )
+    .expect("a transaction's connect places the conversion")
+    .expect("two typed ends have a verdict");
+    let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome else {
+        panic!("a built-in conversion bridges the ends: {verdict:?}");
+    };
+    assert_eq!(
+        convert_node.conversion.node_type,
+        NodeClassImportPath::of_built_in_node(CELSIUS_TO_FAHRENHEIT)
+    );
+    connect_on_this_thread(
+        &compiler,
+        celsius_into_fahrenheit.0,
+        celsius_into_fahrenheit.1,
+    )
+    .expect_err("connect itself never places a convert node");
+    assert_eq!(the_links_in(&compiler), 0);
+}
+
+/// A link a built-in conversion bridges answers its convert node only when each of the two
+/// links through it carries the names the end it feeds requires, as connect judges each once
+/// the node is made: the conversion's output states `image`, so an input requiring `image` is
+/// fed through it, and one requiring `depth` is refused naming the missing name.
+///
+/// Mental-revert: judging the two links through the convert node by their islands alone answers
+/// the node for the input requiring `depth`, which the transaction's own connect then refuses.
+#[test]
+fn a_convert_node_is_answered_only_when_both_its_links_carry_the_names_required() {
+    register_the_verdict_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let delisle_source = a_node_of(&compiler, class_path(DELISLE_SOURCE));
+    let needing_image = a_node_of(&compiler, class_path(NEWTON_SINK_NEEDING_IMAGE));
+    let needing_depth = a_node_of(&compiler, class_path(NEWTON_SINK_NEEDING_DEPTH));
+
+    let verdict = the_verdict_connect_takes_on_a_link(
+        &compiler,
+        OutputLinkPortRef::new(delisle_source.clone(), "temperature"),
+        InputLinkPortRef::new(needing_image, "temperature"),
+    )
+    .expect("the conversion's output states the `image` the input requires")
+    .expect("two typed ends have a verdict");
+    let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome else {
+        panic!("a built-in conversion bridges the ends: {verdict:?}");
+    };
+    assert_eq!(
+        convert_node.conversion.node_type,
+        NodeClassImportPath::of_built_in_node(DELISLE_TO_NEWTON_NAMING_IMAGE)
+    );
+
+    match the_verdict_connect_takes_on_a_link(
+        &compiler,
+        OutputLinkPortRef::new(delisle_source, "temperature"),
+        InputLinkPortRef::new(needing_depth, "temperature"),
+    ) {
+        Err(Error::InvalidLink(words)) => {
+            assert!(words.contains("requires [\"depth\"]"), "{words}");
+            assert!(words.contains(DELISLE_TO_NEWTON_NAMING_IMAGE), "{words}");
+        }
+        other => panic!("the link out of the convert node lacks `depth`: {other:?}"),
     }
     assert_eq!(the_links_in(&compiler), 0);
 }

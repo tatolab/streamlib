@@ -87,8 +87,8 @@ pub(super) fn the_project_source() -> Value {
 }
 
 /// Every built-in pin type is listed in the contract's order, each storing a value with its
-/// value's schema, List and bundle with how a pin of one is declared, and Audio with the
-/// conversion a registered node type states from it.
+/// value's schema, List and bundle with how a pin of one is declared, and Audio with, among
+/// the conversions the test binary registers, the one a registered node type states from it.
 ///
 /// Mental-revert: reading conversions from no node type leaves Audio's `converts_to` empty.
 #[tokio::test(flavor = "multi_thread")]
@@ -122,13 +122,17 @@ async fn every_built_in_pin_type_is_listed_with_its_schema_and_the_conversions_f
             .map(|name| serde_json::to_value(name).expect("a name serializes"))
             .collect::<Vec<_>>()
     );
-    assert_eq!(
-        row("audio")["converts_to"],
-        json!([{
-            "from": { "type": "audio" },
-            "to": { "type": "tensor" },
-            "node_type": AudioToTensorTestConversion::node_class_import_path().as_str(),
-        }])
+    let audio_test_conversion = json!({
+        "from": { "type": "audio" },
+        "to": { "type": "tensor" },
+        "node_type": AudioToTensorTestConversion::node_class_import_path().as_str(),
+    });
+    assert!(
+        row("audio")["converts_to"]
+            .as_array()
+            .is_some_and(|conversions| conversions.contains(&audio_test_conversion)),
+        "{}",
+        row("audio")
     );
     assert_eq!(
         row("boolean")["value_json_schema"]["type"],

@@ -5,10 +5,12 @@ use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
     PROJECT_TRANSACTION_COMMIT_TRAILER, PROJECT_TRANSACTION_FORMAT_VERSION,
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectOperation, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionLineage, StreamGraphDocument, StreamGraphDocumentNode, StreamGraphOperation,
+    ProjectRepositoryRefusal, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionNodeInsertedOnALink,
+    StreamGraphDocument, StreamGraphDocumentNode, StreamGraphOperation,
     StreamGraphOperationOnAStream,
 };
+use streamlib_runtime_client_contract::local_api_wire_contract::GraphTransactionNodeInsertedBecause;
 use uuid::Uuid;
 
 struct ProjectHoldingOneStream {
@@ -456,5 +458,36 @@ fn a_key_sent_again_answers_its_transaction_past_a_newer_unreadable_trailer() {
     assert_eq!(
         retried,
         ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(first)
+    );
+}
+
+/// A transaction a newer runtime kept, naming a node it inserted for a reason this runtime does
+/// not know, still reads, the node named as inserted for another reason, so an action sent again
+/// under its key is answered from it.
+///
+/// Mental-revert: a reason read only among the ones this runtime knows refuses the whole
+/// transaction.
+#[test]
+fn a_kept_transaction_reads_a_node_inserted_for_a_reason_this_runtime_does_not_know() {
+    let node = Uuid::new_v4();
+    let kept: ProjectTransaction = serde_json::from_value(json!({
+        "format_version": PROJECT_TRANSACTION_FORMAT_VERSION,
+        "transaction": Uuid::new_v4(),
+        "author": { "kind": "agent", "name": "alice" },
+        "parent_commit": null,
+        "operations": [],
+        "inverse_operations": [],
+        "nodes_inserted_on_links": [
+            { "node": node, "inserted_because": "splits_a_bundle" },
+        ],
+    }))
+    .expect("a kept transaction naming an unknown reason reads");
+
+    assert_eq!(
+        kept.nodes_inserted_on_links,
+        [ProjectTransactionNodeInsertedOnALink {
+            node,
+            inserted_because: GraphTransactionNodeInsertedBecause::ForAnotherReason,
+        }]
     );
 }

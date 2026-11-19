@@ -676,7 +676,7 @@
     {
       "name": "connect",
       "summary": "Link an output port to an input port in one loaded stream, as one transaction.",
-      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes` and both of its links under `connected_links`. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These pin type rules judge a link in the stream's own graph; a link inside a placed stream, under a non-empty `level`, is not judged by them yet.",
+      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends, only when both ends are UUID-named nodes the edited level holds. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. A link inside a placed stream, under a non-empty `level`, is judged by the node types that level draws and refused before anything is written, as at the stream's own level; `connect` places no convert node there, so a link that needs one is refused naming it.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -737,7 +737,7 @@
     {
       "name": "check_link",
       "summary": "Answer what `connect` would answer for one link in a loaded stream, changing nothing.",
-      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect` or `input_takes_no_wire`. A link that needs a convert node is refused today, as `connect` refuses it. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
+      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -4216,7 +4216,7 @@
     {
       "name": "list_pin_types",
       "summary": "List every built-in pin type, how each is written, and what converts it.",
-      "description": "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` refuses a link that needs a conversion, so a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.",
+      "description": "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -6010,7 +6010,12 @@
           {
             "type": "string",
             "const": "link_pin_types_do_not_connect",
-            "description": "The two ends of the link sent carry pin types that do not connect, or connect only\nthrough a convert node; the runtime's words name both ends, both types and each node type\nthat converts between them."
+            "description": "The two ends of the link sent carry pin types that do not connect, or connect only\nthrough a convert node `connect` does not place; the runtime's words name both ends, both\ntypes and each node type that converts between them."
+          },
+          {
+            "type": "string",
+            "const": "link_needs_a_module_conversion",
+            "description": "The two ends of the link sent connect only through a conversion a module or the project's\nown node declares, which `connect` never places; the runtime's words name each such node\ntype. With exactly one, `suggested_call` is the `transact` that places it between them,\nonly when both ends are UUID-named nodes the edited level holds."
           },
           {
             "type": "string",
@@ -10236,6 +10241,14 @@
               "null"
             ],
             "description": "The `as` its `add_node` gave it, which later operations of the transaction named it by."
+          },
+          "node_type": {
+            "type": "string",
+            "description": "Its node type, on a node a `connect` inserted."
+          },
+          "inserted_because": {
+            "$ref": "#/components/schemas/GraphTransactionNodeInsertedBecause",
+            "description": "Why a `connect` inserted it on its link."
           }
         },
         "required": [
@@ -10244,6 +10257,27 @@
           "name"
         ],
         "description": "A node a graph transaction added."
+      },
+      "GraphTransactionNodeInsertedBecause": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "converts_pin_types",
+            "description": "The two ends' pin types connect only through this built-in convert node."
+          },
+          {
+            "type": "string",
+            "const": "closes_a_loop",
+            "description": "The link closes a loop of function nodes, which this `PreviousValue` node breaks."
+          },
+          {
+            "type": "string",
+            "const": "for_another_reason",
+            "description": "A reason this client does not know, which a newer runtime gave: in its answer, or in a\ntransaction it kept that an older runtime answers from history."
+          }
+        ],
+        "description": "Why a `connect` placed a node of its own on the link it asked for, the link carried through\nit. The set grows: a reason a client does not know reads as `for_another_reason`.",
+        "x-may-grow": true
       },
       "GraphTransactionConnectedLink": {
         "type": "object",
@@ -10273,6 +10307,17 @@
               "null"
             ],
             "description": "Why a link reading `error` will carry nothing, in the refusing end's own words."
+          },
+          "free_conversion": {
+            "type": "boolean",
+            "description": "`true` when the input reads what the output carries as its own type at no cost: Boolean,\nInteger and Float among themselves, a Vector into a Vector or a Color, one number into a\nVector or a Color, or a Menu into a String. Absent on every other link."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinLinkWarningOnTheWire"
+            },
+            "description": "What the link does that a person may not expect, as the judgement of its two ends' pin\ntypes says; none of these blocks it. Absent when it warns of nothing."
           }
         },
         "required": [
@@ -10630,7 +10675,7 @@
           {
             "type": "string",
             "const": "connects_through_convert_node",
-            "description": "The two ends connect through the convert node `convert_node` names, placed between them.\nNot answered yet: `connect` refuses a link that needs a convert node, so such a link is\nanswered `refused`."
+            "description": "The two ends connect through the built-in convert node `convert_node` names, which\n`connect` places between them in the same edit, collapsed, linking each end to it."
           },
           {
             "type": "string",
@@ -10662,7 +10707,12 @@
           },
           "output_pin_type": {
             "$ref": "#/components/schemas/PinType",
-            "description": "The type that output gives."
+            "description": "The type that output gives, under the settings `input_values` holds."
+          },
+          "input_values": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The settings the node holds, each by its input's name, picked for the link's input; absent\nwhen what its output gives follows no setting."
           }
         },
         "required": [

@@ -632,6 +632,21 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.what_a_connect_makes_of_the_link(link)
     }
 
+    fn the_verdict_of_a_link_between_two_running_nodes(
+        &self,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict> {
+        self.the_verdict_of_a_link_between_two_running_nodes(link)
+    }
+
+    fn the_verdict_of_a_link_between_two_node_types(
+        &self,
+        from: crate::core::runtime::PortOfANodeOfAType<'_>,
+        to: crate::core::runtime::PortOfANodeOfAType<'_>,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict> {
+        self.the_verdict_of_a_link_between_two_node_types(from, to)
+    }
+
     fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
         &'a self,
         held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,

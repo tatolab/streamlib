@@ -272,6 +272,11 @@ impl LoadedStreamInThisRuntime {
                 node_run_id,
                 &config_json,
             )?;
+            crate::core::graph::refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse(
+                graph,
+                node_run_id,
+                &config_json,
+            )?;
             crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
                 graph,
                 &self.node_types_this_stream_resolves,

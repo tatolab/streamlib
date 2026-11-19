@@ -106,7 +106,7 @@ impl StreamGraphTransactionExecutor<'_> {
             streams_taking_their_edits_once_the_documents_hold_them: BTreeSet::new(),
             project_repository: project_repository_held.as_deref(),
             node_by_label: HashMap::new(),
-            labels_of_added_nodes: HashMap::new(),
+            what_the_answer_names_of_each_added_node: HashMap::new(),
         };
         self.refuse_a_value_an_input_does_not_take_before_any_is_applied(
             &requests_and_the_stream_id_each_names,
@@ -123,7 +123,15 @@ impl StreamGraphTransactionExecutor<'_> {
             .into_iter()
             .enumerate()
         {
-            let what_the_request_names = what_a_graph_action_names(&request);
+            let what_the_request_names =
+                what_a_graph_action_names(&request).made_in(WhereAnOperationEdits {
+                    stream_id: &stream_id,
+                    level: request.level(),
+                    level_holds_both_link_ends: self
+                        .the_level_holds_both_ends_of_the_link_the_request_names(
+                            &request, &stream_id, &staged,
+                        ),
+                });
             let applied = match self.apply_one_action(request, &stream_id, &mut staged) {
                 Ok(applied) => applied,
                 Err(refusal) => {
@@ -154,7 +162,7 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let WhatTheTransactionHasStaged {
             streams,
-            labels_of_added_nodes,
+            what_the_answer_names_of_each_added_node,
             ..
         } = staged;
         if !project_operations.is_empty() {
@@ -170,6 +178,9 @@ impl StreamGraphTransactionExecutor<'_> {
                     ProjectTransactionAsSentAndAnswered {
                         actions_as_sent,
                         inputs_overridden_by_links: overridden_by_links.clone(),
+                        nodes_inserted_on_links: the_nodes_inserted_on_links(
+                            &what_the_answer_names_of_each_added_node,
+                        ),
                     },
                     project_operations,
                     ProjectTransactionLineage::NewEdit,
@@ -210,10 +221,39 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             operations_answered,
             WhatAnAnswerNamesBesideItsOperations {
-                labels_of_added_nodes: &labels_of_added_nodes,
+                what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links,
             },
         ))
+    }
+
+    /// Whether the level `request`, an action on the loaded stream `stream_id`, edits holds, as
+    /// the transaction has staged it, the node at each end of the link the request names, each
+    /// named by its UUID and neither by the `as` of a node this transaction adds.
+    fn the_level_holds_both_ends_of_the_link_the_request_names(
+        &self,
+        request: &StreamGraphAction,
+        stream_id: &str,
+        staged: &WhatTheTransactionHasStaged<'_>,
+    ) -> bool {
+        let (StreamGraphAction::Connect { source, target, .. }
+        | StreamGraphAction::Disconnect { source, target, .. }) = request
+        else {
+            return false;
+        };
+        let Ok(reached) = self.the_level_a_request_reaches(
+            stream_id,
+            request.level(),
+            &staged.streams,
+            &staged.staged_graph_of_each_stream_not_running,
+            staged.project_repository,
+        ) else {
+            return false;
+        };
+        let Ok(level_as_drawn) = reached.the_document_as_drawn() else {
+            return false;
+        };
+        the_level_holds_both_ends_by_uuid(&level_as_drawn, source, target, &staged.node_by_label)
     }
 
     /// The level of the loaded stream `stream_id` that `level`, a path of placed streams,
@@ -271,7 +311,7 @@ impl StreamGraphTransactionExecutor<'_> {
             streams_taking_their_edits_once_the_documents_hold_them,
             project_repository,
             node_by_label,
-            labels_of_added_nodes,
+            what_the_answer_names_of_each_added_node,
         } = staged;
         let project_repository = *project_repository;
         let label = match &request {
@@ -353,12 +393,39 @@ impl StreamGraphTransactionExecutor<'_> {
                 .block_on(stream_operations.to_json_async())?;
             Ok(the_function_nodes_of_the_render(&rendered_graph))
         };
+        let the_stream_takes_its_edits_once_the_documents_hold_them =
+            streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
+        let judged_before_commit_because = if !reached.is_the_streams_own_level() {
+            Some(WhyALinkIsJudgedByNodeTypes::TheLinkIsAtAPlacedLevel)
+        } else if the_stream_takes_its_edits_once_the_documents_hold_them {
+            Some(WhyALinkIsJudgedByNodeTypes::TheStreamTakesItsEditsLater)
+        } else {
+            None
+        };
+        let refuse_a_link_judged_before_commit = |link: &StreamGraphDocumentLink| {
+            judged_before_commit_because.map_or(Ok(()), |because| {
+                refuse_a_link_judged_by_the_node_types_of_its_level(
+                    stream_operations.as_ref(),
+                    &level_as_drawn,
+                    link,
+                    because,
+                )
+            })
+        };
+        let convert_node_a_link_needs = |link: &StreamGraphDocumentLink| {
+            if judged_before_commit_because.is_some() {
+                refuse_a_link_judged_before_commit(link)?;
+                return Ok(None);
+            }
+            the_convert_node_a_live_connect_places(stream_operations.as_ref(), link)
+        };
         let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
             stream_operations
                 .the_config_a_node_holding_the_input_values_takes(node_type, input_values)
                 .map_err(GraphRequestRefusal::from)
         };
         let mut placed_stream_a_collapse_saves = None;
+        let mut node_inserted_because = None;
         let mut edit_as_drawn = graph_operation_for_the_request(
             request,
             &level_as_drawn,
@@ -369,9 +436,12 @@ impl StreamGraphTransactionExecutor<'_> {
                 document_of_a_placed_stream: &document_of_a_placed_stream,
                 family_of_an_output_port: &family_of_an_output_port,
                 function_nodes_of_the_running_stream: &function_nodes_of_the_running_stream,
+                convert_node_a_link_needs: &convert_node_a_link_needs,
+                refuse_a_link_judged_before_commit: &refuse_a_link_judged_before_commit,
                 config_a_node_takes: &config_a_node_takes,
             },
             &mut placed_stream_a_collapse_saves,
+            &mut node_inserted_because,
         )?;
         if let StreamGraphOperation::Connect { link } = &edit_as_drawn {
             refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
@@ -477,7 +547,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 )
                 .into());
             }
-            label_what_the_operation_adds(label, &applied, &|own| own, labels_of_added_nodes);
+            record_what_the_answer_names_of_the_node_the_operation_adds(
+                label,
+                node_inserted_because,
+                &applied,
+                &|own| own,
+                what_the_answer_names_of_each_added_node,
+            );
             project_operations.push(ProjectOperation::StreamGraph(
                 StreamGraphOperationOnAStream {
                     stream: stream_asset,
@@ -516,11 +592,12 @@ impl StreamGraphTransactionExecutor<'_> {
         placed_document_after_the_edit.apply(&edit)?;
         let operation_answered =
             reached.the_operation_as_drawn(&edit, &placed_document_after_the_edit)?;
-        label_what_the_operation_adds(
+        record_what_the_answer_names_of_the_node_the_operation_adds(
             label,
+            node_inserted_because,
             &edit,
             &|own| reached.the_drawn_uuid_of(own),
-            labels_of_added_nodes,
+            what_the_answer_names_of_each_added_node,
         );
         for labelled in node_by_label.values_mut() {
             if edit.node() == Some(*labelled) && !reached.is_the_streams_own_level() {

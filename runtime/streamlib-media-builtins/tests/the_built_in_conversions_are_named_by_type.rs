@@ -6,8 +6,9 @@
 //! stated, so the link verdict finds it between two ends.
 
 use streamlib::sdk::descriptors::{
-    NodeClassImportPath, NodeDescriptor, PinConversion, PinLinkEnd, PinLinkInputEnd,
-    PinLinkOutcome, PinLinkVerdict, PinType, TexturePixelFormat, pin_link_verdict,
+    BuiltInPinTypeName, BundleMember, NamedPinTypeImportPath, NodeClassImportPath, NodeDescriptor,
+    PinConversion, PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkVerdict, PinType,
+    ProjectAssetMedia, TexturePixelFormat, VectorComponentCount, pin_link_verdict,
 };
 use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib_media_builtins::register_media_builtin_node_types;
@@ -41,6 +42,7 @@ fn the_typed_conversions() -> [PinConversion; 4] {
             input_pin_type,
             output_port_name: output_port_name.to_owned(),
             output_pin_type,
+            output_picked_for_the_input: None,
         }
     };
     [
@@ -199,4 +201,128 @@ fn the_verdict_between(
         },
         conversions,
     )
+}
+
+/// Every built-in pin type a conversion's ends are judged against: at least one of each type
+/// [`BuiltInPinTypeName::EVERY_NAME`] lists, a type added there failing to compile here until it
+/// is given one; each Texture format alone and a Texture of any; and each type a conversion states
+/// at either end.
+fn every_built_in_end_type(conversions: &[PinConversion]) -> Vec<PinType> {
+    let float = || PinType::Float { exact_size: None };
+    let mut end_types: Vec<PinType> = Vec::new();
+    for name in BuiltInPinTypeName::EVERY_NAME {
+        match name {
+            BuiltInPinTypeName::Boolean => end_types.push(PinType::Boolean {}),
+            BuiltInPinTypeName::Integer => end_types.push(PinType::Integer { exact_size: None }),
+            BuiltInPinTypeName::Float => end_types.push(float()),
+            BuiltInPinTypeName::String => end_types.push(PinType::String {}),
+            BuiltInPinTypeName::Menu => end_types.push(PinType::Menu {
+                option_names: vec!["low".to_owned(), "high".to_owned()],
+            }),
+            BuiltInPinTypeName::Color => end_types.push(PinType::Color {}),
+            BuiltInPinTypeName::Vector => end_types.extend(
+                [
+                    VectorComponentCount::Two,
+                    VectorComponentCount::Three,
+                    VectorComponentCount::Four,
+                ]
+                .map(|component_count| PinType::Vector { component_count }),
+            ),
+            BuiltInPinTypeName::Rectangle => end_types.push(PinType::Rectangle {}),
+            BuiltInPinTypeName::Transform => end_types.push(PinType::Transform {}),
+            BuiltInPinTypeName::Texture => {
+                end_types
+                    .extend(TexturePixelFormat::EVERY_FORMAT.map(|format| a_texture_of(&[format])));
+                end_types.push(a_texture_of(&[]));
+            }
+            BuiltInPinTypeName::Audio => end_types.push(PinType::Audio {}),
+            BuiltInPinTypeName::EncodedVideo => {
+                end_types.push(PinType::EncodedVideo { codecs: Vec::new() })
+            }
+            BuiltInPinTypeName::EncodedAudio => {
+                end_types.push(PinType::EncodedAudio { codecs: Vec::new() })
+            }
+            BuiltInPinTypeName::Tensor => end_types.push(PinType::Tensor {}),
+            BuiltInPinTypeName::Asset => end_types.extend([
+                PinType::Asset { media: Vec::new() },
+                PinType::Asset {
+                    media: vec![ProjectAssetMedia::Image],
+                },
+            ]),
+            BuiltInPinTypeName::Trigger => end_types.push(PinType::Trigger {}),
+            BuiltInPinTypeName::ListOf => end_types.push(PinType::ListOf {
+                element_type: Box::new(float()),
+            }),
+            BuiltInPinTypeName::Bundle => end_types.push(PinType::Bundle {
+                members: vec![BundleMember {
+                    name: "gain".to_owned(),
+                    member_type: float(),
+                    meaning: None,
+                    default_value: None,
+                }],
+            }),
+            BuiltInPinTypeName::Named => end_types.push(PinType::Named {
+                named_pin_type: NamedPinTypeImportPath::new("conversion_check:Temperature")
+                    .expect("a named pin type"),
+            }),
+            BuiltInPinTypeName::NodeReference => end_types.push(PinType::NodeReference {
+                referenced_node_type: None,
+                one_referrer_per_referenced_node: false,
+            }),
+            BuiltInPinTypeName::PinTypeChoice => {
+                end_types.push(PinType::PinTypeChoice { among: Vec::new() })
+            }
+        }
+    }
+    for conversion in conversions {
+        for stated in [&conversion.input_pin_type, &conversion.output_pin_type] {
+            if !end_types.contains(stated) {
+                end_types.push(stated.clone());
+            }
+        }
+    }
+    end_types
+}
+
+/// No two conversions `connect` may place bridge the same pair of built-in types, so a link never
+/// has two built-in nodes to choose between. Each is judged by its declaration alone, which
+/// bridges every pair the setting it picks for an input lets it bridge.
+///
+/// Mental-revert: a second built-in Tensor-to-Texture conversion makes two bridge a Tensor into a
+/// Texture.
+#[test]
+fn no_two_insertable_conversions_bridge_the_same_pair_of_built_in_types() {
+    register_media_builtin_node_types();
+    let insertable: Vec<PinConversion> = NODE_REGISTRY
+        .list_registered()
+        .into_iter()
+        .filter_map(|descriptor| {
+            descriptor
+                .pin_conversion()
+                .unwrap_or_else(|refusal| panic!("{refusal}"))
+        })
+        .filter(PinConversion::may_be_inserted)
+        .collect();
+    assert!(!insertable.is_empty());
+    let end_types = every_built_in_end_type(&insertable);
+
+    for output in &end_types {
+        for input in &end_types {
+            let bridging: Vec<&NodeClassImportPath> = insertable
+                .iter()
+                .filter(|conversion| {
+                    matches!(
+                        the_verdict_between(output, input, std::slice::from_ref(conversion))
+                            .outcome,
+                        PinLinkOutcome::ConnectsThroughConvertNode(_)
+                    )
+                })
+                .map(|conversion| &conversion.node_type)
+                .collect();
+            assert!(
+                bridging.len() <= 1,
+                "{output} into {input} is bridged by {bridging:?}"
+            );
+        }
+    }
 }
