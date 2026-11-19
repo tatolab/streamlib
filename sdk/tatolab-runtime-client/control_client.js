@@ -58,6 +58,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("check_link", params, callOptions);
   }
 
+  check_link_candidates(params, callOptions) {
+    return this.call("check_link_candidates", params, callOptions);
+  }
+
   import_graph_generator(params, callOptions) {
     return this.call("import_graph_generator", params, callOptions);
   }

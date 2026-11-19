@@ -36,16 +36,17 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
     DescribeAssetToolResult, DescribeNodeTypesToolResult, DescribeRuntimeToolResult,
     DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
-    ImportProjectToolResult, LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult,
-    ListNodeTypesToolResult, ListPinTypesToolResult, ListProjectFilesToolResult,
-    ListProjectNodeTypesToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
-    ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
-    PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
-    ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
-    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
-    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
-    SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
-    UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
+    ListDependenciesToolResult, ListNodeTypesToolResult, ListPinTypesToolResult,
+    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
+    ListSamplesToolResult, ListStreamsToolResult, ListedStreamState, LogsToolResult,
+    OpenViewerToolResult, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
+    ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
+    ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
+    ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
+    RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
+    StreamActionStepOnTheWire, StreamLocationOnTheWire, UpdateDependencyToolResult,
+    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
@@ -113,6 +114,8 @@ pub(crate) enum ControlOperationAnswer {
     GraphTransaction(GraphTransactionToolResult),
     /// `check_link`'s: what `connect` would answer.
     CheckLink(LinkCheckResult),
+    /// `check_link_candidates`': what `check_link` would answer for each candidate.
+    CheckLinkCandidates(LinkCandidatesCheckResult),
     /// A queued project stream action's: its id and its project.
     ProjectStreamActionQueued(ProjectStreamActionQueuedToolResult),
     /// `remove_project`'s.
@@ -451,6 +454,10 @@ impl ControlOperationDispatcher {
                 .check_link(request)
                 .await
                 .map(ControlOperationAnswer::CheckLink),
+            ControlOperationCall::CheckLinkCandidates(request) => self
+                .check_link_candidates(request)
+                .await
+                .map(ControlOperationAnswer::CheckLinkCandidates),
             ControlOperationCall::ImportGraphGenerator(request) => {
                 self.answer_import_graph_generator(request, request_origin)
                     .await
