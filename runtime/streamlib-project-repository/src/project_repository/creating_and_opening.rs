@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 impl ProjectRepository {
     /// Create a project named `name` in `project_directory`, made when missing, with its first commit.
@@ -17,7 +18,7 @@ impl ProjectRepository {
                 project_directory: project_directory.to_path_buf(),
             });
         }
-        std::fs::create_dir_all(project_directory)?;
+        create_directory_and_its_missing_parents_at_the_process_umask(project_directory)?;
         let runtime_directory = project_directory.join(PROJECT_RUNTIME_DIRECTORY);
         let runtime_directory_existed = runtime_directory.exists();
         let created = Self::write_a_new_project(project_directory, name, author);

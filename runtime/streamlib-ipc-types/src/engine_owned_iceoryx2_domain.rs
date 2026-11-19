@@ -15,6 +15,8 @@ pub use streamlib_runtime_client_contract::streamlib_runtime_directory::{
     ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, engine_owned_iceoryx2_prefix_for_this_user,
 };
 
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::with_no_iceoryx2_listener_bind_changing_the_umask;
+
 use crate::{DataChannelPayloadCacheLine, DataChannelSampleUserHeader};
 
 /// Why the configuration of an iceoryx2 domain, or a node in it, was refused.
@@ -180,6 +182,17 @@ pub fn create_the_reserved_slot_subscriber_of(
             }
             other => ChannelReservedSlotSubscribeError::Transport(format!("{other:?}")),
         })
+}
+
+/// Bind a listener on `event_service` while no child starts and no folder is
+/// made at the process umask in this process, since the bind swaps the umask.
+pub fn bind_an_iceoryx2_listener_outside_every_child_process_start(
+    event_service: &iceoryx2::service::port_factory::event::PortFactory<ipc_threadsafe::Service>,
+) -> Result<
+    iceoryx2::port::listener::Listener<ipc_threadsafe::Service>,
+    iceoryx2::port::listener::ListenerCreateError,
+> {
+    with_no_iceoryx2_listener_bind_changing_the_umask(|| event_service.listener_builder().create())
 }
 
 #[cfg(test)]

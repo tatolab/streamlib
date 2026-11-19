@@ -17,6 +17,7 @@ use streamlib_project_repository::{
 
 use super::project_venv_sync_stamp::the_distribution_name_of_the_module_wheel;
 use super::{ProjectVenvNotMade, remove_what_stands_at};
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// Link each wheel of `first_party_module_wheels` into the project's
 /// [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`], take out each link to a module
@@ -39,12 +40,14 @@ pub(super) fn declare_each_first_party_module_in_the_project(
         ),
     };
     let links_directory = project_directory.join(PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY);
-    std::fs::create_dir_all(&links_directory).map_err(|not_made| {
-        not_declared_because(format!(
-            "{} was not made: {not_made}",
-            links_directory.display()
-        ))
-    })?;
+    create_directory_and_its_missing_parents_at_the_process_umask(&links_directory).map_err(
+        |not_made| {
+            not_declared_because(format!(
+                "{} was not made: {not_made}",
+                links_directory.display()
+            ))
+        },
+    )?;
     let declared_modules: Vec<FirstPartyModuleDeclaredByAProject> = first_party_module_wheels
         .iter()
         .filter_map(|module_wheel| {
@@ -233,12 +236,14 @@ fn link_each_first_party_module_the_import_names(
         if std::fs::read_link(&link).is_ok_and(|target| target == *carried_wheel) {
             continue;
         }
-        std::fs::create_dir_all(&links_directory).map_err(|not_made| {
-            not_linked_because(format!(
-                "{} was not made: {not_made}",
-                links_directory.display()
-            ))
-        })?;
+        create_directory_and_its_missing_parents_at_the_process_umask(&links_directory).map_err(
+            |not_made| {
+                not_linked_because(format!(
+                    "{} was not made: {not_made}",
+                    links_directory.display()
+                ))
+            },
+        )?;
         remove_what_stands_at(&link)?;
         std::os::unix::fs::symlink(carried_wheel, &link).map_err(|not_linked| {
             not_linked_because(format!(
@@ -289,12 +294,13 @@ pub(super) fn declare_the_carried_wheels_in_the_project(
             if !std::fs::read_link(&link).is_ok_and(|target| target == carried_wheels_directory) {
                 remove_what_stands_at(&link)?;
                 if let Some(links_parent) = link.parent() {
-                    std::fs::create_dir_all(links_parent).map_err(|not_made| {
-                        not_declared_because(format!(
-                            "{} was not made: {not_made}",
-                            links_parent.display()
-                        ))
-                    })?;
+                    create_directory_and_its_missing_parents_at_the_process_umask(links_parent)
+                        .map_err(|not_made| {
+                            not_declared_because(format!(
+                                "{} was not made: {not_made}",
+                                links_parent.display()
+                            ))
+                        })?;
                 }
                 std::os::unix::fs::symlink(carried_wheels_directory, &link).map_err(
                     |not_linked| {

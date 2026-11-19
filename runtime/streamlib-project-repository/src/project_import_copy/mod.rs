@@ -14,6 +14,7 @@ use crate::core_project_import::is_at_or_inside_a_core_project_import_folder;
 use crate::project_asset::{DIRECTORIES_A_PROJECT_SCAN_SKIPS, PROJECT_IMPORTS_DIRECTORY};
 use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// Where a project stages each import's files before a transaction moves them into place, and
 /// keeps an import's folder a transaction takes out until it commits, relative to the project.
@@ -134,7 +135,7 @@ pub(crate) fn unpack_a_project_archive_as_a_new_project(
             project_directory: project_directory.to_path_buf(),
         });
     }
-    std::fs::create_dir_all(parent_directory)?;
+    create_directory_and_its_missing_parents_at_the_process_umask(parent_directory)?;
     let unpacking_directory = parent_directory.join(format!(
         ".{}.unpacking-{}",
         folder_name.to_string_lossy(),
@@ -313,11 +314,11 @@ pub(crate) fn copy_the_files_a_project_copy_carries(
     destination: &Path,
     refusal_of_a_file_not_copied: impl Fn(std::io::Error) -> ProjectRepositoryRefusal,
 ) -> Result<(), ProjectRepositoryRefusal> {
-    std::fs::create_dir_all(destination)?;
+    create_directory_and_its_missing_parents_at_the_process_umask(destination)?;
     for relative in files_an_import_carries(source)? {
         let copied_to = destination.join(&relative);
         if let Some(parent) = copied_to.parent() {
-            std::fs::create_dir_all(parent)?;
+            create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
         }
         std::fs::copy(source.join(&relative), copied_to).map_err(&refusal_of_a_file_not_copied)?;
     }
@@ -355,7 +356,7 @@ fn extract_the_project_archive(
         .filter_map(|path| path.parent().map(Path::to_path_buf))
         .filter(|environment| *environment != root)
         .collect();
-    std::fs::create_dir_all(staging_directory)?;
+    create_directory_and_its_missing_parents_at_the_process_umask(staging_directory)?;
     for (index, entry_path) in entry_paths.iter().enumerate() {
         let Some(entry_path) = entry_path else {
             continue;
@@ -393,7 +394,7 @@ fn extract_the_project_archive(
         }
         let destination = staging_directory.join(inside_the_project);
         if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)?;
+            create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
         }
         let mut bytes = Vec::new();
         entry

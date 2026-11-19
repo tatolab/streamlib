@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::runtime::StreamLocation;
 use crate::core::{Error, Result};
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// The name of the one stream asset a new project starts with.
 pub(crate) const NEW_PROJECT_SCAFFOLD_STREAM_NAME: &str = "main";
@@ -279,12 +280,13 @@ fn write_the_starter_into(project_directory: &Path, scaffold: &NewProjectScaffol
     for scaffolded_file in &scaffolded_files {
         let scaffolded_file_path = project_directory.join(scaffolded_file.path_in_project);
         if let Some(parent_directory) = scaffolded_file_path.parent() {
-            fs::create_dir_all(parent_directory).map_err(|io_failure| {
-                Error::Runtime(format!(
-                    "cannot create `{}`: {io_failure}",
-                    parent_directory.display()
-                ))
-            })?;
+            create_directory_and_its_missing_parents_at_the_process_umask(parent_directory)
+                .map_err(|io_failure| {
+                    Error::Runtime(format!(
+                        "cannot create `{}`: {io_failure}",
+                        parent_directory.display()
+                    ))
+                })?;
         }
         fs::OpenOptions::new()
             .write(true)
