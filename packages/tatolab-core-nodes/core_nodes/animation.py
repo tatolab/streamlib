@@ -7,8 +7,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Annotated
 
-from tatolab.stream import State, Stateful, Time, node
+from tatolab.stream import NumberRange, NumberUnit, State, Stateful, Time, node
+
+# A rate in cycles a second.
+Hertz = Annotated[float, NumberUnit("Hz")]
+
+# A length of stream time, never below 0.
+Seconds = Annotated[float, NumberRange(minimum=0.0), NumberUnit("s")]
 
 
 @dataclass(frozen=True)
@@ -24,9 +31,9 @@ class LfoPhase:
     category="Animation",
     description="A smooth wave that swings between -1 and 1, rate_hz times a second. Wire it into any number input to animate it.",
 )
-@node.function
+@node
 def Lfo(  # noqa: N802
-    rate_hz: float = 1.0, *, now: Time, previous: State[LfoPhase]
+    rate_hz: Hertz = 1.0, *, now: Time, previous: State[LfoPhase]
 ) -> Stateful[float, LfoPhase]:
     """A sine wave from -1 to 1 at `rate_hz`, advanced by the stream time between reads."""
     elapsed_seconds = (now - previous.last_evaluated_at_ns) * 1e-9 if previous.started else 0.0
@@ -46,7 +53,7 @@ class TimerStart:
     category="Animation",
     description="Seconds since the stream started, or since reset was last on.",
 )
-@node.function
+@node
 def Timer(  # noqa: N802
     reset: bool = False, *, now: Time, previous: State[TimerStart]
 ) -> Stateful[float, TimerStart]:
@@ -69,9 +76,9 @@ class LagValue:
     category="Animation",
     description="Smooth a jumpy number: follow it, taking about `seconds` to catch up.",
 )
-@node.function
+@node
 def Lag(  # noqa: N802
-    x: float, seconds: float = 0.1, *, now: Time, previous: State[LagValue]
+    x: float = 0.0, seconds: Seconds = 0.1, *, now: Time, previous: State[LagValue]
 ) -> Stateful[float, LagValue]:
     """`x` followed smoothly, closing about two thirds of the gap each `seconds` of stream time."""
     if not previous.started or seconds <= 0.0:
@@ -94,9 +101,9 @@ class RampPhase:
     category="Animation",
     description="A number that climbs from 0 to 1 and starts over, rate_hz times a second. Drives anything that loops: a wipe, a rotation, a scroll.",
 )
-@node.function
+@node
 def Ramp(  # noqa: N802
-    rate_hz: float = 1.0, *, now: Time, previous: State[RampPhase]
+    rate_hz: Hertz = 1.0, *, now: Time, previous: State[RampPhase]
 ) -> Stateful[float, RampPhase]:
     """A sawtooth from 0 up to 1 at `rate_hz`, advanced by the stream time between reads."""
     elapsed_seconds = (now - previous.last_evaluated_at_ns) * 1e-9 if previous.started else 0.0
@@ -117,9 +124,13 @@ class PulsePhase:
     category="Animation",
     description="On and off in a steady beat: on for the first `width` of each cycle, rate_hz times a second. Set rate_hz to BPM / 60 for a beat.",
 )
-@node.function
+@node
 def Pulse(  # noqa: N802
-    rate_hz: float = 2.0, width: float = 0.5, *, now: Time, previous: State[PulsePhase]
+    rate_hz: Hertz = 2.0,
+    width: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 0.5,
+    *,
+    now: Time,
+    previous: State[PulsePhase],
 ) -> Stateful[bool, PulsePhase]:
     """On while the cycle at `rate_hz` is in its first `width`, advanced by the stream time between reads."""
     elapsed_seconds = (now - previous.last_evaluated_at_ns) * 1e-9 if previous.started else 0.0
@@ -140,7 +151,7 @@ class SpeedPosition:
     category="Animation",
     description="Turn a speed into a position: adds `rate` every second, so a steady input makes a steadily growing number. Reset sends it back to 0.",
 )
-@node.function
+@node
 def Speed(  # noqa: N802
     rate: float = 1.0, reset: bool = False, *, now: Time, previous: State[SpeedPosition]
 ) -> Stateful[float, SpeedPosition]:
@@ -164,11 +175,11 @@ class EnvelopeLevel:
     category="Animation",
     description="Fade up while the gate is on and fade down when it lets go: rises to 1 over `attack_seconds`, falls to 0 over `release_seconds`.",
 )
-@node.function
+@node
 def Envelope(  # noqa: N802
     gate: bool = False,
-    attack_seconds: float = 0.1,
-    release_seconds: float = 0.5,
+    attack_seconds: Seconds = 0.1,
+    release_seconds: Seconds = 0.5,
     *,
     now: Time,
     previous: State[EnvelopeLevel],
