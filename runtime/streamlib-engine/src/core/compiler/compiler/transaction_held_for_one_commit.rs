@@ -6,10 +6,24 @@
 
 use super::Compiler;
 use crate::core::compiler::PendingOperation;
-use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent, LinkUniqueId,
-    NodeInstanceComponent, PendingDeletionComponent, WhyTheNodeLeaves,
+use crate::core::compiler::compiler_ops::shader_node_island::{
+    ShaderNodeFusedIntoTheIslandOfAnotherComponent, ShaderNodeIslandHostedHereComponent,
 };
+use crate::core::graph::{
+    FunctionNodeRanCompiledComponent, GraphEdgeWithComponents, GraphNode, GraphNodeWithComponents,
+    LinkState, LinkStateComponent, LinkUniqueId, NodeInstanceComponent, PendingDeletionComponent,
+    ShaderNodeFusedGroupComponent, WhyTheNodeLeaves,
+};
+
+/// Whether a commit built `node`: an instance of its own, or a place in an island another node
+/// runs, a function node compiled into its helpers or a shader node fused into a host's island.
+fn a_commit_built(node: &GraphNode) -> bool {
+    node.has::<NodeInstanceComponent>()
+        || node.has::<FunctionNodeRanCompiledComponent>()
+        || node.has::<ShaderNodeIslandHostedHereComponent>()
+        || node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>()
+        || node.has::<ShaderNodeFusedGroupComponent>()
+}
 
 impl Compiler {
     /// Hold the transaction for one commit: until it is released, a commit asked for compiles
@@ -94,7 +108,7 @@ impl Compiler {
                         .traversal()
                         .v(node_run_id)
                         .first()
-                        .is_some_and(|node| !node.has::<NodeInstanceComponent>());
+                        .is_some_and(|node| !a_commit_built(node));
                     if unbuilt && !graph.drop_the_node(node_run_id, WhyTheNodeLeaves::Removed) {
                         tracing::warn!(
                             "`{node_run_id}`, taken back, was not dropped from the graph"

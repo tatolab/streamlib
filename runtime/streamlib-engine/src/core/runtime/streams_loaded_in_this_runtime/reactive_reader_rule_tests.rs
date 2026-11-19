@@ -967,3 +967,5 @@ fn a_saved_graphs_island_into_the_app_process_is_shown_failed_and_removed_by_a_d
     assert_eq!(the_link_into_the_program(&stream), None);
     assert_eq!(the_links_set_aside(&stream), Vec::new());
 }
+
+mod links_leaving_tests;

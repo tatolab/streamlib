@@ -378,7 +378,7 @@ fn the_links_into_function_nodes_from_outside_any_island(
 }
 
 /// The function nodes upstream of `node_id` through function nodes, the
-/// island its inputs evaluate.
+/// island its inputs evaluate, followed through the links that stand.
 fn the_function_nodes_upstream_of(graph: &Graph, node_id: &NodeRunId) -> Vec<NodeRunId> {
     let mut function_nodes_upstream = Vec::new();
     let mut nodes_to_follow = vec![node_id.clone()];
@@ -388,7 +388,7 @@ fn the_function_nodes_upstream_of(graph: &Graph, node_id: &NodeRunId) -> Vec<Nod
             continue;
         }
         for link in graph.traversal().e(()).iter() {
-            if link.to_port().node_run_id() != &following_id {
+            if link.to_port().node_run_id() != &following_id || !graph.stands(link) {
                 continue;
             }
             let upstream_id = link.source().node_run_id();
@@ -689,8 +689,9 @@ fn is_fed_by_a_node_that_is_not_a_function_node(graph: &Graph, node_id: &NodeRun
         .e(())
         .iter()
         .filter(|link| {
-            link.to_port().node_run_id() == node_id
-                || function_nodes_upstream.contains(link.to_port().node_run_id())
+            graph.stands(link)
+                && (link.to_port().node_run_id() == node_id
+                    || function_nodes_upstream.contains(link.to_port().node_run_id()))
         })
         .any(|link| !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()))
 }

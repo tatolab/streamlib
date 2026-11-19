@@ -48,9 +48,9 @@ pub(super) use link_connected_between_two_ports::{
     WhenTheEngineCannotWireALink, connect_impl, refuse_a_held_link_the_engine_cannot_wire,
     the_verdict_connect_takes_on_a_link, the_verdicts_connect_takes_on_links_with_node_types_ports,
 };
-use reactive_reader_rule_of_an_edit::ARemoval;
 #[cfg(test)]
 use reactive_reader_rule_of_an_edit::refuse_a_removal_that_strands_a_reactive_reader;
+use reactive_reader_rule_of_an_edit::{ARemoval, the_reader_rule_is_left_to_the_close};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -549,18 +549,17 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_node_async(&self, node_run_id: NodeRunId) -> BoxFuture<'_, Result<()>> {
-        if let Err(refusal) = self
-            .refuse_a_node_change_a_drawn_link_names(
+        // Judged holding the stream's one writer, so the graph and the links drawn it judges
+        // are the ones the removal is made on.
+        let joined = the_reader_rule_is_left_to_the_close();
+        self.in_this_streams_log_route(self.in_one_commit(async move {
+            self.refuse_a_node_change_a_drawn_link_names(
                 &node_run_id,
                 NodeChangeADrawnLinkBlocks::Removal,
-            )
-            .and_then(|()| {
-                self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(&node_run_id))
-            })
-        {
-            return Box::pin(std::future::ready(Err(refusal)));
-        }
-        self.in_this_streams_log_route(self.in_one_commit(async move {
+            )?;
+            if !joined {
+                self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(&node_run_id))?;
+            }
             remove_node_impl(self.live_graph_change(), node_run_id).await
         }))
     }
@@ -585,16 +584,13 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-        if let Err(refusal) =
-            self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(&link_id))
-        {
-            return Box::pin(std::future::ready(Err(refusal)));
-        }
-        self.in_this_streams_log_route(
-            self.in_one_commit(
-                async move { disconnect_impl(self.live_graph_change(), link_id).await },
-            ),
-        )
+        let joined = the_reader_rule_is_left_to_the_close();
+        self.in_this_streams_log_route(self.in_one_commit(async move {
+            if !joined {
+                self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(&link_id))?;
+            }
+            disconnect_impl(self.live_graph_change(), link_id).await
+        }))
     }
 
     fn apply_a_stream_graph_operation_live(
@@ -842,14 +838,19 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_node(&self, node_run_id: &NodeRunId) -> Result<()> {
-        self.refuse_a_node_change_a_drawn_link_names(
-            node_run_id,
-            NodeChangeADrawnLinkBlocks::Removal,
-        )?;
-        self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(node_run_id))?;
+        let stream = self.this_stream_held_for_a_task()?;
         let node_run_id = node_run_id.clone();
-        self.in_one_commit_from_synchronous_code(move |change| {
-            remove_node_impl(change, node_run_id)
+        let joined = the_reader_rule_is_left_to_the_close();
+        // Judged holding the stream's one writer, as `remove_node_async` judges it.
+        self.in_one_commit_from_synchronous_code(move |change| async move {
+            stream.refuse_a_node_change_a_drawn_link_names(
+                &node_run_id,
+                NodeChangeADrawnLinkBlocks::Removal,
+            )?;
+            if !joined {
+                stream.refuse_a_removal_this_stream_cannot_take(ARemoval::OfANode(&node_run_id))?;
+            }
+            remove_node_impl(change, node_run_id).await
         })
     }
 
@@ -869,9 +870,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
-        self.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(link_id))?;
+        let stream = self.this_stream_held_for_a_task()?;
         let link_id = link_id.clone();
-        self.in_one_commit_from_synchronous_code(move |change| disconnect_impl(change, link_id))
+        let joined = the_reader_rule_is_left_to_the_close();
+        self.in_one_commit_from_synchronous_code(move |change| async move {
+            if !joined {
+                stream.refuse_a_removal_this_stream_cannot_take(ARemoval::OfALink(&link_id))?;
+            }
+            disconnect_impl(change, link_id).await
+        })
     }
 
     fn open_a_graph_edit_batch(self: Arc<Self>) -> Result<Box<dyn GraphEditBatch>> {

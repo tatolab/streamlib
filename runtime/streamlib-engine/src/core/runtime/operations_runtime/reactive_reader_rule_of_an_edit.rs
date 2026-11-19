@@ -74,15 +74,13 @@ pub(in crate::core::runtime) fn the_reader_rule_is_left_to_the_close() -> bool {
 
 impl LoadedStreamInThisRuntime {
     /// Refuse `removal` when it leaves a reader it does not take out that runs reactively, fed
-    /// only by function node islands, which have no source to wake it; judged as the graph
-    /// edits this task holds close, when it holds some.
+    /// only by function node islands, which have no source to wake it. Asked by a removal made
+    /// as graph edits of its own, holding the stream's one writer; one joined to graph edits
+    /// held for one commit leaves the rule to their close.
     pub(super) fn refuse_a_removal_this_stream_cannot_take(
         &self,
         removal: ARemoval<'_>,
     ) -> Result<()> {
-        if the_reader_rule_is_left_to_the_close() {
-            return Ok(());
-        }
         self.compiler
             .scope_reading(|graph| refuse_a_removal_that_strands_a_reactive_reader(graph, removal))
     }

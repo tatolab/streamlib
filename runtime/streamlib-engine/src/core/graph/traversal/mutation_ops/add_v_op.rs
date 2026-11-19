@@ -37,7 +37,7 @@ impl<'a> TraversalSourceMut<'a> {
             && let Some(holder) = self
                 .graph
                 .node_weights()
-                .find(|node| node.node_type == spec.name)
+                .find(|node| node.node_type == spec.name && node.stands())
         {
             return Err(Error::GraphError(format!(
                 "node `{name}` cannot be of the view type `{}`: node `{}` ({}) of the stream \

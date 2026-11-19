@@ -459,13 +459,16 @@ impl StreamGraphTransactionExecutor<'_> {
                 },
                 _ => OneOperationAppliedLive::replacing_no_live_value(applied.clone()),
             };
-            let stream = streams
+            let staged = streams
                 .get_mut(stream_id)
-                .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
-            if let Err(why) = stream.staged_graph.apply(&applied) {
+                .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?
+                .staged_graph
+                .apply(&applied);
+            if let Err(why) = staged {
                 self.reverse_one_operation_applied_live(
                     stream_id,
                     stream_operations.as_ref(),
+                    the_open_batch_of(streams, stream_id).ok(),
                     &applied_on_the_running_stream,
                 );
                 return Err(format!(

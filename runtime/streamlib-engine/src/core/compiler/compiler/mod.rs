@@ -955,3 +955,6 @@ mod already_wired_tests;
 
 #[cfg(test)]
 mod abandoned_shader_node_restart_tests;
+
+#[cfg(test)]
+mod transaction_held_for_one_commit_tests;

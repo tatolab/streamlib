@@ -28,6 +28,7 @@ use crate::core::graph::{
 };
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
+use crate::core::runtime::operations_runtime::GraphEditsHeldForOneCommit;
 use crate::core::runtime::operations_runtime::{
     ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
 };
@@ -91,10 +92,22 @@ impl LoadedStreamInThisRuntime {
             node_run_id,
             NodeChangeADrawnLinkBlocks::Rename,
         )?;
-        let renamed = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal_mut().rename_v(node_run_id, requested_name))?;
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        let held = GraphEditsHeldForOneCommit::the_ones_this_task_holds();
+        let renamed = self.compiler.scope(|graph, _tx| {
+            let name_before = graph
+                .traversal()
+                .v(node_run_id)
+                .first()
+                .map(|node| node.display_name.clone());
+            let renamed = graph
+                .traversal_mut()
+                .rename_v(node_run_id, requested_name)?;
+            if let (Some(held), Some(name_before)) = (&held, name_before) {
+                held.hold_the_name_before_a_rename(node_run_id, name_before);
+            }
+            Ok::<_, crate::core::Error>(renamed)
+        })?;
+        self.announce_the_graph_changed();
         Ok(renamed)
     }
 
@@ -154,7 +167,7 @@ impl LoadedStreamInThisRuntime {
                 .traversal()
                 .e(())
                 .iter()
-                .filter(|link| link.to_port().node_run_id() == node_run_id)
+                .filter(|link| link.to_port().node_run_id() == node_run_id && graph.stands(link))
                 .map(|link| link.to_port().port_name().to_string())
                 .filter(|port| {
                     node.is_an_exposed_config_field_input(port)

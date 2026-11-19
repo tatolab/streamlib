@@ -354,41 +354,97 @@ impl StreamGraphTransactionExecutor<'_> {
     /// stream it was applied to, setting live again each value set live it replaced, so a
     /// refused transaction leaves the streams as they were. A stream that took back the graph
     /// edits of its batch has only the values they set left to reverse.
+    ///
+    /// The inverses of one stream are applied in one batch: the transaction's own while it is
+    /// open, or else one opened to reverse them, so none is judged by a graph the others leave
+    /// half reversed and a stream's one writer is never waited for while its batch is open.
     pub(super) fn reverse_what_was_applied_live(
         &self,
         streams: &BTreeMap<String, StreamATransactionEdits>,
         applied_live: Vec<(String, OneOperationAppliedLive)>,
     ) {
+        let applied_live: Vec<(String, OneOperationAppliedLive)> = applied_live
+            .into_iter()
+            .filter(|(stream_id, applied)| {
+                streams.get(stream_id).is_some_and(|stream| {
+                    !matches!(
+                        stream.graph_edit_batch,
+                        GraphEditBatchState::TakenBack(HowFarARefusedBatchWasTakenBack::Whole)
+                    ) || sets_a_value_a_take_back_leaves(&applied.operation)
+                })
+            })
+            .collect();
+        let streams_to_reverse_in_a_batch_of_their_own: BTreeSet<String> = applied_live
+            .iter()
+            .map(|(stream_id, _)| stream_id)
+            .filter(|stream_id| the_open_batch_of(streams, stream_id).is_err())
+            .cloned()
+            .collect();
+        let mut batch_reversing_each_stream: BTreeMap<String, Box<dyn GraphEditBatch>> =
+            BTreeMap::new();
+        for stream_id in streams_to_reverse_in_a_batch_of_their_own {
+            let Some(stream) = streams.get(&stream_id) else {
+                continue;
+            };
+            match Arc::clone(&stream.stream_operations).open_a_graph_edit_batch() {
+                Ok(batch) => {
+                    batch_reversing_each_stream.insert(stream_id, batch);
+                }
+                Err(not_opened) => tracing::error!(
+                    stream = %stream_id,
+                    %not_opened,
+                    "no batch of graph edits was opened to reverse a refused graph \
+                     transaction; each part of it is reversed on its own"
+                ),
+            }
+        }
         for (stream_id, applied) in applied_live.into_iter().rev() {
             let Some(stream) = streams.get(&stream_id) else {
                 continue;
             };
-            if matches!(
-                stream.graph_edit_batch,
-                GraphEditBatchState::TakenBack(HowFarARefusedBatchWasTakenBack::Whole)
-            ) && !sets_a_value_a_take_back_leaves(&applied.operation)
-            {
-                continue;
-            }
+            let batch = the_open_batch_of(streams, &stream_id).ok().or_else(|| {
+                batch_reversing_each_stream
+                    .get(&stream_id)
+                    .map(|batch| batch.as_ref())
+            });
             self.reverse_one_operation_applied_live(
                 &stream_id,
                 stream.stream_operations.as_ref(),
+                batch,
                 &applied,
             );
+        }
+        for (stream_id, batch) in batch_reversing_each_stream {
+            if let Err(refused) = batch.close() {
+                tracing::error!(
+                    stream = %stream_id,
+                    refusal = %refused.refusal,
+                    "could not reverse a refused graph transaction on its running stream"
+                );
+            }
         }
     }
 
     /// Reverse `applied` on the running stream `stream_operations` serves: apply its inverse,
-    /// then set live again the live value it replaced, logging a step the stream refuses.
+    /// through `batch` when one is open on the stream, then set live again the live value it
+    /// replaced, logging a step the stream refuses.
     pub(super) fn reverse_one_operation_applied_live(
         &self,
         stream_id: &str,
         stream_operations: &dyn RuntimeOperations,
+        batch: Option<&dyn GraphEditBatch>,
         applied: &OneOperationAppliedLive,
     ) {
-        if let Err(not_reversed) = self.async_runtime.block_on(
-            stream_operations.apply_a_stream_graph_operation_live(applied.operation.inverse()),
-        ) {
+        let inverse = applied.operation.inverse();
+        let reversed = match batch {
+            Some(batch) => self
+                .async_runtime
+                .block_on(batch.apply_a_stream_graph_operation_live(inverse)),
+            None => self
+                .async_runtime
+                .block_on(stream_operations.apply_a_stream_graph_operation_live(inverse)),
+        };
+        if let Err(not_reversed) = reversed {
             tracing::error!(
                 stream = %stream_id,
                 %not_reversed,
@@ -412,14 +468,13 @@ impl StreamGraphTransactionExecutor<'_> {
 }
 
 /// Whether `operation` sets a value a running stream does not take back with the graph edits
-/// of a batch: a node's config, input, name, studio fields or exposed config fields.
+/// of a batch: a node's config, input, studio fields or exposed config fields.
 fn sets_a_value_a_take_back_leaves(operation: &StreamGraphOperation) -> bool {
     matches!(
         operation,
         StreamGraphOperation::SetNodeConfig { .. }
             | StreamGraphOperation::SetPinValue { .. }
             | StreamGraphOperation::SetNodeInputValue { .. }
-            | StreamGraphOperation::RenameNode { .. }
             | StreamGraphOperation::SetStudioFields { .. }
             | StreamGraphOperation::SetExposedConfigFields { .. }
     )

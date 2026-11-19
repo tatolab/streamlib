@@ -567,3 +567,64 @@ fn a_forced_shutdown_ends_a_stream_whose_batch_stays_open() {
         }
     }
 }
+
+/// A second batch asked for on the thread holding the stream's open batch is refused at once,
+/// not left waiting for the stream's one writer that thread holds itself.
+///
+/// Mental-revert: opening it waits for the first batch to close, which only its own thread
+/// can do, and the test never returns.
+#[test]
+#[serial]
+fn a_second_batch_on_the_thread_holding_one_is_refused() {
+    let (_runner, stream, _project) = a_stream_whose_windowed_port_one_source_feeds();
+
+    let batch = a_graph_edit_batch_of(&stream);
+    let second = <LoadedStreamInThisRuntime as RuntimeOperations>::open_a_graph_edit_batch(
+        Arc::clone(&stream),
+    );
+    batch.close().expect("the first batch closes");
+
+    let Err(refused) = second else {
+        panic!("a second batch opened on the thread holding the first");
+    };
+    assert!(
+        refused
+            .to_string()
+            .contains("close the batch of graph edits first"),
+        "{refused}"
+    );
+    a_graph_edit_batch_of(&stream)
+        .close()
+        .expect("a batch opens once the first closed");
+}
+
+/// A batch dropped unclosed takes back the rename it made: the node is named as before.
+///
+/// Mental-revert: a take-back that leaves names alone keeps the node renamed, though the
+/// caller reverses only what a take-back leaves.
+#[test]
+#[serial]
+fn a_dropped_batch_takes_back_its_rename() {
+    let (_runner, stream, _project) = a_stream_whose_windowed_port_one_source_feeds();
+    let async_runtime = an_async_runtime();
+
+    let batch = a_graph_edit_batch_of(&stream);
+    apply_each(
+        &async_runtime,
+        batch.as_ref(),
+        [StreamGraphOperation::RenameNode {
+            node: the_uuid_of("idle"),
+            from: "idle".to_owned(),
+            to: "renamed".to_owned(),
+        }],
+    )
+    .expect("the rename is made in the batch");
+    assert!(stream.the_node_named("renamed").is_ok());
+    drop(batch);
+
+    assert!(
+        stream.the_node_named("idle").is_ok(),
+        "the node is named as before"
+    );
+    assert!(stream.the_node_named("renamed").is_err());
+}

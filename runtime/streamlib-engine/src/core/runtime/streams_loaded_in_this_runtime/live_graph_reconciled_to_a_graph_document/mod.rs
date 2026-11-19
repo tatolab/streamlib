@@ -29,8 +29,9 @@ use crate::core::graph::{
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
-    ALinkConnectedOrSetAside, ConfigReferencesOfTheAddedNode, WhenTheEngineCannotWireALink,
-    add_node_impl, connect_impl, describe_the_type_an_add_names_when_it_must, disconnect_impl,
+    ALinkConnectedOrSetAside, ConfigReferencesOfTheAddedNode, GraphEditsHeldForOneCommit,
+    WhenTheEngineCannotWireALink, add_node_impl, connect_impl,
+    describe_the_type_an_add_names_when_it_must, disconnect_impl,
     refuse_a_held_link_the_engine_cannot_wire, remove_node_impl,
 };
 use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::{
@@ -271,25 +272,46 @@ impl LoadedStreamInThisRuntime {
                 kept_live_nodes_to_rename.push((live_node, document_node));
             }
         }
+        let held = GraphEditsHeldForOneCommit::the_ones_this_task_holds();
         self.compiler
             .scope(|this_streams_graph, _tx| -> Result<()> {
                 let names_the_renamed_nodes_take = kept_live_nodes_to_rename
                     .iter()
                     .map(|(_, document_node)| cast_name(&document_node.name))
                     .collect::<Result<HashSet<String>>>()?;
+                let mut name_each_node_holds: HashMap<NodeRunId, String> =
+                    kept_live_nodes_to_rename
+                        .iter()
+                        .map(|(live_node, _)| {
+                            (
+                                live_node.node_run_id.clone(),
+                                live_node.display_name.clone(),
+                            )
+                        })
+                        .collect();
+                let mut rename = |node_run_id: &NodeRunId, name: &str| -> Result<()> {
+                    let renamed = this_streams_graph
+                        .traversal_mut()
+                        .rename_v(node_run_id, name)?;
+                    if let Some(name_before) =
+                        name_each_node_holds.insert(node_run_id.clone(), renamed)
+                        && let Some(held) = &held
+                    {
+                        held.hold_the_name_before_a_rename(node_run_id, name_before);
+                    }
+                    Ok(())
+                };
                 for (live_node, _) in &kept_live_nodes_to_rename {
                     if !names_the_renamed_nodes_take.contains(&live_node.display_name) {
                         continue;
                     }
-                    this_streams_graph.traversal_mut().rename_v(
+                    rename(
                         &live_node.node_run_id,
                         &a_name_no_document_node_holds_while_renames_swap(live_node.node_uuid),
                     )?;
                 }
                 for (live_node, document_node) in &kept_live_nodes_to_rename {
-                    this_streams_graph
-                        .traversal_mut()
-                        .rename_v(&live_node.node_run_id, &document_node.name)?;
+                    rename(&live_node.node_run_id, &document_node.name)?;
                 }
                 Ok(())
             })?;

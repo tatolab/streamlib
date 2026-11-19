@@ -16,8 +16,8 @@ use streamlib_project_repository::StreamGraphOperation;
 use tokio::sync::OwnedMutexGuard;
 
 use super::{BoxFuture, LiveGraphChangeOnOneStream, commit_the_graph_edits_held_for_one_commit};
-use crate::core::graph::LinkUniqueId;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
+use crate::core::graph::{LinkUniqueId, NodeRunId};
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations::{
@@ -62,12 +62,15 @@ fn announces_a_connect(event: &RuntimeEvent) -> bool {
 }
 
 /// What graph edits held for one commit keep until they close: each event they would have
-/// announced, beside the link it announces, and the stream as drawn before them.
+/// announced, beside the link it announces, the stream as drawn before them, the names the
+/// graph-only nodes held then, and the name each node they renamed held before.
 pub(in crate::core::runtime) struct GraphEditsHeldForOneCommit {
     events_held: Mutex<Vec<(Option<LinkUniqueId>, RuntimeEvent)>>,
     /// Whether an edit held announced the graph changed, announced once as the edits close.
     the_graph_changed: AtomicBool,
     drawn_before: GraphOnlyNodesAsDrawn,
+    node_names_the_graph_only_nodes_held_before: HashSet<String>,
+    names_before_each_rename: Mutex<Vec<(NodeRunId, String)>>,
 }
 
 impl GraphEditsHeldForOneCommit {
@@ -87,6 +90,18 @@ impl GraphEditsHeldForOneCommit {
             return;
         }
         self.events_held.lock().push((of_the_link.cloned(), event));
+    }
+
+    /// Keep that the node `node_run_id` was named `name_before` before an edit held renamed
+    /// it, so a take-back names it so again.
+    pub(in crate::core::runtime) fn hold_the_name_before_a_rename(
+        &self,
+        node_run_id: &NodeRunId,
+        name_before: String,
+    ) {
+        self.names_before_each_rename
+            .lock()
+            .push((node_run_id.clone(), name_before));
     }
 }
 
@@ -150,6 +165,10 @@ impl LoadedStreamInThisRuntime {
             events_held: Mutex::new(Vec::new()),
             the_graph_changed: AtomicBool::new(false),
             drawn_before: self.graph_only_nodes_as_drawn.lock().clone(),
+            node_names_the_graph_only_nodes_held_before: self
+                .compiler
+                .scope_reading(|graph| graph.node_names_the_graph_only_nodes_hold().clone()),
+            names_before_each_rename: Mutex::new(Vec::new()),
         })
     }
 
@@ -330,9 +349,25 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// Put the stream as drawn back as it was before `held`, and drop each event it kept.
+    /// Put the stream as drawn back as it was before `held`, the names the graph-only nodes held
+    /// and each node `held` renamed under the name it held before, and drop each event it kept.
     fn restore_what_was_drawn_and_drop_the_events(&self, held: &GraphEditsHeldForOneCommit) {
         *self.graph_only_nodes_as_drawn.lock() = held.drawn_before.clone();
+        let names_before_each_rename = std::mem::take(&mut *held.names_before_each_rename.lock());
+        self.compiler.scope(|graph, _tx| {
+            graph.set_node_names_the_graph_only_nodes_hold(
+                held.node_names_the_graph_only_nodes_held_before.clone(),
+            );
+            for (node_run_id, name_before) in names_before_each_rename.into_iter().rev() {
+                if let Err(not_renamed) = graph.traversal_mut().rename_v(&node_run_id, &name_before)
+                {
+                    tracing::warn!(
+                        "`{node_run_id}`, renamed by graph edits taken back, keeps its new name: \
+                         {not_renamed}"
+                    );
+                }
+            }
+        });
         held.events_held.lock().clear();
     }
 
@@ -413,6 +448,18 @@ impl LoadedStreamInThisRuntime {
     pub(in crate::core::runtime) fn open_a_graph_edit_batch_of_this_stream(
         self: Arc<Self>,
     ) -> Result<GraphEditBatchOfALoadedStream> {
+        let this_thread_holds_a_batch =
+            *self.thread_holding_a_graph_edit_batch.lock() == Some(std::thread::current().id());
+        if this_thread_holds_a_batch
+            || GraphEditsHeldForOneCommit::the_ones_this_task_holds().is_some()
+        {
+            return Err(Error::Runtime(format!(
+                "no batch of graph edits was opened on the stream `{}`: its caller holds graph \
+                 edits of it open, and a second batch waits for them to close. To fix: close \
+                 the batch of graph edits first",
+                self.stream_id()
+            )));
+        }
         let no_other_writer = self.hold_the_one_writer_from_synchronous_code()?;
         *self.thread_holding_a_graph_edit_batch.lock() = Some(std::thread::current().id());
         let held = self.hold_the_graph_edits_for_one_commit();
@@ -440,23 +487,26 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
         &self,
         graph_operation: StreamGraphOperation,
     ) -> BoxFuture<'_, Result<StreamGraphOperation>> {
-        if !self
-            .stream
-            .compiler
-            .the_transaction_is_held_for_one_commit()
-        {
-            let refusal = self
+        let edit = THE_GRAPH_EDITS_THIS_TASK_HOLDS.scope(
+            Arc::clone(&self.held),
+            self.stream
+                .apply_a_stream_graph_operation_to_the_live_graph(graph_operation),
+        );
+        self.stream.in_this_streams_log_route(async move {
+            // Looked at as the edit runs, not as it is asked for: a stop that took the edits
+            // back meanwhile leaves none to join.
+            if !self
                 .stream
-                .the_refusal_of_edits_a_forced_stop_took_back(&self.held);
-            return Box::pin(std::future::ready(Err(refusal.refusal)));
-        }
-        self.stream.in_this_streams_log_route(
-            THE_GRAPH_EDITS_THIS_TASK_HOLDS.scope(
-                Arc::clone(&self.held),
-                self.stream
-                    .apply_a_stream_graph_operation_to_the_live_graph(graph_operation),
-            ),
-        )
+                .compiler
+                .the_transaction_is_held_for_one_commit()
+            {
+                return Err(self
+                    .stream
+                    .the_refusal_of_edits_a_forced_stop_took_back(&self.held)
+                    .refusal);
+            }
+            edit.await
+        })
     }
 
     fn close(mut self: Box<Self>) -> std::result::Result<(), GraphEditBatchRefused> {
