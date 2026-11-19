@@ -14,6 +14,7 @@ use super::gpu_surface_owned_memory::GpuSurfaceOwnedMemory;
 use super::linux::{
     publish_cpu_staged_write_back_to_surface, publish_device_write_back_to_surface,
 };
+use super::staged_edits_awaiting_publication::StagedEditAwaitingPublication;
 
 /// Which staging holds the edit a pending write-back publishes.
 ///
@@ -31,7 +32,7 @@ pub(crate) enum StagedWriteBackSource {
 
 impl StagedWriteBackSource {
     /// How a refusal names this door to the author who opened it.
-    fn door_in_a_refusal(self) -> &'static str {
+    pub(super) fn door_in_a_refusal(self) -> &'static str {
         match self {
             Self::DeviceExportStaging => "the device tensor",
             Self::CpuReadbackStaging => "the CPU array",
@@ -46,7 +47,14 @@ impl StagedWriteBackSource {
 /// the swap-once semantics (the first settler wins; unlock-then-close
 /// publishes once) live in one place.
 pub(crate) struct PendingStagedWriteBackToSurface {
-    armed_over: Mutex<Option<StagedWriteBackSource>>,
+    armed_over: Mutex<Option<ArmedStagedWriteBack>>,
+}
+
+/// The door an armed edit publishes through, and the hold that keeps every
+/// other handle's read-in off its pool slot's staging until it settles.
+struct ArmedStagedWriteBack {
+    source: StagedWriteBackSource,
+    _pool_slot_held: Option<StagedEditAwaitingPublication>,
 }
 
 impl PendingStagedWriteBackToSurface {
@@ -67,9 +75,16 @@ impl PendingStagedWriteBackToSurface {
     /// of them with pixels that predate it. Silently settling one is the
     /// answer this must never give — the lost edit surfaces as corruption
     /// nowhere near the write.
-    pub(crate) fn arm(&self, source: StagedWriteBackSource) -> PyResult<()> {
+    ///
+    /// `hold_the_pool_slot` runs once, when this arms from unarmed: what it
+    /// answers holds the surface's pool slot until the edit settles.
+    pub(crate) fn arm(
+        &self,
+        source: StagedWriteBackSource,
+        hold_the_pool_slot: impl FnOnce() -> Option<StagedEditAwaitingPublication>,
+    ) -> PyResult<()> {
         let mut armed_over = self.armed_over.lock();
-        match *armed_over {
+        match armed_over.as_ref().map(|armed| armed.source) {
             Some(already_armed) if already_armed != source => {
                 Err(PyRuntimeError::new_err(format!(
                     "this lock scope already staged an edit through {}; {} would stage a second \
@@ -79,8 +94,12 @@ impl PendingStagedWriteBackToSurface {
                     source.door_in_a_refusal(),
                 )))
             }
-            _ => {
-                *armed_over = Some(source);
+            Some(_) => Ok(()),
+            None => {
+                *armed_over = Some(ArmedStagedWriteBack {
+                    source,
+                    _pool_slot_held: hold_the_pool_slot(),
+                });
                 Ok(())
             }
         }
@@ -106,10 +125,12 @@ impl PendingStagedWriteBackToSurface {
         // Taken before the publish, not held across it: the copy crosses
         // to the parent, and a lock held over that hop is the
         // mutex-across-the-GIL hazard.
-        let Some(armed_over) = self.armed_over.lock().take() else {
+        // The pool slot stays held until the publish returns, when the
+        // taken arm drops.
+        let Some(armed) = self.armed_over.lock().take() else {
             return Ok(());
         };
-        match armed_over {
+        match armed.source {
             StagedWriteBackSource::DeviceExportStaging => {
                 publish_device_write_back_to_surface(python, owned_memory)
             }

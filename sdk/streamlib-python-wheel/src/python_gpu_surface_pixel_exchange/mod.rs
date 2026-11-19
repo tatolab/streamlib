@@ -42,6 +42,10 @@ mod pending_staged_write_back_to_surface;
 #[cfg(all(test, target_os = "linux"))]
 mod pending_staged_write_back_to_surface_tests;
 mod pixel_exchange_tensor_layout;
+#[cfg(target_os = "linux")]
+mod staged_edits_awaiting_publication;
+#[cfg(all(test, target_os = "linux"))]
+mod staged_edits_awaiting_publication_tests;
 #[cfg(test)]
 mod tests;
 
@@ -61,6 +65,8 @@ pub(crate) use macos::{
 #[cfg(target_os = "linux")]
 pub(crate) use pending_staged_write_back_to_surface::StagedWriteBackSource;
 pub(crate) use pixel_exchange_tensor_layout::PixelExchangeTensorLayout;
+#[cfg(target_os = "linux")]
+pub(crate) use staged_edits_awaiting_publication::StagedEditsAwaitingPublication;
 
 /// Capsule names before a consumer takes ownership. The DLPack protocol
 /// fixes these and their `used_` counterparts: a consumer renames the
