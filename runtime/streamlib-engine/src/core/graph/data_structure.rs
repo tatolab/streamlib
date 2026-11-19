@@ -13,12 +13,14 @@ use super::nodes::{GraphNode, NodeRunId};
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
+use crate::core::PortDirection;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
 use crate::core::graph::input_values::{LiveInputValuesOfAStream, the_value_an_input_reads};
 use crate::core::graph::pin_type_link_checks::the_verdict_on_a_link_between_typed_ends;
+use crate::core::graph::the_pin_a_port_resolves_to;
 use crate::core::json_schema::{
     GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId, rendered_link,
     rendered_link_carried_through_the_function_node_pool,
@@ -348,6 +350,14 @@ impl Graph {
                     port,
                     linked_inputs.contains(&(&node.id, port.name.as_str())),
                 );
+                rendered_input.pin =
+                    the_pin_a_port_resolves_to(self, node, port, PortDirection::Input);
+            }
+            for (rendered_output, port) in
+                rendered.ports.outputs.iter_mut().zip(&node.ports.outputs)
+            {
+                rendered_output.pin =
+                    the_pin_a_port_resolves_to(self, node, port, PortDirection::Output);
             }
             rendered
         };

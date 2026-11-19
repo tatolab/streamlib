@@ -388,6 +388,12 @@ def LevelScaledByItsGain(  # noqa: N802
     return level * config.gain
 
 
+@node
+def LevelScaledByItsTypedGain(level: float = 1.0, gain: float = 0.25) -> float:  # noqa: N802
+    """A typed node: its level scaled by its `gain` input."""
+    return level * gain
+
+
 @dataclasses.dataclass(frozen=True)
 class HeldLevelConfig:
     level: float = 0.25

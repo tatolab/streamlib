@@ -579,7 +579,8 @@ impl LoadedStreamInThisRuntime {
 
     /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
     /// or Image formats alone refuse it is kept when its ports' families take it, and one an
-    /// island cannot take is left to the commit that builds the stream to refuse.
+    /// island cannot take, or one feeding an island into the app process, is left to the commit
+    /// that builds the stream to refuse.
     pub(crate) fn connect_a_link_of_a_saved_graph(
         &self,
         from: OutputLinkPortRef,
@@ -968,7 +969,13 @@ mod connect_wires_a_matching_link_in_silence_tests;
 mod connect_refuses_ports_whose_families_do_not_match_tests;
 
 #[cfg(test)]
+mod connect_on_a_test_thread;
+
+#[cfg(test)]
 mod connect_judges_two_typed_pins_by_their_verdict_tests;
 
 #[cfg(test)]
 mod connect_refuses_an_island_into_the_app_process_tests;
+
+#[cfg(test)]
+mod connect_resolves_a_pin_type_found_another_way_tests;

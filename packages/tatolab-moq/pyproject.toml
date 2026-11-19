@@ -57,3 +57,7 @@ venv = ".venv"
 # `_native` is a compiled artifact, so a checkout has the stub and not the `.so`
 # it describes. `mypy.stubtest` is what checks the stub against the real binary.
 reportMissingModuleSource = "none"
+
+# What the Marketplace files this module under.
+[tool.tatolab.catalog]
+category = "I/O & codecs"

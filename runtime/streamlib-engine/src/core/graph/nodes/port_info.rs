@@ -37,6 +37,11 @@ pub struct PortInfo {
     /// family alone.
     #[serde(flatten)]
     pub pin: Option<crate::core::descriptors::ResolvedPin>,
+    /// The pin type this port's node type declares, or how its graph finds it, and its flow;
+    /// `None` on a port that declares no pin. Not rendered here: `graph` serves the type it
+    /// resolves to.
+    #[serde(skip)]
+    pub declared_pin_type: Option<PinTypeAsDeclared>,
     /// Whether a value set live on this input is kept across Stop and a restart of the runtime,
     /// or reset at Stop. Mirrors the field on [`crate::core::descriptors::PortDescriptor`].
     #[serde(
@@ -65,6 +70,16 @@ pub struct PortInfo {
     /// when it declares none. Not rendered here: the pin declaration a client reads carries it.
     #[serde(skip)]
     pub meaning: Option<String>,
+}
+
+/// The pin type a port's node type declares, or how its graph finds it: exactly one, one of
+/// several, any, the type linked into an input, or the type a setting chooses; and its flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinTypeAsDeclared {
+    /// The type, or how it is found.
+    pub pin_type: crate::core::descriptors::DeclaredPinType,
+    /// How its messages are read.
+    pub flow: crate::core::descriptors::PinFlow,
 }
 
 /// The lowest and highest number an input takes, compared bound by bound bit for bit, so a port
@@ -115,6 +130,10 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             meaning: declared_pin
                 .as_ref()
                 .and_then(|declared| declared.annotations.meaning.clone()),
+            declared_pin_type: declared_pin.as_ref().map(|declared| PinTypeAsDeclared {
+                pin_type: declared.pin_type.clone(),
+                flow: declared.flow,
+            }),
             pin: declared_pin.and_then(crate::core::descriptors::PinDeclaration::into_resolved),
             lifetime: port.lifetime,
             input_mode: port.input_mode,

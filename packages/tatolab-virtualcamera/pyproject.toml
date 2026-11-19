@@ -56,3 +56,7 @@ venvPath = "."
 venv = ".venv"
 # `_native` is a compiled artifact; `mypy.stubtest` checks the stub against it.
 reportMissingModuleSource = "none"
+
+# What the Marketplace files this module under.
+[tool.tatolab.catalog]
+category = "Compositing & output"

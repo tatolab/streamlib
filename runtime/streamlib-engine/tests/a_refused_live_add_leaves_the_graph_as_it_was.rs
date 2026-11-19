@@ -114,7 +114,10 @@ fn an_add_whose_node_the_running_stream_cannot_build_leaves_no_node() {
     .expect_err("a GraphInput naming no family is refused")
     .to_string();
 
-    assert!(refusal.contains("names family \"Channels\""), "{refusal}");
+    assert!(
+        refusal.contains("`leak_probe` declares its port of family \"Channels\""),
+        "{refusal}"
+    );
     assert_eq!(the_node_names_the_graph_answers(&stream), before);
     stream.stop().expect("the stream stops");
 }

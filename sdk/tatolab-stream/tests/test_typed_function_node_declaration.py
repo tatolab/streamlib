@@ -379,13 +379,18 @@ def test_a_value_class_default_of_another_class_or_a_range_on_it_is_refused() ->
 
 def test_a_wide_integer_any_and_an_unknown_type_are_refused() -> None:
     assert refusal_of(Count).finding_code == "exact_size_only_as_an_element"
-    assert refusal_of(Log).finding_code == "pin_typed_any"
+    refusal = refusal_of(Log)
+    assert refusal.finding_code == "pin_typed_any"
+    assert str(refusal) == (
+        "`Log`'s input `value` is typed `Any`, which checks nothing. To fix: `object`, or a "
+        "type parameter when an output hands the value on."
+    )
     assert refusal_of(Pair).finding_code == "pin_type_unknown"
     assert refusal_of(Fields).finding_code == "pin_type_unknown"
 
 
-def test_several_outputs_a_bundle_and_a_config_are_refused_until_they_are_read() -> None:
-    assert refusal_of(Split).finding_code == "return_not_read_yet"
+def test_a_bundle_and_a_config_are_refused_until_they_are_read() -> None:
+    assert node(Split) is not None, "a named tuple names its outputs"
     assert refusal_of(Record).finding_code == "return_not_read_yet"
     assert refusal_of(Configured).finding_code == "parameter_not_a_pin"
 

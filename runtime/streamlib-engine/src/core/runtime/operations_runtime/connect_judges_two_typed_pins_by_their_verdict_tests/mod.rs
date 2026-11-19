@@ -9,9 +9,10 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{
-    ALinkConnected, LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link,
+use super::connect_on_a_test_thread::{
+    connect_on_this_thread, connect_on_this_thread_as, the_links_in,
 };
+use super::{ALinkConnected, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     FreePinConversion, NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName,
@@ -20,11 +21,10 @@ use crate::core::descriptors::{
     TexturePixelFormat,
 };
 use crate::core::graph::{
-    InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+    InputLinkPortRef, NodeRunId, OutputLinkPortRef,
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
 };
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
-use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::{Error, Result};
 
 mod node_types_port_tests;
@@ -328,43 +328,6 @@ fn a_node_configured(
             .id
             .clone()
     })
-}
-
-fn connect_on_this_thread(
-    compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    connect_on_this_thread_as(compiler, from, to, ALinkConnected::MadeNow)
-}
-
-fn connect_on_this_thread_as(
-    compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-    a_link_connected: ALinkConnected,
-) -> Result<LinkUniqueId> {
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("current-thread runtime")
-        .block_on(connect_impl(
-            LiveGraphChangeOnOneStream {
-                compiler: Arc::clone(compiler),
-                live: None,
-                stream: LoadedStreamIdentity {
-                    runtime_id: "Rverdictcheck".to_string(),
-                    stream_id: "main".to_string(),
-                    stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
-                },
-            },
-            from,
-            to,
-            a_link_connected,
-        ))
-}
-
-fn the_links_in(compiler: &Compiler) -> usize {
-    compiler.scope(|graph, _tx| graph.traversal().e(()).iter().count())
 }
 
 /// The refusal `refused` is when the verdict refuses the link; panics on any other error.

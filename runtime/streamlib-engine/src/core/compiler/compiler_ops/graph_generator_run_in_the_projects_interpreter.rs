@@ -77,7 +77,7 @@ pub(crate) fn graph_generator_run_command(
 
 /// Run `generator` over `promoted_settings` as a fragment named `fragment_name`, or its own
 /// name, in the project of `stream_environment`, answering the fragment node it is stored as:
-/// `{name, type, config, fragment}`, its nodes and links by name. Refused with the project's
+/// `{name, type, input_values, fragment}`, its nodes and links by name. Refused with the project's
 /// own traceback when the generator did not run, and when the run could not start, ran past
 /// [`GRAPH_GENERATOR_RUN_BOUND`] or printed no document.
 pub(crate) fn run_a_graph_generator_in_the_projects_interpreter(

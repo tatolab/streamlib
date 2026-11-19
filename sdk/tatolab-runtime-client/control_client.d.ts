@@ -304,6 +304,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   describe_node_types(params: ControlOperations["describe_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["describe_node_types"]["result"]>;
   /**
+   * File a node type under a group of the project's own, or put it back where its author files it, as one transaction on its history.
+   */
+  set_node_type_group(params: ControlOperations["set_node_type_group"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_node_type_group"]["result"]>;
+  /**
    * List the Tato Studio views a project brings.
    */
   list_project_views(params: ControlOperations["list_project_views"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_views"]["result"]>;

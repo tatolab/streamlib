@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pin_type::{NodeInputMode, PinDeclaration, PinFlow};
+use crate::pin_type::{DeclaredPinType, NodeInputMode, PinDeclaration, PinFlow, PinType};
 use crate::{
     AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
     NodeValueLifetime, PortFamilyDeclaration,
@@ -280,6 +280,49 @@ impl NodeDescriptor {
     pub fn stating_a_conversion(mut self) -> Self {
         self.conversion = true;
         self
+    }
+
+    /// Why a port's type, found through another input of the node type, cannot be found: a
+    /// port following an input the node type does not declare, or whose type is chosen by an
+    /// input that is not a pin type choice; `None` when every such port names one.
+    pub fn refusal_of_a_port_whose_type_no_input_finds(&self) -> Option<String> {
+        let the_input_named =
+            |input_name: &str| self.inputs.iter().find(|input| input.name == input_name);
+        self.inputs.iter().chain(&self.outputs).find_map(|port| {
+            match &port.declared_pin()?.pin_type {
+                DeclaredPinType::SameAsInput { input_port_name } => {
+                    the_input_named(input_port_name).is_none().then(|| {
+                        format!(
+                            "port {:?} takes the type of input {input_port_name:?}, which the node \
+                         does not declare",
+                            port.name
+                        )
+                    })
+                }
+                DeclaredPinType::SetByInput { input_name } => {
+                    let chooses_a_pin_type = the_input_named(input_name)
+                        .and_then(PortDescriptor::declared_pin)
+                        .is_some_and(|declared| {
+                            matches!(
+                                declared.pin_type,
+                                DeclaredPinType::Is {
+                                    pin_type: PinType::PinTypeChoice { .. }
+                                }
+                            )
+                        });
+                    (!chooses_a_pin_type).then(|| {
+                        format!(
+                            "port {:?} takes the type input {input_name:?} chooses, and the \
+                             node declares no input {input_name:?} of a pin type choice",
+                            port.name
+                        )
+                    })
+                }
+                DeclaredPinType::Is { .. }
+                | DeclaredPinType::OneOf { .. }
+                | DeclaredPinType::Any => None,
+            }
+        })
     }
 
     pub fn with_input(mut self, port: PortDescriptor) -> Self {
