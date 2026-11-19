@@ -13,9 +13,7 @@ use crate::core::compiler::compiler_ops::function_node_island::tests::{
 use crate::core::compiler::compiler_ops::function_node_island::{
     HowALinkIsWired, how_a_link_is_wired, wire_a_link_from_a_function_node_island_into_its_reader,
 };
-use crate::core::graph::{
-    FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode, JsonSerializableComponent,
-};
+use crate::core::graph::{FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode};
 
 const NOTHING_REMOVED: WhatTheCompileCarryingAPromotionRemoves<'static> =
     WhatTheCompileCarryingAPromotionRemoves {
@@ -414,8 +412,9 @@ fn graph_shows_each_promotion_under_the_promoted_nodes_metrics() {
             .traversal()
             .v(promoted_id)
             .first()
-            .and_then(|node| node.get::<NodeMetrics>())
-            .map(JsonSerializableComponent::to_json)
+            .filter(|node| node.has::<NodeMetrics>())
+            .and_then(|node| node.render_components().metrics)
+            .map(|metrics| serde_json::to_value(metrics).unwrap())
             .unwrap();
         assert_eq!(
             metrics["promoted_out_of_its_readers_islands"],
@@ -484,14 +483,17 @@ fn a_stateful_node_two_readers_read_moves_out_of_the_islands_with_what_it_feeds(
     );
 }
 
-fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &NodeRunId) -> JsonValue {
-    graph
+fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &NodeRunId) -> Option<bool> {
+    let node = graph
         .traversal()
         .v(node_id)
         .first()
-        .and_then(|node| node.get::<FunctionNodeRanCompiledComponent>())
-        .map(|component| component.to_json())
-        .expect("a promoted function node carries the report `graph` renders")
+        .expect("the promoted function node is in the graph");
+    assert!(
+        node.has::<FunctionNodeRanCompiledComponent>(),
+        "a promoted function node carries the report `graph` renders"
+    );
+    node.render_components().ran_compiled
 }
 
 fn the_report_its_own_helper_notes_on(
@@ -531,13 +533,13 @@ fn a_stateful_node_two_readers_read_shows_how_its_own_helper_ran_it() {
 
     assert_eq!(
         the_ran_compiled_graph_renders_on(&graph, &counter),
-        JsonValue::Null,
-        "null until its own helper has set up"
+        None,
+        "absent until its own helper has set up"
     );
     the_report_its_own_helper_notes_on(&graph, &counter).note_it_ran_compiled(true);
     assert_eq!(
         the_ran_compiled_graph_renders_on(&graph, &counter),
-        JsonValue::Bool(true)
+        Some(true)
     );
 }
 
@@ -571,13 +573,13 @@ fn a_node_promoted_out_of_its_reader_shows_how_its_own_helper_runs_it() {
 
     assert_eq!(
         the_ran_compiled_graph_renders_on(&graph, &remap),
-        JsonValue::Bool(false),
+        Some(false),
         "how its reader ran it, until its own helper reports"
     );
     the_report_its_own_helper_notes_on(&graph, &remap).note_it_ran_compiled(true);
     assert_eq!(
         the_ran_compiled_graph_renders_on(&graph, &remap),
-        JsonValue::Bool(true)
+        Some(true)
     );
 }
 

@@ -4,9 +4,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::Value as JsonValue;
-
-use super::JsonSerializableComponent;
+use super::GraphRenders;
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 pub struct NodePauseGateComponent(Arc<AtomicBool>);
 
@@ -56,12 +55,8 @@ impl Clone for NodePauseGateComponent {
     }
 }
 
-impl JsonSerializableComponent for NodePauseGateComponent {
-    fn json_key(&self) -> &'static str {
-        "paused"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!(self.is_paused())
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodePauseGateComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.paused = Some(self.is_paused());
     }
 }

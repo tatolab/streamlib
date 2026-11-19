@@ -538,7 +538,7 @@ fn a_rendered_node(name: &str) -> GraphNodeOutput {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },
-        components: serde_json::Map::new(),
+        components: Default::default(),
         input_values: serde_json::Map::new(),
         pins: serde_json::Map::new(),
         exposed_config_fields: Vec::new(),
@@ -555,9 +555,7 @@ fn a_rendered_link(id: &str, source: (&str, &str), target: (&str, &str)) -> Link
         source,
         target,
         capacity: 4,
-        state: Default::default(),
-        error_reason: None,
-        components: serde_json::Map::new(),
+        ..LinkOutput::default()
     }
 }
 
@@ -681,4 +679,47 @@ fn the_render_carries_each_runtime_links_id_and_drops_a_drawn_link_whose_reader_
     );
     assert_eq!(graph_response.nodes[1].ports.inputs[0].name, "value");
     assert_eq!(graph_response.nodes[2].ports.outputs[0].name, "value");
+}
+
+#[test]
+fn a_drawn_link_read_through_a_variable_says_what_its_running_link_converts_and_warns_of() {
+    use streamlib_runtime_client_contract::local_api_wire_contract::{
+        PinLinkMarksOnTheWire, PinLinkWarningOnTheWire,
+    };
+    let resolution = resolved(a_camera_variable_read_by_two_displays()).unwrap();
+    let warned_running_link = LinkOutput {
+        marks: PinLinkMarksOnTheWire {
+            free_conversion: true,
+            warnings: vec![PinLinkWarningOnTheWire::VectorReadAsAColor],
+        },
+        ..a_rendered_link("L2", ("camera", "video"), ("back", "video_in"))
+    };
+    let mut graph_response = GraphResponse {
+        asset: None,
+        display_name: None,
+        stream: None,
+        clock: Default::default(),
+        nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
+        links: vec![warned_running_link],
+        references: Vec::new(),
+        machine: "vm".to_string(),
+        groups: Vec::new(),
+        studio: None,
+        function_node_pool: None,
+    };
+    resolution
+        .variables_as_drawn
+        .render_into(&mut graph_response);
+
+    let drawn = graph_response
+        .links
+        .iter()
+        .find(|rendered| rendered.source.node == "get-camera-2")
+        .expect("the get's drawn link renders");
+    assert!(drawn.marks.free_conversion, "{drawn:?}");
+    assert_eq!(
+        drawn.marks.warnings,
+        [PinLinkWarningOnTheWire::VectorReadAsAColor],
+        "{drawn:?}"
+    );
 }

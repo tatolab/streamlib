@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
-use serde_json::Value as JsonValue;
 
-use super::{JsonSerializableComponent, ObservableNodeState};
+use super::{GraphRenders, ObservableNodeState};
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 use crate::core::nodes::NodeState;
 
 /// The number one reader's helper keeps its raise reports under on each
@@ -192,13 +192,9 @@ impl HowOneReadersHelperRanEachFunctionNode {
 /// set up.
 pub struct FunctionNodeRanCompiledComponent(pub Arc<HowItsHelpersRanAFunctionNode>);
 
-impl JsonSerializableComponent for FunctionNodeRanCompiledComponent {
-    fn json_key(&self) -> &'static str {
-        "ran_compiled"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        JsonValue::from(self.0.ran_compiled())
+impl GraphRenders<GraphNodeComponentsOnTheWire> for FunctionNodeRanCompiledComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.ran_compiled = self.0.ran_compiled();
     }
 }
 
@@ -207,14 +203,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_renders_null_until_a_helper_reports_then_how_the_last_ran_it() {
+    fn it_renders_nothing_until_a_helper_reports_then_how_the_last_ran_it() {
         let how_it_ran = Arc::new(HowItsHelpersRanAFunctionNode::default());
         let component = FunctionNodeRanCompiledComponent(Arc::clone(&how_it_ran));
-        assert_eq!(component.to_json(), JsonValue::Null);
+        assert_eq!(ran_compiled_rendered(&component), None);
         how_it_ran.note_it_ran_compiled(false);
-        assert_eq!(component.to_json(), JsonValue::Bool(false));
+        assert_eq!(ran_compiled_rendered(&component), Some(false));
         how_it_ran.note_it_ran_compiled(true);
-        assert_eq!(component.to_json(), JsonValue::Bool(true));
+        assert_eq!(ran_compiled_rendered(&component), Some(true));
+    }
+
+    fn ran_compiled_rendered(component: &FunctionNodeRanCompiledComponent) -> Option<bool> {
+        let mut components = GraphNodeComponentsOnTheWire::default();
+        component.render_onto(&mut components);
+        components.ran_compiled
     }
 
     fn a_function_node_reported_by_two_readers() -> (

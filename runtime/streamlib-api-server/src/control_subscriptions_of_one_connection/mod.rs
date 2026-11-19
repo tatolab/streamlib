@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use streamlib::sdk::error::Result as StreamlibResult;
-use streamlib::sdk::nodes::NodeState;
 use streamlib::sdk::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, RuntimeEvent, topics,
 };
@@ -471,7 +470,10 @@ impl EventListener for StreamChangesForwardedToOneConnection {
                 ..
             } => self.forward(
                 StreamGraphChangeKindOnTheWire::NodeStateChanged,
-                Some((node_run_id.to_string(), node_state_on_the_wire(*new_state))),
+                Some((
+                    node_run_id.to_string(),
+                    NodeStateOnTheWire::from(*new_state),
+                )),
             ),
             RuntimeEvent::RuntimeStarted
             | RuntimeEvent::RuntimeStartFailed { .. }
@@ -491,19 +493,6 @@ impl EventListener for StreamChangesForwardedToOneConnection {
     fn on_events_lost(&mut self, _lost_event_count: u64) -> StreamlibResult<()> {
         self.forward(StreamGraphChangeKindOnTheWire::Missed, None);
         Ok(())
-    }
-}
-
-fn node_state_on_the_wire(node_state: NodeState) -> NodeStateOnTheWire {
-    match node_state {
-        NodeState::Pending => NodeStateOnTheWire::Pending,
-        NodeState::Idle => NodeStateOnTheWire::Idle,
-        NodeState::Running => NodeStateOnTheWire::Running,
-        NodeState::Paused => NodeStateOnTheWire::Paused,
-        NodeState::Stopping => NodeStateOnTheWire::Stopping,
-        NodeState::Stopped => NodeStateOnTheWire::Stopped,
-        NodeState::Error => NodeStateOnTheWire::Error,
-        NodeState::Restarting => NodeStateOnTheWire::Restarting,
     }
 }
 

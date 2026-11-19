@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::components::{
-    ComponentMap, ComponentSerializer, default_component_serializers, default_components,
+    ComponentMap, ComponentRenderer, default_component_renderers, default_components,
 };
 use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{GraphNodePorts, NodeRunId, PortInfo};
@@ -46,12 +46,13 @@ pub struct GraphNode {
     /// on a node whose type nothing registers.
     #[serde(skip)]
     node_kind: Option<NodeKind>,
-    /// Runtime components (not serialized by derive, but via serialize_components).
+    /// Runtime components (not serialized by derive, but rendered by render_components).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
-    /// Serializers for each inserted component type.
-    #[serde(skip, default = "default_component_serializers")]
-    component_serializers: Vec<ComponentSerializer>,
+    /// The renderer of each inserted component type.
+    #[serde(skip, default = "default_component_renderers")]
+    component_renderers:
+        Vec<ComponentRenderer<crate::core::json_schema::GraphNodeComponentsOnTheWire>>,
     /// The entries this node's output ports carry now, shared with whatever
     /// replaces them and with every node an inbound link reads them from.
     #[serde(skip)]
@@ -89,7 +90,7 @@ impl std::fmt::Debug for GraphNode {
             .field("config", &self.config)
             .field("config_checksum", &self.config_checksum)
             .field("ports", &self.ports)
-            // Skip: components, component_serializers (runtime-only)
+            // Skip: components, component_renderers (runtime-only)
             .finish()
     }
 }
@@ -123,7 +124,7 @@ impl GraphNode {
             ports,
             node_kind,
             components: ComponentMap::new(),
-            component_serializers: Vec::new(),
+            component_renderers: Vec::new(),
             stream_facts_of_output_ports,
             upstream_stream_facts_by_inbound_link: Arc::default(),
         }
@@ -286,12 +287,16 @@ impl GraphNodeWithComponents for GraphNode {
         &mut self.components
     }
 
-    fn component_serializers(&self) -> &[ComponentSerializer] {
-        &self.component_serializers
+    fn component_renderers(
+        &self,
+    ) -> &[ComponentRenderer<crate::core::json_schema::GraphNodeComponentsOnTheWire>] {
+        &self.component_renderers
     }
 
-    fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer> {
-        &mut self.component_serializers
+    fn component_renderers_mut(
+        &mut self,
+    ) -> &mut Vec<ComponentRenderer<crate::core::json_schema::GraphNodeComponentsOnTheWire>> {
+        &mut self.component_renderers
     }
 }
 

@@ -61,14 +61,13 @@ pub use validation::validate_graph;
 
 pub(crate) use components::HowOneReadersHelperRanEachFunctionNode;
 pub use components::{
-    Component, ComponentMap, ComponentSerializer, DeviceMatchedAudioWindowContractsComponent,
+    ComponentMap, ComponentRenderer, DeviceMatchedAudioWindowContractsComponent,
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
-    FunctionNodePromotionOutOfItsReadersIslands, FunctionNodeRanCompiledComponent,
+    FunctionNodePromotionOutOfItsReadersIslands, FunctionNodeRanCompiledComponent, GraphRenders,
     HelperProcessRestartRecord, HelperProcessRestartsComponent, HowItsHelpersRanAFunctionNode,
-    Iceoryx2ServicesHeldOpenForLinkComponent, JsonSerializableComponent,
-    LinkCarriedThroughTheFunctionNodePoolComponent,
-    LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkStateComponent,
-    LinkTypeInfoComponent, LossCountsOfPortsInThisProcess, NodeFailureReasonComponent,
+    Iceoryx2ServicesHeldOpenForLinkComponent, LinkCarriedThroughTheFunctionNodePoolComponent,
+    LinkComponent, LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkStateComponent,
+    LossCountsOfPortsInThisProcess, NodeComponent, NodeFailureReasonComponent,
     NodeInstanceComponent, NodeLossCounts, NodeMetrics, NodeNotReadyBecauseComponent,
     NodePauseGateComponent, NodeReadyBarrierComponent, NodeReadyBarrierHandle, ObservableNodeState,
     OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
@@ -77,7 +76,7 @@ pub use components::{
     ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
     StepProgressCallbackInFlight, StepProgressOfOneNode, StepProgressOfOneNodeComponent,
     StepProgressReadingOfOneNode, StorableComponent, ThreadHandleComponent,
-    default_component_serializers, default_components,
+    default_component_renderers, default_components,
 };
 pub(crate) use components::{
     NodeInstanceWithItsOutOfProcessLinkWiring, SourceSideHeldOpenForAReaderOutsideItsStream,

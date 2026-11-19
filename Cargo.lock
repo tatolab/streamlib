@@ -5542,6 +5542,7 @@ dependencies = [
 name = "streamlib-control-contract"
 version = "0.68.82"
 dependencies = [
+ "jsonschema",
  "schemars 1.2.2",
  "serde",
  "serde_json",

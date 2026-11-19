@@ -4,10 +4,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::{Value as JsonValue, json};
-
-use crate::core::JsonSerializableComponent;
-use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
+use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphRenders};
+use crate::core::json_schema::{GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire};
 use crate::core::nodes::NodeState;
 use crate::core::test_support::{
     MockInputOnlyNode, MockNode, MockOutputOnlyNode, ensure_test_mocks_registered,
@@ -41,27 +39,7 @@ impl Default for MockState {
     }
 }
 
-impl JsonSerializableComponent for MockState {
-    fn json_key(&self) -> &'static str {
-        "mock_state"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "state": format!("{:?}", self.0) })
-    }
-}
-
 struct MockNodeInstance;
-
-impl JsonSerializableComponent for MockNodeInstance {
-    fn json_key(&self) -> &'static str {
-        "mock_node_instance"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "type": "MockNodeInstance" })
-    }
-}
 
 /// Mock pause gate component.
 struct MockPauseGate {
@@ -92,16 +70,6 @@ impl Clone for MockPauseGate {
     }
 }
 
-impl JsonSerializableComponent for MockPauseGate {
-    fn json_key(&self) -> &'static str {
-        "mock_pause_gate"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "paused": self.is_paused() })
-    }
-}
-
 /// Mock link instance component.
 struct MockLinkInstance {
     capacity: usize,
@@ -113,25 +81,22 @@ impl MockLinkInstance {
     }
 }
 
-impl JsonSerializableComponent for MockLinkInstance {
-    fn json_key(&self) -> &'static str {
-        "mock_link_instance"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "capacity": self.capacity })
-    }
-}
-
 /// Counter component for mutation tests.
 struct CounterComponent(i32);
 
-impl JsonSerializableComponent for CounterComponent {
-    fn json_key(&self) -> &'static str {
-        "counter"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "value": self.0 })
-    }
+/// Each mock `graph` renders under no key of `$onto`: these tests read the component itself.
+macro_rules! mocks_render_under_no_key {
+    ($onto:ty: $($mock:ty),+) => {
+        $(impl GraphRenders<$onto> for $mock {
+            fn render_onto(&self, _components: &mut $onto) {}
+        })+
+    };
 }
+
+mocks_render_under_no_key!(
+    GraphNodeComponentsOnTheWire: MockState,
+    MockNodeInstance,
+    MockPauseGate,
+    CounterComponent
+);
+mocks_render_under_no_key!(GraphLinkComponentsOnTheWire: MockLinkInstance);

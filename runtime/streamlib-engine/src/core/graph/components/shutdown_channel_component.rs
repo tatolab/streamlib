@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crossbeam_channel::{Receiver, Sender};
-use serde_json::Value as JsonValue;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::fd::OwnedFd;
 
-use super::JsonSerializableComponent;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeShutdownChannelOnTheWire;
+
+use super::GraphRenders;
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 pub struct ShutdownChannelComponent {
     pub sender: Sender<()>,
@@ -158,15 +160,10 @@ impl Default for ShutdownChannelComponent {
     }
 }
 
-impl JsonSerializableComponent for ShutdownChannelComponent {
-    fn json_key(&self) -> &'static str {
-        "shutdown_channel"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!({
-            "attached": true,
-            "receiver_taken": self.receiver.is_none()
-        })
+impl GraphRenders<GraphNodeComponentsOnTheWire> for ShutdownChannelComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.shutdown_channel = Some(NodeShutdownChannelOnTheWire {
+            receiver_taken: self.receiver.is_none(),
+        });
     }
 }
