@@ -347,7 +347,7 @@ pub(crate) fn the_pin_values_with_the_live_ones_over_them(
 }
 
 /// One value a live set makes: the node, by UUID, its input, and the value, `None` taking the
-/// input's live value off.
+/// input's live value off. A set of no value on a Trigger input fires it once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputValueToSetLive {
     /// The node, by UUID.
@@ -398,7 +398,15 @@ pub enum LiveInputValueSetRefusal {
         /// Why, in the runtime's words, naming the node and the input.
         runtime_words: String,
     },
-    /// A helper or island reading one of the values was not handed it.
+    /// The value at `set_index` fires a Trigger input of a node that does not run, so the fire
+    /// would reach no read.
+    TheNodeDoesNotRun {
+        /// The index of the refused fire among those asked.
+        set_index: usize,
+        /// Why the node does not run, as [`crate::core::Error::NodeOfAStreamIsNotRunning`].
+        refusal: crate::core::Error,
+    },
+    /// A helper or island reading one of the values, or a node one fires, was not handed it.
     NotHandedOver(crate::core::Error),
 }
 

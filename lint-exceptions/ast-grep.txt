@@ -168,7 +168,6 @@
 1 no-inline-test-module runtime/streamlib-engine/src/core/logging/writer.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/machine_global_unique_name.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/output_port_stream_facts.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/nodes/__generated_private/generated_node_impl.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/nodes/out_of_process_link_wire_reply.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/nodes/node_spec.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/pubsub/events.rs
@@ -204,7 +203,7 @@
 1 no-inline-test-module runtime/streamlib-engine/src/core/shared_native_services.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/signals.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/stable_short_id.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/test_support.rs
+1 no-inline-test-module runtime/streamlib-engine/src/core/test_support/mod.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/unix_socket_path_cleared_for_bind.rs
 1 no-inline-test-module runtime/streamlib-engine/src/iceoryx2/audio_window/audio_window_accumulator.rs
 1 no-inline-test-module runtime/streamlib-engine/src/iceoryx2/audio_window/channels_block_of_the_window_stage.rs
@@ -400,7 +399,7 @@
 1 no-inline-test-module xtask/src/stage_runtime_unit_uv.rs
 1 no-inline-test-module xtask/src/stage_sample_projects.rs
 9 no-path-attribute packages/test-fixtures/src/lib.rs
-1 no-path-attribute runtime/streamlib-engine/src/core/test_support.rs
+1 no-path-attribute runtime/streamlib-engine/src/core/test_support/mod.rs
 1 no-path-attribute runtime/streamlib-project-repository/src/project_store.rs
 1 no-path-attribute runtime/streamlib-project-repository/src/project_views.rs
 1 no-path-attribute runtime/streamlib-project-repository/src/tatolab_view_manifest.rs

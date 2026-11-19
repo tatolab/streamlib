@@ -15,6 +15,7 @@ mod inbound_link_named_on_each_read;
 mod link_removal_and_payload_bounds;
 mod listener_fan_in_and_link_losses;
 mod reads_borrows_and_quotas;
+mod trigger_fires_queued_while_unlinked;
 
 fn unique_suffix(tag: &str) -> String {
     format!(
