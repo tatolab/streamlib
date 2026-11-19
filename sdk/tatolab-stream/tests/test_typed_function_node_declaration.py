@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal, NamedTuple
 import pytest
 
 from tatolab.stream import (
+    Asset,
     Color,
     Description,
     Float32,
@@ -122,7 +123,13 @@ def test_a_typed_function_node_is_a_function_node_the_runtime_calls_as_today() -
     signature = getattr(Tone, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
     assert [entry["value_type"] for entry in signature["inputs"]] == ["float", "float", "int", "bool", "float"]
     assert signature["outputs"] == [
-        {"port": "result", "field": None, "value_type": "float", "may_hand_out_nothing": False}
+        {
+            "port": "result",
+            "field": None,
+            "value_type": "float",
+            "pin_type": {"type": "float"},
+            "may_hand_out_nothing": False,
+        }
     ]
     (result,) = getattr(Tone, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
     assert result["pin_declaration"] == {
@@ -232,12 +239,32 @@ def GateWithTwoUnits(level: Annotated[float, NumberUnit("Hz"), NumberUnit("kHz")
     return level
 
 
-def Caption(text: str = "") -> float:
-    return float(len(text))
-
-
-def Wave(shape: Literal["sine", "square"] = "sine") -> float:
+def WaveDefaultingToNoOption(shape: Literal["sine", "square"] = "saw") -> float:  # pyright: ignore[reportArgumentType]
     return 0.0
+
+
+def WaveOfNumbers(shape: Literal[1, 2] = 1) -> float:
+    return 0.0
+
+
+def LevelsOfLevels(levels: list[list[float]] = []) -> float:  # noqa: B006
+    return 0.0
+
+
+def LevelsOfNoType(levels: list = []) -> float:  # noqa: B006  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]
+    return 0.0
+
+
+def LevelsWithAUnitEach(levels: list[Annotated[float, NumberUnit("Hz")]] = []) -> float:  # noqa: B006
+    return 0.0
+
+
+def LevelsOfPictures(pictures: list[ImageFrame] = []) -> float:  # noqa: B006
+    return 0.0
+
+
+def Frames(at: list[Int64] = [0]) -> list[Int64]:  # noqa: B006
+    return at
 
 
 def Pass(picture: ImageFrame | None = None) -> float:
@@ -339,11 +366,7 @@ def test_an_object_no_pin_reads_and_an_annotation_written_twice_are_refused() ->
 
 
 def test_a_type_the_runtime_cannot_carry_yet_is_refused_by_name() -> None:
-    for function, named in (
-        (Caption, "`str`, the String pin type"),
-        (Wave, "`Literal`, the Menu pin type"),
-        (Pass, "`ImageFrame`, a read type"),
-    ):
+    for function, named in ((Pass, "`ImageFrame`, a read type"),):
         refusal = refusal_of(function)
         assert refusal.finding_code == "pin_type_not_read_yet", function
         assert named in str(refusal)
@@ -379,3 +402,100 @@ def test_a_refusal_is_a_type_error_so_a_load_reports_it_as_one() -> None:
 def test_bare_node_on_a_class_is_refused_pointing_at_the_class_grammar() -> None:
     with pytest.raises(TypeError, match="`@node.process`"):
         node(Mixer)  # pyright: ignore[reportArgumentType]
+
+
+@node
+def Caption(
+    text: str = "",
+    shape: Literal["sine", "square"] = "square",
+    picture: Asset = Asset("0eaf9ee2-0f73-4154-a3f6-a99c261b850d"),
+    levels: list[float] = [0.25, 0.5],  # noqa: B006
+    tints: list[Color] = [Color(1.0, 0.0, 0.0)],  # noqa: B006
+) -> list[str]:
+    return [text, shape, picture.asset, *map(str, levels), *map(str, tints)]
+
+
+def test_a_string_menu_asset_and_list_are_declared_with_their_stored_defaults() -> None:
+    assert input_port(Caption, "text")["pin_declaration"]["pin_type"]["pin_type"] == {
+        "type": "string"
+    }
+    assert input_port(Caption, "shape")["pin_declaration"]["pin_type"]["pin_type"] == {
+        "type": "menu",
+        "option_names": ["sine", "square"],
+    }
+    assert input_port(Caption, "shape")["pin_default"] == "square"
+    assert input_port(Caption, "picture")["pin_default"] == {
+        "asset": "0eaf9ee2-0f73-4154-a3f6-a99c261b850d"
+    }
+    assert input_port(Caption, "levels")["pin_declaration"]["pin_type"]["pin_type"] == {
+        "type": "list_of",
+        "element_type": {"type": "float"},
+    }
+    assert input_port(Caption, "levels")["pin_default"] == [0.25, 0.5]
+    assert input_port(Caption, "tints")["pin_default"] == [
+        {"red": 1.0, "green": 0.0, "blue": 0.0, "alpha": 1.0}
+    ]
+
+
+def test_each_typed_pin_travels_on_the_family_of_its_message_and_states_its_pin_type() -> None:
+    families = {
+        port["name"]: port["family"]["family"]
+        for port in getattr(Caption, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    }
+    assert families == {
+        "text": "records",
+        "shape": "records",
+        "picture": "records",
+        "levels": "array",
+        "tints": "array",
+    }
+    (result,) = getattr(Caption, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    assert result["family"] == {"family": "records"}
+    signature = getattr(Caption, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
+    assert [entry["value_type"] for entry in signature["inputs"]] == [
+        "string",
+        "menu",
+        "asset",
+        "list_of",
+        "list_of",
+    ]
+    assert signature["outputs"][0]["pin_type"] == {
+        "type": "list_of",
+        "element_type": {"type": "string"},
+    }
+
+
+def test_a_64_bit_integer_types_a_list_element() -> None:
+    declared = node(Frames)
+    assert input_port(declared, "at")["pin_declaration"]["pin_type"]["pin_type"] == {
+        "type": "list_of",
+        "element_type": {"type": "integer", "exact_size": "int64"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("function", "finding_code", "words"),
+    [
+        pytest.param(
+            WaveDefaultingToNoOption,
+            "pin_default_not_of_its_type",
+            "which is none of its options, 'sine', 'square'",
+            id="a menu default that is no option",
+        ),
+        pytest.param(WaveOfNumbers, "menu_options_not_valid", "options are names", id="menu of numbers"),
+        pytest.param(LevelsOfLevels, "list_element_not_taken", "`list` is not", id="a List of a List"),
+        pytest.param(LevelsOfNoType, "list_element_not_taken", "names the type", id="a bare list"),
+        pytest.param(
+            LevelsWithAUnitEach, "list_element_not_taken", "no annotation of its own", id="element unit"
+        ),
+        pytest.param(
+            LevelsOfPictures, "pin_type_not_read_yet", "a read type", id="a List of a stream type"
+        ),
+    ],
+)
+def test_a_menu_or_list_no_pin_may_declare_is_refused_naming_why(
+    function: Any, finding_code: str, words: str
+) -> None:
+    refusal = refusal_of(function)
+    assert refusal.finding_code == finding_code
+    assert words in str(refusal)

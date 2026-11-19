@@ -33,6 +33,7 @@ from ._pin_annotations import NumberUnit as NumberUnit
 from ._pin_annotations import PinControl as PinControl
 from ._pin_annotations import PinMeaning as PinMeaning
 from ._pin_declaration import NodeDeclarationRefusal as NodeDeclarationRefusal
+from ._pin_types import Asset as Asset
 from ._pin_types import Color as Color
 from ._pin_types import Float32 as Float32
 from ._pin_types import Float64 as Float64
@@ -243,6 +244,7 @@ __all__ = [
     "UInt16",
     "UInt32",
     "UInt64",
+    "Asset",
     "Color",
     "Vector2",
     "Vector3",

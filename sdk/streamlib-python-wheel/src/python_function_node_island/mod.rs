@@ -11,7 +11,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 use streamlib::sdk::descriptors::{PinType, VectorComponentCount};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
@@ -22,8 +22,10 @@ use streamlib::sdk::iceoryx2::{
 };
 
 use streamlib::sdk::pin_value_packing::{
-    PackedPinValueRef, the_channel_values_a_control_message_carries,
-    the_channel_values_a_pin_type_reads,
+    PackedPinValue, PackedPinValueRef, pack_pin_value,
+    the_channel_values_a_control_message_carries, the_channel_values_a_pin_type_reads,
+    the_records_message_of_a_stored_value, the_stored_value_a_records_message_carries,
+    unpack_pin_value,
 };
 
 use crate::python_bag_conversion::{records_message_dict_of, records_message_payload_of};
@@ -34,6 +36,8 @@ use crate::python_node_link_data_access::PythonNodeLinkDataAccess;
 mod function_node_call_shapes;
 mod function_node_island_evaluators;
 mod function_node_raises_in_this_helper;
+mod messages_read_off_links_from_outside_the_island;
+mod ports_of_a_function_node_run_standalone;
 
 use function_node_call_shapes::{FunctionNodeCallFailure, HowAFunctionNodeIsCalled};
 use function_node_island_evaluators::FunctionNodeHandedOverByTheBootstrap;
@@ -42,6 +46,17 @@ pub(crate) use function_node_island_evaluators::{
 };
 pub(crate) use function_node_raises_in_this_helper::FunctionNodeRaisesInThisHelper;
 use function_node_raises_in_this_helper::WhereAnIslandNotesTheRaisesOfItsFunctionNodes;
+use messages_read_off_links_from_outside_the_island::{
+    HowAnInputReadsALinkFromOutsideItsIsland, NewestMessageReaderOfTheReadersInputPorts,
+    the_control_value_a_message_carries, the_newest_message_read_from, the_parts_a_message_carries,
+    the_pin_type_a_value_type_carries_in_parts, the_record_of_a_stored_value_a_message_carries,
+    the_stored_value_a_record_carries_packed,
+};
+pub(crate) use ports_of_a_function_node_run_standalone::{
+    hand_an_unread_message_on, read_the_control_value_at_an_input_port,
+    read_the_message_at_an_input_port_unread, read_the_parts_at_an_input_port,
+    read_the_stored_value_at_an_input_port, write_the_stored_value_on_an_output_port,
+};
 
 /// One value a function node takes or gives.
 #[derive(Debug)]
@@ -139,11 +154,25 @@ impl FunctionNodeValue {
         Ok(Self::Number(value.extract::<f64>()?))
     }
 
+    /// This output value as the island hands it to the port it feeds: a
+    /// record of a String, a Menu, an Asset or a List, for `stored_value_of`
+    /// its pin type, packed as that type travels.
     fn as_the_island_output_of(
         &self,
         node_id: &str,
         output_index: usize,
+        stored_value_of: Option<&PinType>,
     ) -> Result<FunctionNodeIslandOutputValue> {
+        if let (Self::Record(record), Some(pin_type)) = (self, stored_value_of) {
+            return Python::attach(|python| {
+                the_stored_value_a_record_carries_packed(
+                    record.bind(python),
+                    pin_type,
+                    &format!("function node `{node_id}`'s output {output_index}"),
+                )
+                .map(FunctionNodeIslandOutputValue::Packed)
+            });
+        }
         Ok(match self {
             Self::Number(number) => FunctionNodeIslandOutputValue::ControlValue(vec![*number]),
             Self::Parts(parts) => FunctionNodeIslandOutputValue::ControlValue(parts.clone()),
@@ -271,140 +300,15 @@ impl UnreadMessageAFunctionNodeHandsOn {
     }
 }
 
-/// How a function node input reads the messages a link from outside its
-/// island carries.
-#[derive(Debug, Clone, PartialEq)]
-enum HowAnInputReadsALinkFromOutsideItsIsland {
-    /// As the number a control message carries: the first sample of its first
-    /// channel.
-    ControlValue,
-    /// As the parts of a value of the pin type, one on each channel of a
-    /// control message, read with the free conversion a link allows.
-    Parts(PinType),
-    /// As the dict a Records message carries.
-    Record,
-    /// As the message itself, handed on unread: nothing at an evaluation no new
-    /// message arrived before.
-    MessageHandedOnUnread,
-}
-
-impl HowAnInputReadsALinkFromOutsideItsIsland {
-    /// How an input of `value_type`, as the bootstrap names it, reads a link.
-    fn of_the_value_type(value_type: &str) -> std::result::Result<Self, String> {
-        match value_type {
-            "float" | "int" | "bool" => Ok(Self::ControlValue),
-            "records" => Ok(Self::Record),
-            "unread_message" => Ok(Self::MessageHandedOnUnread),
-            value_type => the_pin_type_a_value_type_carries_in_parts(value_type)
-                .map(Self::Parts)
-                .ok_or_else(|| {
-                    format!(
-                        "an input of value type {value_type:?} cannot read a link from a node \
-                         outside its island; it reads a number, a Color, a Vector, a \
-                         Rectangle, a Transform, a dict or an `UnreadMessage`"
-                    )
-                }),
-        }
-    }
-}
-
-/// The pin type of a value the bootstrap names `value_type` and carries as its
-/// parts: a Color, a Vector of each size, a Rectangle or a Transform.
-///
-/// Wire contract with the helper bootstrap: these value type names.
-pub(crate) fn the_pin_type_a_value_type_carries_in_parts(value_type: &str) -> Option<PinType> {
-    Some(match value_type {
-        "color" => PinType::Color {},
-        "vector2" => PinType::Vector {
-            component_count: VectorComponentCount::Two,
-        },
-        "vector3" => PinType::Vector {
-            component_count: VectorComponentCount::Three,
-        },
-        "vector4" => PinType::Vector {
-            component_count: VectorComponentCount::Four,
-        },
-        "rectangle" => PinType::Rectangle {},
-        "transform" => PinType::Transform {},
-        _ => return None,
-    })
-}
-
-/// The parts a control message carries, read as `read_as` reads them: one
-/// number, the first sample of its first channel, for `None`; the parts of a
-/// value of the pin type for `Some`, with the free conversion a link allows.
-fn the_parts_a_message_carries(
-    message: &MessageReadFromInputPort,
-    read_as: Option<&PinType>,
-    node_id: &str,
-    reader_input_port: &str,
-) -> Result<Vec<f64>> {
-    let channel_values = the_channel_values_a_control_message_carries(PackedPinValueRef {
-        payload_descriptor: &message.payload_descriptor,
-        payload: message.payload.bytes(),
-    });
-    let read = match (channel_values, read_as) {
-        (Ok(channel_values), None) => Ok(channel_values.into_iter().take(1).collect()),
-        (Ok(channel_values), Some(pin_type)) => {
-            the_channel_values_a_pin_type_reads(pin_type, &channel_values)
-        }
-        (Err(refusal), _) => Err(refusal),
-    };
-    read.map_err(|refusal| {
-        Error::Runtime(format!(
-            "function node `{node_id}` reads {} off the link it reads at \
-             {reader_input_port:?}, and {refusal}",
-            read_as.map_or_else(|| "a number".to_owned(), |pin_type| format!("a {pin_type}"))
-        ))
-    })
-}
-
-/// The number a control message carries: the first sample of its first channel.
-fn the_control_value_a_message_carries(
-    message: &MessageReadFromInputPort,
-    node_id: &str,
-    reader_input_port: &str,
-) -> Result<f64> {
-    Ok(the_parts_a_message_carries(message, None, node_id, reader_input_port)?[0])
-}
-
-/// Reads the newest message at one of the reader's input ports, past any older
-/// ones still queued there; `None` when none arrived since the last read.
-type NewestMessageReaderOfTheReadersInputPorts =
-    Box<dyn Fn(&str) -> Result<Option<MessageReadFromInputPort>> + Send + Sync>;
-
-/// The most messages one read of the newest message takes off a port, so a
-/// publisher that keeps up with the reads cannot hold an evaluation in the
-/// loop; any past it wait for the next read.
-const MOST_MESSAGES_ONE_READ_OF_THE_NEWEST_TAKES: usize = 64;
-
-fn the_newest_message_read_from(
-    input_mailboxes: &InputMailboxesInner,
-    reader_input_port: &str,
-) -> Result<Option<MessageReadFromInputPort>> {
-    let mut newest: Option<MessageReadFromInputPort> = None;
-    for _ in 0..MOST_MESSAGES_ONE_READ_OF_THE_NEWEST_TAKES {
-        let Some(mut message) = input_mailboxes.read_raw(reader_input_port)? else {
-            break;
-        };
-        if let Some(replaced) = newest {
-            message.lost_since_last_read = message
-                .lost_since_last_read
-                .saturating_add(replaced.lost_since_last_read);
-        }
-        newest = Some(message);
-    }
-    Ok(newest)
-}
-
 /// What the bootstrap says of how one function node's values travel beyond
 /// numbers: the inputs it reads off links from outside its island, those that
 /// take `None`, and the inputs and outputs that carry a message handed on
 /// unread or may carry nothing.
 ///
-/// Wire contract with the helper bootstrap: a dict of these five keys, the
-/// first `[(input_index, reader_input_port, value_type)]`, the rest input or
-/// output indices.
+/// Wire contract with the helper bootstrap: a dict of these seven keys, the
+/// first `[(input_index, reader_input_port, value_type)]`, the last two
+/// `[(index, pin_type_as_json)]` of each String, Menu, Asset or List input and
+/// output, the rest input or output indices.
 #[derive(Debug, Default, FromPyObject)]
 pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
     #[pyo3(item)]
@@ -417,6 +321,34 @@ pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
     outputs_carrying_an_unread_message: Vec<usize>,
     #[pyo3(item)]
     outputs_that_may_hand_out_nothing: Vec<usize>,
+    #[pyo3(item)]
+    inputs_carrying_a_stored_value: Vec<(usize, String)>,
+    #[pyo3(item)]
+    outputs_carrying_a_stored_value: Vec<(usize, String)>,
+}
+
+impl HowAFunctionNodeCarriesValuesBeyondNumbers {
+    /// The pin type of the String, Menu, Asset or List input `input_index` carries, or of
+    /// output `output_index` when `of_an_output`; `None` for a value of any other type.
+    fn the_pin_type_of_a_stored_value(
+        &self,
+        index: usize,
+        of_an_output: bool,
+    ) -> std::result::Result<Option<PinType>, String> {
+        let carried = if of_an_output {
+            &self.outputs_carrying_a_stored_value
+        } else {
+            &self.inputs_carrying_a_stored_value
+        };
+        carried
+            .iter()
+            .find(|(carried_index, _)| *carried_index == index)
+            .map(|(_, pin_type)| {
+                serde_json::from_str::<PinType>(pin_type)
+                    .map_err(|refusal| format!("the pin type {pin_type} does not read: {refusal}"))
+            })
+            .transpose()
+    }
 }
 
 /// How an island reads values beyond numbers: what each of its nodes carries,
@@ -538,6 +470,25 @@ impl FunctionNodeIslandEvaluation {
                             &function_node.node_id,
                             reader_input_port,
                         )?);
+                        self.values_last_read_off_links_from_outside_islands
+                            .lock()
+                            .insert(reader_input_port.clone(), value_read_last.duplicated());
+                    }
+                    (
+                        Some(message),
+                        HowAnInputReadsALinkFromOutsideItsIsland::StoredValue(pin_type),
+                    ) => {
+                        let record = the_record_of_a_stored_value_a_message_carries(
+                            &message,
+                            pin_type,
+                            &function_node.node_id,
+                            reader_input_port,
+                        )?;
+                        *value_read_last = Python::attach(|python| {
+                            records_message_dict_of(python, reader_input_port, &record)
+                                .map(|record| FunctionNodeValue::Record(record.unbind()))
+                                .map_err(|refusal| Error::Runtime(refusal.to_string()))
+                        })?;
                         self.values_last_read_off_links_from_outside_islands
                             .lock()
                             .insert(reader_input_port.clone(), value_read_last.duplicated());
@@ -840,88 +791,6 @@ pub(crate) fn take_each_function_node_raise_newly_noted(
             )
         })
         .collect()
-}
-
-/// The message `input_port` holds for this read, handed back unread: an
-/// island's output at the port, or the newest message its link carried;
-/// `None` when it holds none.
-#[pyfunction]
-#[pyo3(signature = (*, link_data_access, input_port))]
-pub(crate) fn read_the_message_at_an_input_port_unread(
-    python: Python<'_>,
-    link_data_access: &PythonNodeLinkDataAccess,
-    input_port: &str,
-) -> PyResult<Option<UnreadMessageAFunctionNodeHandsOn>> {
-    Ok(link_data_access
-        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
-        .map(|message| UnreadMessageAFunctionNodeHandsOn {
-            message: Arc::new(
-                MessageAFunctionNodeIslandHolds::hold_a_message_read_off_its_channel(
-                    &message,
-                    &link_data_access.claim_of_the_pooled_gpu_frames_its_islands_hold(),
-                    input_port,
-                ),
-            ),
-        }))
-}
-
-/// The number `input_port` holds for this read, read as an island reads one:
-/// the first sample of a Channels block, f32 or f64, and any other message
-/// refused by name; `None` when no message arrived since the last read.
-#[pyfunction]
-#[pyo3(signature = (*, link_data_access, node_id, input_port))]
-pub(crate) fn read_the_control_value_at_an_input_port(
-    python: Python<'_>,
-    link_data_access: &PythonNodeLinkDataAccess,
-    node_id: &str,
-    input_port: &str,
-) -> PyResult<Option<f64>> {
-    link_data_access
-        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
-        .map(|message| the_control_value_a_message_carries(&message, node_id, input_port))
-        .transpose()
-        .map_err(|refusal| PyValueError::new_err(refusal.to_string()))
-}
-
-/// The parts of the value `input_port` holds for this read, a value of the pin
-/// type the bootstrap names `value_type`, read as an island reads one off a
-/// control message with the free conversion a link allows, and any other
-/// message refused by name; `None` when no message arrived since the last read.
-#[pyfunction]
-#[pyo3(signature = (*, link_data_access, node_id, input_port, value_type))]
-pub(crate) fn read_the_parts_at_an_input_port<'py>(
-    python: Python<'py>,
-    link_data_access: &PythonNodeLinkDataAccess,
-    node_id: &str,
-    input_port: &str,
-    value_type: &str,
-) -> PyResult<Option<Bound<'py, PyTuple>>> {
-    let pin_type = the_pin_type_a_value_type_carries_in_parts(value_type).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "value type {value_type:?} is no Color, Vector, Rectangle or Transform"
-        ))
-    })?;
-    link_data_access
-        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
-        .map(|message| {
-            the_parts_a_message_carries(&message, Some(&pin_type), node_id, input_port)
-                .map_err(|refusal| PyValueError::new_err(refusal.to_string()))
-                .and_then(|parts| PyTuple::new(python, parts))
-        })
-        .transpose()
-}
-
-/// Write `message` on `output_port` exactly as it arrived, its descriptor,
-/// stamp and group boundary unchanged.
-#[pyfunction]
-#[pyo3(signature = (*, link_data_access, output_port, message))]
-pub(crate) fn hand_an_unread_message_on(
-    python: Python<'_>,
-    link_data_access: &PythonNodeLinkDataAccess,
-    output_port: &str,
-    message: &UnreadMessageAFunctionNodeHandsOn,
-) -> PyResult<()> {
-    link_data_access.hand_a_message_on_unread(python, output_port, &message.message.message)
 }
 
 #[cfg(test)]

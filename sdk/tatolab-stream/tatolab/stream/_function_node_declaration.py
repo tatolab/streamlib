@@ -93,6 +93,10 @@ _SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME: "dict[str, str]" = {
     "boolean": "bool",
     "integer": "int",
     "float": "float",
+    "string": "string",
+    "menu": "menu",
+    "asset": "asset",
+    "list_of": "list_of",
 }
 
 
@@ -442,6 +446,7 @@ class _FunctionNodeSignatureReading:
                 "parameter": parameter.name,
                 "port": port_name,
                 "value_type": _signature_value_type_of(declared.declaration),
+                "pin_type": _the_pin_type_a_pin_declares(declared.declaration),
                 "optional": declared.optional,
                 "default": declared.default_value,
             }
@@ -450,7 +455,7 @@ class _FunctionNodeSignatureReading:
             {
                 "name": port_name,
                 "description": port_description,
-                "family": {"family": "channels"},
+                "family": {"family": _family_a_pin_travels_on(declared.declaration)},
                 "pin_declaration": declared.declaration,
                 "pin_default": declared.default_value,
             }
@@ -621,17 +626,22 @@ class _FunctionNodeSignatureReading:
             self._function_name, _SINGLE_OUTPUT_NAME, output_annotation, direction="output"
         )
         value_class = _the_value_class_of_parts_a_pin_declares(declared.declaration)
-        channel_names = [port_name] if value_class is None else list(value_class.part_names())
+        family = _family_a_pin_travels_on(declared.declaration)
+        family_declaration: "dict[str, Any]" = {"family": family}
+        if family == "channels":
+            channel_names = [port_name] if value_class is None else list(value_class.part_names())
+            family_declaration.update({"names": {"stated": channel_names}, "dtype": "f64"})
         output_port = {
             "name": port_name,
             "description": port_description or "",
-            "family": {"family": "channels", "names": {"stated": channel_names}, "dtype": "f64"},
+            "family": family_declaration,
             "pin_declaration": declared.declaration,
         }
         signature_output = {
             "port": port_name,
             "field": None,
             "value_type": _signature_value_type_of(declared.declaration),
+            "pin_type": _the_pin_type_a_pin_declares(declared.declaration),
             "may_hand_out_nothing": declared.optional,
         }
         return [output_port], [signature_output]
@@ -711,6 +721,31 @@ def _the_value_class_of_parts_a_pin_declares(
         if value_class.pin_type == declared_pin_type["pin_type"]:
             return value_class
     return None
+
+
+def _the_pin_type_a_pin_declares(declaration: PinDeclarationOnTheWire) -> "dict[str, Any]":
+    """The one pin type a function node's typed pin declares, as `graph` serves it."""
+    declared_pin_type = declaration["pin_type"]
+    assert declared_pin_type["kind"] == "is", "a function node's pin is exactly one type"
+    return dict(declared_pin_type["pin_type"])
+
+
+def _family_a_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
+    """The port family whose message a typed pin's value travels as.
+
+    A number, a Boolean and a value of parts travel as a control message on Channels; a List of
+    them as an Array frame; a String, a Menu, an Asset and any other List as a Records message.
+    """
+    pin_type = _the_pin_type_a_pin_declares(declaration)
+    if pin_type["type"] == "list_of":
+        return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
+    return "channels" if pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
+
+
+# The pin types whose value travels as a control message, its parts one on each channel.
+_TYPES_OF_A_CONTROL_MESSAGE = frozenset(
+    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
+)
 
 
 def _signature_value_type_of(declaration: PinDeclarationOnTheWire) -> str:

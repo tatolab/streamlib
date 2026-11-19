@@ -34,9 +34,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
     CloseViewerToolResult, ControlOperationRefusalCode, CreateNodeFileToolResult,
     CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
-    DescribeAssetToolResult, DescribeRuntimeToolResult, DescribeStreamActionToolResult,
-    DuplicateProjectToolResult, GraphTransactionToolResult, ImportProjectToolResult,
-    LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult, ListProjectFilesToolResult,
+    DescribeAssetToolResult, DescribeNodeTypesToolResult, DescribeRuntimeToolResult,
+    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
+    ImportProjectToolResult, LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult,
+    ListNodeTypesToolResult, ListPinTypesToolResult, ListProjectFilesToolResult,
     ListProjectNodeTypesToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
     ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
     PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
@@ -156,6 +157,12 @@ pub(crate) enum ControlOperationAnswer {
     ProjectFileTransaction(ProjectFileTransactionToolResult),
     /// `list_project_node_types`'s.
     ListProjectNodeTypes(ListProjectNodeTypesToolResult),
+    /// `list_pin_types`'.
+    ListPinTypes(ListPinTypesToolResult),
+    /// `list_node_types`'.
+    ListNodeTypes(ListNodeTypesToolResult),
+    /// `describe_node_types`'.
+    DescribeNodeTypes(DescribeNodeTypesToolResult),
     /// `list_project_views`'s.
     ListProjectViews(ListProjectViewsToolResult),
     /// `write_studio_view_output`'s.
@@ -633,6 +640,18 @@ impl ControlOperationDispatcher {
                 .list_project_node_types(request)
                 .await
                 .map(ControlOperationAnswer::ListProjectNodeTypes),
+            ControlOperationCall::ListPinTypes(request) => self
+                .list_pin_types(request)
+                .await
+                .map(ControlOperationAnswer::ListPinTypes),
+            ControlOperationCall::ListNodeTypes(request) => self
+                .list_node_types(request)
+                .await
+                .map(ControlOperationAnswer::ListNodeTypes),
+            ControlOperationCall::DescribeNodeTypes(request) => self
+                .describe_node_types(request)
+                .await
+                .map(ControlOperationAnswer::DescribeNodeTypes),
             ControlOperationCall::ListProjectViews(request) => self
                 .list_project_views(request)
                 .await

@@ -11,13 +11,15 @@ a declaration that uses it is refused by name with that reason.
 The exact sizes are `Annotated` aliases of `int` and `float`, so a value of one is a plain
 number in Python. A Color, a Vector, a Rectangle and a Transform are frozen value classes whose
 fields are the keys of the type's stored JSON form, in the order the type packs its parts on a
-link.
+link. An Asset is a frozen value class of the asset's UUID and, for an asset of an import, that
+import's project UUID.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import math
+import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar, Final, Optional, Self, final
@@ -27,6 +29,7 @@ from ._contract_pin_types import BuiltInPinTypeName, FloatSize, IntegerSize, Pin
 __all__ = [
     "PIN_TYPE_SPELLINGS",
     "PIN_VALUE_CLASSES",
+    "Asset",
     "Color",
     "PinValueOfParts",
     "Rectangle",
@@ -346,6 +349,61 @@ class Transform(PinValueOfParts):
         return cls(tuple(stored_value))  # pyright: ignore[reportUnknownArgumentType]
 
 
+@final
+@dataclass(frozen=True, slots=True)
+class Asset:
+    """One of the project's assets, by the UUID `list_assets` answers for it.
+
+    `from_project` is the UUID of the imported project that holds it, and `None` for an asset
+    of the project's own. Its stored JSON form is the object `{"asset": "<uuid>"}`, with
+    `"from": "<project uuid>"` for an asset of an import, as a saved document holds it.
+    """
+
+    asset: str
+    """The asset's UUID, in its lowercase hyphenated form."""
+
+    from_project: Optional[str] = None
+    """The UUID of the imported project that holds the asset; `None` for the project's own."""
+
+    pin_type: ClassVar[PinType] = {"type": "asset"}  # pyright: ignore[reportAssignmentType]
+    """The built-in pin type a pin typed `Asset` declares."""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "asset", _a_uuid(self.asset, "asset"))
+        if self.from_project is not None:
+            object.__setattr__(self, "from_project", _a_uuid(self.from_project, "from_project"))
+
+    def stored_value(self) -> dict[str, str]:
+        """Its stored JSON form: `{"asset": "<uuid>"}`, with `"from"` for an asset of an import."""
+        stored = {"asset": self.asset}
+        if self.from_project is not None:
+            stored["from"] = self.from_project
+        return stored
+
+    @classmethod
+    def from_stored_value(cls, stored_value: Any) -> Asset:
+        """The asset whose stored JSON form is `stored_value`, refused when it is not exactly one."""
+        if (
+            not isinstance(stored_value, dict)
+            or "asset" not in stored_value
+            or not set(stored_value) <= {"asset", "from"}  # pyright: ignore[reportUnknownArgumentType]
+        ):
+            raise ValueError(
+                f'a stored Asset is the object {{"asset": "<uuid>"}}, with "from" for an asset '
+                f"of an import, and was {stored_value!r}"
+            )
+        return cls(stored_value["asset"], stored_value.get("from"))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+
+
+def _a_uuid(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"Asset.{field} is a UUID string, and was given {value!r}")
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        raise ValueError(f"Asset.{field} is a UUID, and was given {value!r}") from None
+
+
 PIN_VALUE_CLASSES: Final[tuple[type[PinValueOfParts], ...]] = (
     Color,
     Vector2,
@@ -372,7 +430,6 @@ class PinTypeSpelling:
     "it is not read yet because"; `None` when it is read."""
 
 
-_VALUES_NOT_CARRIED = "the runtime does not carry its values on a link yet"
 _STREAM_TYPE_NOT_SPELLED = (
     "a function under bare `@node` does not take a stream type yet; `@node.function` takes "
     "it by its read type"
@@ -396,8 +453,8 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("float", "float"),
     PinTypeSpelling("Float32", "float"),
     PinTypeSpelling("Float64", "float"),
-    PinTypeSpelling("str", "string", _VALUES_NOT_CARRIED),
-    PinTypeSpelling("Literal", "menu", _VALUES_NOT_CARRIED),
+    PinTypeSpelling("str", "string"),
+    PinTypeSpelling("Literal", "menu"),
     PinTypeSpelling("Color", "color"),
     PinTypeSpelling("Vector2", "vector"),
     PinTypeSpelling("Vector3", "vector"),
@@ -409,9 +466,9 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("EncodedVideo", "encoded_video", _STREAM_TYPE_NOT_SPELLED),
     PinTypeSpelling("EncodedAudio", "encoded_audio", _STREAM_TYPE_NOT_SPELLED),
     PinTypeSpelling("Tensor", "tensor", _STREAM_TYPE_NOT_SPELLED),
-    PinTypeSpelling("Asset", "asset", _VALUES_NOT_CARRIED),
+    PinTypeSpelling("Asset", "asset"),
     PinTypeSpelling("Trigger", "trigger", _TRIGGER_NOT_CARRIED),
-    PinTypeSpelling("list", "list_of", _VALUES_NOT_CARRIED),
+    PinTypeSpelling("list", "list_of"),
     PinTypeSpelling("dataclass", "bundle", _BUNDLE_NOT_CARRIED),
     PinTypeSpelling("named_pin_type", "named", _NAMED_TYPE_NOT_CARRIED),
     PinTypeSpelling("NodeReference", "node_reference", _SETTING_TYPE_NOT_TAKEN),
