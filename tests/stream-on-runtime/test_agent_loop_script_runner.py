@@ -95,7 +95,7 @@ class ContractBackedAgentSession:
         ]
         self.links: "list[dict[str, Any]]" = []
         #: The inputs a link from a picture output connects to; `check_link` refuses any other.
-        self.picture_inputs = {"video_from_upstream"}
+        self.picture_inputs = {"layer_0"}
         self.transactions: "list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]" = []
         self.tool_calls: "list[tuple[str, dict[str, Any]]]" = []
         self.refused_operations: "set[str]" = set()
@@ -312,8 +312,9 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
                        "undo"]
     }
     assert called[2:] == [
-        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
-        CALL_OPERATION_TOOL_NAME, "transact", "graph", "undo", "undo", "graph",
+        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, "transact",
+        CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME, "transact", "graph",
+        "undo", "undo", "undo", "graph",
     ]
     checked = [arguments["operation"] for name, arguments in session.tool_calls
                if name == CALL_OPERATION_TOOL_NAME]
@@ -424,9 +425,9 @@ def test_a_read_from_a_step_not_yet_answered_is_malformed() -> None:
 
 def test_a_given_the_task_does_not_state_is_malformed() -> None:
     document = copy.deepcopy(build_a_graph_document())
-    del document["task"]["givens"]["sink_input"]
+    del document["task"]["givens"]["compositor_input"]
 
-    with pytest.raises(AgentLoopScriptIsMalformed, match="`sink_input` is not among the task's givens"):
+    with pytest.raises(AgentLoopScriptIsMalformed, match="`compositor_input` is not among the task's givens"):
         agent_loop_script_from(document)
 
 
@@ -444,3 +445,24 @@ def test_a_check_that_refuses_the_node_type_the_script_places_fails_the_run() ->
 
     with pytest.raises(AgentLoopScriptRunFailed, match="node_types_the_source_feeds.*`/candidates`"):
         played(agent_loop_script_from(build_a_graph_document()), session)
+
+
+def test_build_a_graph_places_the_node_type_its_ask_answered_after_the_ask() -> None:
+    document = build_a_graph_document()
+    session = ContractBackedAgentSession(the_committed_control_contract())
+
+    played(agent_loop_script_from(document), session)
+
+    [placing_step] = [step for step in document["steps"] if step["name"] == "compositor_placed"]
+    assert placing_step["arguments"]["operations"][0]["type"] == {
+        "$read": {"step": "node_types_the_source_feeds", "pointer": "/candidates/0/end/node_type"}
+    }
+    names = [
+        arguments["operation"] if name == CALL_OPERATION_TOOL_NAME else name
+        for name, arguments in session.tool_calls
+    ]
+    asked_at = names.index("check_link_candidates")
+    [placed] = [
+        arguments for name, arguments in session.tool_calls[asked_at:] if name == "transact"
+    ][:1]
+    assert placed["operations"][0]["type"] == document["task"]["givens"]["compositor_node_type"]

@@ -18,7 +18,11 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
 use crate::core::graph::input_values::{LiveInputValuesOfAStream, the_value_an_input_reads};
-use crate::core::json_schema::{GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId};
+use crate::core::graph::pin_type_link_checks::the_verdict_on_a_link_between_typed_ends;
+use crate::core::json_schema::{
+    GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId, rendered_link,
+    rendered_link_carried_through_the_function_node_pool,
+};
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -145,25 +149,33 @@ impl Graph {
         })
     }
 
-    /// `from` and `to`, the ends of a link, each under its port's current name; an end whose
-    /// node or port the graph does not hold is left as given, for its refusal to name.
-    pub fn link_ends_under_their_current_port_names(
+    /// `from`, a link's output end, under its port's current name; an end whose node or port
+    /// the graph does not hold is left as given, for its refusal to name.
+    pub fn output_under_its_current_name(
         &self,
         from: super::OutputLinkPortRef,
-        to: super::InputLinkPortRef,
-    ) -> (super::OutputLinkPortRef, super::InputLinkPortRef) {
-        let node_of = |node_run_id: &NodeRunId| {
-            self.digraph
-                .node_weights()
-                .find(|node| &node.id == node_run_id)
-        };
-        let from = node_of(from.node_run_id())
+    ) -> super::OutputLinkPortRef {
+        self.node_of_the_run_id(from.node_run_id())
             .and_then(|node| node.try_output(from.port_name()))
-            .unwrap_or(from);
-        let to = node_of(to.node_run_id())
+            .unwrap_or(from)
+    }
+
+    /// `to`, a link's input end, under its port's current name; an end whose node or port the
+    /// graph does not hold is left as given, for its refusal to name.
+    pub fn input_under_its_current_name(
+        &self,
+        to: super::InputLinkPortRef,
+    ) -> super::InputLinkPortRef {
+        self.node_of_the_run_id(to.node_run_id())
             .and_then(|node| node.try_input(to.port_name()))
-            .unwrap_or(to);
-        (from, to)
+            .unwrap_or(to)
+    }
+
+    /// The node `node_run_id` names, if the graph holds it.
+    fn node_of_the_run_id(&self, node_run_id: &NodeRunId) -> Option<&GraphNode> {
+        self.digraph
+            .node_weights()
+            .find(|node| &node.id == node_run_id)
     }
 
     /// Drop the node `node_run_id` and the links into and out of it, then forget the values set
@@ -368,7 +380,8 @@ impl Graph {
 
     /// Every link, in the order the graph holds them, each pair of links that
     /// carries one link through the function node pool rendered once as that
-    /// link, where the link into the pool stands.
+    /// link, where the link into the pool stands; each says what it converts
+    /// and warns of as the judgement of its two typed ends does.
     fn links_rendered_as_given(&self, node_names: &NodeNamesByNodeRunId) -> Vec<LinkOutput> {
         let carried_links = the_links_carried_through_the_function_node_pool_of(self);
         let carried_link_wired_as = |link: &Link| {
@@ -377,15 +390,29 @@ impl Graph {
                     || carried.out_of_the_function_node_pool.id == link.id
             })
         };
+        let conversions = self.node_types_this_stream_resolves().pin_conversions();
+        let verdict_on = |from: &Link, to: &Link| {
+            the_verdict_on_a_link_between_typed_ends(self, &from.source, &to.target, &conversions)
+        };
         self.digraph
             .edge_weights()
             .filter_map(|link| match carried_link_wired_as(link) {
-                None => Some(LinkOutput::of_a_link(link, node_names)),
-                Some(carried) if carried.into_the_function_node_pool.id == link.id => Some(
-                    LinkOutput::of_a_link_carried_through_the_function_node_pool(
-                        carried, node_names,
-                    ),
-                ),
+                None => Some(rendered_link(
+                    link,
+                    node_names,
+                    verdict_on(link, link).as_ref(),
+                )),
+                Some(carried) if carried.into_the_function_node_pool.id == link.id => {
+                    Some(rendered_link_carried_through_the_function_node_pool(
+                        carried,
+                        node_names,
+                        verdict_on(
+                            carried.into_the_function_node_pool,
+                            carried.out_of_the_function_node_pool,
+                        )
+                        .as_ref(),
+                    ))
+                }
                 Some(_) => None,
             })
             .collect()

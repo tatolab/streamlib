@@ -545,6 +545,9 @@ impl LoadedStreamInThisRuntime {
                 }
             }
         }
+        if to_judge.is_empty() {
+            return Ok(answers.into_iter().flatten().collect());
+        }
         let mut verdicts = the_verdicts_connect_takes_on_links_with_node_types_ports(
             &self.compiler,
             held,

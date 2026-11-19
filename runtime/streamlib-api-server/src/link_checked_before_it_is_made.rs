@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use serde::Deserialize;
 use serde_json::Value;
 use streamlib::sdk::error::PortDirection;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
@@ -16,7 +17,8 @@ use streamlib_project_repository::{
     GraphEditStream, StreamGraphActionLinkEnd, StreamGraphDocumentLinkEnd, StreamGraphOperation,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, LinkCheckResult, StreamGraphOnTheWire,
+    ControlOperationRefusalCode, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, LinkCheckResult,
+    StreamGraphOnTheWire,
 };
 use uuid::Uuid;
 
@@ -131,7 +133,7 @@ impl ControlOperationDispatcher {
             .to_json_async()
             .await
             .map_err(of_an_engine_error)?;
-        let rendered = serde_json::from_value(rendered_graph.clone()).map_err(|refusal| {
+        let rendered = StreamGraphOnTheWire::deserialize(&rendered_graph).map_err(|refusal| {
             NoRunningGraphToCheckLinksOn::Refused(ControlOperationRefusal::runtime_failed(format!(
                 "{method_name} failed: the stream's graph did not read as `graph` renders \
                      one: {refusal}"
@@ -241,11 +243,10 @@ impl TheRunningGraphLinksAreCheckedOn {
             Some(placed.node_type.as_str().to_owned()),
             self.stream_operations.as_ref(),
         );
-        let ports = match held_direction {
-            PortDirection::Input => &placed.ports.inputs,
-            PortDirection::Output => &placed.ports.outputs,
-        };
-        if !ports.iter().any(|placed_port| placed_port.name == port) {
+        if !the_ports_of(&placed.ports, held_direction)
+            .iter()
+            .any(|placed_port| placed_port.name == port)
+        {
             return Err(port_not_found());
         }
         Ok(StreamGraphDocumentLinkEnd { node, port })
@@ -290,7 +291,7 @@ impl TheRunningGraphLinksAreCheckedOn {
     /// live connect, the port by what it declares, and nothing described or registered, so a
     /// type the stream has not described yet is not checked yet. A refusal names no link,
     /// since no node holds the port yet.
-    pub(crate) fn check_with_node_types_ports(
+    pub(crate) async fn check_with_node_types_ports(
         &self,
         held: &StreamGraphDocumentLinkEnd,
         held_direction: PortDirection,
@@ -308,7 +309,9 @@ impl TheRunningGraphLinksAreCheckedOn {
                 held,
                 held_direction,
                 node_types_ports,
-            ) {
+            )
+            .await
+        {
             Ok(what_each_makes) => what_each_makes
                 .into_iter()
                 .map(|what_it_makes| {
@@ -323,6 +326,17 @@ impl TheRunningGraphLinksAreCheckedOn {
                 vec![Ok(refused); node_types_ports.len()]
             }
         }
+    }
+}
+
+/// The ports of `direction` among `ports`, as `graph` renders a node's.
+pub(crate) fn the_ports_of(
+    ports: &GraphNodePortsOnTheWire,
+    direction: PortDirection,
+) -> &[GraphNodePortOnTheWire] {
+    match direction {
+        PortDirection::Input => &ports.inputs,
+        PortDirection::Output => &ports.outputs,
     }
 }
 

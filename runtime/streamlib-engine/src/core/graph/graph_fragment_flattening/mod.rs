@@ -30,9 +30,9 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
 };
 use crate::core::json_schema::{
-    GraphFragmentOutput, GraphNodeKindOnTheWire, GraphNodeOutput, GraphNodePortsOnTheWire,
-    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, LinkStateOutput,
-    redraw_a_node_over_its_pins,
+    GraphFragmentOutput, GraphNodeComponentsOnTheWire, GraphNodeKindOnTheWire, GraphNodeOutput,
+    GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
+    LinkStateOutput, PinLinkMarksOnTheWire, redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
@@ -526,7 +526,7 @@ impl GraphFragmentAsDrawn {
             exposed_config_fields: self.node.exposed_config_fields.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            components: serde_json::Map::new(),
+            components: GraphNodeComponentsOnTheWire::default(),
             fragment: Some(GraphFragmentOutput {
                 nodes,
                 links,
@@ -742,7 +742,8 @@ fn ends_match(running: &LinkPortRefOutput, drawn: &LinkPortRefOutput) -> bool {
 }
 
 /// `link` rendered with the live keys of the running links it stands for: the first of them
-/// not wired, else the first; with its ends alone when it stands for none.
+/// not wired, else the first; converting for free when any of them does, and warning of each
+/// warning any of them gives, once; with its ends alone when it stands for none.
 fn rendered_with_the_live_keys_of(
     link: &GraphSnapshotLink,
     running_links_it_stands_for: &[&LinkOutput],
@@ -755,9 +756,24 @@ fn rendered_with_the_live_keys_of(
     else {
         return drawn;
     };
+    let mut warnings = Vec::new();
+    for warning in running_links_it_stands_for
+        .iter()
+        .flat_map(|running| &running.marks.warnings)
+    {
+        if !warnings.contains(warning) {
+            warnings.push(warning.clone());
+        }
+    }
     LinkOutput {
         source: drawn.source,
         target: drawn.target,
+        marks: PinLinkMarksOnTheWire {
+            free_conversion: running_links_it_stands_for
+                .iter()
+                .any(|running| running.marks.free_conversion),
+            warnings,
+        },
         ..(*running).clone()
     }
 }
@@ -805,7 +821,7 @@ fn rendered_as_stored(
         exposed_config_fields: node.exposed_config_fields.clone(),
         studio: node.studio.clone(),
         inputs_waiting_for_a_value: Vec::new(),
-        components: serde_json::Map::new(),
+        components: GraphNodeComponentsOnTheWire::default(),
         fragment: None,
     }
 }
@@ -822,10 +838,7 @@ fn rendered_as_drawn(link: &GraphSnapshotLink) -> LinkOutput {
             node: cast_or_as_written(&link.target.node),
             port: link.target.port.clone(),
         },
-        capacity: Default::default(),
-        state: Default::default(),
-        error_reason: None,
-        components: serde_json::Map::new(),
+        ..LinkOutput::default()
     }
 }
 

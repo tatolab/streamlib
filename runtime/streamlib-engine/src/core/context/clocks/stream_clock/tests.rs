@@ -130,7 +130,7 @@ fn the_spec_reads_and_writes_the_graph_documents_clock_key() {
 #[test]
 fn a_spec_this_runtime_cannot_run_is_refused_naming_the_stream() {
     let refusal = |spec: StreamClockSpec| {
-        spec.refusal_unless_this_runtime_runs_it("rig")
+        refuse_a_stream_clock_this_runtime_cannot_run(&spec, "rig")
             .unwrap_err()
             .to_string()
     };
@@ -172,27 +172,31 @@ fn a_spec_this_runtime_cannot_run_is_refused_naming_the_stream() {
         })
         .contains("after 0 steps")
     );
-    StreamClockSpec::Stepped {
-        step_ns: 1,
-        pace: Some(2.0),
-        stop_after_steps: Some(1),
-    }
-    .refusal_unless_this_runtime_runs_it("rig")
+    refuse_a_stream_clock_this_runtime_cannot_run(
+        &StreamClockSpec::Stepped {
+            step_ns: 1,
+            pace: Some(2.0),
+            stop_after_steps: Some(1),
+        },
+        "rig",
+    )
     .unwrap();
-    StreamClockSpec::Real
-        .refusal_unless_this_runtime_runs_it("rig")
-        .unwrap();
-    StreamClockSpec::Scaled {
-        scale: 1.0,
-        step_ns: 1,
-    }
-    .refusal_unless_this_runtime_runs_it("rig")
+    refuse_a_stream_clock_this_runtime_cannot_run(&StreamClockSpec::Real, "rig").unwrap();
+    refuse_a_stream_clock_this_runtime_cannot_run(
+        &StreamClockSpec::Scaled {
+            scale: 1.0,
+            step_ns: 1,
+        },
+        "rig",
+    )
     .unwrap();
-    StreamClockSpec::Scaled {
-        scale: 8.0,
-        step_ns: 1,
-    }
-    .refusal_unless_this_runtime_runs_it("rig")
+    refuse_a_stream_clock_this_runtime_cannot_run(
+        &StreamClockSpec::Scaled {
+            scale: 8.0,
+            step_ns: 1,
+        },
+        "rig",
+    )
     .unwrap();
 }
 

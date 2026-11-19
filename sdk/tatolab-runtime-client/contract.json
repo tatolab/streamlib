@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 8
+    "x-contract-revision": 9
   },
   "methods": [
     {
@@ -493,7 +493,7 @@
     {
       "name": "graph",
       "summary": "Export a loaded stream's live graph, or every loaded stream's, with each node's and link's state.",
-      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
+      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -798,7 +798,7 @@
     {
       "name": "check_link_candidates",
       "summary": "Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.",
-      "description": "Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{\"output\": {\"node\": …, \"port\": …}}`, each candidate then an input, or `{\"input\": …}`, each candidate then an output. `among` is `\"placed_ports\"`, every such port of every node at the level; `\"node_type_ports\"`, every such port of every node type the stream resolves, to learn which node type can take an output before placing one; or `{\"ends\": [...]}`, these ends alone, each `{\"kind\": \"placed_port\", \"node\", \"port\"}` or `{\"kind\": \"node_type_port\", \"node_type\", \"port\"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, as `check_link` refuses it, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.",
+      "description": "Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{\"output\": {\"node\": …, \"port\": …}}`, each candidate then an input, or `{\"input\": …}`, each candidate then an output. `among` is `\"placed_ports\"`, every such port of every node at the level; `\"node_type_ports\"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{\"ends\": [...]}`, these ends alone, each `{\"kind\": \"placed_port\", \"node\", \"port\"}` or `{\"kind\": \"node_type_port\", \"node_type\", \"port\"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, as `check_link` refuses it, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -6413,6 +6413,14 @@
             "description": "The stream id this graph was loaded under, its stream's address. Absent until a load."
           },
           "clock": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StreamClockSpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "The clock the stream runs on, tagged by its `mode`: a spec key. Absent when it runs on\nreal time."
           },
           "nodes": {
@@ -6424,7 +6432,9 @@
           },
           "links": {
             "type": "array",
-            "items": true,
+            "items": {
+              "$ref": "#/components/schemas/GraphLinkOnTheWire"
+            },
             "description": "Every link between those nodes' ports."
           },
           "references": {
@@ -6466,6 +6476,94 @@
           "machine"
         ],
         "description": "One stream's graph: its spec keys, the stream document's own, with the live keys beside\nthem, so it loads back as a graph document."
+      },
+      "StreamClockSpec": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "const": "real"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false,
+            "description": "The machine's monotonic clock."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "scale": {
+                "type": "number",
+                "format": "double",
+                "description": "Stream seconds per machine second; greater than zero.",
+                "exclusiveMinimum": 0
+              },
+              "step_ns": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+                "description": "Stream nanoseconds per step when the scale runs behind the step barrier; at least one.",
+                "default": 16666667
+              },
+              "mode": {
+                "type": "string",
+                "const": "scaled"
+              }
+            },
+            "required": [
+              "mode",
+              "scale"
+            ],
+            "description": "`base + scale × elapsed` on the machine's monotonic clock."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "step_ns": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+                "description": "Stream nanoseconds per step; at least one."
+              },
+              "pace": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double",
+                "description": "The multiple of real time steps are paced to, greater than zero; unpaced when absent\nor null.",
+                "default": null,
+                "exclusiveMinimum": 0
+              },
+              "stop_after_steps": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 1,
+                "description": "The step after which the stream stops itself, at least the first; it runs on while\nabsent or null.",
+                "default": null
+              },
+              "mode": {
+                "type": "string",
+                "const": "stepped"
+              }
+            },
+            "required": [
+              "mode",
+              "step_ns"
+            ],
+            "description": "Advances `step_ns` at a time, once every node finished the step."
+          }
+        ],
+        "description": "The clock a stream's spec names: the graph document's `clock` key, tagged by its `mode`."
       },
       "GraphNodeOnTheWire": {
         "type": "object",
@@ -6550,8 +6648,7 @@
             "description": "The inputs of a function node that no link feeds, that carry no saved value and that\ndeclare no default; the node holds without evaluating until each has a value."
           },
           "components": {
-            "type": "object",
-            "additionalProperties": true,
+            "$ref": "#/components/schemas/GraphNodeComponentsOnTheWire",
             "description": "The node's live state and counters, by component."
           },
           "fragment": {
@@ -7371,6 +7468,555 @@
         ],
         "description": "Where the value an input reads comes from, as `graph` renders it."
       },
+      "GraphNodeComponentsOnTheWire": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeStateOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The node's state now."
+          },
+          "failed_because": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the node failed, while its state is `Error`; null on a node that has not failed."
+          },
+          "process_raising_because": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the node's `process()` keeps raising, while it does; null once a call runs cleanly."
+          },
+          "not_ready_because": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a running node is not ready, in its own words, while it says so; null once it\nreports itself ready."
+          },
+          "helper_process_restarts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HelperProcessRestartsOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a node in a helper process of its own, the helper processes started for it since its\nstream loaded."
+          },
+          "metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeMetricsOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The node's counters: the bags lost on its inbound links and refused and sent on its\noutput ports."
+          },
+          "paused": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the node is paused with its stream."
+          },
+          "pending_deletion": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` on a node a removal is deleting."
+          },
+          "ready_barrier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeReadyBarrierOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the node's thread has signalled it is ready, and has been told to continue."
+          },
+          "shutdown_channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeShutdownChannelOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The channel the node's thread is told to shut down on."
+          },
+          "thread_handle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeThreadHandleOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The thread the node runs on."
+          },
+          "node_instance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeInstanceOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The node's instance in the runtime's own process."
+          },
+          "host": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FunctionNodeHostOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a function node is evaluated."
+          },
+          "ran_compiled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the helper that last evaluated a function node ran it compiled; absent until one\nreports."
+          },
+          "fused_group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShaderNodeFusedGroupOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The shader nodes evaluated with this one as one island."
+          },
+          "function_node_state": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "On a stateful function node, each field of the state its stream carries now, by field."
+          },
+          "graph_interface": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphInterfacePortOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a graph interface node, the port of the stream it declares."
+          },
+          "graph_variable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphVariableOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a graph variable's node, the variable."
+          }
+        },
+        "required": [
+          "failed_because",
+          "process_raising_because",
+          "not_ready_because"
+        ],
+        "description": "What the runtime keeps on a node, each under its own key. `failed_because`,\n`process_raising_because` and `not_ready_because` are always present, null when unset; every\nother key is absent where the node keeps nothing of that kind."
+      },
+      "NodeStateOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "Pending",
+            "description": "Waiting to be started."
+          },
+          {
+            "type": "string",
+            "const": "Idle",
+            "description": "Prepared, its `setup` not yet run."
+          },
+          {
+            "type": "string",
+            "const": "Running",
+            "description": "Running."
+          },
+          {
+            "type": "string",
+            "const": "Paused",
+            "description": "Paused with its stream."
+          },
+          {
+            "type": "string",
+            "const": "Stopping",
+            "description": "Shutting down."
+          },
+          {
+            "type": "string",
+            "const": "Stopped",
+            "description": "Stopped."
+          },
+          {
+            "type": "string",
+            "const": "Error",
+            "description": "Failed; `graph` says why."
+          },
+          {
+            "type": "string",
+            "const": "Restarting",
+            "description": "Its helper process died on its own and a new one starts after a backoff."
+          }
+        ],
+        "description": "A node's state as `graph` renders it."
+      },
+      "HelperProcessRestartsOnTheWire": {
+        "type": "object",
+        "properties": {
+          "restart_count": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "New helper processes started since the stream loaded."
+          },
+          "last_exit_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last death's exit and the end of its standard error; null before the first."
+          }
+        },
+        "required": [
+          "restart_count"
+        ],
+        "description": "The helper processes started for a node since its stream loaded."
+      },
+      "NodeMetricsOnTheWire": {
+        "type": "object",
+        "properties": {
+          "frames_dropped": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The bags lost on every inbound link, summed."
+          },
+          "dropped_bags_by_link": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "description": "The bags lost on each inbound link, by link id."
+          },
+          "refused_bags_by_output_port": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "description": "The bags refused at the ceiling on each output port with a channel, by port."
+          },
+          "written_bags_by_output_port": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "description": "The bags sent on each output port with a channel, by port: what the losses downstream\nare counted against."
+          },
+          "discarded_samples_by_link": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "description": "The samples discarded on each inbound link into a windowed port, by link id; absent when\nnone was."
+          },
+          "given_up_groups_by_output_port": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "description": "The groups given up upstream on each output port whose writer gave one up, by port;\nabsent when none was."
+          },
+          "promoted_out_of_its_readers_islands": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FunctionNodePromotionOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What moved this function node out of its readers' islands into a process of its own;\nabsent on a node never moved."
+          }
+        },
+        "required": [
+          "frames_dropped",
+          "dropped_bags_by_link",
+          "refused_bags_by_output_port",
+          "written_bags_by_output_port"
+        ],
+        "description": "A node's counters, each by the link or the port it counts on."
+      },
+      "FunctionNodePromotionOnTheWire": {
+        "type": "object",
+        "properties": {
+          "promotions": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The times it was moved; a node is moved once."
+          },
+          "after_crashing_the_helper_of": {
+            "type": "string",
+            "description": "The name in the graph of the reader whose helper the node crashed or stalled."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why that helper was lost, as its death was reported."
+          }
+        },
+        "required": [
+          "promotions",
+          "after_crashing_the_helper_of",
+          "reason"
+        ],
+        "description": "What moved a function node out of its readers' islands into a process of its own."
+      },
+      "NodeReadyBarrierOnTheWire": {
+        "type": "object",
+        "properties": {
+          "ready_signaled": {
+            "type": "boolean",
+            "description": "Whether the node's thread signalled it is ready."
+          },
+          "continue_received": {
+            "type": "boolean",
+            "description": "Whether the node's thread was told to continue."
+          }
+        },
+        "required": [
+          "ready_signaled",
+          "continue_received"
+        ],
+        "description": "Whether a node's thread has signalled it is ready, and has been told to continue."
+      },
+      "NodeShutdownChannelOnTheWire": {
+        "type": "object",
+        "properties": {
+          "receiver_taken": {
+            "type": "boolean",
+            "description": "Whether the node's thread has taken the channel's receiver."
+          }
+        },
+        "required": [
+          "receiver_taken"
+        ],
+        "description": "The channel a node's thread is told to shut down on."
+      },
+      "NodeThreadHandleOnTheWire": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "The thread's id, as the runtime prints it."
+          },
+          "thread_name": {
+            "type": "string",
+            "description": "The thread's name."
+          }
+        },
+        "required": [
+          "thread_id",
+          "thread_name"
+        ],
+        "description": "The thread a node runs on."
+      },
+      "NodeInstanceOnTheWire": {
+        "type": "object",
+        "properties": {
+          "arc_strong_count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "The strong references held to the instance."
+          },
+          "arc_weak_count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "The weak references held to the instance."
+          }
+        },
+        "required": [
+          "arc_strong_count",
+          "arc_weak_count"
+        ],
+        "description": "A node's instance in the runtime's own process."
+      },
+      "FunctionNodeHostOnTheWire": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "inside_the_read_of": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "inside_the_read_of"
+            ],
+            "additionalProperties": false,
+            "description": "Inside the read of each reader named, by node id."
+          },
+          {
+            "type": "string",
+            "const": "in_a_helper_process_of_its_own",
+            "description": "In a helper process of its own."
+          }
+        ],
+        "description": "Where a function node is evaluated."
+      },
+      "ShaderNodeFusedGroupOnTheWire": {
+        "type": "object",
+        "properties": {
+          "evaluated_by": {
+            "type": "string",
+            "description": "The node that evaluates the island."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The island's members, by name, in evaluation order."
+          },
+          "kernels": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "The members each kernel of the last evaluation fused, by name; null before the first."
+          },
+          "submissions": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The submissions every evaluation so far recorded."
+          },
+          "dispatches": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The dispatches every evaluation so far recorded."
+          }
+        },
+        "required": [
+          "evaluated_by",
+          "members",
+          "submissions",
+          "dispatches"
+        ],
+        "description": "The shader nodes one evaluator runs as one island, and how its evaluations cut them into\nkernels."
+      },
+      "GraphInterfacePortOnTheWire": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/GraphInterfacePortDirectionOnTheWire",
+            "description": "Whether the stream takes the port in or gives it out."
+          },
+          "port": {
+            "type": "string",
+            "description": "The port's name on the stream."
+          },
+          "family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The port family the port carries; null while the runtime waits for a link to settle it."
+          },
+          "current_value": {
+            "description": "On a `GraphInput` node, the value its `value` input reads now: the one set live, else its\nsaved one. Absent elsewhere, and where it reads none."
+          }
+        },
+        "required": [
+          "direction",
+          "port"
+        ],
+        "description": "The port of its stream a graph interface node declares, on the node and on each link with an\nend on it."
+      },
+      "GraphInterfacePortDirectionOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "input",
+            "description": "The stream takes it in, through a `GraphInput` node."
+          },
+          {
+            "type": "string",
+            "const": "output",
+            "description": "The stream gives it out, through a `GraphOutput` node."
+          }
+        ],
+        "description": "Whether a stream takes a port it declares in or gives it out."
+      },
+      "GraphVariableOnTheWire": {
+        "type": "object",
+        "properties": {
+          "variable": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The variable's name; null on a node no setter or getter names one for."
+          }
+        },
+        "description": "The graph variable a variable's node, or a link with an end on one, stands for."
+      },
       "GraphFragmentOnTheWire": {
         "type": "object",
         "properties": {
@@ -7383,7 +8029,9 @@
           },
           "links": {
             "type": "array",
-            "items": true,
+            "items": {
+              "$ref": "#/components/schemas/GraphLinkOnTheWire"
+            },
             "description": "Every link between those nodes' ports."
           },
           "groups": {
@@ -7399,6 +8047,343 @@
           "links"
         ],
         "description": "The nodes and links a fragment holds, each link end naming a node of the fragment."
+      },
+      "GraphLinkOnTheWire": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The link's id; empty on a link drawn with an end on a node that runs as no node of its\nown, a graph interface node or a fragment, which no running link stands for."
+          },
+          "source": {
+            "$ref": "#/components/schemas/GraphLinkPortRefOnTheWire",
+            "description": "The output port the link carries from."
+          },
+          "target": {
+            "$ref": "#/components/schemas/GraphLinkPortRefOnTheWire",
+            "description": "The input port the link carries into."
+          },
+          "capacity": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "The samples the link's channel holds.",
+            "default": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/GraphLinkStateOnTheWire",
+            "description": "The link's state now.",
+            "default": "pending"
+          },
+          "error_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the link is in the `error` state, in the words of the helper process that could not\nopen its port, or of the graph's validation that refused it as its stream loaded. Absent\nin every other state, so a reader that finds it knows the link carries nothing and will\nnot start to: disconnect it and wire again."
+          },
+          "free_conversion": {
+            "type": "boolean",
+            "description": "`true` when the input reads what the output carries as its own type at no cost: Boolean,\nInteger and Float among themselves, a Vector into a Vector or a Color, one number into a\nVector or a Color, or a Menu into a String. Absent on every other link."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinLinkWarningOnTheWire"
+            },
+            "description": "What the link does that a person may not expect, as the judgement of its two ends' pin\ntypes says; none of these blocks it. Absent when it warns of nothing."
+          },
+          "components": {
+            "$ref": "#/components/schemas/GraphLinkComponentsOnTheWire",
+            "description": "What the runtime keeps on the link, by what it is."
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target",
+          "components"
+        ],
+        "description": "One link of a stream's graph, from an output port to an input port."
+      },
+      "GraphLinkPortRefOnTheWire": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "The node's name."
+          },
+          "port": {
+            "type": "string",
+            "description": "The port's own name on that node."
+          }
+        },
+        "required": [
+          "node",
+          "port"
+        ],
+        "description": "One end of a link of a stream's graph: a node by its name, and one of its ports."
+      },
+      "GraphLinkStateOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "pending",
+            "description": "In the graph, not wired yet."
+          },
+          {
+            "type": "string",
+            "const": "wired",
+            "description": "Wired, its channel carrying samples."
+          },
+          {
+            "type": "string",
+            "const": "disconnecting",
+            "description": "Being disconnected."
+          },
+          {
+            "type": "string",
+            "const": "disconnected",
+            "description": "Disconnected."
+          },
+          {
+            "type": "string",
+            "const": "error",
+            "description": "Wiring failed; `error_reason` says why."
+          }
+        ],
+        "description": "The state of a link of a stream's graph."
+      },
+      "PinLinkWarningOnTheWire": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "output_meaning": {
+                "type": "string",
+                "description": "The output's meaning."
+              },
+              "input_meaning": {
+                "type": "string",
+                "description": "The input's meaning."
+              },
+              "warning": {
+                "type": "string",
+                "const": "meanings_differ"
+              }
+            },
+            "required": [
+              "warning",
+              "output_meaning",
+              "input_meaning"
+            ],
+            "description": "The two ends state different meanings for what they carry."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "member": {
+                "type": "string",
+                "description": "The member."
+              },
+              "output_meaning": {
+                "type": "string",
+                "description": "The output member's meaning."
+              },
+              "input_meaning": {
+                "type": "string",
+                "description": "The input member's meaning."
+              },
+              "warning": {
+                "type": "string",
+                "const": "member_meanings_differ"
+              }
+            },
+            "required": [
+              "warning",
+              "member",
+              "output_meaning",
+              "input_meaning"
+            ],
+            "description": "A member of two bundles states a different meaning at each end."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "vector_read_as_a_color"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "A Vector is read as a Color: x, y, z and w become red, green, blue and alpha."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "option_names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Each such option, as the output names it."
+              },
+              "warning": {
+                "type": "string",
+                "const": "menu_options_the_input_does_not_list"
+              }
+            },
+            "required": [
+              "warning",
+              "option_names"
+            ],
+            "description": "The output may send Menu options the input does not list."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "texture_output_states_no_format"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "The output states no pixel format, so it may send one the input cannot take."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "type_found_only_once_placed"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "The candidate, a node type's port, finds its type from a link into its node or from a\nsetting, so it is judged as taking the other end's type; a node of the type, once placed\nand given them, may still refuse the link."
+          }
+        ],
+        "description": "What a link does that a person may not expect, tagged by its `warning`."
+      },
+      "GraphLinkComponentsOnTheWire": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphLinkStateComponentOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The link's state as wiring stamped it, spelled with a capital: always the link's `state`."
+          },
+          "pending_deletion": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` on a link a disconnect is removing."
+          },
+          "carried_through_the_function_node_pool": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LinkCarriedThroughTheFunctionNodePoolOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a link from a function node island into a reader that cannot evaluate it, the ports of\nthe stream's function node pool it is carried through."
+          },
+          "read_through_the_reader_of_its_function_node_island": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "On a link out of a function node island that its reader evaluates, each input port of\nthat reader the link is read through, sorted."
+          },
+          "graph_interface": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphInterfacePortOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a link with an end on a graph interface node, the port of the stream that node\ndeclares."
+          },
+          "graph_variable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphVariableOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a link with an end on a graph variable's node, the variable."
+          }
+        },
+        "description": "What the runtime keeps on a link, each under its own key; a key is absent where the link\nkeeps nothing of that kind."
+      },
+      "GraphLinkStateComponentOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "Pending",
+            "description": "In the graph, not wired yet."
+          },
+          {
+            "type": "string",
+            "const": "Wired",
+            "description": "Wired, its channel carrying samples."
+          },
+          {
+            "type": "string",
+            "const": "Disconnecting",
+            "description": "Being disconnected."
+          },
+          {
+            "type": "string",
+            "const": "Disconnected",
+            "description": "Disconnected."
+          },
+          {
+            "type": "string",
+            "const": "Error",
+            "description": "Wiring failed; `error_reason` says why."
+          }
+        ],
+        "description": "A link's state as wiring stamped it on the link, spelled with a capital: always the link's `state`."
+      },
+      "LinkCarriedThroughTheFunctionNodePoolOnTheWire": {
+        "type": "object",
+        "properties": {
+          "input_port": {
+            "type": "string",
+            "description": "The pool's input port the island's output feeds."
+          },
+          "output_port": {
+            "type": "string",
+            "description": "The pool's output port that feeds the reader."
+          }
+        },
+        "required": [
+          "input_port",
+          "output_port"
+        ],
+        "description": "The two ports of the stream's function node pool a link is carried through."
       },
       "LabelledNodeGroup": {
         "type": "object",
@@ -8978,122 +9963,6 @@
           "output_pin_type"
         ],
         "description": "The node of one built-in conversion a link is made through."
-      },
-      "PinLinkWarningOnTheWire": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "output_meaning": {
-                "type": "string",
-                "description": "The output's meaning."
-              },
-              "input_meaning": {
-                "type": "string",
-                "description": "The input's meaning."
-              },
-              "warning": {
-                "type": "string",
-                "const": "meanings_differ"
-              }
-            },
-            "required": [
-              "warning",
-              "output_meaning",
-              "input_meaning"
-            ],
-            "description": "The two ends state different meanings for what they carry."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "member": {
-                "type": "string",
-                "description": "The member."
-              },
-              "output_meaning": {
-                "type": "string",
-                "description": "The output member's meaning."
-              },
-              "input_meaning": {
-                "type": "string",
-                "description": "The input member's meaning."
-              },
-              "warning": {
-                "type": "string",
-                "const": "member_meanings_differ"
-              }
-            },
-            "required": [
-              "warning",
-              "member",
-              "output_meaning",
-              "input_meaning"
-            ],
-            "description": "A member of two bundles states a different meaning at each end."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "warning": {
-                "type": "string",
-                "const": "vector_read_as_a_color"
-              }
-            },
-            "required": [
-              "warning"
-            ],
-            "description": "A Vector is read as a Color: x, y, z and w become red, green, blue and alpha."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "option_names": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Each such option, as the output names it."
-              },
-              "warning": {
-                "type": "string",
-                "const": "menu_options_the_input_does_not_list"
-              }
-            },
-            "required": [
-              "warning",
-              "option_names"
-            ],
-            "description": "The output may send Menu options the input does not list."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "warning": {
-                "type": "string",
-                "const": "texture_output_states_no_format"
-              }
-            },
-            "required": [
-              "warning"
-            ],
-            "description": "The output states no pixel format, so it may send one the input cannot take."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "warning": {
-                "type": "string",
-                "const": "type_found_only_once_placed"
-              }
-            },
-            "required": [
-              "warning"
-            ],
-            "description": "The candidate, a node type's port, finds its type from a link into its node or from a\nsetting, so it is judged as taking the other end's type; a node of the type, once placed\nand given them, may still refuse the link."
-          }
-        ],
-        "description": "What a link does that a person may not expect, tagged by its `warning`."
       },
       "CheckLinkCandidatesRequest": {
         "type": "object",
@@ -14335,51 +15204,6 @@
           }
         ],
         "description": "What changed in a loaded stream's live graph."
-      },
-      "NodeStateOnTheWire": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "Pending",
-            "description": "Waiting to be started."
-          },
-          {
-            "type": "string",
-            "const": "Idle",
-            "description": "Prepared, its `setup` not yet run."
-          },
-          {
-            "type": "string",
-            "const": "Running",
-            "description": "Running."
-          },
-          {
-            "type": "string",
-            "const": "Paused",
-            "description": "Paused with its stream."
-          },
-          {
-            "type": "string",
-            "const": "Stopping",
-            "description": "Shutting down."
-          },
-          {
-            "type": "string",
-            "const": "Stopped",
-            "description": "Stopped."
-          },
-          {
-            "type": "string",
-            "const": "Error",
-            "description": "Failed; `graph` says why."
-          },
-          {
-            "type": "string",
-            "const": "Restarting",
-            "description": "Its helper process died on its own and a new one starts after a backoff."
-          }
-        ],
-        "description": "A node's state as `graph` renders it."
       },
       "InputValueChangedNotificationParams": {
         "type": "object",

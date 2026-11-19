@@ -97,13 +97,14 @@ pub trait RuntimeOperations: Send + Sync {
     /// judged as [`Self::what_a_live_connect_makes_of_the_link`] judges a link, the port by what
     /// it declares, and made nowhere; each refused as its connect would be refused. Nothing is
     /// described: a node type the stream has not described yet is answered
-    /// [`WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed`].
-    fn what_a_live_connect_makes_of_links_with_node_types_ports(
-        &self,
-        held: &streamlib_project_repository::StreamGraphDocumentLinkEnd,
+    /// [`WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed`]. The judgement
+    /// runs in this stream's log route, so what it logs reaches the stream's log.
+    fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+        &'a self,
+        held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,
         held_direction: crate::core::PortDirection,
-        node_types_ports: &[ANodeTypesPort<'_>],
-    ) -> Result<Vec<Result<WhatALiveConnectMakesOfALink>>>;
+        node_types_ports: &'a [ANodeTypesPort<'a>],
+    ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>>;
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.

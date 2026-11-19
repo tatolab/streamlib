@@ -3,7 +3,7 @@
 
 //! `graph`'s answer from a real runtime reads as the contract types it: the TypeScript client
 //! checks the answer as it reads it, every key the answer carries is one the contract states,
-//! and each input says where the value it reads comes from.
+//! each input says where the value it reads comes from, and a link says when it converts.
 
 use tokio::io::AsyncReadExt;
 
@@ -15,9 +15,11 @@ use super::*;
 const LIVE_MIXER_NODE_UUID: &str = "1c1c1c1c-1c1c-4c1c-8c1c-1c1c1c1c1c1c";
 const SAVED_MIXER_NODE_UUID: &str = "2d2d2d2d-2d2d-4d2d-8d2d-2d2d2d2d2d2d";
 const WIRED_MIXER_NODE_UUID: &str = "3e3e3e3e-3e3e-4e3e-8e3e-3e3e3e3e3e3e";
+const COUNTED_MIXER_NODE_UUID: &str = "4f4f4f4f-4f4f-4f4f-8f4f-4f4f4f4f4f4f";
 
-/// A project whose stream `main` holds three mixers, whose `gain` reads a value set live, a
-/// saved one and what a link from the first mixer carries; the first holds a config field.
+/// A project whose stream `main` holds four mixers, whose `gain` reads a value set live, a
+/// saved one, what a link from the first mixer's Float `level` carries, and what one from its
+/// Integer `count` carries, read for free; the first holds a config field.
 fn a_project_whose_mixers_read_their_gain_from_each_place() -> ProjectWithGraphDocuments {
     register_the_input_value_test_node_once();
     let mixer = InputValueTestNode::node_class_import_path();
@@ -29,10 +31,13 @@ fn a_project_whose_mixers_read_their_gain_from_each_place() -> ProjectWithGraphD
             { "id": SAVED_MIXER_NODE_UUID, "name": "saved_mixer", "type": mixer.as_str(),
               "input_values": { "gain": 0.5 } },
             { "id": WIRED_MIXER_NODE_UUID, "name": "wired_mixer", "type": mixer.as_str() },
+            { "id": COUNTED_MIXER_NODE_UUID, "name": "counted_mixer", "type": mixer.as_str() },
         ],
         "links": [
             { "source": { "node": LIVE_MIXER_NODE_UUID, "port": "level" },
               "target": { "node": WIRED_MIXER_NODE_UUID, "port": "gain" } },
+            { "source": { "node": LIVE_MIXER_NODE_UUID, "port": "count" },
+              "target": { "node": COUNTED_MIXER_NODE_UUID, "port": "gain" } },
         ],
     }))
 }
@@ -137,4 +142,27 @@ async fn a_real_runtimes_graph_reads_as_the_contract_types_it_and_names_where_ea
     let wired_gain = the_input_named(&the_node_named(one_stream, "wired_mixer"), "gain");
     assert!(wired_gain.get("value").is_none(), "{wired_gain}");
     assert_eq!(wired_gain["value_comes_from"], "wire");
+    let level_into_gain = the_link_into(one_stream, "wired_mixer");
+    assert!(
+        level_into_gain.get("free_conversion").is_none()
+            && level_into_gain.get("warnings").is_none(),
+        "a Float into a Float converts nothing and warns of nothing: {level_into_gain}"
+    );
+    let count_into_gain = the_link_into(one_stream, "counted_mixer");
+    assert_eq!(
+        count_into_gain["free_conversion"], true,
+        "an Integer read as a Float converts for free: {count_into_gain}"
+    );
+    assert_eq!(
+        count_into_gain["source"],
+        json!({ "node": "live_mixer", "port": "count" })
+    );
+}
+
+/// The link of `graph` into node `node`.
+fn the_link_into<'graph>(graph: &'graph Value, node: &str) -> &'graph Value {
+    graph["links"]
+        .as_array()
+        .and_then(|links| links.iter().find(|link| link["target"]["node"] == node))
+        .unwrap_or_else(|| panic!("a link feeds `{node}`: {graph}"))
 }

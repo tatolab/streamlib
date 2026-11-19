@@ -5,6 +5,8 @@
 //! `check_link` answers for its link with the placed end, from an output or from an input, over
 //! the placed ports, the node types' ports or a list of ends, and changes nothing.
 
+use parking_lot::Mutex;
+use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 use streamlib::sdk::runtime::graph_renders_and_commits_counted_for_a_test::commits_begun_of;
 use streamlib_project_repository::GRAPH_INPUT_NODE_TYPE;
 
@@ -329,19 +331,81 @@ async fn a_node_types_port_that_is_no_port_is_answered_refused() {
     );
 }
 
-/// A node type the stream has not described yet is listed under `not_checked`, saying to place
-/// a node of it first; it is not described, so the stream's node catalog is left as it was.
+/// The import path of a node type a project's `nodes/watcher.py` declares, which nothing places.
+const WATCHER_TYPE: &str = "nodes.watcher:Watcher";
+
+/// The source of `nodes/watcher.py`: one process node taking each Image frame.
+const WATCHER_SOURCE: &str = "\
+from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
+
+
+@node.process
+class Watcher:
+    \"\"\"Takes each frame and keeps nothing.\"\"\"
+
+    video = Input(Image, delivery=\"newest\")
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.inputs.read(self.video)
+";
+
+/// Each node type registered on one stream's topic.
+#[derive(Default)]
+struct NodeTypesRegisteredOnOneStream(Vec<String>);
+
+impl EventListener for NodeTypesRegisteredOnOneStream {
+    fn on_event(&mut self, event: &Event) -> Result<()> {
+        if let Event::OfALoadedStream {
+            event: RuntimeEvent::RuntimeDidRegisterNodeType { node_type },
+            ..
+        } = event
+        {
+            self.0.push(node_type.as_str().to_owned());
+        }
+        Ok(())
+    }
+
+    fn on_events_lost(&mut self, lost_event_count: u64) -> Result<()> {
+        panic!("the stream's topic lost {lost_event_count} events, which this test reads");
+    }
+}
+
+/// A project's own node type, in its `nodes/watcher.py`, that nothing has placed is listed under
+/// `not_checked`, saying to place a node of it first: it is not described, so the stream's node
+/// catalog is left as it was and no registration of a node type is published on its topic.
 ///
-/// Mental-revert: describing the type, as an `add_node` of it would, registers it into the
-/// stream, so the catalog afterwards lists one more type.
+/// Mental-revert: describing the type, as an `add_node` of it would, runs a describe of
+/// `nodes.watcher` in the stream's interpreter. Where that describes it, the type is registered
+/// into the stream and its registration published; where it cannot, the candidate is answered
+/// `refused` with the describe's refusal. Either way it is not listed under `not_checked`.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_node_type_not_described_yet_is_not_checked_and_not_described() {
+async fn a_project_node_type_nothing_placed_is_not_checked_and_not_described() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_function_nodes();
+    let nodes = project.path().join("nodes");
+    std::fs::create_dir_all(&nodes).expect("the nodes folder is made");
+    std::fs::write(nodes.join("__init__.py"), "").expect("the nodes package is written");
+    std::fs::write(nodes.join("watcher.py"), WATCHER_SOURCE).expect("the node file is written");
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let loaded_stream = engine
+        .operations_on_the_loaded_streams()
+        .loaded_stream_identity_of_the_stream_a_call_names(&stream_id)
+        .expect("the stream is loaded");
+    let registered = Arc::new(Mutex::new(NodeTypesRegisteredOnOneStream::default()));
+    PUBSUB
+        .subscribe(
+            &topics::loaded_stream(&loaded_stream),
+            Arc::clone(&registered) as Arc<Mutex<dyn EventListener>>,
+        )
+        .expect("the stream's topic is subscribed");
     let catalog_before = the_node_catalog_of(&engine, &stream_id);
+    assert!(
+        !catalog_before
+            .iter()
+            .any(|node_type| node_type == WATCHER_TYPE)
+    );
     let not_described = json!({
-        "kind": "node_type_port", "node_type": "link_check_test:NotDescribedYet", "port": "x",
+        "kind": "node_type_port", "node_type": WATCHER_TYPE, "port": "video",
     });
 
     let answer = engine
@@ -368,6 +432,8 @@ async fn a_node_type_not_described_yet_is_not_checked_and_not_described() {
         "{answer}"
     );
     assert_eq!(the_node_catalog_of(&engine, &stream_id), catalog_before);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(registered.lock().0, Vec::<String>::new());
 }
 
 /// A graph interface's or a fragment's node type, as a candidate, is listed under `not_checked`
@@ -499,11 +565,13 @@ async fn a_from_naming_no_node_or_a_port_of_the_other_direction_refuses_the_call
     }
 }
 
-/// On a playing stream, judging every node type's port changes nothing a commit reads: no
-/// commit begins, the live graph holds as many nodes as before, and the stream still runs.
+/// On a playing stream, judging every node type's port changes nothing a commit reads: it logs
+/// no operation for the next commit, begins no commit, leaves the live graph holding as many
+/// nodes as before, and the stream still runs.
 ///
-/// Mental-revert: a node held for a judgement logged as a pending operation, or left placed,
-/// begins a commit and leaves one node more in the live graph.
+/// Mental-revert: placing the node held for a judgement through the transaction, as an add
+/// does, logs an operation the next commit would compile; leaving it placed leaves one node
+/// more in the live graph; publishing a graph change for it begins a commit.
 #[tokio::test(flavor = "multi_thread")]
 async fn node_types_candidates_on_a_playing_stream_begin_no_commit_and_leave_it_running() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -518,6 +586,11 @@ async fn node_types_candidates_on_a_playing_stream_begin_no_commit_and_leave_it_
     let nodes_in = |graph: Value| graph["nodes"].as_array().map(Vec::len);
     let nodes_before = nodes_in(engine.the_live_graph_of(&stream_id));
     let commits_begun_before = commits_begun_of(&loaded_stream);
+    let the_stream = engine
+        .engine
+        .loaded_stream_of_the_id(&stream_id)
+        .expect("the stream is loaded");
+    let pending_before = the_stream.pending_operations_logged_for_a_test();
 
     let answer = served
         .control_call(
@@ -537,6 +610,11 @@ async fn node_types_candidates_on_a_playing_stream_begin_no_commit_and_leave_it_
             .as_array()
             .is_some_and(|candidates| !candidates.is_empty()),
         "{answer}"
+    );
+    assert_eq!(
+        the_stream.pending_operations_logged_for_a_test(),
+        pending_before,
+        "a judgement logged an operation for the next commit"
     );
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(

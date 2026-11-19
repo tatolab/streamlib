@@ -671,17 +671,19 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.what_a_connect_makes_of_the_link(link)
     }
 
-    fn what_a_live_connect_makes_of_links_with_node_types_ports(
-        &self,
-        held: &streamlib_project_repository::StreamGraphDocumentLinkEnd,
+    fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+        &'a self,
+        held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,
         held_direction: crate::core::PortDirection,
-        node_types_ports: &[crate::core::runtime::ANodeTypesPort<'_>],
-    ) -> Result<Vec<Result<WhatALiveConnectMakesOfALink>>> {
-        self.what_a_connect_makes_of_links_with_node_types_ports(
-            held,
-            held_direction,
-            node_types_ports,
-        )
+        node_types_ports: &'a [crate::core::runtime::ANodeTypesPort<'a>],
+    ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>> {
+        self.in_this_streams_log_route(async move {
+            self.what_a_connect_makes_of_links_with_node_types_ports(
+                held,
+                held_direction,
+                node_types_ports,
+            )
+        })
     }
 
     fn the_name_a_node_added_with_none_takes(

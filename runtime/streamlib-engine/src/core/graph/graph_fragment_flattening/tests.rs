@@ -5,6 +5,7 @@ use super::*;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
 };
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeStateOnTheWire;
 
 const LOOK_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a01";
 const SOFT_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a02";
@@ -277,7 +278,10 @@ fn a_fragment_written_as_its_graph_document_reads_back_unchanged() {
 
 fn rendered_as_running(node: &GraphSnapshotNode) -> GraphNodeOutput {
     GraphNodeOutput {
-        components: serde_json::Map::from_iter([("running".to_string(), serde_json::json!(true))]),
+        components: GraphNodeComponentsOnTheWire {
+            state: Some(NodeStateOnTheWire::Running),
+            ..GraphNodeComponentsOnTheWire::default()
+        },
         ..rendered_as_stored(node, &NodeTypesOneStreamResolves::new())
     }
 }
@@ -354,8 +358,8 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
         "`tint` feeds the `GraphOutput` `out`"
     );
     assert_eq!(
-        soft_holds.nodes[1].components["running"],
-        serde_json::json!(true)
+        soft_holds.nodes[1].components.state,
+        Some(NodeStateOnTheWire::Running)
     );
     let blur_into_tint = &soft_holds.links[1];
     assert_eq!(
@@ -585,5 +589,82 @@ fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_
     assert_eq!(
         serde_json::Value::Object(blur.pins.clone()),
         serde_json::json!({"amount": 3})
+    );
+}
+
+/// A camera into `look`, whose `GraphInput` feeds both its `blur` and its `tint`: one drawn link
+/// that stands for two running links.
+fn a_camera_into_look_feeding_blur_and_tint() -> serde_json::Value {
+    serde_json::json!({
+        "nodes": [
+            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"id": LOOK_UUID, "name": "look", "type": "looks.generators:look", "config": {},
+             "fragment": {
+                 "nodes": [
+                     {"name": "source", "type": GRAPH_INPUT_NODE_TYPE,
+                      "config": {"port": "video", "family": "image"}},
+                     {"id": BLUR_UUID, "name": "blur", "type": "looks.nodes:Blur",
+                      "config": {}},
+                     {"id": TINT_UUID, "name": "tint", "type": TINT_NODE_TYPE, "config": {}},
+                 ],
+                 "links": [
+                     {"source": {"node": "source", "port": "value"},
+                      "target": {"node": "blur", "port": "video"}},
+                     {"source": {"node": "source", "port": "value"},
+                      "target": {"node": "tint", "port": "video"}},
+                 ],
+             }},
+        ],
+        "links": [
+            {"source": {"node": "camera", "port": "video"},
+             "target": {"node": "look", "port": "video"}},
+        ],
+    })
+}
+
+#[test]
+fn a_drawn_link_into_a_fragment_says_what_any_running_link_it_stands_for_converts_and_warns_of() {
+    use streamlib_runtime_client_contract::local_api_wire_contract::PinLinkWarningOnTheWire;
+    let flattening = flattened(a_camera_into_look_feeding_blur_and_tint()).expect("flattens");
+    let mut render = a_render_of(&flattening.graph_the_runtime_runs);
+    assert_eq!(render.links.len(), 2, "{:?}", render.links);
+    for link in &mut render.links {
+        match link.id.as_str() {
+            "camera->look/blur" => {
+                link.marks.warnings = vec![PinLinkWarningOnTheWire::VectorReadAsAColor];
+            }
+            "camera->look/tint" => {
+                link.marks.free_conversion = true;
+                link.marks.warnings = vec![
+                    PinLinkWarningOnTheWire::VectorReadAsAColor,
+                    PinLinkWarningOnTheWire::TextureOutputStatesNoFormat,
+                ];
+            }
+            other => panic!("no running link {other} in this graph"),
+        }
+    }
+    flattening
+        .fragments_as_drawn
+        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+
+    let camera_into_look = &render.links[0];
+    assert_eq!(
+        (
+            camera_into_look.source.node.as_str(),
+            camera_into_look.target.node.as_str()
+        ),
+        ("camera", "look")
+    );
+    assert!(
+        camera_into_look.marks.free_conversion,
+        "{camera_into_look:?}"
+    );
+    assert_eq!(
+        camera_into_look.marks.warnings,
+        [
+            PinLinkWarningOnTheWire::VectorReadAsAColor,
+            PinLinkWarningOnTheWire::TextureOutputStatesNoFormat,
+        ],
+        "each warning of either running link, once: {camera_into_look:?}"
     );
 }

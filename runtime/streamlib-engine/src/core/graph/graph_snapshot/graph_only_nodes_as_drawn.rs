@@ -175,7 +175,6 @@ impl GraphOnlyNodesAsDrawn {
             graph_response
                 .links
                 .push(crate::core::json_schema::LinkOutput {
-                    id: String::new(),
                     source: LinkPortRefOutput {
                         node: cast(&set_aside.link.source.node),
                         port: set_aside.link.source.port.clone(),
@@ -184,10 +183,9 @@ impl GraphOnlyNodesAsDrawn {
                         node: cast(&set_aside.link.target.node),
                         port: set_aside.link.target.port.clone(),
                     },
-                    capacity: 0,
                     state: crate::core::json_schema::LinkStateOutput::Error,
                     error_reason: Some(set_aside.why_its_validation_refused_it.clone()),
-                    components: serde_json::Map::new(),
+                    ..crate::core::json_schema::LinkOutput::default()
                 });
         }
     }

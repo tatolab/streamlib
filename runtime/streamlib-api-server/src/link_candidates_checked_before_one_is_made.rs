@@ -18,7 +18,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
-use crate::link_checked_before_it_is_made::NoRunningGraphToCheckLinksOn;
+use crate::link_checked_before_it_is_made::{NoRunningGraphToCheckLinksOn, the_ports_of};
 use crate::stream_graph_transaction_executor::{GraphRequestRefusal, GraphTransactionRefusal};
 
 impl ControlOperationDispatcher {
@@ -109,6 +109,7 @@ impl ControlOperationDispatcher {
         }
         let mut node_types_checks = running_graph
             .check_with_node_types_ports(&placed_end, held_direction, &node_types_ports)
+            .await
             .into_iter();
         let mut answer = LinkCandidatesCheckResult {
             candidates: Vec::new(),
@@ -143,14 +144,12 @@ fn the_placed_ports_of(
         .nodes
         .iter()
         .flat_map(|node| {
-            let ports = match direction {
-                PortDirection::Input => &node.ports.inputs,
-                PortDirection::Output => &node.ports.outputs,
-            };
-            ports.iter().map(|port| LinkCandidateEnd::PlacedPort {
-                node: node.id.clone(),
-                port: port.name.clone(),
-            })
+            the_ports_of(&node.ports, direction)
+                .iter()
+                .map(|port| LinkCandidateEnd::PlacedPort {
+                    node: node.id.clone(),
+                    port: port.name.clone(),
+                })
         })
         .collect()
 }
