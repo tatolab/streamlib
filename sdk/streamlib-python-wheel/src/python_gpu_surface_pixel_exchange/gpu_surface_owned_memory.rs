@@ -43,6 +43,12 @@ pub(crate) struct GpuSurfaceOwnedMemory {
     /// makes the second door's refusal reach the first door's edit.
     #[cfg(target_os = "linux")]
     pub(super) pending_staged_write_back: PendingStagedWriteBackToSurface,
+    /// Whether a device-tensor scope over this surface is entered. A second
+    /// one would share the first's staging and its pending edit, and its
+    /// exit would publish the first's edit early and leave the first's
+    /// later writes unarmed.
+    #[cfg(target_os = "linux")]
+    pub(super) a_device_tensor_scope_is_entered: std::sync::atomic::AtomicBool,
 }
 
 impl GpuSurfaceOwnedMemory {
@@ -64,6 +70,8 @@ impl GpuSurfaceOwnedMemory {
             minted_surface_id,
             #[cfg(target_os = "linux")]
             pending_staged_write_back: PendingStagedWriteBackToSurface::new_unarmed(),
+            #[cfg(target_os = "linux")]
+            a_device_tensor_scope_is_entered: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

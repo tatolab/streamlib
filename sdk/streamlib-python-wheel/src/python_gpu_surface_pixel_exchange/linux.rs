@@ -16,8 +16,13 @@ use crate::python_helper_process_pixel_exchange::{
 };
 
 use super::gpu_surface_owned_memory::GpuSurfaceOwnedMemory;
-use super::pending_staged_write_back_to_surface::PendingStagedWriteBackToSurface;
+use super::pending_staged_write_back_to_surface::{
+    PendingStagedWriteBackToSurface, StagedWriteBackSource,
+};
 use super::pixel_exchange_tensor_layout::PixelExchangeTensorLayout;
+use super::pool_slots_holding_a_staged_edit::{
+    PoolSlotHeldForAStagedEdit, ReadingTheFrameIn, SurfaceHandleIdentity,
+};
 use super::{DlpackExchangeShape, HostVisiblePixelPlaneView, dlpack_capsule_over};
 
 impl GpuSurfaceOwnedMemory {
@@ -70,6 +75,69 @@ impl GpuSurfaceOwnedMemory {
     /// one — the cell every door arms, discards and publishes through.
     pub(crate) fn pending_staged_write_back(&self) -> &PendingStagedWriteBackToSurface {
         &self.pending_staged_write_back
+    }
+
+    /// Mark a device-tensor scope over this surface entered, or the refusal
+    /// when one already is.
+    pub(crate) fn enter_a_device_tensor_scope(&self) -> PyResult<()> {
+        if self
+            .a_device_tensor_scope_is_entered
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "surface {:?} already has a device-tensor scope entered; a second one over it \
+                 would publish the first one's edit at its own exit and lose the first one's \
+                 later writes. Use the enclosing scope's tensor",
+                self.surface_id_for_a_refusal(),
+            )));
+        }
+        Ok(())
+    }
+
+    /// Mark the device-tensor scope over this surface left.
+    pub(crate) fn leave_the_device_tensor_scope(&self) {
+        self.a_device_tensor_scope_is_entered
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Arm this surface's staged write-back through `door`, holding its
+    /// pool slot so no other handle reads a frame in over the edit until it
+    /// settles.
+    pub(crate) fn arm_staged_write_back(
+        self: &Arc<Self>,
+        door: StagedWriteBackSource,
+    ) -> PyResult<()> {
+        self.pending_staged_write_back.arm(door, || {
+            self.hold_the_pool_slot_for_an_edit_staged_through(door)
+        })
+    }
+
+    /// `None` for a surface with no id, which no staged door serves.
+    fn hold_the_pool_slot_for_an_edit_staged_through(
+        self: &Arc<Self>,
+        door: StagedWriteBackSource,
+    ) -> PyResult<Option<PoolSlotHeldForAStagedEdit>> {
+        let Some(surface_id) = self.minted_surface_id.as_deref() else {
+            return Ok(None);
+        };
+        self.checked_out_surface
+            .exchange_client()
+            .pool_slots_holding_a_staged_edit()
+            .hold_until_the_edit_settles(surface_id, SurfaceHandleIdentity::of(self), door)
+            .map(Some)
+    }
+
+    /// What reading the frame into this surface's `door` staging does, or
+    /// the refusal when an edit staged over the same pool slot would be lost.
+    fn before_reading_the_frame_in(
+        self: &Arc<Self>,
+        surface_id: &str,
+        door: StagedWriteBackSource,
+    ) -> PyResult<ReadingTheFrameIn> {
+        self.checked_out_surface
+            .exchange_client()
+            .pool_slots_holding_a_staged_edit()
+            .before_reading_the_frame_in(surface_id, SurfaceHandleIdentity::of(self), door)
     }
 
     /// The host-mapped pixel view, or a refusal naming why this surface
@@ -170,12 +238,18 @@ pub(crate) fn prepare_device_export(
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<PreparedDeviceExport> {
     let export = surface_device_export_for(python, owned_memory)?;
-    export.exchange_client.run_device_export_copy(
-        python,
-        "refill_device_export_staging",
+    if owned_memory.before_reading_the_frame_in(
         &export.surface_id,
-        &export.helper_device_export,
-    )?;
+        StagedWriteBackSource::DeviceExportStaging,
+    )? == ReadingTheFrameIn::CopyTheFrameIn
+    {
+        export.exchange_client.run_device_export_copy(
+            python,
+            "refill_device_export_staging",
+            &export.surface_id,
+            &export.helper_device_export,
+        )?;
+    }
     // Geometry comes from the staging alone — the object the byte span was
     // sized for — never mixed with the handle's own pixel view. The engine
     // records the pixel shape for both source kinds (a texture source maps
@@ -364,12 +438,18 @@ pub(crate) fn read_the_frame_into_its_cpu_staging(
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<Arc<HelperCpuReadbackExport>> {
     let staged = surface_cpu_readback_export_for(python, owned_memory)?;
-    staged.exchange_client.run_cpu_readback_copy(
-        python,
-        CpuReadbackCopyDirection::SurfaceIntoStaging,
+    if owned_memory.before_reading_the_frame_in(
         &staged.surface_id,
-        &staged.cpu_readback_export,
-    )?;
+        StagedWriteBackSource::CpuReadbackStaging,
+    )? == ReadingTheFrameIn::CopyTheFrameIn
+    {
+        staged.exchange_client.run_cpu_readback_copy(
+            python,
+            CpuReadbackCopyDirection::SurfaceIntoStaging,
+            &staged.surface_id,
+            &staged.cpu_readback_export,
+        )?;
+    }
     Ok(staged.cpu_readback_export)
 }
 

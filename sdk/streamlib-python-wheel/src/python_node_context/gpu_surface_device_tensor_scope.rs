@@ -116,6 +116,17 @@ fn device_tensor_scope_already_entered_error() -> PyErr {
     )
 }
 
+/// A scope entered by hand and dropped without `__exit__` gives its entry
+/// back, so a later scope over the same surface is not refused for good.
+#[cfg(target_os = "linux")]
+impl Drop for PythonGpuSurfaceDeviceTensorScope {
+    fn drop(&mut self) {
+        if self.prepared_device_export.get_mut().is_some() {
+            self.owned_memory.leave_the_device_tensor_scope();
+        }
+    }
+}
+
 #[pymethods]
 impl PythonGpuSurfaceDeviceTensorScope {
     fn __enter__(python_self: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
@@ -124,8 +135,17 @@ impl PythonGpuSurfaceDeviceTensorScope {
             if python_self.prepared_device_export.lock().is_some() {
                 return Err(device_tensor_scope_already_entered_error());
             }
-            let prepared = prepare_device_export(python_self.py(), &python_self.owned_memory)?;
+            python_self.owned_memory.enter_a_device_tensor_scope()?;
+            let prepared = match prepare_device_export(python_self.py(), &python_self.owned_memory)
+            {
+                Ok(prepared) => prepared,
+                Err(not_prepared) => {
+                    python_self.owned_memory.leave_the_device_tensor_scope();
+                    return Err(not_prepared);
+                }
+            };
             if !prepared.writable {
+                python_self.owned_memory.leave_the_device_tensor_scope();
                 return Err(PyRuntimeError::new_err(
                     "this surface cannot take a write-back — it is a pool member its \
                      producer still owns, or a texture allocated without \"copy_dst\" usage — \
@@ -134,6 +154,17 @@ impl PythonGpuSurfaceDeviceTensorScope {
                      its array out read-only under the same rule. Reading needs no write door: lock(), \
                      then as_numpy or __dlpack__",
                 ));
+            }
+            // Armed, with the pool slot held, right after the refill rather
+            // than at the first capsule: an edit another scope published in
+            // between would be overwritten by this scope's blit-back of a
+            // staging filled before it.
+            if let Err(not_armed) = python_self
+                .owned_memory
+                .arm_staged_write_back(StagedWriteBackSource::DeviceExportStaging)
+            {
+                python_self.owned_memory.leave_the_device_tensor_scope();
+                return Err(not_armed);
             }
             *python_self.prepared_device_export.lock() = Some(prepared);
             Ok(python_self)
@@ -188,7 +219,10 @@ impl PythonGpuSurfaceDeviceTensorScope {
         let _ = (exception, traceback);
         #[cfg(target_os = "linux")]
         {
-            let _prepared_released = self.prepared_device_export.lock().take();
+            let Some(_prepared_released) = self.prepared_device_export.lock().take() else {
+                return Ok(false);
+            };
+            self.owned_memory.leave_the_device_tensor_scope();
             if left_by_a_propagating_exception(exception_type) {
                 self.owned_memory.pending_staged_write_back().discard();
             } else {
@@ -288,13 +322,10 @@ impl PythonGpuSurfaceDeviceTensorScope {
             // read-only export, so every capsule minted here arms the
             // blit-back.
             let no_read_only_lock_applies = false;
-            // Armed before the capsule is minted, like every other door:
-            // the surface's cell is shared with the handle that minted this
-            // scope, so a CPU staged edit already outstanding is refused
-            // here instead of being overwritten at this scope's exit.
+            // `__enter__` armed already; arming again here is the same edit,
+            // and the refusal if this scope's exit discarded it meanwhile.
             self.owned_memory
-                .pending_staged_write_back()
-                .arm(StagedWriteBackSource::DeviceExportStaging)?;
+                .arm_staged_write_back(StagedWriteBackSource::DeviceExportStaging)?;
             let capsule = device_dlpack_capsule(
                 python,
                 &self.owned_memory,
