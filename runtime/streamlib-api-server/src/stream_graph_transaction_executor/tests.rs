@@ -217,7 +217,7 @@ fn an_edit_the_documents_hold_that_a_running_stream_refuses_is_held_with_each_la
 
     assert_eq!(
         *runtime.recorded_graph_mutations.lock(),
-        [carried.clone()],
+        std::slice::from_ref(&carried),
         "the later edit of the stream that refused is not sent to it"
     );
     let held = runtime.recorded_edits_held_not_live.lock().clone();
