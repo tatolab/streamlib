@@ -20,8 +20,8 @@ use super::pending_staged_write_back_to_surface::{
     PendingStagedWriteBackToSurface, StagedWriteBackSource,
 };
 use super::pixel_exchange_tensor_layout::PixelExchangeTensorLayout;
-use super::staged_edits_awaiting_publication::{
-    ReadingTheFrameIn, StagedEditAwaitingPublication, SurfaceHandleIdentity,
+use super::pool_slots_holding_a_staged_edit::{
+    PoolSlotHeldForAStagedEdit, ReadingTheFrameIn, SurfaceHandleIdentity,
 };
 use super::{DlpackExchangeShape, HostVisiblePixelPlaneView, dlpack_capsule_over};
 
@@ -77,6 +77,29 @@ impl GpuSurfaceOwnedMemory {
         &self.pending_staged_write_back
     }
 
+    /// Mark a device-tensor scope over this surface entered, or the refusal
+    /// when one already is.
+    pub(crate) fn enter_a_device_tensor_scope(&self) -> PyResult<()> {
+        if self
+            .a_device_tensor_scope_is_entered
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "surface {:?} already has a device-tensor scope entered; a second one over it \
+                 would publish the first one's edit at its own exit and lose the first one's \
+                 later writes. Use the enclosing scope's tensor",
+                self.surface_id_for_a_refusal(),
+            )));
+        }
+        Ok(())
+    }
+
+    /// Mark the device-tensor scope over this surface left.
+    pub(crate) fn leave_the_device_tensor_scope(&self) {
+        self.a_device_tensor_scope_is_entered
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Arm this surface's staged write-back through `door`, holding its
     /// pool slot so no other handle reads a frame in over the edit until it
     /// settles.
@@ -93,14 +116,15 @@ impl GpuSurfaceOwnedMemory {
     fn hold_the_pool_slot_for_an_edit_staged_through(
         self: &Arc<Self>,
         door: StagedWriteBackSource,
-    ) -> Option<StagedEditAwaitingPublication> {
-        let surface_id = self.minted_surface_id.as_deref()?;
-        Some(
-            self.checked_out_surface
-                .exchange_client()
-                .staged_edits_awaiting_publication()
-                .hold_until_the_edit_settles(surface_id, SurfaceHandleIdentity::of(self), door),
-        )
+    ) -> PyResult<Option<PoolSlotHeldForAStagedEdit>> {
+        let Some(surface_id) = self.minted_surface_id.as_deref() else {
+            return Ok(None);
+        };
+        self.checked_out_surface
+            .exchange_client()
+            .pool_slots_holding_a_staged_edit()
+            .hold_until_the_edit_settles(surface_id, SurfaceHandleIdentity::of(self), door)
+            .map(Some)
     }
 
     /// What reading the frame into this surface's `door` staging does, or
@@ -112,7 +136,7 @@ impl GpuSurfaceOwnedMemory {
     ) -> PyResult<ReadingTheFrameIn> {
         self.checked_out_surface
             .exchange_client()
-            .staged_edits_awaiting_publication()
+            .pool_slots_holding_a_staged_edit()
             .before_reading_the_frame_in(surface_id, SurfaceHandleIdentity::of(self), door)
     }
 

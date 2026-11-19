@@ -537,3 +537,76 @@ class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
             "the_exception_propagated": the_exception_propagated,
             "the_door_opens_again_after_a_raise": the_door_reopened,
         }
+
+
+class _NestedWriteDoorProbe(_WriteDoorProbe):
+    """Edit half the rows through an outer write door, open the same door
+    again inside it, then edit the other half through the outer view.
+
+    The inner door may open, or be refused by name; what it may never do is
+    leave the outer edit unpublished, either the half written before it opened
+    or the half written after it closed.
+    """
+
+    REFUSAL_NAMES: str
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.the_inner_door_was_refused_by_name = False
+
+    def _open_the_inner_door(self, frame) -> None:
+        raise NotImplementedError
+
+    def _open_the_inner_door_or_take_its_refusal(self, frame) -> None:
+        try:
+            self._open_the_inner_door(frame)
+        except RuntimeError as refusal:
+            if self.REFUSAL_NAMES not in str(refusal):
+                raise
+            self.the_inner_door_was_refused_by_name = True
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        observation = super()._observe_the_pixels(ctx, frame)
+        observation["the_inner_door_was_refused_by_name"] = self.the_inner_door_was_refused_by_name
+        return observation
+
+
+@node.process
+class AnInnerCpuDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
+    """`with frame.cpu()` inside another over the same frame."""
+
+    REFUSAL_NAMES = "has an edit staged through"
+
+    def _open_the_inner_door(self, frame) -> None:
+        with frame.cpu() as inner_pixels:
+            _ = inner_pixels.any()
+
+    def _edit_the_top_rows(self, frame) -> None:
+        half = self.ROWS_TO_EDIT // 2
+        with frame.cpu() as outer_pixels:
+            outer_pixels[:half, :, :] = self.EDIT_VALUE
+            self._open_the_inner_door_or_take_its_refusal(frame)
+            outer_pixels[half : self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
+
+
+@node.process
+class AnInnerGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
+    """`with frame.writable()` inside another over the same frame."""
+
+    REFUSAL_NAMES = "already has a device-tensor scope entered"
+
+    def _open_the_inner_door(self, frame) -> None:
+        import torch
+
+        with frame.writable() as inner_tensor:
+            _ = torch.from_dlpack(inner_tensor).any()
+
+    def _edit_the_top_rows(self, frame) -> None:
+        import torch
+
+        half = self.ROWS_TO_EDIT // 2
+        with frame.writable() as outer_tensor:
+            outer = torch.from_dlpack(outer_tensor)
+            outer[:half, :, :] = self.EDIT_VALUE
+            self._open_the_inner_door_or_take_its_refusal(frame)
+            outer[half : self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE

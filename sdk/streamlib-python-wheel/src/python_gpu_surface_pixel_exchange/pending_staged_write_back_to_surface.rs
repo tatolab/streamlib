@@ -14,7 +14,7 @@ use super::gpu_surface_owned_memory::GpuSurfaceOwnedMemory;
 use super::linux::{
     publish_cpu_staged_write_back_to_surface, publish_device_write_back_to_surface,
 };
-use super::staged_edits_awaiting_publication::StagedEditAwaitingPublication;
+use super::pool_slots_holding_a_staged_edit::PoolSlotHeldForAStagedEdit;
 
 /// Which staging holds the edit a pending write-back publishes.
 ///
@@ -64,7 +64,7 @@ pub(crate) struct PendingStagedWriteBackToSurface {
 /// other handle's read-in off its pool slot's staging until it settles.
 struct ArmedStagedWriteBack {
     source: StagedWriteBackSource,
-    _pool_slot_held: Option<StagedEditAwaitingPublication>,
+    _pool_slot_held: Option<PoolSlotHeldForAStagedEdit>,
 }
 
 impl PendingStagedWriteBackToSurface {
@@ -87,11 +87,12 @@ impl PendingStagedWriteBackToSurface {
     /// nowhere near the write.
     ///
     /// `hold_the_pool_slot` runs once, when this arms from unarmed: what it
-    /// answers holds the surface's pool slot until the edit settles.
+    /// answers holds the surface's pool slot until the edit settles, and its
+    /// refusal leaves this unarmed.
     pub(crate) fn arm(
         &self,
         source: StagedWriteBackSource,
-        hold_the_pool_slot: impl FnOnce() -> Option<StagedEditAwaitingPublication>,
+        hold_the_pool_slot: impl FnOnce() -> PyResult<Option<PoolSlotHeldForAStagedEdit>>,
     ) -> PyResult<()> {
         let mut armed_over = self.armed_over.lock();
         match armed_over.as_ref().map(|armed| armed.source) {
@@ -108,7 +109,7 @@ impl PendingStagedWriteBackToSurface {
             None => {
                 *armed_over = Some(ArmedStagedWriteBack {
                     source,
-                    _pool_slot_held: hold_the_pool_slot(),
+                    _pool_slot_held: hold_the_pool_slot()?,
                 });
                 Ok(())
             }

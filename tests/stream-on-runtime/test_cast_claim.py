@@ -93,6 +93,14 @@ STREAM_BY_PROBE_AND_SOURCE = {
         "ARaiseInsideTheCpuWriteDoorPropagatesProbe",
         "test_pattern",
     ): cast_claim_streams.a_raise_inside_the_cpu_write_door_propagates_probe_off_the_test_pattern,
+    (
+        "AnInnerCpuDoorKeepsTheOuterEditProbe",
+        "test_pattern",
+    ): cast_claim_streams.an_inner_cpu_door_keeps_the_outer_edit_probe_off_the_test_pattern,
+    (
+        "AnInnerGpuWriteDoorKeepsTheOuterEditProbe",
+        "test_pattern",
+    ): cast_claim_streams.an_inner_gpu_write_door_keeps_the_outer_edit_probe_off_the_test_pattern,
 }
 
 
@@ -408,4 +416,38 @@ def test_a_cpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
     consumer and no CUDA anywhere in it."""
     observation = run_claim_probe(start_tatolabd_running_stream, "TheCpuWriteDoorEditsTheFrameProbe")
 
+    _assert_the_edit_reached_the_surface(observation)
+
+
+def test_an_inner_cpu_door_over_the_same_frame_keeps_the_outer_edit(
+    start_tatolabd_running_stream,
+):
+    """`with frame.cpu()` nested in another over the same frame: the inner
+    door opens or is refused by name, and the outer edit, written on both
+    sides of it, is on the surface once the outer block ends."""
+    observation = run_claim_probe(
+        start_tatolabd_running_stream,
+        "AnInnerCpuDoorKeepsTheOuterEditProbe",
+        source="test_pattern",
+    )
+
+    _assert_the_edit_reached_the_surface(observation)
+
+
+@pytest.mark.rig_only_capability(reason="CUDA")
+def test_an_inner_gpu_write_door_over_the_same_frame_is_refused_and_keeps_the_outer_edit(
+    start_tatolabd_running_stream,
+):
+    """`with frame.writable()` nested in another over the same frame shares
+    the outer scope's staging and pending edit, so on Linux it is refused by
+    name; the outer edit, written on both sides of it, still lands."""
+    _require_a_device_consumer()
+    observation = run_claim_probe(
+        start_tatolabd_running_stream,
+        "AnInnerGpuWriteDoorKeepsTheOuterEditProbe",
+        source="test_pattern",
+    )
+
+    if sys.platform != "darwin":
+        assert observation["the_inner_door_was_refused_by_name"]
     _assert_the_edit_reached_the_surface(observation)

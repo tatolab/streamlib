@@ -124,8 +124,17 @@ impl PythonGpuSurfaceDeviceTensorScope {
             if python_self.prepared_device_export.lock().is_some() {
                 return Err(device_tensor_scope_already_entered_error());
             }
-            let prepared = prepare_device_export(python_self.py(), &python_self.owned_memory)?;
+            python_self.owned_memory.enter_a_device_tensor_scope()?;
+            let prepared = match prepare_device_export(python_self.py(), &python_self.owned_memory)
+            {
+                Ok(prepared) => prepared,
+                Err(not_prepared) => {
+                    python_self.owned_memory.leave_the_device_tensor_scope();
+                    return Err(not_prepared);
+                }
+            };
             if !prepared.writable {
+                python_self.owned_memory.leave_the_device_tensor_scope();
                 return Err(PyRuntimeError::new_err(
                     "this surface cannot take a write-back — it is a pool member its \
                      producer still owns, or a texture allocated without \"copy_dst\" usage — \
@@ -188,7 +197,10 @@ impl PythonGpuSurfaceDeviceTensorScope {
         let _ = (exception, traceback);
         #[cfg(target_os = "linux")]
         {
-            let _prepared_released = self.prepared_device_export.lock().take();
+            let Some(_prepared_released) = self.prepared_device_export.lock().take() else {
+                return Ok(false);
+            };
+            self.owned_memory.leave_the_device_tensor_scope();
             if left_by_a_propagating_exception(exception_type) {
                 self.owned_memory.pending_staged_write_back().discard();
             } else {
