@@ -14,6 +14,7 @@
 
 mod common;
 
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -57,6 +58,24 @@ fn start_tatolabd_re_loading_the_recorded_native_only_stream(
     (runtime, main.stream_id)
 }
 
+/// `list_streams` once the action re-loading the recorded stream has ended: the
+/// stream starts inside that action, so its `started` line can come before the
+/// listing stops showing it `preparing`.
+fn the_listed_streams_once_the_re_load_ended(local_api_socket_path: &Path) -> serde_json::Value {
+    let list_streams = || {
+        call_a_tool_over_the_local_api(local_api_socket_path, "list_streams", serde_json::json!({}))
+            .json()
+    };
+    let listed = list_streams();
+    match listed["streams"][0]["action"].as_str() {
+        Some(re_load) => {
+            the_stream_action_once_ended(local_api_socket_path, re_load);
+            list_streams()
+        }
+        None => listed,
+    }
+}
+
 #[test]
 fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an_interrupt() {
     let _one_at_a_time = ONE_STREAM_ON_THE_GPU_AT_A_TIME
@@ -68,12 +87,7 @@ fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_b
         start_tatolabd_re_loading_the_recorded_native_only_stream(&runtime_unit, &machine_root);
 
     let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
-    let listed = call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "list_streams",
-        serde_json::json!({}),
-    )
-    .json();
+    let listed = the_listed_streams_once_the_re_load_ended(&machine_root.local_api_socket_path());
     runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(
