@@ -62,7 +62,8 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
 }
 
 #: The control each input of `Caption` names, which the Studio draws in place of its type's
-#: default. The sample lists `Caption` and places none of it.
+#: default. The stream places one `Caption` that nothing reads, so its interpreter describes the
+#: node type with its annotations: a node type read from source alone states no pin types.
 CONTROL_NAMED_BY_EACH_CAPTION_INPUT = {
     "shown": "checkbox",
     "lines": "dial",
@@ -75,7 +76,7 @@ CONTROL_NAMED_BY_EACH_CAPTION_INPUT = {
 }
 
 #: The nodes whose `process()`, or evaluation, must never raise while the stream plays.
-NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally")
+NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally", "caption")
 
 #: The function nodes, which run inside the read of the stream's function node pool, since
 #: `glow` is a shader node and `beat` runs as Python.

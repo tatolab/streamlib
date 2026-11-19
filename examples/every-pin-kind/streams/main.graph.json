@@ -121,6 +121,11 @@
       },
       "name": "tally",
       "type": "nodes.frame_tally:FrameTally"
+    },
+    {
+      "id": "c4f7a2d0-5b1e-4c3a-9f86-2e7d1b0a9c53",
+      "name": "caption",
+      "type": "nodes.caption:Caption"
     }
   ]
 }
