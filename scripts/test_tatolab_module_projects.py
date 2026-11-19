@@ -251,6 +251,9 @@ class ModuleProjectArchives(unittest.TestCase):
             (view_directory / "node_modules").mkdir()
             (view_directory / "node_modules" / "left-out.js").write_text("")
             (view_directory / ".DS_Store").write_text("")
+            (view_directory / "venv" / "lib").mkdir(parents=True)
+            (view_directory / "venv" / "pyvenv.cfg").write_text("")
+            (view_directory / "venv" / "lib" / "left-out.py").write_text("")
 
         [archive_path] = self.assemble_the_camera(before_assembling=write_a_view)
         with zipfile.ZipFile(archive_path) as archive:
@@ -273,7 +276,7 @@ class ModuleProjectArchives(unittest.TestCase):
         )
 
     def test_a_view_whose_manifest_misses_what_the_view_contract_requires_fails_the_catalog(self):
-        for manifest in ({**PROGRAM_VIEW_MANIFEST, "placement": None}, {**PROGRAM_VIEW_MANIFEST, "placement": "floating"}, {"contract": "1.0", "title": "Program"}):
+        for manifest in ({**PROGRAM_VIEW_MANIFEST, "placement": None}, {**PROGRAM_VIEW_MANIFEST, "placement": "floating"}, {**PROGRAM_VIEW_MANIFEST, "contract": "9.9"}, {"contract": "1.0", "title": "Program"}):
             with self.subTest(manifest=manifest):
                 shutil.rmtree(self.workspace_root, ignore_errors=True)
                 shutil.rmtree(self.output_root, ignore_errors=True)
@@ -368,8 +371,10 @@ class ModuleProjectListingDetails(unittest.TestCase):
     def test_a_gallery_naming_a_missing_or_outside_or_unpictured_file_is_left_out(self):
         def write_a_text_file(module_directory):
             (module_directory / "notes.txt").write_text("not a picture")
+            (module_directory / "catalog").mkdir()
+            (module_directory / "catalog" / "cover#1.png").write_bytes(b"cover")
 
-        for gallery in ('["catalog/missing.png"]', '["../outside.png"]', '["notes.txt"]', '"catalog/cover.png"'):
+        for gallery in ('["catalog/missing.png"]', '["../outside.png"]', '["notes.txt"]', '"catalog/cover.png"', '["catalog/cover#1.png"]'):
             with self.subTest(gallery=gallery):
                 shutil.rmtree(self.workspace_root, ignore_errors=True)
                 (self.working_directory / "workspace" / "packages").mkdir(parents=True)
@@ -397,7 +402,7 @@ class ModuleProjectListingDetails(unittest.TestCase):
         # The same value `an_imports_version_is_the_sha256_of_its_files_hashes_as_canonical_json`
         # pins in streamlib-project-repository: change both or neither.
         self.assertEqual(
-            tatolab_module_projects.copy_version_of({"tatolab-project.json": b"{}\n", "wheels/a.whl": b"wheel", ".tatolab/left-out": b"", "streams/.DS_Store": b"", "views/node_modules/x.js": b""}),
+            tatolab_module_projects.copy_version_of({"tatolab-project.json": b"{}\n", "wheels/a.whl": b"wheel", ".tatolab/left-out": b"", "streams/.DS_Store": b"", "views/node_modules/x.js": b"", "views/program/venv/pyvenv.cfg": b"", "views/program/venv/lib/x.py": b""}),
             "e26dca00880b66fe5d7f2f49e2a238ec7c9d881b48793ba29f09dd77d1c397a9",
         )
 

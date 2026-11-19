@@ -70,6 +70,11 @@ GALLERY_PICTURE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 CHANGELOG_FILE_NAME = "CHANGELOG.md"
 # What an import of a project leaves out, as the runtime's `add_dependency` copies one.
 FOLDERS_AN_IMPORT_SKIPS = ("node_modules", "__pycache__")
+# The file that makes a folder a Python virtual environment, which an import leaves out whole.
+PYVENV_CONFIG_FILE_NAME = "pyvenv.cfg"
+VIEW_CONTRACT = "1.0"
+# A gallery picture's file name is its URL's last segment as written, so it needs no encoding.
+GALLERY_PICTURE_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 FILE_NAMES_AN_IMPORT_SKIPS = (".DS_Store",)
 PACKAGES_DIRECTORY_NAME = "packages"
 MODULES_DIRECTORY_NAME = "modules"
@@ -250,10 +255,12 @@ def catalog_declaration_of_the_module_in(module_project_directory):
             not picture_path.is_relative_to(module_project_directory.resolve())
             or not picture_path.is_file()
             or picture_path.suffix.lower() not in GALLERY_PICTURE_SUFFIXES
+            or not GALLERY_PICTURE_FILE_NAME.fullmatch(picture_path.name)
         ):
             raise ModuleProjectNotAssembled(
                 f"{module_project_directory.name}'s gallery names {json.dumps(picture)}, "
-                f"which is no {', '.join(GALLERY_PICTURE_SUFFIXES)} picture inside its module project"
+                f"which is no {', '.join(GALLERY_PICTURE_SUFFIXES)} picture inside its module project "
+                "named with letters, digits, `.`, `_` and `-`"
             )
         gallery_pictures.append(picture_path)
     if len({picture.name for picture in gallery_pictures}) != len(gallery_pictures):
@@ -274,30 +281,34 @@ def release_notes_of_the_version(workspace_root, version):
     return section["body"].strip() if section else ""
 
 
-def is_a_path_an_import_carries(relative_path):
-    """Whether `add_dependency` copies the file at `relative_path` inside a project it imports."""
-    *folders, file_name = relative_path.split("/")
-    return file_name not in FILE_NAMES_AN_IMPORT_SKIPS and not any(
-        folder.startswith(".") or folder in FOLDERS_AN_IMPORT_SKIPS for folder in folders
-    )
+def paths_an_import_carries(relative_paths):
+    """Each of `relative_paths`, the files of one project, that `add_dependency` copies when it imports the project, in path order."""
+    relative_paths = set(relative_paths)
+    virtual_environment_folders = {
+        relative_path.rsplit("/", 1)[0] + "/" for relative_path in relative_paths if relative_path.endswith(f"/{PYVENV_CONFIG_FILE_NAME}")
+    }
+
+    def is_carried(relative_path):
+        *folders, file_name = relative_path.split("/")
+        return (
+            file_name not in FILE_NAMES_AN_IMPORT_SKIPS
+            and not any(folder.startswith(".") or folder in FOLDERS_AN_IMPORT_SKIPS for folder in folders)
+            and not any(relative_path.startswith(folder) for folder in virtual_environment_folders)
+        )
+
+    return sorted(relative_path for relative_path in relative_paths if is_carried(relative_path))
 
 
 def files_under_the_folder_an_import_carries(folder):
     """Each file under `folder` an import carries, by its path relative to `folder`, in path order."""
     folder = Path(folder)
-    return sorted(
-        relative_path
-        for relative_path in (path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file())
-        if is_a_path_an_import_carries(relative_path)
-    )
+    return paths_an_import_carries(path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file())
 
 
 def copy_version_of(member_bytes_by_name):
     """The version `add_dependency` records for an import of these files: the SHA-256 of each one's SHA-256, by path, as canonical JSON."""
     copied_files = {
-        member_name: hashlib.sha256(member_bytes).hexdigest()
-        for member_name, member_bytes in member_bytes_by_name.items()
-        if is_a_path_an_import_carries(member_name)
+        member_name: hashlib.sha256(member_bytes_by_name[member_name]).hexdigest() for member_name in paths_an_import_carries(member_bytes_by_name)
     }
     return hashlib.sha256((json.dumps(copied_files, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()).hexdigest()
 
@@ -423,11 +434,12 @@ def view_members_of_the_archive(archive):
             continue
         manifest = json.loads(archive.read(member_name))
         missing = [field for field in VIEW_MANIFEST_REQUIRED_FIELDS if not isinstance(manifest.get(field), str) or not manifest[field]]
-        if missing or manifest["placement"] not in VIEW_PLACEMENTS:
-            raise ModuleProjectNotDescribed(
-                f"{member_name} does not read against view contract 1.0: "
-                + (f"it names no {', '.join(missing)}" if missing else f"its placement {json.dumps(manifest['placement'])} is not area or node")
-            )
+        if missing:
+            raise ModuleProjectNotDescribed(f"{member_name} does not read against view contract {VIEW_CONTRACT}: it names no {', '.join(missing)}")
+        if manifest["contract"] != VIEW_CONTRACT:
+            raise ModuleProjectNotDescribed(f"{member_name} is built for view contract {json.dumps(manifest['contract'])}, not {VIEW_CONTRACT}")
+        if manifest["placement"] not in VIEW_PLACEMENTS:
+            raise ModuleProjectNotDescribed(f"{member_name}'s placement {json.dumps(manifest['placement'])} is not area or node")
         members.append(
             {
                 "view_type": f"{project_name}:{member_name.split('/')[1]}",

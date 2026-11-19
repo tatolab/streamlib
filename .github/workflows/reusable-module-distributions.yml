@@ -426,14 +426,19 @@ jobs:
               webp) picture_type=image/webp ;;
               *) echo "::error::$picture_key is no picture the catalog's gallery takes"; exit 1 ;;
             esac
-            held_picture_sha256="$(curl -fsSL "$GET_TATOLAB_COM_URL/$picture_key" 2>/dev/null | sha256sum | cut -d ' ' -f 1 || true)"
-            if curl -fsSI "$GET_TATOLAB_COM_URL/$picture_key" > /dev/null 2>&1; then
-              if [ "$held_picture_sha256" != "$(sha256sum "$picture_path" | cut -d ' ' -f 1)" ]; then
-                echo "::error::$GET_TATOLAB_COM_URL already serves $picture_key with other bytes than this run's"
-                exit 1
-              fi
-              continue
-            fi
+            held_picture="$(mktemp)"
+            held_status="$(curl -sSL -o "$held_picture" -w '%{http_code}' "$GET_TATOLAB_COM_URL/$picture_key")"
+            case "$held_status" in
+              404) ;;
+              200)
+                if ! cmp -s "$held_picture" "$picture_path"; then
+                  echo "::error::$GET_TATOLAB_COM_URL already serves $picture_key with other bytes than this run's"
+                  exit 1
+                fi
+                continue
+                ;;
+              *) echo "::error::$GET_TATOLAB_COM_URL answered $held_status for $picture_key, so whether it holds the picture is unknown"; exit 1 ;;
+            esac
             put_object "$picture_path" "$picture_key" "$picture_type" "public, max-age=31536000, immutable"
           done
           put_object module-projects/catalog/v1.json catalog/v1.json "application/json" "public, max-age=0, must-revalidate"
