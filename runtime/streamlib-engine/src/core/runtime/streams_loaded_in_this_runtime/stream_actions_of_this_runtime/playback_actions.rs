@@ -553,8 +553,9 @@ impl Runner {
 
     /// Run the playback start the stream action `action_id` queued of the project in
     /// `project_directory`: name the held stopped streams as the ones it takes in — an open
-    /// queued ahead of it loads them only after this action is queued — record each running and
-    /// start it, and finish the action. A stream whose start is refused is held stopped and recorded failed with the
+    /// queued ahead of it loads them only after this action is queued — bring each to its
+    /// document when that holds edits it did not take, record each running and start it, and
+    /// finish the action. A stream whose start is refused is held stopped and recorded failed with the
     /// reason; a project holding no stream stopped fails the action.
     pub(super) fn start_the_playback_of_the_held_project(
         &self,
@@ -589,6 +590,8 @@ impl Runner {
                 break;
             }
             let stream_id = held.stream_id().to_string();
+            held.log_route()
+                .run_entered(|| held.bring_the_stopped_stream_to_its_document());
             if let Some(why_it_cannot_play) =
                 held.why_its_graph_as_held_keeps_this_stream_from_playing()
             {

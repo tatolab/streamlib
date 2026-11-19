@@ -630,6 +630,23 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
     }
 }
 
+impl From<&crate::core::graph::GraphNodePorts> for GraphNodePortsOnTheWire {
+    fn from(ports: &crate::core::graph::GraphNodePorts) -> Self {
+        Self {
+            inputs: ports
+                .inputs
+                .iter()
+                .map(GraphNodePortOnTheWire::from)
+                .collect(),
+            outputs: ports
+                .outputs
+                .iter()
+                .map(GraphNodePortOnTheWire::from)
+                .collect(),
+        }
+    }
+}
+
 /// `link` as `graph` answers it, each end on this runtime named by its node's name, saying what
 /// it converts and warns of as `verdict`, the judgement of its two typed ends, does.
 pub(crate) fn rendered_link(

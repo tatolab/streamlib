@@ -14,11 +14,20 @@ impl StreamGraphTransactionExecutor<'_> {
     ) {
         let mut refusal_of_each_stream_that_refused: HashMap<String, String> = HashMap::new();
         for (stream_id, operation) in operations {
-            let Ok(stream_operations) = self
+            let stream_operations = match self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(&stream_id)
-            else {
-                continue;
+            {
+                Ok(stream_operations) => stream_operations,
+                Err(why) => {
+                    tracing::warn!(
+                        stream = %stream_id,
+                        %why,
+                        "the project's graph documents hold an edit of a stream not loaded; the \
+                         stream takes it at its next load"
+                    );
+                    continue;
+                }
             };
             if let Some(refusal) = refusal_of_each_stream_that_refused.get(&stream_id) {
                 stream_operations.hold_an_edit_its_document_holds_not_live(

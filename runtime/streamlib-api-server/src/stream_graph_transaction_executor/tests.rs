@@ -181,3 +181,55 @@ fn a_project_file_is_imported_as_its_dotted_path_and_a_package_as_its_folder() {
         );
     }
 }
+
+#[test]
+fn an_edit_the_documents_hold_that_a_running_stream_refuses_is_held_with_each_later_one_of_it() {
+    use crate::control_plane_stub_support::STUB_STREAM_ID;
+    use crate::mcp::tests::ControlPlaneMcpDispatchStubRuntime;
+
+    let refusal = "the function node pool is already running";
+    let runtime =
+        ControlPlaneMcpDispatchStubRuntime::refusing_each_edit_the_documents_hold_first(refusal);
+    let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
+    let project_repositories =
+        streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime::default();
+    let executor = super::StreamGraphTransactionExecutor {
+        operations_on_the_loaded_streams: &runtime,
+        project_repositories: &project_repositories,
+        async_runtime: tokio_runtime.handle(),
+    };
+    let carried = StreamGraphOperation::CarryTheLinksOntoThePortsOfAPlacedStream {
+        placed_stream: Uuid::new_v4(),
+        port_links_taken_out: Vec::new(),
+        port_links_put_back: Vec::new(),
+    };
+    let renamed = StreamGraphOperation::RenameNode {
+        node: Uuid::new_v4(),
+        from: "scale".to_owned(),
+        to: "zoom".to_owned(),
+    };
+
+    executor.make_live_what_the_documents_now_hold(vec![
+        (STUB_STREAM_ID.to_owned(), carried.clone()),
+        (STUB_STREAM_ID.to_owned(), renamed.clone()),
+        ("a-stream-not-loaded".to_owned(), renamed.clone()),
+    ]);
+
+    assert_eq!(
+        *runtime.recorded_graph_mutations.lock(),
+        [carried.clone()],
+        "the later edit of the stream that refused is not sent to it"
+    );
+    let held = runtime.recorded_edits_held_not_live.lock().clone();
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert_eq!(held[0].0, carried);
+    assert!(held[0].1.contains(refusal), "{held:?}");
+    assert_eq!(held[1].0, renamed);
+    assert!(
+        held[1]
+            .1
+            .contains("an earlier edit of the same transaction was not taken")
+            && held[1].1.contains(refusal),
+        "{held:?}"
+    );
+}

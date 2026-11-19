@@ -18,18 +18,19 @@ use super::LoadedStreamInThisRuntime;
 use crate::core::graph::graph_fragment_flattening::{cast_or_as_written, rendered_as_stored};
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::json_schema::{
-    GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse, LinkOutput,
-    LinkPortRefOutput, redraw_a_node_over_its_pins,
+    GraphNodeOutput, GraphNodePortsOnTheWire, GraphResponse, LinkOutput, LinkPortRefOutput,
+    redraw_a_node_over_its_pins,
 };
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::{
-    the_graph_document_of_the_stream_at, the_graph_the_document_of_the_stream_at_holds,
+    the_graph_document_json_of_the_stream_at, the_graph_the_document_of_the_stream_at_holds,
 };
 
 impl LoadedStreamInThisRuntime {
     /// Hold `operation`, which this stream's graph document holds and its running graph refused
     /// in the runtime's words `refusal`, as an edit not live yet, at the part it changes.
-    pub fn hold_an_edit_its_document_holds_not_live(
+    pub(in crate::core::runtime) fn hold_an_edit_its_document_holds_not_live(
         &self,
         operation: &StreamGraphOperation,
         refusal: &str,
@@ -49,37 +50,45 @@ impl LoadedStreamInThisRuntime {
 
     /// Each edit this stream's graph document holds that its running graph did not take, as the
     /// diagnostic at the part it changes; empty while its running graph holds its document.
-    pub fn the_edits_its_document_holds_not_live(&self) -> Vec<DiagnosticOnTheWire> {
+    pub(in crate::core::runtime) fn the_edits_its_document_holds_not_live(
+        &self,
+    ) -> Vec<DiagnosticOnTheWire> {
         self.edits_its_document_holds_not_live.lock().clone()
     }
 
     /// Bring this stream, its playback stopped, to the graph its document holds when that holds
     /// edits its running graph did not take, and forget them; a document that does not read, or
-    /// that the stopped graph does not reconcile to, is logged and its edits kept.
+    /// that the stopped graph does not reconcile to, is logged and its edits kept. An edit held
+    /// while the document is read is kept for the next stop.
     pub(in crate::core::runtime) fn bring_the_stopped_stream_to_its_document(self: &Arc<Self>) {
-        if self.edits_its_document_holds_not_live.lock().is_empty() {
+        let edits_taken_back = std::mem::take(&mut *self.edits_its_document_holds_not_live.lock());
+        if edits_taken_back.is_empty() {
             return;
         }
-        let brought = the_graph_document_it_holds_on_disk(self).and_then(|graph_document| {
-            self.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
-                graph_document,
-                LinksAReconcileMakes::EachAsASavedGraphsLink,
-            )
-            .map_err(|refusal| refusal.to_string())
-        });
+        let brought = the_graph_document_json_of_the_stream_at(self.stream_location()).and_then(
+            |graph_document| {
+                self.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
+                    graph_document,
+                    LinksAReconcileMakes::EachAsASavedGraphsLink,
+                )
+                .map_err(|refusal| refusal.to_string())
+            },
+        );
         match brought {
-            Ok(()) => {
-                self.forget_the_edits_its_document_holds_not_live();
-                tracing::info!(
-                    "the stream `{}` stopped and took the edits its graph document holds",
+            Ok(()) => tracing::info!(
+                "the stream `{}` stopped and took the edits its graph document holds",
+                self.stream_id()
+            ),
+            Err(why) => {
+                let mut held = self.edits_its_document_holds_not_live.lock();
+                let held_meanwhile = std::mem::replace(&mut *held, edits_taken_back);
+                held.extend(held_meanwhile);
+                tracing::warn!(
+                    "the stream `{}` stopped and did not take the edits its graph document \
+                     holds, which it keeps as not live: {why}",
                     self.stream_id()
                 );
             }
-            Err(why) => tracing::warn!(
-                "the stream `{}` stopped and did not take the edits its graph document holds, \
-                 which it keeps as not live: {why}",
-                self.stream_id()
-            ),
         }
     }
 
@@ -89,10 +98,9 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Answer, in `graph_response`, which renders the running graph, the graph this stream's
-    /// document holds while it holds edits the running graph did not take: each node and link
-    /// the running graph also holds as it renders them, under the document's names, and each
-    /// other drawn as the document writes it, carrying `live: false`. A document that does not
-    /// read leaves the running graph's answer, logged.
+    /// document holds while it holds edits the running graph did not take, as
+    /// [`render_the_document_over_the_live_graph`] draws it. A document that does not read leaves
+    /// the running graph's answer, logged.
     pub(super) fn render_the_document_over_the_live_graph_while_edits_are_not_live(
         &self,
         graph_response: &mut GraphResponse,
@@ -100,42 +108,23 @@ impl LoadedStreamInThisRuntime {
         if self.edits_its_document_holds_not_live.lock().is_empty() {
             return;
         }
-        let document = match the_graph_the_document_of_the_stream_at_holds(self.stream_location()) {
-            Ok(document) => document,
-            Err(why) => {
-                tracing::warn!(
-                    "the stream `{}` holds edits not live, and its graph document does not read, \
-                     so `graph` answers its running graph: {why}",
-                    self.stream_id()
-                );
-                return;
-            }
-        };
-        render_the_document_over_the_live_graph(
-            graph_response,
-            &document,
-            |node_type| {
-                self.node_types_this_stream_resolves
-                    .port_info(node_type)
-                    .map(|ports| GraphNodePortsOnTheWire {
-                        inputs: ports
-                            .inputs
-                            .iter()
-                            .map(GraphNodePortOnTheWire::from)
-                            .collect(),
-                        outputs: ports
-                            .outputs
-                            .iter()
-                            .map(GraphNodePortOnTheWire::from)
-                            .collect(),
-                    })
-            },
-            |node| rendered_as_stored(node, &self.node_types_this_stream_resolves),
-        );
+        match the_graph_the_document_of_the_stream_at_holds(self.stream_location()) {
+            Ok(document) => render_the_document_over_the_live_graph(
+                graph_response,
+                &document,
+                &self.node_types_this_stream_resolves,
+            ),
+            Err(why) => tracing::warn!(
+                "the stream `{}` holds edits not live, and its graph document does not read, \
+                 so `graph` answers its running graph: {why}",
+                self.stream_id()
+            ),
+        }
     }
 
-    /// Where `operation` applies: the link it connects or disconnects, the node it acts on, or
-    /// else the stream; each node named as the running graph names it.
+    /// Where `operation` applies: the link it connects or disconnects, the node it adds or the
+    /// fragment node it folds or unfolds under the name the operation gives it, any other node it
+    /// acts on as the running graph names it, or else the stream.
     fn the_place_an_edit_changes(
         &self,
         operation: &StreamGraphOperation,
@@ -167,6 +156,14 @@ impl LoadedStreamInThisRuntime {
                     node_name: node.name.clone(),
                 }
             }
+            StreamGraphOperation::FoldIntoFragment { fold }
+            | StreamGraphOperation::UnfoldFragment { fold } => match fold.fragment_node() {
+                Some(fragment_node) => DiagnosticPlaceOnTheWire::Node {
+                    node_id: fragment_node.to_string(),
+                    node_name: fold.fragment_name().to_string(),
+                },
+                None => DiagnosticPlaceOnTheWire::Stream,
+            },
             _ => match operation.node() {
                 Some(node) => DiagnosticPlaceOnTheWire::Node {
                     node_id: node.to_string(),
@@ -178,53 +175,67 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
-/// The graph document of `stream`, as its project holds it on disk now.
-fn the_graph_document_it_holds_on_disk(
-    stream: &LoadedStreamInThisRuntime,
-) -> std::result::Result<serde_json::Value, String> {
-    let (_, stream_document) = the_graph_document_of_the_stream_at(stream.stream_location())?;
-    let bytes = stream_document
-        .bytes
-        .as_ref()
-        .map_err(|why| format!("its graph document does not read: {why}"))?;
-    serde_json::from_slice(bytes).map_err(|why| format!("its graph document is not JSON: {why}"))
+/// The two ends of a link by the ids of the nodes it joins and its ports: how a link the
+/// running graph holds is matched to one its document draws.
+#[derive(PartialEq, Eq, Hash)]
+struct LinkEnds {
+    from_node: String,
+    from_port: String,
+    to_node: String,
+    to_port: String,
+}
+
+impl LinkEnds {
+    /// The ends of the link from `source` to `target`, each node's name read as its id through
+    /// `id_of_each_name`; `None` when either node is not there.
+    fn of(
+        source: &LinkPortRefOutput,
+        target: &LinkPortRefOutput,
+        id_of_each_name: &HashMap<String, String>,
+    ) -> Option<Self> {
+        Some(Self {
+            from_node: id_of_each_name.get(&source.node)?.clone(),
+            from_port: source.port.clone(),
+            to_node: id_of_each_name.get(&target.node)?.clone(),
+            to_port: target.port.clone(),
+        })
+    }
+}
+
+/// The id of each node `nodes` renders, by its name.
+fn the_id_of_each_name(nodes: &[GraphNodeOutput]) -> HashMap<String, String> {
+    nodes
+        .iter()
+        .map(|node| (node.name.clone(), node.id.clone()))
+        .collect()
 }
 
 /// Answer `document` in `graph_response`, which renders the running graph: each node of the
 /// document's own level the running graph holds by its UUID as it renders it, under the
-/// document's name, pins and studio fields, and each other as `drawn_as_stored` draws it with
-/// the ports `declared_ports` answers for its type, carrying `live: false`; each link the running
-/// graph holds between the same ports of the same nodes as it renders it, and each other as the
-/// document draws it, pending and carrying `live: false`. A node the running graph holds and the
-/// document does not is left out.
-pub(crate) fn render_the_document_over_the_live_graph(
+/// document's name, pins and studio fields, and each other as it is stored, with the ports
+/// `node_types` declares for its type, carrying `live: false`; each link the running graph holds
+/// between the same ports of the same nodes as it renders it, and each other as the document
+/// draws it, pending and carrying `live: false`. A node the running graph holds and the document
+/// does not is left out.
+fn render_the_document_over_the_live_graph(
     graph_response: &mut GraphResponse,
     document: &GraphSnapshot,
-    declared_ports: impl Fn(
-        &crate::core::descriptors::NodeClassImportPath,
-    ) -> Option<GraphNodePortsOnTheWire>,
-    drawn_as_stored: impl Fn(&crate::core::graph::graph_snapshot::GraphSnapshotNode) -> GraphNodeOutput,
+    node_types: &NodeTypesOneStreamResolves,
 ) {
-    let live_id_of_each_name: HashMap<String, String> = graph_response
-        .nodes
-        .iter()
-        .map(|node| (node.name.clone(), node.id.clone()))
-        .collect();
+    let live_id_of_each_name = the_id_of_each_name(&graph_response.nodes);
     let mut live_node_of_each_id: HashMap<String, GraphNodeOutput> =
         std::mem::take(&mut graph_response.nodes)
             .into_iter()
             .map(|node| (node.id.clone(), node))
             .collect();
-    let mut document_id_of_each_name: HashMap<String, String> = HashMap::new();
     graph_response.nodes = document
         .nodes
         .iter()
         .map(|node| {
-            let id = node
+            let live = node
                 .id
-                .map(|node_uuid| node_uuid.to_string())
-                .unwrap_or_default();
-            let rendered = match live_node_of_each_id.remove(&id) {
+                .and_then(|node_uuid| live_node_of_each_id.remove(&node_uuid.to_string()));
+            match live {
                 Some(mut live) => {
                     redraw_a_node_over_its_pins(&mut live, &node.input_values);
                     live.studio = node.studio.clone();
@@ -232,36 +243,23 @@ pub(crate) fn render_the_document_over_the_live_graph(
                     live
                 }
                 None => {
-                    let mut drawn = drawn_as_stored(node);
-                    if let Some(ports) = declared_ports(&node.node_type) {
-                        drawn.ports = ports;
+                    let mut drawn = rendered_as_stored(node, node_types);
+                    if let Some(ports) = node_types.port_info(&node.node_type) {
+                        drawn.ports = GraphNodePortsOnTheWire::from(&ports);
                     }
                     drawn.live = Some(false);
                     drawn
                 }
-            };
-            document_id_of_each_name.insert(rendered.name.clone(), id);
-            rendered
+            }
         })
         .collect();
-    let ends_of = |source: &LinkPortRefOutput,
-                   target: &LinkPortRefOutput,
-                   id_of_each_name: &HashMap<String, String>| {
-        (
-            id_of_each_name.get(&source.node).cloned(),
-            source.port.clone(),
-            id_of_each_name.get(&target.node).cloned(),
-            target.port.clone(),
-        )
-    };
-    let mut live_link_of_each_ends: HashMap<_, LinkOutput> =
+    let document_id_of_each_name = the_id_of_each_name(&graph_response.nodes);
+    let mut live_link_of_each_ends: HashMap<LinkEnds, LinkOutput> =
         std::mem::take(&mut graph_response.links)
             .into_iter()
-            .map(|link| {
-                (
-                    ends_of(&link.source, &link.target, &live_id_of_each_name),
-                    link,
-                )
+            .filter_map(|link| {
+                LinkEnds::of(&link.source, &link.target, &live_id_of_each_name)
+                    .map(|ends| (ends, link))
             })
             .collect();
     graph_response.links = document
@@ -276,11 +274,9 @@ pub(crate) fn render_the_document_over_the_live_graph(
                 node: cast_or_as_written(&drawn.target.node),
                 port: drawn.target.port.clone(),
             };
-            match live_link_of_each_ends.remove(&ends_of(
-                &source,
-                &target,
-                &document_id_of_each_name,
-            )) {
+            let live = LinkEnds::of(&source, &target, &document_id_of_each_name)
+                .and_then(|ends| live_link_of_each_ends.remove(&ends));
+            match live {
                 Some(live) => LinkOutput {
                     source,
                     target,

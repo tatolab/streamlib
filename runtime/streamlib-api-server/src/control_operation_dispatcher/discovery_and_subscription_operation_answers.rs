@@ -107,7 +107,7 @@ impl ControlOperationDispatcher {
                     let mut stream_graph = streams
                         .runtime_operations_of(&stream)
                         .and_then(|stream_operations| {
-                            async_runtime.block_on(stream_operations.to_json_async())
+                            async_runtime.block_on(stream_operations.the_graph_as_answered_async())
                         })
                         .map_err(|refusal| {
                             ControlOperationRefusal::of_an_engine_error("graph export", &refusal)

@@ -331,7 +331,7 @@ fn every_node_uuid_the_graph_documents_of_the_project_hold(
 
 /// The project file of the stream at `location` and the graph document holding its stream
 /// asset, or why its project or document is not where it was recorded.
-pub(in crate::core::runtime) fn the_graph_document_of_the_stream_at(
+fn the_graph_document_of_the_stream_at(
     location: &StreamLocation,
 ) -> std::result::Result<(TatolabProjectFile, ProjectStreamDocument), String> {
     let project_directory = &location.project_directory;
@@ -359,6 +359,19 @@ pub(in crate::core::runtime) fn the_graph_document_of_the_stream_at(
             )
         })?;
     Ok((project_file, stream_document))
+}
+
+/// The graph document of the stream at `location` as its project holds it on disk now, as the
+/// JSON a reconcile of its live graph takes, or why it does not read.
+pub(in crate::core::runtime) fn the_graph_document_json_of_the_stream_at(
+    location: &StreamLocation,
+) -> std::result::Result<serde_json::Value, String> {
+    let (_, stream_document) = the_graph_document_of_the_stream_at(location)?;
+    let bytes = stream_document
+        .bytes
+        .as_ref()
+        .map_err(|why| format!("its graph document does not read: {why}"))?;
+    serde_json::from_slice(bytes).map_err(|why| format!("its graph document is not JSON: {why}"))
 }
 
 /// The name the stream at `location` is shown under, read from its graph document; its

@@ -840,6 +840,10 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
     }
 
+    fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+        Box::pin(async move { LoadedStreamInThisRuntime::the_graph_as_answered(self) })
+    }
+
     fn open_a_viewer_of_an_output_port(
         &self,
         node_id: String,

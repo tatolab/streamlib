@@ -613,7 +613,7 @@ fn an_edit_a_playing_stream_did_not_take_shows_not_live_and_lands_when_its_playb
             .contains("the function node pool is already running"),
         "{diagnostic:?}"
     );
-    let graph = playing.to_json().unwrap();
+    let graph = playing.the_graph_as_answered().unwrap();
     let node_named = |graph: &serde_json::Value, name: &str| {
         graph["nodes"]
             .as_array()
@@ -637,6 +637,12 @@ fn an_edit_a_playing_stream_did_not_take_shows_not_live_and_lands_when_its_playb
     assert!(node_named(&graph, "sink").get("live").is_none(), "{graph}");
     assert!(link_into(&graph, "sink").get("live").is_none(), "{graph}");
     assert_eq!(playing.node_count(), 2, "the running graph took nothing");
+    let running = playing.to_json().unwrap();
+    assert_eq!(
+        running["nodes"].as_array().unwrap().len(),
+        2,
+        "every edit and check still reads the running graph: {running}"
+    );
 
     let stop = runner.stop_playback(project.path()).unwrap();
     let stopped = the_stream_action_once_finished(&runner, &stop.action_id);
@@ -646,7 +652,7 @@ fn an_edit_a_playing_stream_did_not_take_shows_not_live_and_lands_when_its_playb
     assert_eq!(playing.node_count(), 3);
     assert_eq!(playing.the_live_links_by_node_uuid().len(), 2);
     assert!(playing.the_edits_its_document_holds_not_live().is_empty());
-    let graph = playing.to_json().unwrap();
+    let graph = playing.the_graph_as_answered().unwrap();
     assert!(
         node_named(&graph, "second_sink").get("live").is_none(),
         "{graph}"
