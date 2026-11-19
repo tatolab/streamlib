@@ -356,6 +356,7 @@ fn connect_on_this_thread_as(
                     stream_id: "main".to_string(),
                     stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
                 },
+                one_input_value_change_at_a_time: Default::default(),
             },
             from,
             to,

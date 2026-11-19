@@ -48,12 +48,14 @@ pub(super) use link_connected_between_two_ports::{
 type LiveCommitContext = Option<Arc<RuntimeContext>>;
 
 /// What every graph change on one stream works through: the stream's
-/// compiler, the context it compiles against right away, if any, and the
-/// stream whose topic it publishes on.
+/// compiler, the context it compiles against right away, if any, the
+/// stream whose topic it publishes on, and the stream's one input value
+/// change at a time, which a connect holds while it makes its link.
 pub(super) struct LiveGraphChangeOnOneStream {
     compiler: Arc<Compiler>,
     live: LiveCommitContext,
     stream: LoadedStreamIdentity,
+    one_input_value_change_at_a_time: Arc<parking_lot::Mutex<()>>,
 }
 
 thread_local! {
@@ -211,6 +213,7 @@ pub(super) async fn add_node_impl(
         compiler,
         live,
         stream,
+        ..
     } = live_graph_change;
     let emit_will_add = |id: &NodeRunId| {
         stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillAddNode {
@@ -374,6 +377,7 @@ pub(super) async fn remove_node_impl(
         compiler,
         live,
         stream,
+        ..
     } = live_graph_change;
     compiler.scope(|graph, tx| {
         mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)
@@ -424,6 +428,7 @@ pub(super) async fn disconnect_impl(
         compiler,
         live,
         stream,
+        ..
     } = live_graph_change;
     let link_info = compiler.scope(|graph, tx| {
         let (from_value, to_value) = graph
@@ -478,6 +483,7 @@ impl LoadedStreamInThisRuntime {
             compiler: Arc::clone(&self.compiler),
             live: self.live_commit_context(),
             stream: self.loaded_stream_identity().clone(),
+            one_input_value_change_at_a_time: Arc::clone(&self.one_input_value_change_at_a_time),
         }
     }
 

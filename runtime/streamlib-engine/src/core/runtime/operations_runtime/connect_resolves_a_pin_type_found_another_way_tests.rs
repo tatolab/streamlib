@@ -4,7 +4,8 @@
 //! `connect` judges a port whose type is found another way than stated exactly by the type its
 //! graph resolves: one of several by the best of them, any type as taking every typed output,
 //! the type linked into an input by that link, and the type a setting chooses by that choice,
-//! which a wired link that would not fit refuses.
+//! which a wired link that would not fit refuses, through every output following an input on
+//! downstream.
 
 use std::sync::Arc;
 
@@ -36,6 +37,10 @@ const ANY_SINK: &str = "FoundAnotherWayAnySink";
 const STRING_OR_BOOLEAN_SINK: &str = "FoundAnotherWayStringOrBooleanSink";
 const PASS_ON: &str = "FoundAnotherWayPassOn";
 const CHOSEN_SOURCE: &str = "FoundAnotherWayChosenSource";
+const CHOSEN_BY_DEFAULT_SOURCE: &str = "FoundAnotherWayChosenByDefaultSource";
+const UNTYPED_PASS_ON: &str = "FoundAnotherWayUntypedPassOn";
+const IMAGE_STRING_SINK: &str = "FoundAnotherWayImageStringSink";
+const FAMILY_SET_IN_CONFIG_SOURCE: &str = "FoundAnotherWayFamilySetInConfigSource";
 /// The output of a `PASS_ON` node, which takes the type of its input `value`.
 const PASSED_ON: &str = "passed_on";
 
@@ -93,6 +98,25 @@ fn register_the_fixture_node_types() {
         let sink = |class_name, pin_type| {
             a_node_type(class_name, vec![a_port("value", pin_type)], Vec::new())
         };
+        let a_type_choice = || {
+            a_port("kind", is(PinType::PinTypeChoice { among: Vec::new() })).with_input_mode(
+                NodeInputMode::SettingOnly {
+                    read: SettingReadTime::AtSetup,
+                },
+            )
+        };
+        let chosen_by = |class_name, kind: PortDescriptor| {
+            a_node_type(
+                class_name,
+                vec![kind],
+                vec![a_port(
+                    "value",
+                    DeclaredPinType::SetByInput {
+                        input_name: "kind".to_owned(),
+                    },
+                )],
+            )
+        };
         for descriptor in [
             source(FLOAT_SOURCE, float()),
             source(STRING_SOURCE, PinType::String {}),
@@ -116,20 +140,57 @@ fn register_the_fixture_node_types() {
                     },
                 )],
             ),
+            chosen_by(CHOSEN_SOURCE, a_type_choice()),
+            chosen_by(
+                CHOSEN_BY_DEFAULT_SOURCE,
+                PortDescriptor {
+                    pin_default: Some(json!(PinType::String {})),
+                    ..a_type_choice()
+                },
+            ),
             a_node_type(
-                CHOSEN_SOURCE,
-                vec![
-                    a_port("kind", is(PinType::PinTypeChoice { among: Vec::new() }))
-                        .with_input_mode(NodeInputMode::SettingOnly {
-                            read: SettingReadTime::AtSetup,
-                        }),
-                ],
-                vec![a_port(
+                UNTYPED_PASS_ON,
+                vec![PortDescriptor::new(
                     "value",
-                    DeclaredPinType::SetByInput {
-                        input_name: "kind".to_owned(),
+                    "value",
+                    true,
+                    PortFamilyDeclaration::of_family(PortFamily::Records),
+                )],
+                vec![a_port(
+                    PASSED_ON,
+                    DeclaredPinType::SameAsInput {
+                        input_port_name: "value".to_owned(),
                     },
                 )],
+            ),
+            a_node_type(
+                IMAGE_STRING_SINK,
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration::of_family(PortFamily::Image),
+                    )
+                    .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
+                ],
+                Vec::new(),
+            ),
+            a_node_type(
+                FAMILY_SET_IN_CONFIG_SOURCE,
+                Vec::new(),
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration {
+                            family_from_config_key: Some("family".to_owned()),
+                            ..PortFamilyDeclaration::of_family(PortFamily::Records)
+                        },
+                    )
+                    .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
+                ],
             ),
         ] {
             NODE_REGISTRY
@@ -167,19 +228,28 @@ fn choosing(pin_type: PinType) -> serde_json::Map<String, Value> {
     json!({ "kind": pin_type }).as_object().unwrap().clone()
 }
 
-/// The output a link out of `node` starts at: `passed_on` on a `PASS_ON` node, else `value`.
+/// The output a link out of `node` starts at: `passed_on` on a node passing its input on, else
+/// `value`.
 fn the_output_of(compiler: &Compiler, node: &NodeRunId) -> &'static str {
     let is_a_pass_on = compiler.scope(|graph, _tx| {
-        graph
-            .traversal()
-            .v(node)
-            .first()
-            .is_some_and(|node| node.node_type == class_path(PASS_ON))
+        graph.traversal().v(node).first().is_some_and(|node| {
+            node.node_type == class_path(PASS_ON) || node.node_type == class_path(UNTYPED_PASS_ON)
+        })
     });
     if is_a_pass_on { PASSED_ON } else { "value" }
 }
 
 fn connect(compiler: &Arc<Compiler>, from: &NodeRunId, to: &NodeRunId) -> Result<LinkUniqueId> {
+    connect_holding_input_value_changes_by(compiler, from, to, Default::default())
+}
+
+/// [`connect`], its link made while `one_input_value_change_at_a_time` is free.
+fn connect_holding_input_value_changes_by(
+    compiler: &Arc<Compiler>,
+    from: &NodeRunId,
+    to: &NodeRunId,
+    one_input_value_change_at_a_time: Arc<parking_lot::Mutex<()>>,
+) -> Result<LinkUniqueId> {
     let output = the_output_of(compiler, from);
     tokio::runtime::Builder::new_current_thread()
         .build()
@@ -193,6 +263,7 @@ fn connect(compiler: &Arc<Compiler>, from: &NodeRunId, to: &NodeRunId) -> Result
                     stream_id: "main".to_string(),
                     stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
                 },
+                one_input_value_change_at_a_time,
             },
             OutputLinkPortRef::new(from.clone(), output),
             InputLinkPortRef::new(to.clone(), "value"),
@@ -340,6 +411,45 @@ fn an_output_whose_type_a_setting_chooses_links_by_that_choice_and_graph_serves_
     );
 }
 
+/// Set the setting `kind` of `chosen` to `pin_type` in `compiler`'s graph and answer how the
+/// wired links of the node take the choice.
+fn choose_and_judge(compiler: &Compiler, chosen: &NodeRunId, pin_type: PinType) -> Result<()> {
+    compiler.scope(|graph, _tx| {
+        graph
+            .traversal_mut()
+            .v(chosen)
+            .first_mut()
+            .expect("the node is held")
+            .pins
+            .insert("kind".to_owned(), json!(pin_type));
+        refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(graph, chosen, "kind")
+    })
+}
+
+/// The pin type `graph` serves on the first output of `node` in `compiler`'s graph.
+fn the_type_served_on_the_output_of(compiler: &Compiler, node: &NodeRunId) -> Option<PinType> {
+    let served = compiler.scope(|graph, _tx| graph.to_graph_response("a machine".to_owned()));
+    let node_uuid = compiler.scope(|graph, _tx| {
+        graph
+            .traversal()
+            .v(node)
+            .first()
+            .expect("the node is held")
+            .node_uuid
+            .to_string()
+    });
+    served
+        .nodes
+        .iter()
+        .find(|served_node| served_node.id == node_uuid)
+        .expect("graph serves the node")
+        .ports
+        .outputs[0]
+        .pin
+        .as_ref()
+        .map(|pin| pin.pin_type.clone())
+}
+
 #[test]
 fn a_setting_choosing_a_type_a_wired_link_does_not_take_is_refused_naming_the_link() {
     register_the_fixture_node_types();
@@ -348,16 +458,7 @@ fn a_setting_choosing_a_type_a_wired_link_does_not_take_is_refused_naming_the_li
     let string_sink = a_node_of(&compiler, STRING_SINK);
     connect(&compiler, &chosen, &string_sink).expect("the setting chose a String");
 
-    let refused = compiler.scope(|graph, _tx| {
-        graph
-            .traversal_mut()
-            .v(&chosen)
-            .first_mut()
-            .expect("the node is held")
-            .pins
-            .insert("kind".to_owned(), json!(PinType::Audio {}));
-        refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(graph, &chosen, "kind")
-    });
+    let refused = choose_and_judge(&compiler, &chosen, PinType::Audio {});
 
     let words = refused
         .expect_err("Audio does not connect to the String input wired")
@@ -386,4 +487,164 @@ fn an_output_whose_setting_chooses_no_type_yet_is_judged_by_its_family() {
         verdict, None,
         "no verdict judges an end its graph types not"
     );
+}
+
+#[test]
+fn a_link_into_the_first_of_a_chain_of_pass_ons_is_refused_when_the_last_ones_link_would_not_fit() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let first = a_node_of(&compiler, PASS_ON);
+    let second = a_node_of(&compiler, PASS_ON);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    connect(&compiler, &second, &string_sink).expect("nothing typed is passed on yet");
+    connect(&compiler, &first, &second).expect("nothing typed is passed on yet");
+
+    let float = a_node_of(&compiler, FLOAT_SOURCE);
+    let words = connect(&compiler, &float, &first)
+        .expect_err("a Float passed on twice would reach an input taking a String")
+        .to_string();
+
+    assert!(
+        words.contains("takes the type linked into `value`") && words.contains("String"),
+        "{words}"
+    );
+    let string = a_node_of(&compiler, STRING_SOURCE);
+    connect(&compiler, &string, &first).expect("a String passed on twice fits");
+}
+
+#[test]
+fn a_link_into_an_untyped_input_an_output_takes_the_type_of_is_refused_when_that_outputs_link_would_not_fit()
+ {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let pass_on = a_node_of(&compiler, UNTYPED_PASS_ON);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    connect(&compiler, &pass_on, &string_sink).expect("nothing typed is passed on yet");
+
+    let float = a_node_of(&compiler, FLOAT_SOURCE);
+    let words = connect(&compiler, &float, &pass_on)
+        .expect_err("its families take the link in, and a Float passed on would reach a String")
+        .to_string();
+
+    assert!(
+        words.contains("takes the type linked into `value`") && words.contains("String"),
+        "{words}"
+    );
+}
+
+#[test]
+fn a_setting_choosing_a_type_a_link_past_a_pass_on_does_not_take_is_refused_naming_that_link() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let pass_on = a_node_of(&compiler, PASS_ON);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    connect(&compiler, &chosen, &pass_on).expect("an Any input takes a String");
+    connect(&compiler, &pass_on, &string_sink).expect("a String passed on fits");
+
+    let words = choose_and_judge(&compiler, &chosen, PinType::Audio {})
+        .expect_err("Audio passed on would reach the String input wired past the pass-on")
+        .to_string();
+
+    assert!(
+        words.contains("setting `kind`")
+            && words.contains("takes the type linked into `value`")
+            && words.contains("Audio"),
+        "{words}"
+    );
+    choose_and_judge(&compiler, &chosen, PinType::String {}).expect("a String still fits");
+}
+
+#[test]
+fn a_setting_holding_no_saved_type_chooses_the_type_it_declares_by_default() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_of(&compiler, CHOSEN_BY_DEFAULT_SOURCE);
+
+    assert_eq!(
+        the_type_served_on_the_output_of(&compiler, &chosen),
+        Some(PinType::String {})
+    );
+    let float_sink = a_node_of(&compiler, FLOAT_SINK);
+    assert!(matches!(
+        connect(&compiler, &chosen, &float_sink),
+        Err(Error::PinLinkRefused(_))
+    ));
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    connect(&compiler, &chosen, &string_sink).expect("the default chose a String");
+}
+
+#[test]
+fn a_port_whose_type_is_found_another_way_is_judged_by_its_family_though_it_resolves_to_one_type() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let image_string_sink = a_node_of(&compiler, IMAGE_STRING_SINK);
+
+    let refused = connect(&compiler, &chosen, &image_string_sink)
+        .expect_err("a Records output does not feed an Image input, though both carry a String");
+
+    assert!(
+        matches!(refused, Error::InvalidLink(_)),
+        "refused by the families, not {refused:?}"
+    );
+}
+
+#[test]
+fn a_loop_of_pass_ons_resolves_untyped_rather_than_following_itself() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let first = a_node_of(&compiler, PASS_ON);
+    let second = a_node_of(&compiler, PASS_ON);
+    connect(&compiler, &first, &second).expect("nothing typed is passed on");
+    connect(&compiler, &second, &first).expect("nothing typed is passed on round the loop");
+
+    assert_eq!(the_type_served_on_the_output_of(&compiler, &first), None);
+    assert_eq!(the_type_served_on_the_output_of(&compiler, &second), None);
+}
+
+#[test]
+fn graph_serves_the_pin_of_a_port_stating_its_type_exactly_though_its_config_sets_its_family() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, FAMILY_SET_IN_CONFIG_SOURCE);
+
+    assert_eq!(
+        the_type_served_on_the_output_of(&compiler, &source),
+        Some(PinType::String {})
+    );
+}
+
+#[test]
+fn a_connect_waits_while_an_input_value_change_is_made() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let string = a_node_of(&compiler, STRING_SOURCE);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    let one_input_value_change_at_a_time = Arc::new(parking_lot::Mutex::new(()));
+
+    let change_made = one_input_value_change_at_a_time.lock();
+    let connecting = std::thread::spawn({
+        let compiler = Arc::clone(&compiler);
+        let one_input_value_change_at_a_time = Arc::clone(&one_input_value_change_at_a_time);
+        move || {
+            connect_holding_input_value_changes_by(
+                &compiler,
+                &string,
+                &string_sink,
+                one_input_value_change_at_a_time,
+            )
+        }
+    });
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        !connecting.is_finished(),
+        "the connect waits for the change"
+    );
+    drop(change_made);
+
+    connecting
+        .join()
+        .expect("the connect does not panic")
+        .expect("a String to a String connects once the change is made");
 }

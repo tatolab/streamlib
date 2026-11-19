@@ -51,6 +51,7 @@ pub(in crate::core::runtime) async fn connect_impl(
         compiler,
         live,
         stream,
+        one_input_value_change_at_a_time,
     } = live_graph_change;
     let (from, to) = compiler.scope(|graph, _tx| the_ends_connect_links(graph, from, to))?;
 
@@ -59,7 +60,10 @@ pub(in crate::core::runtime) async fn connect_impl(
         to: to.clone(),
     });
 
-    let link_id = apply_a_link(&compiler, from.clone(), to.clone(), a_link_connected)?;
+    let link_id = {
+        let _no_input_value_changing = one_input_value_change_at_a_time.lock();
+        apply_a_link(&compiler, from.clone(), to.clone(), a_link_connected)?
+    };
 
     commit_live_graph_change(&compiler, live).await?;
 
