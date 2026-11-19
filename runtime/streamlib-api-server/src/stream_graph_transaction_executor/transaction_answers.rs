@@ -10,7 +10,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 /// each node added, why a `connect` inserted each node it added on its link, and each input
 /// value set that a link overrides.
 pub(super) struct WhatAnAnswerNamesBesideItsOperations<'named> {
-    pub(super) named_of_each_added_node: &'named HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
+    pub(super) what_the_answer_names_of_each_added_node:
+        &'named HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
     pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
 }
 
@@ -51,7 +52,7 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             applied_live,
             WhatAnAnswerNamesBesideItsOperations {
-                named_of_each_added_node: &HashMap::new(),
+                what_the_answer_names_of_each_added_node: &HashMap::new(),
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
             },
         )
@@ -65,7 +66,7 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_operations_of: &dyn Fn(&str) -> Option<Arc<dyn RuntimeOperations>>,
         applied_live: Vec<(String, StreamGraphOperation)>,
         WhatAnAnswerNamesBesideItsOperations {
-            named_of_each_added_node,
+            what_the_answer_names_of_each_added_node,
             overridden_by_links,
         }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
@@ -82,10 +83,10 @@ impl StreamGraphTransactionExecutor<'_> {
                         stream: stream_id.clone(),
                         node: node.id.to_string(),
                         name: node.name.clone(),
-                        label: named_of_each_added_node
+                        label: what_the_answer_names_of_each_added_node
                             .get(&node.id)
                             .and_then(|named| named.label.clone()),
-                        inserted: named_of_each_added_node
+                        inserted: what_the_answer_names_of_each_added_node
                             .get(&node.id)
                             .and_then(|named| named.inserted_because)
                             .map(|inserted_because| InsertedNodeOnTheWire {
@@ -100,7 +101,7 @@ impl StreamGraphTransactionExecutor<'_> {
                             stream: stream_id.clone(),
                             node: fragment.to_string(),
                             name: fold.fragment_name().to_owned(),
-                            label: named_of_each_added_node
+                            label: what_the_answer_names_of_each_added_node
                                 .get(&fragment)
                                 .and_then(|named| named.label.clone()),
                             inserted: None,
@@ -240,7 +241,7 @@ fn how_the_graph_reads_the_link(
     let marks = PinLinkMarksOnTheWire::deserialize(rendered_link).unwrap_or_else(|not_read| {
         tracing::warn!(
             %not_read,
-            "the graph render of a link a transaction connected names marks no client reads"
+            "a connected link's pin marks could not be read from the render"
         );
         PinLinkMarksOnTheWire::default()
     });

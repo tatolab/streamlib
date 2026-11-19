@@ -535,14 +535,16 @@ async fn a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later_is_ref
 
 /// A Tensor linked into a Texture input that takes `bgra8_unorm` inside a placed stream, where
 /// `connect` places no convert node, is refused before anything is written, naming the node to
-/// add there; neither graph document changes.
+/// add there; a Boolean linked into Audio, which only a module's conversion bridges, is refused
+/// `link_needs_a_module_conversion` with the `transact` that places it at that level, as at the
+/// stream's own level; neither graph document changes.
 ///
-/// Mental-revert: connecting it as it is writes the link to the placed stream's document.
+/// Mental-revert: connecting either as it is writes the link to the placed stream's document.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_link_needing_a_convert_node_inside_a_placed_stream_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
-    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
     let collapsed = engine
         .the_answer_or_the_refusal_of(
@@ -586,6 +588,40 @@ async fn a_link_needing_a_convert_node_inside_a_placed_stream_is_refused() {
             .contains("`tatolab.stream:TensorToTexture`")
             && refusal.runtime_words.contains("inside a placed stream"),
         "{refusal:?}"
+    );
+
+    let module_conversion = ConvertNodeTestModuleGateToAudio::node_class_import_path();
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            json!({ "stream": stream_asset, "level": [subgraph],
+                    "source": { "node": camera_drawn, "port": "gate" },
+                    "target": { "node": model_drawn, "port": "audio" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("connect never places a module's conversion");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::LinkNeedsAModuleConversion,
+        "{refusal:?}"
+    );
+    let Some(SuggestedOperationCall { operation, params }) = refusal.suggested_call.clone() else {
+        panic!("the refusal suggests the call that places the conversion: {refusal:?}");
+    };
+    assert_eq!(operation, "transact");
+    assert_eq!(
+        Value::Object(params),
+        json!({ "operations": [
+            { "operation": "add_node", "stream": stream_id, "level": [subgraph],
+              "type": module_conversion.as_str(), "as": "conversion" },
+            { "operation": "connect", "stream": stream_id, "level": [subgraph],
+              "source": { "node": camera_drawn, "port": "gate" },
+              "target": { "node": "conversion", "port": "gate" } },
+            { "operation": "connect", "stream": stream_id, "level": [subgraph],
+              "source": { "node": "conversion", "port": "audio" },
+              "target": { "node": model_drawn, "port": "audio" } },
+        ]})
     );
     assert_eq!(project.the_graph_document_of("sub"), sub_before);
     assert_eq!(project.the_graph_document_of("main"), main_before);

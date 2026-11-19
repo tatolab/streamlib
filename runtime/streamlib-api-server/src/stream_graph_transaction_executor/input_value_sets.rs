@@ -25,7 +25,8 @@ pub(super) struct WhatTheTransactionHasStaged<'repository> {
     pub(super) streams_taking_their_edits_once_the_documents_hold_them: BTreeSet<String>,
     pub(super) project_repository: Option<&'repository ProjectRepository>,
     pub(super) node_by_label: HashMap<String, Uuid>,
-    pub(super) named_of_each_added_node: HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
+    pub(super) what_the_answer_names_of_each_added_node:
+        HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
 }
 
 /// Whether [`StreamGraphTransactionExecutor::apply_one_request`] checks a value it sets on an

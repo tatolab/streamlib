@@ -4,11 +4,11 @@
 //! Why a graph action or one of its operations was refused, and what the refused operation
 //! names, as the wire carries the refusal.
 
-use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+
+use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::PinConversion;
 use streamlib_control_contract::{ControlOperation, Transact};
-
 use streamlib_project_repository::{
     ProjectRepositoryRefusal, StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument,
 };

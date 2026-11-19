@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use streamlib::sdk::descriptors::{ConvertNodeToInsert, PinLinkOutcome};
+use streamlib::sdk::descriptors::{
+    ConvertNodeToInsert, PinConversion, PinLinkOutcome, PinLinkRefusal,
+};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, PortOfANodeOfAType, RuntimeOperations,
     StreamLocation, WhatALiveConnectMakesOfALink,
@@ -83,11 +85,12 @@ use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
 
 /// What a `connect` from `source` to `target` at the own level of the running stream
 /// `stream_operations` runs asks of it, made as a transaction's `connect` makes it on the
-/// stream's graph as `rendered_graph` renders it and `level_as_drawn` reads that render: each port under its current name, each node
-/// by its UUID, a loop of function nodes closed by a `PreviousValue` node added on it, a link
-/// whose pin types connect through a built-in conversion carried through its convert node added
-/// on it, and a link the graph already holds refused, in the order
-/// [`StreamGraphTransactionExecutor::apply_one_request`] takes those steps.
+/// stream's graph as `rendered_graph` renders it and `level_as_drawn` reads that render: each
+/// port under its current name, each node by its UUID, a loop of function nodes closed by a
+/// `PreviousValue` node added on it, a link whose pin types connect through a built-in
+/// conversion carried through its convert node added on it, and a link the graph already holds
+/// refused, in the order [`StreamGraphTransactionExecutor::apply_one_request`] takes those
+/// steps.
 pub(crate) fn what_a_connect_asks_of_the_running_stream(
     source: StreamGraphActionLinkEnd,
     target: StreamGraphActionLinkEnd,
@@ -163,8 +166,9 @@ enum WhyNoConvertNodeIsPlaced {
 /// Refuse `link`, drawn at `level_as_drawn`, before anything is written, when its two typed
 /// ends, judged by the node types of that level as the running stream `stream_operations`
 /// resolves them, connect only through a convert node, which `connect` does not place there
-/// `because`.
-fn refuse_a_link_needing_a_convert_node_connect_does_not_place(
+/// `because`; at a placed level, also when only a module's conversion bridges them, as the
+/// stream's own level refuses such a link.
+fn refuse_a_link_needing_a_node_connect_does_not_place(
     stream_operations: &dyn RuntimeOperations,
     level_as_drawn: &StreamGraphDocument,
     link: &StreamGraphDocumentLink,
@@ -188,10 +192,15 @@ fn refuse_a_link_needing_a_convert_node_connect_does_not_place(
             port: &link.target.port,
         },
     );
-    let Some(PinLinkOutcome::ConnectsThroughConvertNode(convert_node)) =
-        verdict.map(|verdict| verdict.outcome)
-    else {
-        return Ok(());
+    let convert_node = match verdict.map(|verdict| verdict.outcome) {
+        Some(PinLinkOutcome::ConnectsThroughConvertNode(convert_node)) => convert_node,
+        Some(PinLinkOutcome::Refused(refusal))
+            if matches!(because, WhyNoConvertNodeIsPlaced::TheLinkIsAtAPlacedLevel)
+                && only_a_modules_conversion_bridges(&refusal) =>
+        {
+            return Err(streamlib::sdk::error::Error::PinLinkRefused(refusal).into());
+        }
+        _ => return Ok(()),
     };
     let words = match because {
         WhyNoConvertNodeIsPlaced::TheLinkIsAtAPlacedLevel => format!(
@@ -210,6 +219,17 @@ fn refuse_a_link_needing_a_convert_node_connect_does_not_place(
         RefusalCodeAndPlace::coded(ControlOperationRefusalCode::LinkPinTypesDoNotConnect),
         words,
     ))
+}
+
+/// Whether `refusal` refuses two pin types that only conversions `connect` never places, a
+/// module's, bridge.
+fn only_a_modules_conversion_bridges(refusal: &PinLinkRefusal) -> bool {
+    matches!(
+        refusal,
+        PinLinkRefusal::PinTypesDoNotConnect { conversions_that_bridge, .. }
+            if !conversions_that_bridge.is_empty()
+                && !conversions_that_bridge.iter().any(PinConversion::may_be_inserted)
+    )
 }
 
 /// One loaded stream a transaction edits: its operations, where it lives, and its graph as the
@@ -361,12 +381,12 @@ struct WhatTheAnswerNamesOfAnAddedNode {
 }
 
 /// Record what the answer names of the node `operation` adds, under the UUID `drawn_uuid_of`
-/// gives it, in `named_of_each_added_node`, when it names anything.
+/// gives it, in `what_the_answer_names_of_each_added_node`, when it names anything.
 fn record_what_the_answer_names_of_the_node_the_operation_adds(
     named: WhatTheAnswerNamesOfAnAddedNode,
     operation: &StreamGraphOperation,
     drawn_uuid_of: &dyn Fn(Uuid) -> Uuid,
-    named_of_each_added_node: &mut HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
+    what_the_answer_names_of_each_added_node: &mut HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
 ) {
     let added_node = match operation {
         StreamGraphOperation::AddNode { node, .. } => Some(node.id),
@@ -377,7 +397,7 @@ fn record_what_the_answer_names_of_the_node_the_operation_adds(
         return;
     };
     if named.label.is_some() || named.inserted_because.is_some() {
-        named_of_each_added_node.insert(added_node, named);
+        what_the_answer_names_of_each_added_node.insert(added_node, named);
     }
 }
 

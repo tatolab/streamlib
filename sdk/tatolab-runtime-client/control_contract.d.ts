@@ -1843,11 +1843,11 @@ export interface GraphTransactionAddedNode {
    */
   as?: string | null;
   /**
-   * Its node type.
+   * Its node type, on a node a `connect` inserted.
    */
   node_type?: string;
   /**
-   * Why the runtime inserted it.
+   * Why a `connect` inserted it on its link.
    */
   inserted_because?: GraphTransactionNodeInsertedBecause;
 }

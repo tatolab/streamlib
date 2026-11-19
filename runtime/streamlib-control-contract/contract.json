@@ -9460,11 +9460,11 @@
           },
           "node_type": {
             "type": "string",
-            "description": "Its node type."
+            "description": "Its node type, on a node a `connect` inserted."
           },
           "inserted_because": {
             "$ref": "#/components/schemas/GraphTransactionNodeInsertedBecause",
-            "description": "Why the runtime inserted it."
+            "description": "Why a `connect` inserted it on its link."
           }
         },
         "required": [

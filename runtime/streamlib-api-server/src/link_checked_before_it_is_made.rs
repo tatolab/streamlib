@@ -5,9 +5,9 @@
 //! graph by the engine's own judgement of a connect, and made nowhere.
 
 use std::collections::HashMap;
+
 use streamlib::sdk::runtime::WhatALiveConnectMakesOfALink;
 use streamlib_control_contract::{CheckLink, CheckLinkRequest, Connect, ControlOperation};
-
 use streamlib_project_repository::StreamGraphDocument;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphTransactionNodeInsertedBecause, LinkCheckResult,

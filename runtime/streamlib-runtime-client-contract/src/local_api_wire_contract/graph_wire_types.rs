@@ -48,9 +48,9 @@ pub struct GraphTransactionAddedNode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct InsertedNodeOnTheWire {
-    /// Its node type.
+    /// Its node type, on a node a `connect` inserted.
     pub node_type: String,
-    /// Why the runtime inserted it.
+    /// Why a `connect` inserted it on its link.
     pub inserted_because: GraphTransactionNodeInsertedBecause,
 }
 
