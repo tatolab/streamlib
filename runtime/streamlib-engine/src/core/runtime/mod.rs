@@ -96,8 +96,8 @@ pub use streams_loaded_in_this_runtime::loaded_stream::{
 };
 pub use streams_loaded_in_this_runtime::machine_state_directory::{
     PendingStreamActionKind, PendingStreamActionOnTheRecord, STREAM_RECORD_SCHEMA_VERSION,
-    StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure,
-    StreamRecordsInTheStateDirectory,
+    StreamFailureKind, StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime,
+    StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
 };
 pub use streams_loaded_in_this_runtime::operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use streams_loaded_in_this_runtime::output_port_viewer::{

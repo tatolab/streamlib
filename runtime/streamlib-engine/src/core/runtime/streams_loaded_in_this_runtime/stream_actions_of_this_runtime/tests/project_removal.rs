@@ -42,10 +42,8 @@ fn a_remove_project_unloads_and_forgets_every_stream_of_the_project_shown_stoppi
         &a_record_of(&project, "camera"),
     );
     project.hold_the_streams(&["camera", "mic"], &[]);
-    let mic = StreamRecord {
-        stopped: true,
-        ..a_record_of(&project, "mic")
-    };
+    let mut mic = a_record_of(&project, "mic");
+    mic.stopped = true;
     records_in(state_directory.path()).write(&mic).unwrap();
     let preview = a_record_of(&other_project, "preview");
     records_in(state_directory.path()).write(&preview).unwrap();

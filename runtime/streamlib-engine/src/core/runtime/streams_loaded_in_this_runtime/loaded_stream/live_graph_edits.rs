@@ -6,6 +6,9 @@ use std::path::Path;
 
 use parking_lot::RwLock;
 use serde::Serialize;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DiagnosticOnTheWire, DiagnosticPlaceOnTheWire,
+};
 
 use super::LoadedStreamInThisRuntime;
 use super::input_values_set_live::{
@@ -26,7 +29,9 @@ use crate::core::graph::{Graph, LinkUniqueId, NodeRunId, cast_exposed_name_to_ur
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::RuntimeOperations;
+use crate::core::runtime::StreamFailureKind;
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::LoadedStreamHolding;
+use crate::core::runtime::streams_loaded_in_this_runtime::stream_condition::StreamFailure;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
@@ -318,41 +323,70 @@ impl LoadedStreamInThisRuntime {
     /// Why this stream cannot play: a node of its graph is of a type its node code did not
     /// describe, held as a placeholder, or a link of its document is set aside by its
     /// validation; `None` when neither holds.
-    pub fn why_its_graph_as_held_keeps_this_stream_from_playing(&self) -> Option<String> {
+    pub fn why_its_graph_as_held_keeps_this_stream_from_playing(&self) -> Option<StreamFailure> {
         self.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
             .or_else(|| {
                 self.graph_only_nodes_as_drawn
                     .lock()
                     .links_its_validation_set_aside
                     .first()
-                    .map(|set_aside| set_aside.described())
+                    .map(|set_aside| StreamFailure {
+                        kind: StreamFailureKind::LinkRefused,
+                        place: DiagnosticPlaceOnTheWire::Link {
+                            from_node: set_aside.link.source.node.clone(),
+                            from_port: set_aside.link.source.port.clone(),
+                            to_node: set_aside.link.target.node.clone(),
+                            to_port: set_aside.link.target.port.clone(),
+                        },
+                        words: set_aside.described(),
+                    })
             })
+    }
+
+    /// Each diagnostic a node of this stream's graph carries, in the order the graph holds them.
+    pub fn diagnostics_of_its_nodes(&self) -> Vec<DiagnosticOnTheWire> {
+        self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter_map(|node| node.health_and_diagnostics())
+                .flat_map(|(_, diagnostics)| diagnostics)
+                .collect()
+        })
     }
 
     /// Why a node of a type its node code did not describe, held as a placeholder, keeps
     /// this stream from playing.
-    fn why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(&self) -> Option<String> {
+    fn why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(
+        &self,
+    ) -> Option<StreamFailure> {
         if let Some(why_none_of_its_node_code_is_read) = self
             .node_types_this_stream_resolves
             .why_every_node_type_is_held_as_a_placeholder()
         {
-            return Some(format!(
-                "it is held as its document is written, none of its node code read: \
-                 {why_none_of_its_node_code_is_read}"
+            return Some(StreamFailure::of_the_stream(
+                StreamFailureKind::NodeTypeNotDescribed,
+                format!(
+                    "it is held as its document is written, none of its node code read: \
+                     {why_none_of_its_node_code_is_read}"
+                ),
             ));
         }
         self.compiler.scope(|graph, _tx| {
             graph.traversal().v(()).iter().find_map(|node| {
                 self.node_types_this_stream_resolves
                     .placeholder_of_the_node_type_not_described(&node.node_type)
-                    .map(|placeholder| {
-                        format!(
+                    .map(|placeholder| StreamFailure {
+                        kind: StreamFailureKind::NodeTypeNotDescribed,
+                        place: node.diagnostic_place(),
+                        words: format!(
                             "its node `{}` is of the type `{}`, which its node code did not \
                              describe: {}",
                             node.display_name,
                             node.node_type,
                             placeholder.why_its_node_code_did_not_describe_it
-                        )
+                        ),
                     })
             })
         })

@@ -443,15 +443,22 @@ export interface ListStreamsToolResultStream {
    */
   location?: StreamLocationOnTheWire | null;
   /**
-   * Whether it is running, stopped or failed.
+   * Whether it is running, stopped or failed, in one word; `condition` answers its load,
+   * playback and health apart.
    */
   state: ListedStreamState;
+  /**
+   * Whether its graph is loaded, whether it plays and whether it is healthy, apart, with
+   * each diagnostic behind its health. Every runtime of contract revision 9 or later answers
+   * it; absent from an earlier runtime's listing.
+   */
+  condition?: StreamConditionOnTheWire | null;
   /**
    * How many nodes its loaded graph holds; `null` when it is not loaded.
    */
   node_count?: number | null;
   /**
-   * Why it is failed; `null` when it is not.
+   * Why it is failed; `null` when it is not. `condition.diagnostics` types it.
    */
   failed_because?: string | null;
   /**
@@ -495,6 +502,115 @@ export interface StreamLocationOnTheWire {
  * The state of one stream `list_streams` lists.
  */
 export type ListedStreamState = "running" | "stopped" | "paused" | "closed" | "failed" | "preparing" | "stopping";
+
+/**
+ * A stream's load, playback and health, and every diagnostic that explains its health.
+ */
+export interface StreamConditionOnTheWire {
+  /**
+   * Whether its graph is loaded in the runtime.
+   */
+  load: StreamLoadOnTheWire;
+  /**
+   * Whether it plays.
+   */
+  playback: StreamPlaybackOnTheWire;
+  /**
+   * Whether it is healthy.
+   */
+  health: StreamHealthOnTheWire;
+  /**
+   * Each problem behind its health: the stream's own, then each of its nodes'. Empty while it
+   * is `healthy`.
+   */
+  diagnostics: Array<DiagnosticOnTheWire>;
+}
+
+/**
+ * Whether a stream's graph is loaded in the runtime. The set grows: a value a client does not
+ * know reads as `not_loaded`.
+ */
+export type StreamLoadOnTheWire = "loading" | "loaded" | "unloading" | "not_loaded";
+
+/**
+ * Whether a stream plays. The set grows: a value a client does not know reads as `stopped`.
+ */
+export type StreamPlaybackOnTheWire = "starting" | "playing" | "paused" | "stopping" | "stopped";
+
+/**
+ * Whether a stream is healthy. The set grows: a value a client does not know reads as
+ * `failed`.
+ */
+export type StreamHealthOnTheWire = "healthy" | "degraded" | "failed";
+
+/**
+ * One problem a stream or a node has.
+ */
+export interface DiagnosticOnTheWire {
+  /**
+   * What the problem is.
+   */
+  kind: DiagnosticKindOnTheWire;
+  /**
+   * Where it applies.
+   */
+  place: DiagnosticPlaceOnTheWire;
+  /**
+   * The runtime's words for it, never rewritten.
+   */
+  words: string;
+  /**
+   * What recovers from it.
+   */
+  recovery: DiagnosticRecoveryOnTheWire;
+}
+
+/**
+ * What a problem is. The set grows: a kind a client does not know reads as `other`, shown by
+ * its `words` and recovered by its `recovery`.
+ */
+export type DiagnosticKindOnTheWire = "project_venv_not_made" | "load_refused" | "start_refused" | "node_type_not_described" | "link_refused" | "keeps_crashing_the_runtime" | "recorded_by_an_earlier_runtime" | "node_failed" | "node_raising" | "node_not_ready" | "other";
+
+/**
+ * Where a problem applies.
+ */
+export type DiagnosticPlaceOnTheWire = {
+  on: "stream";
+} | {
+  /**
+   * The node's id, as `graph` lists it.
+   */
+  node_id: string;
+  /**
+   * The node's name: its label, not its identity.
+   */
+  node_name: string;
+  on: "node";
+} | {
+  /**
+   * The name of the node the link leaves.
+   */
+  from_node: string;
+  /**
+   * The output port the link leaves.
+   */
+  from_port: string;
+  /**
+   * The name of the node the link enters.
+   */
+  to_node: string;
+  /**
+   * The input port the link enters.
+   */
+  to_port: string;
+  on: "link";
+};
+
+/**
+ * What recovers from a problem. The set grows: a recovery a client does not know reads as
+ * `retry_the_load`.
+ */
+export type DiagnosticRecoveryOnTheWire = "fix_the_code" | "fix_the_dependencies" | "fix_the_link" | "restart_the_playback" | "remove_the_stream" | "wait_for_the_node" | "retry_the_load";
 
 /**
  * A capture device the platform gates behind a privacy prompt, as `list_streams` spells it.
@@ -578,6 +694,12 @@ export interface StreamGraphOnTheWire {
    * `carried_through_the_function_node_pool`.
    */
   function_node_pool?: GraphNodeOnTheWire | null;
+  /**
+   * Whether the stream's graph is loaded, whether it plays and whether it is healthy, apart,
+   * with each diagnostic behind its health: a live key, absent where the graph is no
+   * stream's the runtime holds.
+   */
+  condition?: StreamConditionOnTheWire | null;
 }
 
 /**
@@ -815,6 +937,15 @@ export interface GraphNodeComponentsOnTheWire {
    */
   not_ready_because: string | null;
   /**
+   * Whether the node is healthy, read from its state and why; absent where the node keeps
+   * no state.
+   */
+  health?: NodeHealthOnTheWire | null;
+  /**
+   * Each problem behind the node's health, placed on the node; absent while it is healthy.
+   */
+  diagnostics?: Array<DiagnosticOnTheWire>;
+  /**
    * On a node in a helper process of its own, the helper processes started for it since its
    * stream loaded.
    */
@@ -879,6 +1010,12 @@ export interface GraphNodeComponentsOnTheWire {
  * A node's state as `graph` renders it.
  */
 export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
+
+/**
+ * Whether a node is healthy, as `graph` answers it. The set grows: a value a client does not
+ * know reads as `failed`.
+ */
+export type NodeHealthOnTheWire = "healthy" | "not_ready" | "raising" | "failed";
 
 /**
  * The helper processes started for a node since its stream loaded.
@@ -5498,6 +5635,14 @@ export interface ControlContractComponents {
   ListStreamsToolResultStream: ListStreamsToolResultStream;
   StreamLocationOnTheWire: StreamLocationOnTheWire;
   ListedStreamState: ListedStreamState;
+  StreamConditionOnTheWire: StreamConditionOnTheWire;
+  StreamLoadOnTheWire: StreamLoadOnTheWire;
+  StreamPlaybackOnTheWire: StreamPlaybackOnTheWire;
+  StreamHealthOnTheWire: StreamHealthOnTheWire;
+  DiagnosticOnTheWire: DiagnosticOnTheWire;
+  DiagnosticKindOnTheWire: DiagnosticKindOnTheWire;
+  DiagnosticPlaceOnTheWire: DiagnosticPlaceOnTheWire;
+  DiagnosticRecoveryOnTheWire: DiagnosticRecoveryOnTheWire;
   CaptureDeviceOnTheWire: CaptureDeviceOnTheWire;
   StreamActionStepOnTheWire: StreamActionStepOnTheWire;
   GraphRequest: GraphRequest;
@@ -5522,6 +5667,7 @@ export interface ControlContractComponents {
   InputValueComesFromOnTheWire: InputValueComesFromOnTheWire;
   GraphNodeComponentsOnTheWire: GraphNodeComponentsOnTheWire;
   NodeStateOnTheWire: NodeStateOnTheWire;
+  NodeHealthOnTheWire: NodeHealthOnTheWire;
   HelperProcessRestartsOnTheWire: HelperProcessRestartsOnTheWire;
   NodeMetricsOnTheWire: NodeMetricsOnTheWire;
   FunctionNodePromotionOnTheWire: FunctionNodePromotionOnTheWire;
@@ -5829,7 +5975,7 @@ export interface ControlOperations {
   /**
    * List every stream the runtime holds, by stream id, with its location and state.
    *
-   * List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (playing, or recorded playing and re-loaded playing at the runtime's next start), `stopped` (open with its playback stopped, its graph loaded to read and edit while its node count is set, until `start_playback`), `paused` (open with its playback paused by `pause_playback`, until `resume_playback`), `closed` (its project closed by `close_project`, not loaded, until `open_project`), `preparing` (an action that loads it — an `open_project`, `reload_project` or `start_playback` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_playback`, `close_project` or `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (its code, its venv, its load or its start failed, and held stopped from its document when that reads, its graph there to read and edit, until a play or a `reload_project` retries it; implicated in the runtime's last two crashes in a row, and held at a start from its document with none of its node code read until a `reload_project` of its project tries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `close_project` then `open_project` of its project asks.
+   * List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (playing, or recorded playing and re-loaded playing at the runtime's next start), `stopped` (open with its playback stopped, its graph loaded to read and edit while its node count is set, until `start_playback`), `paused` (open with its playback paused by `pause_playback`, until `resume_playback`), `closed` (its project closed by `close_project`, not loaded, until `open_project`), `preparing` (an action that loads it — an `open_project`, `reload_project` or `start_playback` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_playback`, `close_project` or `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (its code, its venv, its load or its start failed, and held stopped from its document when that reads, its graph there to read and edit, until a play or a `reload_project` retries it; implicated in the runtime's last two crashes in a row, and held at a start from its document with none of its node code read until a `reload_project` of its project tries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `close_project` then `open_project` of its project asks. Its `condition` answers its load, playback and health apart, whatever `state` says: `load` (`not_loaded`, `loading`, `loaded` — its graph held to read and edit, failed or not — or `unloading`), `playback` (`stopped`, `starting`, `playing`, `paused` or `stopping`), `health` (`healthy`, `degraded` while a node of it fails, raises or is not ready, whatever its playback, or `failed` until a recovery is made), and `diagnostics`, each problem behind its health: its `kind`, its `place` (`{"on": "stream"}`, a node by `node_id` and `node_name`, or a link by `from_node`, `from_port`, `to_node` and `to_port`), the runtime's `words` and the `recovery` that applies: `retry_the_load` (a `reload_project` of its project, or a `start_playback` while its graph is loaded), `fix_the_code`, `fix_the_dependencies`, `fix_the_link`, `restart_the_playback`, `remove_the_stream` (a `remove_project` of the project directory its record names) or `wait_for_the_node`. A kind or value this client does not know reads as the set's fallback: `other` for a kind, `not_loaded`, `stopped`, `failed` and `retry_the_load` for the rest.
    *
    * Since contract version 1, stable.
    */
@@ -5840,7 +5986,7 @@ export interface ControlOperations {
   /**
    * Export a loaded stream's live graph, or every loaded stream's, with each node's and link's state.
    *
-   * Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.
+   * Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. A node that keeps a state carries its `health` in its `components` (`healthy`, `not_ready`, `raising` or `failed`) with the `diagnostics` behind it, left out while it has none; a fragment's own node carries neither. Each stream graph carries its `condition`, as `list_streams` answers it. Without `stream`, `{machine, streams}` holds every loaded stream's graph.
    *
    * Since contract version 1, experimental.
    */

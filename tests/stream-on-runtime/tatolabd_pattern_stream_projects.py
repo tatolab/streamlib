@@ -132,12 +132,18 @@ def listing_of(
     node_count: "int | None",
 ) -> "dict[str, Any]":
     """One `list_streams` entry of a pattern stream that is not failed, shown under its
-    function's name."""
+    function's name, its graph loaded and `running` or `stopped`."""
     return {
         "stream": stream_id,
         "display_name": stream_function_name,
         "location": location_of_the_pattern_project(project_directory, stream_function_name),
         "state": state,
+        "condition": {
+            "load": "loaded",
+            "playback": {"running": "playing", "stopped": "stopped"}[state],
+            "health": "healthy",
+            "diagnostics": [],
+        },
         "node_count": node_count,
         "failed_because": None,
         "capture_devices_whose_access_was_never_asked_for": [],

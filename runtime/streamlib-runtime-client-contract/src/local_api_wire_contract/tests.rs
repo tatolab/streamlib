@@ -71,6 +71,19 @@ fn every_stream_action_result_serializes_its_keys_in_wire_order() {
                         stream_asset: uuid::Uuid::from_u128(2),
                     }),
                     state: ListedStreamState::Running,
+                    condition: Some(StreamConditionOnTheWire {
+                        load: StreamLoadOnTheWire::Loaded,
+                        playback: StreamPlaybackOnTheWire::Playing,
+                        health: StreamHealthOnTheWire::Degraded,
+                        diagnostics: vec![DiagnosticOnTheWire::of(
+                            DiagnosticKindOnTheWire::NodeNotReady,
+                            DiagnosticPlaceOnTheWire::Node {
+                                node_id: "n-1".to_owned(),
+                                node_name: "camera".to_owned(),
+                            },
+                            "waiting for its first frame".to_owned(),
+                        )],
+                    }),
                     node_count: Some(4),
                     failed_because: None,
                     capture_devices_whose_access_was_never_asked_for: vec![
@@ -85,6 +98,16 @@ fn every_stream_action_result_serializes_its_keys_in_wire_order() {
                     display_name: "main".to_owned(),
                     location: None,
                     state: ListedStreamState::Failed,
+                    condition: Some(StreamConditionOnTheWire {
+                        load: StreamLoadOnTheWire::NotLoaded,
+                        playback: StreamPlaybackOnTheWire::Stopped,
+                        health: StreamHealthOnTheWire::Failed,
+                        diagnostics: vec![DiagnosticOnTheWire::of(
+                            DiagnosticKindOnTheWire::RecordedByAnEarlierRuntime,
+                            DiagnosticPlaceOnTheWire::Stream,
+                            "an earlier runtime recorded it".to_owned(),
+                        )],
+                    }),
                     node_count: None,
                     failed_because: Some("an earlier runtime recorded it".to_owned()),
                     capture_devices_whose_access_was_never_asked_for: Vec::new(),
@@ -100,6 +123,12 @@ fn every_stream_action_result_serializes_its_keys_in_wire_order() {
                         stream_asset: uuid::Uuid::from_u128(4),
                     }),
                     state: ListedStreamState::Preparing,
+                    condition: Some(StreamConditionOnTheWire {
+                        load: StreamLoadOnTheWire::Loading,
+                        playback: StreamPlaybackOnTheWire::Stopped,
+                        health: StreamHealthOnTheWire::Healthy,
+                        diagnostics: Vec::new(),
+                    }),
                     node_count: None,
                     failed_because: None,
                     capture_devices_whose_access_was_never_asked_for: Vec::new(),
@@ -108,7 +137,7 @@ fn every_stream_action_result_serializes_its_keys_in_wire_order() {
                 },
             ],
         }),
-        r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","project":"00000000-0000-0000-0000-000000000001","stream_asset":"00000000-0000-0000-0000-000000000002"},"state":"running","node_count":4,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":["camera","microphone"],"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","capture_devices_whose_access_was_never_asked_for":[],"action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","project":"00000000-0000-0000-0000-000000000003","stream_asset":"00000000-0000-0000-0000-000000000004"},"state":"preparing","node_count":null,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":[],"action":"Rabc-3","step":"making_the_venv"}]}"#
+        r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","project":"00000000-0000-0000-0000-000000000001","stream_asset":"00000000-0000-0000-0000-000000000002"},"state":"running","condition":{"load":"loaded","playback":"playing","health":"degraded","diagnostics":[{"kind":"node_not_ready","place":{"on":"node","node_id":"n-1","node_name":"camera"},"words":"waiting for its first frame","recovery":"wait_for_the_node"}]},"node_count":4,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":["camera","microphone"],"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","condition":{"load":"not_loaded","playback":"stopped","health":"failed","diagnostics":[{"kind":"recorded_by_an_earlier_runtime","place":{"on":"stream"},"words":"an earlier runtime recorded it","recovery":"remove_the_stream"}]},"node_count":null,"failed_because":"an earlier runtime recorded it","capture_devices_whose_access_was_never_asked_for":[],"action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","project":"00000000-0000-0000-0000-000000000003","stream_asset":"00000000-0000-0000-0000-000000000004"},"state":"preparing","condition":{"load":"loading","playback":"stopped","health":"healthy","diagnostics":[]},"node_count":null,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":[],"action":"Rabc-3","step":"making_the_venv"}]}"#
     );
     assert_eq!(
         wire_text(&ProjectStreamActionQueuedToolResult {
@@ -555,4 +584,44 @@ fn each_node_kind_and_language_is_named_as_it_is_written() {
     for language in FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE {
         assert_eq!(serde_json::to_value(language).unwrap(), language.name());
     }
+}
+
+#[test]
+fn a_condition_value_this_client_does_not_know_reads_as_its_sets_fallback() {
+    let read: StreamConditionOnTheWire = serde_json::from_value(serde_json::json!({
+        "load": "resident",
+        "playback": "rewinding",
+        "health": "wobbly",
+        "diagnostics": [{
+            "kind": "gpu_lost",
+            "place": { "on": "stream" },
+            "words": "the GPU was lost",
+            "recovery": "replace_the_gpu",
+        }],
+    }))
+    .unwrap();
+    assert_eq!(read.load, StreamLoadOnTheWire::NotLoaded);
+    assert_eq!(read.playback, StreamPlaybackOnTheWire::Stopped);
+    assert_eq!(read.health, StreamHealthOnTheWire::Failed);
+    assert_eq!(read.diagnostics[0].kind, DiagnosticKindOnTheWire::Other);
+    assert_eq!(read.diagnostics[0].words, "the GPU was lost");
+    assert_eq!(
+        read.diagnostics[0].recovery,
+        DiagnosticRecoveryOnTheWire::RetryTheLoad
+    );
+    assert_eq!(
+        serde_json::from_value::<NodeHealthOnTheWire>(serde_json::json!("flickering")).unwrap(),
+        NodeHealthOnTheWire::Failed
+    );
+}
+
+#[test]
+fn a_listing_from_a_runtime_before_conditions_reads_with_none() {
+    let listed: ListStreamsToolResultStream = serde_json::from_value(serde_json::json!({
+        "stream": "main", "display_name": "main", "location": null, "state": "running",
+        "node_count": 1, "failed_because": null,
+        "capture_devices_whose_access_was_never_asked_for": [], "action": null, "step": null,
+    }))
+    .unwrap();
+    assert_eq!(listed.condition, None);
 }

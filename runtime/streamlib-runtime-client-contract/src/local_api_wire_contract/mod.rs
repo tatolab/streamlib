@@ -14,6 +14,7 @@ mod log_wire_types;
 mod project_wire_types;
 mod runtime_health_wire_types;
 mod stream_clock_spec;
+mod stream_condition_wire_types;
 mod stream_wire_types;
 
 pub use graph_answer_link_wire_types::{
@@ -72,6 +73,11 @@ pub use runtime_health_wire_types::{
     MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH, MachineRuntimeLockHolderPidAnswer,
 };
 pub use stream_clock_spec::{DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClockSpec};
+pub use stream_condition_wire_types::{
+    DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire,
+    DiagnosticRecoveryOnTheWire, NodeHealthOnTheWire, StreamConditionOnTheWire,
+    StreamHealthOnTheWire, StreamLoadOnTheWire, StreamPlaybackOnTheWire,
+};
 pub use stream_wire_types::{
     CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
     DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, ListStreamsToolResult,

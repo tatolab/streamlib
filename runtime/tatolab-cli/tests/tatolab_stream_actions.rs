@@ -34,6 +34,7 @@ fn listed_stream(
         "stream": stream_id, "display_name": display_name, "state": "running",
         "location": {"project_directory": project_directory, "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
         "node_count": 3, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
+            "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []},
     })
 }
 
@@ -519,10 +520,12 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
             &json!({"streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
                  "location": {"project_directory": "/srv/cam", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
-                 "node_count": 3, "capture_devices_whose_access_was_never_asked_for": []},
+                 "node_count": 3, "capture_devices_whose_access_was_never_asked_for": [],
+                 "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []}},
                 {"stream": "mic-listen-9f8e7d", "display_name": "Desk mic", "state": "stopped",
                  "location": {"project_directory": "/srv/mic", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f"},
-                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": []},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [],
+                 "condition": {"load": "not_loaded", "playback": "stopped", "health": "healthy", "diagnostics": []}},
             ]})
             .to_string(),
         ),

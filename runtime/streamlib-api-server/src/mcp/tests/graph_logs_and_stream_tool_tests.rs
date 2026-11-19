@@ -32,7 +32,7 @@ async fn tools_call_graph_without_a_stream_renders_every_loaded_stream_under_the
         first_text_block_json(&body),
         json!({
             "machine": STUB_MACHINE_NAME,
-            "streams": [two_linked_nodes_graph()],
+            "streams": [as_a_graph_call_answers_it(two_linked_nodes_graph())],
         })
     );
     let machine_wide: streamlib::sdk::json_schema::MachineWideGraphResponse =
@@ -320,6 +320,7 @@ async fn list_streams_answers_each_streams_id_display_name_location_state_node_c
                         "stream_asset": STUB_STREAM_ASSET,
                     },
                     "state": "running",
+                    "condition": the_stub_streams_condition(),
                     "node_count": null,
                     "failed_because": null,
                     "capture_devices_whose_access_was_never_asked_for": [],

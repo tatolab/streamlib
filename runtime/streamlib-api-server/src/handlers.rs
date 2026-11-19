@@ -21,7 +21,9 @@ use streamlib::sdk::json_schema::{
     NodeTypesDescribedInOneStreamOutput, PortFamilyDescriptorOutput, RegistryResponse,
 };
 use streamlib::sdk::nodes::NODE_REGISTRY;
-use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
+use streamlib::sdk::runtime::{
+    OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamListing,
+};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -207,10 +209,61 @@ pub(crate) async fn machine_wide_graph_json(
         };
         stream_graphs.push(stream_operations.to_json_async().await?);
     }
+    give_the_stream_graphs_their_condition(operations_on_the_loaded_streams, &mut stream_graphs)
+        .await?;
     Ok(json!({
         "machine": operations_on_the_loaded_streams.this_machines_name().name(),
         "streams": stream_graphs,
     }))
+}
+
+/// Write into each of `stream_graphs` its stream's condition, as the stream listing answers it.
+pub(crate) async fn give_the_stream_graphs_their_condition(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    stream_graphs: &mut [Value],
+) -> Result<()> {
+    let operations_on_the_loaded_streams = Arc::clone(operations_on_the_loaded_streams);
+    let listings =
+        tokio::task::spawn_blocking(move || operations_on_the_loaded_streams.list_streams())
+            .await
+            .map_err(|not_finished| {
+                Error::Runtime(format!("the stream listing did not finish: {not_finished}"))
+            })?;
+    for stream_graph in stream_graphs {
+        give_the_stream_graph_its_listed_condition(stream_graph, &listings);
+    }
+    Ok(())
+}
+
+/// Write into `stream_graph` the condition `listings` give the stream it names; a stream the
+/// listing no longer holds keeps none.
+pub(crate) fn give_the_stream_graph_its_listed_condition(
+    stream_graph: &mut Value,
+    listings: &[StreamListing],
+) {
+    let Some(stream_graph) = stream_graph.as_object_mut() else {
+        return;
+    };
+    let Some(listing) = stream_graph
+        .get("stream")
+        .and_then(Value::as_str)
+        .and_then(|stream_id| {
+            listings
+                .iter()
+                .find(|listing| listing.stream_id == stream_id)
+        })
+    else {
+        return;
+    };
+    match serde_json::to_value(&listing.condition) {
+        Ok(condition) => {
+            stream_graph.insert("condition".to_owned(), condition);
+        }
+        Err(not_serialized) => tracing::warn!(
+            "the stream `{}`'s condition was left out of its graph: {not_serialized}",
+            listing.stream_id
+        ),
+    }
 }
 
 /// The native node types every stream can add, then each loaded stream's
@@ -293,10 +346,24 @@ pub(crate) async fn get_graph(
         Ok(stream_operations) => stream_operations,
         Err(refusal) => return *refusal,
     };
-    match stream_operations.to_json_async().await {
+    match the_stream_graph_with_its_condition(&state, stream_operations.as_ref()).await {
         Ok(graph) => Json(graph).into_response(),
         Err(export_failure) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &export_failure),
     }
+}
+
+/// The graph `stream_operations` exports, with its stream's condition.
+async fn the_stream_graph_with_its_condition(
+    state: &AppState,
+    stream_operations: &dyn RuntimeOperations,
+) -> Result<Value> {
+    let mut graph = stream_operations.to_json_async().await?;
+    give_the_stream_graphs_their_condition(
+        &state.operations_on_the_loaded_streams,
+        std::slice::from_mut(&mut graph),
+    )
+    .await?;
+    Ok(graph)
 }
 
 #[utoipa::path(

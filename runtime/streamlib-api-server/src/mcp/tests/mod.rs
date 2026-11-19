@@ -309,6 +309,18 @@ fn recorded_stream_graph_operations(
     recorded.lock().clone()
 }
 
+/// `graph`, the stub stream's graph as a graph call answers it: with the condition the stub's
+/// listing gives its stream.
+fn as_a_graph_call_answers_it(mut graph: Value) -> Value {
+    graph["condition"] = the_stub_streams_condition();
+    graph
+}
+
+/// The condition the stub's listing gives its stream: loaded, playing and healthy.
+fn the_stub_streams_condition() -> Value {
+    json!({ "load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": [] })
+}
+
 /// Two nodes and the one link between them, in the shape the engine's
 /// graph export takes, so the prompts parse what a real node answers.
 fn two_linked_nodes_graph() -> Value {

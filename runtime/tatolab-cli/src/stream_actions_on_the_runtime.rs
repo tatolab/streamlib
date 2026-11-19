@@ -697,10 +697,10 @@ mod tests {
             "streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "Desk camera", "state": "running",
                  "location": {"project_directory": "/srv/cam", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
-                 "node_count": 4, "capture_devices_whose_access_was_never_asked_for": []},
+                 "node_count": 4, "capture_devices_whose_access_was_never_asked_for": [], "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []}},
                 {"stream": "a-back-9f8e7d", "display_name": "back", "state": "stopped",
                  "location": {"project_directory": "/srv/a", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f"},
-                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": []},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "condition": {"load": "not_loaded", "playback": "stopped", "health": "healthy", "diagnostics": []}},
             ]
         }))
         .unwrap();
@@ -720,9 +720,11 @@ mod tests {
             "streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
                  "location": {"project_directory": "/srv/cam", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
-                 "node_count": 4, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null},
+                 "node_count": 4, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
+                 "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []}},
                 {"stream": "main", "display_name": "main", "state": "failed", "location": null,
-                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": "an earlier runtime recorded it"},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": "an earlier runtime recorded it",
+                 "condition": {"load": "not_loaded", "playback": "stopped", "health": "failed", "diagnostics": [{"kind": "recorded_by_an_earlier_runtime", "place": {"on": "stream"}, "words": "an earlier runtime recorded it", "recovery": "remove_the_stream"}]}},
             ]
         }))
         .unwrap();
@@ -744,7 +746,7 @@ mod tests {
                 {"stream": "desk-0a1b2c", "display_name": "desk", "state": "running",
                  "location": {"project_directory": "/srv/desk", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
                  "node_count": 3,
-                 "capture_devices_whose_access_was_never_asked_for": ["camera", "microphone"]},
+                 "capture_devices_whose_access_was_never_asked_for": ["camera", "microphone"], "condition": {"load": "loaded", "playback": "playing", "health": "healthy", "diagnostics": []}},
             ]
         }))
         .unwrap();
@@ -765,10 +767,10 @@ mod tests {
             "streams": [
                 {"stream": "desk-0a1b2c", "display_name": "desk", "state": "preparing",
                  "location": {"project_directory": "/srv/desk", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
-                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-1", "step": "making_the_venv"},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-1", "step": "making_the_venv", "condition": {"load": "loading", "playback": "stopped", "health": "healthy", "diagnostics": []}},
                 {"stream": "hall-3d4e5f", "display_name": "hall", "state": "preparing",
                  "location": {"project_directory": "/srv/hall", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f"},
-                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-2", "step": null},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-2", "step": null, "condition": {"load": "loading", "playback": "stopped", "health": "healthy", "diagnostics": []}},
             ]
         }))
         .unwrap();
