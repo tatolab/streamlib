@@ -316,23 +316,33 @@ fn the_kept_download_of(workspace_root: &Path, download: &CarriedDownloadPin) ->
     let file_name = Path::new(&download.path_in_the_unit)
         .file_name()
         .with_context(|| format!("{} names no file", download.path_in_the_unit))?;
+    the_kept_download_pinned_by(workspace_root, &download.url, &download.sha256, file_name)
+}
+
+/// The file at `url` whose sha256 is `sha256`, kept under `target/` as `file_name`, downloaded now
+/// when no kept copy matches. A download is renamed into place only once its sha256 matches.
+pub(crate) fn the_kept_download_pinned_by(
+    workspace_root: &Path,
+    url: &str,
+    sha256: &str,
+    file_name: &std::ffi::OsStr,
+) -> Result<PathBuf> {
     let kept_directory = workspace_root
         .join(CARRIED_PACKAGE_DOWNLOADS_RELATIVE_TO_WORKSPACE)
-        .join(&download.sha256);
+        .join(sha256);
     let kept_download = kept_directory.join(file_name);
-    if sha256_hex_of_the_file(&kept_download).is_ok_and(|sha256| sha256 == download.sha256) {
+    if sha256_hex_of_the_file(&kept_download).is_ok_and(|kept_sha256| kept_sha256 == sha256) {
         return Ok(kept_download);
     }
     std::fs::create_dir_all(&kept_directory)
         .with_context(|| format!("creating {}", kept_directory.display()))?;
     let partial_download = kept_directory.join(format!("{}.partial", file_name.to_string_lossy()));
-    download_with_curl(&download.url, &partial_download)?;
+    download_with_curl(url, &partial_download)?;
     let downloaded_sha256 = sha256_hex_of_the_file(&partial_download)?;
-    if downloaded_sha256 != download.sha256 {
+    if downloaded_sha256 != sha256 {
         bail!(
-            "{} does not match the sha256 it is pinned to: got {downloaded_sha256}, expected {}",
-            download.url,
-            download.sha256
+            "{url} does not match the sha256 it is pinned to: got {downloaded_sha256}, expected \
+             {sha256}"
         );
     }
     std::fs::rename(&partial_download, &kept_download).with_context(|| {
