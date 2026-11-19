@@ -94,8 +94,9 @@ pub(super) fn ports_a_shader_node_program_types(
         .collect()
 }
 
-/// Declare each of `typed_ports` on the port of its name. A name the node has no port of is
-/// refused.
+/// Declare each of `typed_ports` on the port of its name, unless that port's author states its
+/// own declaration, as a pin under the typed grammar does: what the author states, its
+/// annotations included, is the port's. A name the node has no port of is refused.
 pub(super) fn declare_each_typed_port(
     descriptor: &mut NodeDescriptor,
     typed_ports: Vec<(String, PinDeclaration)>,
@@ -109,7 +110,7 @@ pub(super) fn declare_each_typed_port(
             .ok_or_else(|| {
                 format!("the signature types port {port_name:?}, which the node does not declare")
             })?;
-        port.pin_declaration = Some(pin_declaration);
+        port.pin_declaration.get_or_insert(pin_declaration);
     }
     Ok(())
 }

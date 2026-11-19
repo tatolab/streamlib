@@ -5,15 +5,18 @@
 Boolean in and out.
 
 `Beat` turns stream time into a beat and `Warmth` reads the beat's count and accent, so a
-typed Integer and a typed Boolean link between them as well as Floats.
+typed Integer and a typed Boolean link between them as well as Floats. `Beat` is declared in
+the family grammar of `@node.function` and `Warmth` in the typed grammar of bare `@node`, whose
+inputs state a range, a step and a meaning beside their type.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Annotated
 
-from tatolab.stream import Time, node
+from tatolab.stream import Description, NumberRange, NumberStep, PinMeaning, Time, node
 
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
@@ -57,10 +60,21 @@ def Beat(
     category="Every pin kind",
     description="How warm the picture is: warmer on an accented beat, and a little warmer each beat of a bar.",
 )
-@node.function
+@node
 def Warmth(
-    count: int = 0, accented: bool = False, beats_per_bar: int = 4, base: float = 0.1
-) -> float:
+    count: int = 0,
+    accented: bool = False,
+    beats_per_bar: Annotated[
+        int, NumberRange(minimum=1, maximum=16), Description("How many beats make a bar.")
+    ] = 4,
+    base: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        NumberStep(0.01),
+        PinMeaning("warmth"),
+        Description("How warm the picture is on the first beat of a bar."),
+    ] = 0.1,
+) -> Annotated[float, PinMeaning("warmth")]:
     """`base`, plus a step for each beat into the bar of `beats_per_bar`, doubled while `accented`."""
     beat_in_the_bar = count % beats_per_bar if beats_per_bar > 0 else 0
     warmth = base + 0.05 * beat_in_the_bar

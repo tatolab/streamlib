@@ -323,6 +323,91 @@ fn a_function_nodes_number_and_bool_values_are_typed_an_optional_one_may_be_unse
     assert!(refusal_of(&described).contains("\"closed\", which the node does not declare"));
 }
 
+/// A described function node under the typed grammar: `frequency` states a Float pin with a
+/// range, a unit and a meaning, and the signature types the same port a bare Float.
+fn a_described_typed_function_node() -> serde_json::Value {
+    let mut described = described_node_type_with_input_ports(serde_json::json!([
+        {
+            "name": "frequency",
+            "family": {"family": "channels"},
+            "description": "",
+            "pin_default": 440.0,
+            "pin_declaration": {
+                "pin_type": {"kind": "is", "pin_type": {"type": "float"}},
+                "flow": "value",
+                "annotations": {
+                    "range": {"minimum": 20.0, "maximum": 20000.0},
+                    "unit": "Hz",
+                    "meaning": "frequency",
+                },
+            },
+        },
+    ]));
+    described["output_ports"] = serde_json::json!([
+        {
+            "name": "result",
+            "family": {"family": "channels", "names": {"stated": ["result"]}, "dtype": "f64"},
+            "description": "",
+            "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"},
+        },
+    ]);
+    described["kind"] = serde_json::json!("function");
+    described["language"] = serde_json::json!("python");
+    described["state_fields"] = serde_json::json!([]);
+    described["runs_as_python"] = serde_json::json!(false);
+    described["function_signature"] = serde_json::json!({
+        "inputs": [
+            {"parameter": "frequency", "port": "frequency", "value_type": "float", "optional": false, "default": 440.0},
+        ],
+        "outputs": [
+            {"port": "result", "field": null, "value_type": "float", "may_hand_out_nothing": false},
+        ],
+        "state_parameter": null,
+    });
+    described
+}
+
+#[test]
+fn a_typed_function_nodes_stated_pin_keeps_its_range_unit_and_meaning_over_the_signatures_type() {
+    let function = read(&a_described_typed_function_node()).expect("reads");
+
+    let frequency = declared_pin_of(&function, "frequency").expect("declares a pin");
+    assert_eq!(
+        frequency.pin_type,
+        crate::core::descriptors::DeclaredPinType::Is {
+            pin_type: PinType::Float { exact_size: None }
+        }
+    );
+    assert_eq!(
+        frequency.annotations.range,
+        Some(crate::core::descriptors::PinNumberRange {
+            minimum: Some(20.0),
+            maximum: Some(20000.0),
+        })
+    );
+    assert_eq!(frequency.annotations.unit.as_deref(), Some("Hz"));
+    assert_eq!(frequency.annotations.meaning.as_deref(), Some("frequency"));
+    let frequency_port = &function.descriptor.inputs[0];
+    assert_eq!(
+        frequency_port.delivery_profile, None,
+        "a typed pin that states no delivery sends none"
+    );
+}
+
+#[test]
+fn a_stated_pin_declaration_the_engine_does_not_read_is_refused_naming_the_port() {
+    let mut described = a_described_typed_function_node();
+    described["input_ports"][0]["pin_declaration"]["annotations"]["loudness"] =
+        serde_json::json!("loud");
+    assert!(refusal_of(&described).contains("port \"frequency\": pin_declaration"));
+
+    let mut described = a_described_typed_function_node();
+    described["output_ports"][0]["pin_declaration"]["may_be_unset"] = serde_json::json!(true);
+    assert!(
+        refusal_of(&described).contains("output port \"result\" declares that it may be unset")
+    );
+}
+
 #[test]
 fn a_process_nodes_picture_port_is_a_texture_and_its_other_ports_are_untyped() {
     let process = read(&described_node_type_with_output_ports(serde_json::json!([
@@ -823,6 +908,46 @@ fn a_stated_conversion_reaches_the_descriptor_and_one_that_is_no_bool_is_refused
     let refusal = refusal_of(&described_node_type);
     assert!(
         refusal.contains("conversion must be a bool, got"),
+        "got {refusal}"
+    );
+}
+
+#[test]
+fn a_typed_pins_default_is_a_stored_value_of_the_type_it_declares() {
+    let colour = serde_json::json!({"red": 1.0, "green": 0.5, "blue": 0.25, "alpha": 1.0});
+    let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
+        {"name": "tint", "family": {"family": "channels"}, "description": "",
+         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "color"}}, "flow": "value"},
+         "pin_default": colour},
+    ])))
+    .unwrap_or_else(|refusal| panic!("a Color default reads on a Color pin: {refusal}"));
+    assert_eq!(declaration.descriptor.inputs[0].pin_default, Some(colour));
+
+    let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+        "name": "tint", "family": {"family": "channels"}, "description": "",
+        "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "color"}}, "flow": "value"},
+        "pin_default": 0.5,
+    }])));
+    assert!(
+        refusal.contains("\"tint\"") && refusal.contains("a colour"),
+        "got {refusal}"
+    );
+}
+
+#[test]
+fn a_pin_type_no_port_may_declare_is_refused_naming_the_port() {
+    let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+        "name": "frames", "family": {"family": "records"}, "description": "",
+        "pin_declaration": {
+            "pin_type": {"kind": "is", "pin_type": {
+                "type": "list_of", "element_type": {"type": "list_of", "element_type": {"type": "float"}},
+            }},
+            "flow": "value",
+        },
+        "pin_default": [],
+    }])));
+    assert!(
+        refusal.contains("\"frames\"") && refusal.contains("a List of a List"),
         "got {refusal}"
     );
 }

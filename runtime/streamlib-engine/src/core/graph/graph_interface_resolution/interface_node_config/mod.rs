@@ -142,7 +142,9 @@ fn refuse_a_default_or_range_its_family_does_not_take(
         .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
         .or_else(|| node.input_values.get(GRAPH_INPUT_VALUE_FORMER_NAME))
         && let Err(why) =
-            crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, value, 0)
+            crate::core::pin_value_packing::the_message_a_value_written_onto_an_output_is(
+                family, value, 0,
+            )
     {
         return Err(Error::GraphError(format!(
             "`GraphInput` node `{}` holds its `{GRAPH_INTERFACE_VALUE_PORT_NAME}`, its \

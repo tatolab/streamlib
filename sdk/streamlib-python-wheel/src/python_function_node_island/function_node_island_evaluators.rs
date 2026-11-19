@@ -22,6 +22,9 @@ use super::*;
 pub(crate) struct FunctionNodeIslandEvaluatedInThisHelper {
     island_output_node_index: usize,
     island_output_index: usize,
+    /// The pin type of the String, Menu, Asset or List the island's output
+    /// carries, packed as it travels; `None` for a value of any other type.
+    island_output_carries_a_stored_value_of: Option<PinType>,
     first_function_node_it_runs_as_python: Option<String>,
     reader_input_ports_its_links_from_outside_it_arrive_at: Vec<String>,
     pub(super) evaluation: Mutex<FunctionNodeIslandEvaluation>,
@@ -40,7 +43,11 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
         let island_output_node =
             &evaluation.function_nodes_each_after_what_it_reads[self.island_output_node_index];
         let value = island_output_node.output_values[self.island_output_index]
-            .as_the_island_output_of(&island_output_node.node_id, self.island_output_index)?;
+            .as_the_island_output_of(
+                &island_output_node.node_id,
+                self.island_output_index,
+                self.island_output_carries_a_stored_value_of.as_ref(),
+            )?;
         let value = match value {
             FunctionNodeIslandOutputValue::MessageHandedOnUnread(_)
                 if evaluation.message_handed_on_since_the_last_evaluation =>
@@ -83,6 +90,17 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
     }
 }
 
+/// The value a function node input reads while nothing links into it, as the
+/// bootstrap hands it over: a number, the `tuple` of the parts of a Color, a
+/// Vector, a Rectangle or a Transform, or the record `{"value": <stored JSON
+/// form>}` of a String, a Menu, an Asset or a List.
+#[derive(Debug, FromPyObject)]
+pub(crate) enum PinValueTheBootstrapHandsOver {
+    Number(f64),
+    Parts(Vec<f64>),
+    Record(Py<PyDict>),
+}
+
 /// One function node as the bootstrap hands it over: its id, its breadcrumb
 /// number, its compiled evaluate entry's address or the object that runs it as
 /// Python, where each input takes its value, its config values, its initial
@@ -92,7 +110,7 @@ pub(super) type FunctionNodeHandedOverByTheBootstrap = (
     String,
     u32,
     Py<PyAny>,
-    Vec<(Option<(usize, usize)>, f64)>,
+    Vec<(Option<(usize, usize)>, PinValueTheBootstrapHandsOver)>,
     Vec<f64>,
     Vec<f64>,
     usize,
@@ -116,6 +134,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             claim_the_pooled_gpu_frame_a_message_names,
         } = how_it_carries_values_beyond_numbers;
         how_each_node_carries_its_values.resize_with(function_nodes.len(), Default::default);
+        let island_output_carries_a_stored_value_of = how_each_node_carries_its_values
+            .get(island_output_node_index)
+            .map(|how_it_carries_its_values| {
+                how_it_carries_its_values.the_pin_type_of_a_stored_value(island_output_index, true)
+            })
+            .transpose()
+            .map_err(|refusal| format!("the island's output: {refusal}"))?
+            .flatten();
         let mut function_nodes_each_after_what_it_reads: Vec<FunctionNodeInAnIsland> =
             Vec::with_capacity(function_nodes.len());
         for (
@@ -144,9 +170,17 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                     {
                         WhereAFunctionNodeInputTakesItsValue::ItsPin(FunctionNodeValue::Nothing)
                     }
-                    None => WhereAFunctionNodeInputTakesItsValue::ItsPin(
-                        FunctionNodeValue::Number(pin_value),
-                    ),
+                    None => WhereAFunctionNodeInputTakesItsValue::ItsPin(match pin_value {
+                        PinValueTheBootstrapHandsOver::Number(number) => {
+                            FunctionNodeValue::Number(number)
+                        }
+                        PinValueTheBootstrapHandsOver::Parts(parts) => {
+                            FunctionNodeValue::Parts(parts)
+                        }
+                        PinValueTheBootstrapHandsOver::Record(record) => {
+                            FunctionNodeValue::Record(record.into_any())
+                        }
+                    }),
                     Some((source_node_index, output_index)) if source_node_index > node_index => {
                         WhereAFunctionNodeInputTakesItsValue::ALaterNodesOutputAtTheLastEvaluation {
                             node_index: source_node_index,
@@ -176,9 +210,16 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             for (input_index, reader_input_port, value_type) in
                 &how_it_carries_its_values.inputs_read_from_links_from_outside_the_island
             {
-                let read_as =
-                    HowAnInputReadsALinkFromOutsideItsIsland::of_the_value_type(value_type)
-                        .map_err(|refusal| format!("function node `{node_id}`: {refusal}"))?;
+                let read_as = match how_it_carries_its_values
+                    .the_pin_type_of_a_stored_value(*input_index, false)
+                    .map_err(|refusal| format!("function node `{node_id}`: {refusal}"))?
+                {
+                    Some(pin_type) => {
+                        HowAnInputReadsALinkFromOutsideItsIsland::StoredValue(pin_type)
+                    }
+                    None => HowAnInputReadsALinkFromOutsideItsIsland::of_the_value_type(value_type)
+                        .map_err(|refusal| format!("function node `{node_id}`: {refusal}"))?,
+                };
                 let where_it_takes_its_value = where_each_input_takes_its_value_read
                     .get_mut(*input_index)
                     .ok_or_else(|| {
@@ -287,6 +328,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         Ok(Self {
             island_output_node_index,
             island_output_index,
+            island_output_carries_a_stored_value_of,
             first_function_node_it_runs_as_python,
             reader_input_ports_its_links_from_outside_it_arrive_at,
             evaluation: Mutex::new(FunctionNodeIslandEvaluation {

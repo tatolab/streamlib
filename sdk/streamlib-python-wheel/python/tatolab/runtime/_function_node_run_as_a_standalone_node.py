@@ -6,18 +6,24 @@
 Each input reads the newest value its link carries, an island its own helper
 evaluates or a channel from a class node or another promoted node, and keeps
 its pin value until one arrives. A number input reads the first sample of a
-Channels block, f32 or f64, exactly as an island reads one, and refuses any
-other message by name; an `UnreadMessage` input holds only the
+Channels block, f32 or f64, exactly as an island reads one, a Color, Vector,
+Rectangle or Transform input the first sample of each channel, and each
+refuses any other message by name; an `UnreadMessage` input holds only the
 message that arrived since the last call, and the node is not called while it
 holds none. A live config update, and so each value a link gives a field the
 node exposes, reaches the next call. A number or bool output is written as a
-control value, one f64 sample on one channel at rate 0, a `dict` output as a
-Records message, and an `UnreadMessage` output exactly as the message arrived.
+control message, one f64 sample on one channel at rate 0, a Color, Vector,
+Rectangle or Transform output one f64 sample on each channel of its parts, a
+String, Menu, Asset or List as its type packs, a Records message `{"value": ...}`
+or an Array frame for a List of numbers or values of parts, which an input of
+one reads back, a `dict` output as a Records message, and an `UnreadMessage`
+output exactly as the message arrived.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import json
 import struct
 from typing import Any, Optional
 
@@ -39,7 +45,12 @@ from tatolab.runtime._engine import (
     hand_an_unread_message_on,
     read_the_control_value_at_an_input_port,
     read_the_message_at_an_input_port_unread,
+    read_the_parts_at_an_input_port,
+    read_the_stored_value_at_an_input_port,
+    write_the_stored_value_on_an_output_port,
 )
+from tatolab.runtime._function_node_carried_values import PART_VALUE_TYPES
+from tatolab.runtime._function_node_stored_values import STORED_VALUE_TYPES
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeBodyRunAsPython,
     FunctionNodeCompiledToItsEvaluateEntry,
@@ -50,7 +61,7 @@ from tatolab.runtime._function_node_compilation import (
     prepare_function_node_to_evaluate,
 )
 
-# A control value on a wire: one f64 sample, at no regular rate.
+# A control message on a wire: one f64 sample on each channel, at no regular rate.
 _CONTROL_VALUE_SAMPLE_RATE = 0
 
 
@@ -78,11 +89,17 @@ def the_node_class_a_promoted_function_node_runs_as(
             "named like a member of the node it would run as"
         )
 
+    pin_types_of_stored_values = _pin_types_of_the_stored_values_it_carries(prepared)
     class_attributes: "dict[str, Any]" = {}
     for input_port in prepared.input_ports:
         if input_port in ports_carrying_an_unread_message:
             class_attributes[input_port] = Input(
                 Image, also_takes=(Array, Channels, Packets, Records), delivery="newest"
+            )
+        elif input_port in pin_types_of_stored_values:
+            class_attributes[input_port] = Input(
+                _family_a_stored_value_travels_on(pin_types_of_stored_values[input_port]),
+                delivery="newest",
             )
         else:
             class_attributes[input_port] = Input(
@@ -91,6 +108,10 @@ def the_node_class_a_promoted_function_node_runs_as(
     for output_port in prepared.output_ports:
         if output_port in ports_carrying_an_unread_message:
             class_attributes[output_port] = Output(Image)
+        elif output_port in pin_types_of_stored_values:
+            class_attributes[output_port] = Output(
+                _family_a_stored_value_travels_on(pin_types_of_stored_values[output_port])
+            )
         else:
             class_attributes[output_port] = Output(
                 Records if output_port in ports_carrying_records else Channels
@@ -189,6 +210,8 @@ class _FunctionNodeRunAsAStandaloneNode:
         prepared = self._prepared
         ports_carrying_records = _ports_carrying_records(prepared)
         ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
+        value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
+        pin_types_of_stored_values = _pin_types_of_the_stored_values_it_carries(prepared)
         for input_index, input_port in enumerate(prepared.input_ports):
             if input_port in ports_carrying_an_unread_message:
                 self._input_values[input_index] = read_the_message_at_an_input_port_unread(
@@ -200,11 +223,27 @@ class _FunctionNodeRunAsAStandaloneNode:
                 if record is not None:
                     self._input_values[input_index] = record
                 continue
-            control_value = read_the_control_value_at_an_input_port(
-                link_data_access=self._link_data_access, node_id=self._node_id, input_port=input_port
-            )
-            if control_value is not None:
-                self._input_values[input_index] = control_value
+            value_type = value_type_by_input_port.get(input_port, "float")
+            if input_port in pin_types_of_stored_values:
+                read: Any = read_the_stored_value_at_an_input_port(
+                    link_data_access=self._link_data_access,
+                    node_id=self._node_id,
+                    input_port=input_port,
+                    pin_type=json.dumps(pin_types_of_stored_values[input_port]),
+                )
+            elif value_type in PART_VALUE_TYPES:
+                read = read_the_parts_at_an_input_port(
+                    link_data_access=self._link_data_access,
+                    node_id=self._node_id,
+                    input_port=input_port,
+                    value_type=value_type,
+                )
+            else:
+                read = read_the_control_value_at_an_input_port(
+                    link_data_access=self._link_data_access, node_id=self._node_id, input_port=input_port
+                )
+            if read is not None:
+                self._input_values[input_index] = read
         input_values = [value for value in self._input_values if value is not None]
         if len(input_values) != len(self._input_values):
             return
@@ -228,9 +267,22 @@ class _FunctionNodeRunAsAStandaloneNode:
             if output_port in ports_carrying_records:
                 ctx.outputs.write(getattr(type(self), output_port), output_value)
                 continue
+            if output_port in pin_types_of_stored_values:
+                if not isinstance(output_value, dict):
+                    raise TypeError(
+                        f"output {output_port!r} carries a stored value, and the node gave {output_value!r}"
+                    )
+                write_the_stored_value_on_an_output_port(
+                    link_data_access=self._link_data_access,
+                    output_port=output_port,
+                    pin_type=json.dumps(pin_types_of_stored_values[output_port]),
+                    record=output_value,
+                )
+                continue
+            parts = output_value if isinstance(output_value, tuple) else (output_value,)
             ctx.outputs.write_channels_block(
                 output_port,
-                memoryview(struct.pack("=d", output_value)).cast("d", (1, 1)),
+                memoryview(struct.pack(f"={len(parts)}d", *parts)).cast("d", (len(parts), 1)),
                 start_sample=self._control_values_written,
                 sample_rate=_CONTROL_VALUE_SAMPLE_RATE,
             )
@@ -249,6 +301,44 @@ def _ports_carrying_an_unread_message(prepared: FunctionNodeReadyToEvaluate) -> 
             for output_index in how_its_values_are_carried["outputs_carrying_an_unread_message"]
         ]
     )
+
+
+def _pin_types_of_the_stored_values_it_carries(
+    prepared: FunctionNodeReadyToEvaluate,
+) -> "dict[str, dict[str, Any]]":
+    """The pin type of each port that carries a String, a Menu, an Asset or a List, by port."""
+    return {
+        port: pin_type
+        for ports, value_types, pin_types in (
+            (prepared.input_ports, prepared.input_value_types, prepared.input_pin_types),
+            (
+                prepared.output_ports,
+                _the_output_value_types_of(prepared),
+                prepared.output_pin_types,
+            ),
+        )
+        for port, value_type, pin_type in zip(ports, value_types, pin_types)
+        if value_type in STORED_VALUE_TYPES and pin_type is not None
+    }
+
+
+def _the_output_value_types_of(prepared: FunctionNodeReadyToEvaluate) -> "tuple[str, ...]":
+    if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
+        return ()
+    return tuple(each_output["value_type"] for each_output in prepared.function_signature["outputs"])
+
+
+def _family_a_stored_value_travels_on(pin_type: "dict[str, Any]") -> Any:
+    """The port family whose message a String, a Menu, an Asset or a List travels as."""
+    if pin_type["type"] == "list_of" and pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE:
+        return Array
+    return Records
+
+
+# The pin types whose value travels as a control message, a List of which travels as an Array.
+_TYPES_OF_A_CONTROL_MESSAGE = frozenset(
+    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
+)
 
 
 def _ports_carrying_records(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":

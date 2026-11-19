@@ -15,6 +15,11 @@ never pins. Decorating registers nothing: it reads the
 signature once and stamps the declaration the runtime reads, the same stamps a
 `@node.process` class carries plus the signature the runtime calls the body
 with.
+
+Bare `@node` reads the same signature in the typed grammar: each pin is read by
+`read_pin_declaration` into the pin type it declares and what it states besides,
+which its port carries to the runtime as `pin_declaration`, and no spelling of
+the family grammar is read there.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import inspect
 import typing
 from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
 
+from ._contract_pin_types import PinDeclarationOnTheWire
 from ._description import description_and_annotation_without_it
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._function_node_side_effect_check import refuse_a_function_node_body_with_side_effects
@@ -33,6 +39,8 @@ from ._node_config_schema import (
     json_schema_for_a_node_declaring_no_config,
 )
 from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
+from ._pin_declaration import NO_DEFAULT, NodeDeclarationRefusal, read_pin_declaration
+from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 __all__ = [
     "FunctionNode",
@@ -76,6 +84,21 @@ UNREAD_MESSAGE_INPUT_FAMILY = {
 
 _FUNCTION_LOCAL_MARKER = "<locals>"
 
+# The output a function's one returned value is.
+_SINGLE_OUTPUT_NAME = "result"
+
+# The value a typed pin of each built-in number type hands the body, as the signature stamp
+# names it; a value class of parts names its own.
+_SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME: "dict[str, str]" = {
+    "boolean": "bool",
+    "integer": "int",
+    "float": "float",
+    "string": "string",
+    "menu": "menu",
+    "asset": "asset",
+    "list_of": "list_of",
+}
+
 
 class FunctionNode(Generic[_FunctionNodeParameters, _FunctionNodeReturn]):
     """A `@node.function` function: called as the function it wraps, added to a stream as a node."""
@@ -102,15 +125,19 @@ def declare_function_node(
     function: Callable[_FunctionNodeParameters, _FunctionNodeReturn],
     *,
     declaration_stamps: "dict[str, str]",
+    reads_pin_types: bool = False,
 ) -> FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]:
     """Read `function`'s signature into a function node, refusing by name what is not one.
 
     `declaration_stamps` names the stamps every node carries, as
-    `_node_declaration` spells them, so both kinds stamp one set.
+    `_node_declaration` spells them, so both kinds stamp one set. `reads_pin_types` reads the
+    typed grammar of bare `@node`, where each pin declares its pin type and a mistake is a
+    `NodeDeclarationRefusal`; otherwise it reads the family grammar of `@node.function`.
     """
-    _refuse_what_is_not_a_plain_module_level_function(function)
+    decorator = "@node" if reads_pin_types else "@node.function"
+    _refuse_what_is_not_a_plain_module_level_function(function, decorator)
     declared_meta = take_node_meta_held_for_the_kind_decorator(function)
-    signature_reading = _FunctionNodeSignatureReading(function)
+    signature_reading = _FunctionNodeSignatureReading(function, reads_pin_types=reads_pin_types)
     refuse_a_function_node_body_with_side_effects(function)
     function_node = FunctionNode(function)
     config_class = signature_reading.config_class
@@ -123,7 +150,7 @@ def declare_function_node(
             json_schema_for_a_node_declaring_no_config()
             if config_class is None
             else derive_node_config_json_schema_refusing_a_key_with_no_default(
-                config_class, f"@node.function on {function.__name__}"
+                config_class, f"{decorator} on {function.__name__}"
             )
         ),
         declaration_stamps["description"]: declared_meta.get("description", ""),
@@ -138,20 +165,20 @@ def declare_function_node(
     return function_node
 
 
-def _refuse_what_is_not_a_plain_module_level_function(function: object) -> None:
+def _refuse_what_is_not_a_plain_module_level_function(function: object, decorator: str) -> None:
     if isinstance(function, type):
         raise TypeError(
-            f"@node.function takes a function, and {function.__name__} is a class. A class "
+            f"{decorator} takes a function, and {function.__name__} is a class. A class "
             f"with `process()` and ports is `@node.process`."
         )
     if not inspect.isfunction(function):
         raise TypeError(
-            f"@node.function takes a function defined with `def`, got {function!r}."
+            f"{decorator} takes a function defined with `def`, got {function!r}."
         )
     name = function.__name__
     if name == "<lambda>":
         raise TypeError(
-            "@node.function takes a function defined with `def` at module scope, and a lambda "
+            f"{decorator} takes a function defined with `def` at module scope, and a lambda "
             "has no name a reader can import. To fix: write it as a `def`."
         )
     if _FUNCTION_LOCAL_MARKER in function.__qualname__ or function.__closure__:
@@ -175,8 +202,9 @@ def _refuse_what_is_not_a_plain_module_level_function(function: object) -> None:
 class _FunctionNodeSignatureReading:
     """A function's signature read into its ports, its config class and how it is called."""
 
-    def __init__(self, function: Callable[..., Any]) -> None:
+    def __init__(self, function: Callable[..., Any], *, reads_pin_types: bool) -> None:
         self._function_name = function.__name__
+        self._reads_pin_types = reads_pin_types
         annotations = self._resolved_annotations(function)
         self.input_ports: "list[dict[str, Any]]" = []
         self._signature_inputs: "list[dict[str, Any]]" = []
@@ -247,6 +275,15 @@ class _FunctionNodeSignatureReading:
                 f"settings on a `config` dataclass."
             )
         if parameter.name not in annotations:
+            if self._reads_pin_types:
+                raise NodeDeclarationRefusal(
+                    f"`{self._function_name}`'s parameter `{parameter.name}` has no type, so "
+                    f"nothing names the pin's type. To fix: annotate it, "
+                    f"`{parameter.name}: float = 0.0`.",
+                    finding_code="pin_has_no_type",
+                    node=self._function_name,
+                    pin=parameter.name,
+                )
             raise TypeError(
                 f"{self._function_name}'s parameter `{parameter.name}` has no type, so nothing "
                 f"names the pin's family. To fix: annotate it, `{parameter.name}: float`."
@@ -268,8 +305,19 @@ class _FunctionNodeSignatureReading:
             self._read_time_parameter(parameter)
         elif typing.get_origin(annotation) is State:
             self._read_state_parameter(parameter, annotation)
+        elif parameter.name == "config" and self._reads_pin_types:
+            raise NodeDeclarationRefusal(
+                f"`{self._function_name}` takes `config`, and a function under bare `@node` "
+                f"takes each setting as an input of its own, with its default. To fix: write "
+                f"each field of the config class as a parameter.",
+                finding_code="parameter_not_a_pin",
+                node=self._function_name,
+                pin=parameter.name,
+            )
         elif parameter.name == "config":
             self._read_config_parameter(annotation)
+        elif self._reads_pin_types:
+            self._read_typed_input_pin(parameter, annotation, port_description or "")
         else:
             self._read_input_pin(parameter, annotation, port_description or "")
 
@@ -380,6 +428,39 @@ class _FunctionNodeSignatureReading:
             input_port["pin_default"] = signature_input["default"]
         self.input_ports.append(input_port)
 
+    def _read_typed_input_pin(
+        self, parameter: inspect.Parameter, annotation: Any, port_description: str
+    ) -> None:
+        port_name = self._cast_port_name(parameter.name)
+        declared = read_pin_declaration(
+            self._function_name,
+            parameter.name,
+            annotation,
+            default=(
+                NO_DEFAULT if parameter.default is inspect.Parameter.empty else parameter.default
+            ),
+            direction="input",
+        )
+        self._signature_inputs.append(
+            {
+                "parameter": parameter.name,
+                "port": port_name,
+                "value_type": _signature_value_type_of(declared.declaration),
+                "pin_type": _the_pin_type_a_pin_declares(declared.declaration),
+                "optional": declared.optional,
+                "default": declared.default_value,
+            }
+        )
+        self.input_ports.append(
+            {
+                "name": port_name,
+                "description": port_description,
+                "family": {"family": _family_a_pin_travels_on(declared.declaration)},
+                "pin_declaration": declared.declaration,
+                "pin_default": declared.default_value,
+            }
+        )
+
     def _pin_default(self, parameter: inspect.Parameter, pin_value_type: str) -> Any:
         default = parameter.default
         if default is None:
@@ -442,6 +523,8 @@ class _FunctionNodeSignatureReading:
                     f"To fix: `-> Stateful[<output>, {_name_of(self._state_record_class)}]`, "
                     f"returning `(output, new_state)`."
                 )
+        if self._reads_pin_types:
+            return self._typed_output_port(output_annotation)
         record_that_may_be_none, may_be_none = _value_annotation_and_whether_optional(output_annotation)
         if (
             may_be_none
@@ -465,7 +548,7 @@ class _FunctionNodeSignatureReading:
                 [(field.name, field_annotations[field.name]) for field in dataclasses.fields(output_annotation)],
                 fields_of=output_annotation,
             )
-        return self._output_ports_named([("result", output_annotation)], fields_of=None)
+        return self._output_ports_named([(_SINGLE_OUTPUT_NAME, output_annotation)], fields_of=None)
 
     def _output_ports_named(
         self, outputs: "list[tuple[str, Any]]", fields_of: Optional[type]
@@ -516,6 +599,52 @@ class _FunctionNodeSignatureReading:
             for signature_output in signature_outputs:
                 signature_output["fields_of"] = signature_outputs_class
         return output_ports, signature_outputs
+
+    def _typed_output_port(
+        self, described_output_annotation: Any
+    ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
+        port_description, output_annotation = self._port_description_and_annotation_without_it(
+            described_output_annotation, f"output `{_SINGLE_OUTPUT_NAME}`"
+        )
+        value_annotation, _ = _value_annotation_and_whether_optional(output_annotation)
+        if value_annotation not in PIN_VALUE_CLASSES and (
+            typing.get_origin(value_annotation) is tuple
+            or value_annotation is tuple
+            or _is_a_record_of_outputs(value_annotation)
+            or (isinstance(value_annotation, type) and issubclass(value_annotation, tuple))
+        ):
+            raise NodeDeclarationRefusal(
+                f"`{self._function_name}` returns {_name_of(value_annotation)}, and the typed "
+                f"grammar does not read several outputs or a bundle yet. To fix: return one "
+                f"value, or keep this node on `@node.function` until it does.",
+                finding_code="return_not_read_yet",
+                node=self._function_name,
+                pin=_SINGLE_OUTPUT_NAME,
+            )
+        port_name = self._cast_port_name(_SINGLE_OUTPUT_NAME)
+        declared = read_pin_declaration(
+            self._function_name, _SINGLE_OUTPUT_NAME, output_annotation, direction="output"
+        )
+        value_class = _the_value_class_of_parts_a_pin_declares(declared.declaration)
+        family = _family_a_pin_travels_on(declared.declaration)
+        family_declaration: "dict[str, Any]" = {"family": family}
+        if family == "channels":
+            channel_names = [port_name] if value_class is None else list(value_class.part_names())
+            family_declaration.update({"names": {"stated": channel_names}, "dtype": "f64"})
+        output_port = {
+            "name": port_name,
+            "description": port_description or "",
+            "family": family_declaration,
+            "pin_declaration": declared.declaration,
+        }
+        signature_output = {
+            "port": port_name,
+            "field": None,
+            "value_type": _signature_value_type_of(declared.declaration),
+            "pin_type": _the_pin_type_a_pin_declares(declared.declaration),
+            "may_hand_out_nothing": declared.optional,
+        }
+        return [output_port], [signature_output]
 
     def _the_unread_message_input_an_output_follows(self, output_name: str) -> str:
         if len(self._unread_message_input_ports) != 1:
@@ -580,6 +709,53 @@ class _FunctionNodeSignatureReading:
             )
         self._port_spelling_by_cast_name[port_name] = spelling
         return port_name
+
+
+def _the_value_class_of_parts_a_pin_declares(
+    declaration: PinDeclarationOnTheWire,
+) -> "Optional[type[PinValueOfParts]]":
+    """The value class of the type a typed pin declares, when it travels as its parts; `None` for a number."""
+    declared_pin_type = declaration["pin_type"]
+    assert declared_pin_type["kind"] == "is", "a function node's pin is exactly one type"
+    for value_class in PIN_VALUE_CLASSES:
+        if value_class.pin_type == declared_pin_type["pin_type"]:
+            return value_class
+    return None
+
+
+def _the_pin_type_a_pin_declares(declaration: PinDeclarationOnTheWire) -> "dict[str, Any]":
+    """The one pin type a function node's typed pin declares, as `graph` serves it."""
+    declared_pin_type = declaration["pin_type"]
+    assert declared_pin_type["kind"] == "is", "a function node's pin is exactly one type"
+    return dict(declared_pin_type["pin_type"])
+
+
+def _family_a_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
+    """The port family whose message a typed pin's value travels as.
+
+    A number, a Boolean and a value of parts travel as a control message on Channels; a List of
+    them as an Array frame; a String, a Menu, an Asset and any other List as a Records message.
+    """
+    pin_type = _the_pin_type_a_pin_declares(declaration)
+    if pin_type["type"] == "list_of":
+        return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
+    return "channels" if pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
+
+
+# The pin types whose value travels as a control message, its parts one on each channel.
+_TYPES_OF_A_CONTROL_MESSAGE = frozenset(
+    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
+)
+
+
+def _signature_value_type_of(declaration: PinDeclarationOnTheWire) -> str:
+    """The value a typed pin hands the body, as the signature stamp names it."""
+    value_class = _the_value_class_of_parts_a_pin_declares(declaration)
+    if value_class is not None:
+        return value_class.value_type
+    declared_pin_type = declaration["pin_type"]
+    assert declared_pin_type["kind"] == "is", "a function node's pin is exactly one type"
+    return _SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME[declared_pin_type["pin_type"]["type"]]
 
 
 def _families_by_read_type() -> "dict[Any, tuple[str, str]]":

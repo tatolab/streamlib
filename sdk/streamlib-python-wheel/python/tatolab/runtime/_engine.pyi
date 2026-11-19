@@ -44,11 +44,14 @@ __all__ = [
     "open_runtime_context_full_access_for_helper_process",
     "read_each_unlinked_input_port_as_its_pin_value",
     "read_the_control_value_at_an_input_port",
+    "read_the_parts_at_an_input_port",
+    "read_the_stored_value_at_an_input_port",
     "read_the_message_at_an_input_port_unread",
     "run_the_scheduling_loop_of_this_helper",
     "stop_feeding_an_input_port_from_a_function_node_island",
     "take_each_function_node_raise_newly_noted",
     "why_each_function_node_its_islands_call_is_raising",
+    "write_the_stored_value_on_an_output_port",
 ]
 
 MODULE_HOST_TABLE_ABI_MAJOR: int
@@ -153,6 +156,33 @@ def read_the_control_value_at_an_input_port(
     input_port: str,
 ) -> float | None:
     """The number `input_port` holds for this read, as an island reads one: a Channels block's first sample, f32 or f64; `None` when none arrived."""
+
+def read_the_parts_at_an_input_port(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    node_id: str,
+    input_port: str,
+    value_type: str,
+) -> tuple[float, ...] | None:
+    """The parts of the Color, Vector, Rectangle or Transform `input_port` holds for this read, as an island reads them off a control message; `None` when none arrived."""
+
+def read_the_stored_value_at_an_input_port(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    node_id: str,
+    input_port: str,
+    pin_type: str,
+) -> dict[str, Any] | None:
+    """The record `{"value": ...}` of the String, Menu, Asset or List of `pin_type` (JSON) `input_port` holds for this read; `None` when none arrived."""
+
+def write_the_stored_value_on_an_output_port(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    output_port: str,
+    pin_type: str,
+    record: dict[str, Any],
+) -> None:
+    """Write `record`, `{"value": ...}` of a String, Menu, Asset or List of `pin_type` (JSON), on `output_port` as that type packs."""
 
 def hand_an_unread_message_on(
     *,

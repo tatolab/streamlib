@@ -119,8 +119,9 @@ def function_node_run_as_python_in_its_reader(
         if each_port["value_type"] not in _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES:
             raise FunctionNodeDoesNotCompile(
                 f"{import_path}'s port `{each_port['port']}` is {each_port['value_type']}, and a "
-                f"function node carries numbers, bools and dicts in this release. To fix: make "
-                f"it `float`, `int`, `bool` or `dict`."
+                f"function node carries numbers, bools, Colors, Vectors, Rectangles, Transforms, "
+                f"Strings, Menus, Assets, Lists and dicts in this release. To fix: make it one "
+                f"of them."
             )
     for each_input in function_signature["inputs"]:
         if each_input["optional"] and each_input["value_type"] != UNREAD_MESSAGE_VALUE_TYPE:
@@ -157,6 +158,10 @@ def function_node_run_as_python_in_its_reader(
         why_it_does_not_compile=why_it_does_not_compile,
         input_value_types=tuple(each_input["value_type"] for each_input in function_signature["inputs"]),
         how_its_values_are_carried=_how_the_values_of_a_signature_are_carried(function_signature),
+        input_pin_types=tuple(each_input.get("pin_type") for each_input in function_signature["inputs"]),
+        output_pin_types=tuple(
+            each_output.get("pin_type") for each_output in function_signature["outputs"]
+        ),
     )
 
 
