@@ -26,7 +26,9 @@ use crate::core::nodes::HowANodeOfADescribedTypeRuns;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::runtime::{GraphEditBatch, LoadedStreamInThisRuntime, Runner, RuntimeOperations};
-use crate::core::test_support::{a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered};
+use crate::core::test_support::{
+    MockInputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+};
 
 // Each type is named as a native one is, so a load resolves it as this stream registers it,
 // with no node interpreter to describe it.
@@ -912,4 +914,56 @@ fn a_batch_swapping_a_source_an_island_reads_at_the_pools_cap_is_taken() {
         islands * (READS_OF_EACH_ISLAND + 1)
     );
     let _ = the_link_out_of(&stream, "spare");
+}
+
+/// A saved graph holding a link from a function node into a node in the app process loads as
+/// the stream's graph with that link shown in `graph`, failed with why, so the person sees it
+/// and removes it; a disconnect of it leaves the graph without it.
+///
+/// Mental-revert: refusing the link on the load fails the whole graph; setting it aside without
+/// drawing it leaves the person nothing to see or remove.
+#[test]
+fn a_saved_graphs_island_into_the_app_process_is_shown_failed_and_removed_by_a_disconnect() {
+    let (_runner, stream, _project) = a_stopped_stream_resolving_a_reactive_reader();
+    let async_runtime = an_async_runtime();
+    let program_type = MockInputOnlyNode::node_class_import_path();
+    load(
+        &stream,
+        a_document_of(
+            &[("switch", SWITCH), ("program", program_type.as_str())],
+            &[(("switch", "result"), ("program", "in1"))],
+        ),
+    );
+    let the_link_into_the_program = |stream: &LoadedStreamInThisRuntime| {
+        let graph = stream.to_json().expect("the graph renders");
+        graph["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|link| link["target"]["port"] == "in1")
+            .cloned()
+    };
+
+    let shown = the_link_into_the_program(&stream).expect("the saved link is shown");
+    assert_eq!(shown["state"], "error", "{shown}");
+    assert!(
+        shown["error_reason"]
+            .as_str()
+            .is_some_and(|why| why.contains("app process")),
+        "{shown}"
+    );
+    assert_eq!(the_live_links(&stream), 0, "the link is never wired");
+
+    let batch = a_graph_edit_batch_of(&stream);
+    async_runtime
+        .block_on(
+            batch.apply_a_stream_graph_operation_live(StreamGraphOperation::Disconnect {
+                link: a_document_link(("switch", "result"), ("program", "in1")),
+            }),
+        )
+        .expect("the person removes the link");
+    batch.close().expect("the disconnect closes");
+
+    assert_eq!(the_link_into_the_program(&stream), None);
+    assert_eq!(the_links_set_aside(&stream), Vec::new());
 }
