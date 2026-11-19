@@ -800,7 +800,11 @@ pub(crate) fn a_view_reading_records_in(
     let folder = project_directory
         .join(streamlib_project_repository::PROJECT_VIEWS_DIRECTORY)
         .join(view_folder_name);
-    std::fs::create_dir_all(&folder).expect("the view's folder");
+    streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        &folder,
+        streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+    )
+    .expect("the view's folder");
     std::fs::write(
         folder.join(streamlib_project_repository::TATOLAB_VIEW_MANIFEST_FILE_NAME),
         serde_json::to_vec(&a_view_manifest_reading_records()).expect("the manifest serializes"),
