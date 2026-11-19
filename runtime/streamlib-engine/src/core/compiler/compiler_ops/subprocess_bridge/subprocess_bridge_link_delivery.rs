@@ -142,15 +142,20 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
     fn hand_over_the_unlinked_input_values(
         &self,
         input_values: &serde_json::Map<String, serde_json::Value>,
+        fired: &[String],
     ) -> Result<()> {
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Ok(());
         }
+        let mut command = serde_json::json!({
+            "cmd": "set_input_values",
+            "input_values": input_values,
+        });
+        if !fired.is_empty() {
+            command["fired"] = serde_json::json!(fired);
+        }
         self.parent_side
-            .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
-                "cmd": "set_input_values",
-                "input_values": input_values,
-            }))
+            .write_frame_or_give_up_on_the_subprocess(&command)
     }
 
     /// Unanswered, like `unwire_link`.

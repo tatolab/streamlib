@@ -122,17 +122,24 @@ pub fn run_reactive_scheduling_loop(
     loop {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let (listener_fd, listener_generation) = match host.input_mailboxes() {
-                Some(mailboxes) => (mailboxes.listener_fd(), mailboxes.listener_generation()),
-                None => (None, 0),
+            let (listener, reactive_loop_wake_fd) = match host.input_mailboxes() {
+                Some(mailboxes) => (
+                    mailboxes
+                        .listener_fd()
+                        .map(|fd| (fd, mailboxes.listener_generation())),
+                    mailboxes.reactive_loop_wake_fd(),
+                ),
+                None => (None, None),
             };
             refresh_reactive_loop_waiter(
                 node_name_for_logs,
                 &mut waiter,
                 &mut waiter_setup_failed,
-                listener_fd,
-                listener_generation,
-                host.control_arrival_fd(),
+                ReactiveLoopWaitedFds {
+                    listener,
+                    reactive_loop_wake_fd,
+                    control_arrival_fd: host.control_arrival_fd(),
+                },
             );
         }
 
@@ -501,7 +508,8 @@ pub(crate) fn wait_for_a_deadline_or_a_control(
 /// Outcome of one [`ReactiveLoopFdWaiter::wait`] call.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ReactiveLoopWakeOutcome {
-    /// The listener fd turned readable: at least one upstream notify arrived.
+    /// The listener fd turned readable, an upstream notify having arrived, or the input
+    /// mailboxes' wake did, a fire having been queued or a listener installed.
     Notified,
     /// The control arrival fd turned readable.
     ControlArrived,
@@ -520,35 +528,52 @@ pub(crate) enum ReactiveLoopWakeOutcome {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) const REACTIVE_WAIT_BOUND: Duration = Duration::from_millis(500);
 
+/// The fds a reactive loop's waiter watches: the input listener, by the generation the
+/// mailboxes assigned it, the mailboxes' own wake, and the host's control arrival fd. Each is
+/// owned elsewhere and outlives the waiter.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReactiveLoopWaitedFds {
+    pub(crate) listener: Option<(std::os::fd::RawFd, u64)>,
+    pub(crate) reactive_loop_wake_fd: Option<std::os::fd::RawFd>,
+    pub(crate) control_arrival_fd: Option<std::os::fd::RawFd>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl ReactiveLoopWaitedFds {
+    fn none_to_wait_on(&self) -> bool {
+        self.listener.is_none()
+            && self.reactive_loop_wake_fd.is_none()
+            && self.control_arrival_fd.is_none()
+    }
+}
+
 /// Keep the waiter on the listener the mailboxes hold now.
 ///
 /// A listener goes with a destination's last inbound link and comes back with
 /// the next one, and a readiness queue never learns of the new fd on its own —
-/// a closed fd simply leaves it. So a waiter built for an earlier generation,
-/// or for a listener that is gone, is released, and one is built for the
-/// current listener when there is one.
+/// a closed fd simply leaves it. So a waiter built for another listener, or for
+/// none when one is installed now, is released, and one is built for the fds
+/// there are. Installing a listener makes the mailboxes' wake readable, so a
+/// loop waiting with no listener comes round to register it at once.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn refresh_reactive_loop_waiter(
     node_name_for_logs: &str,
     waiter: &mut Option<ReactiveLoopFdWaiter>,
     waiter_setup_failed: &mut bool,
-    listener_fd: Option<i32>,
-    listener_generation: u64,
-    control_arrival_fd: Option<std::os::fd::RawFd>,
+    waited_fds: ReactiveLoopWaitedFds,
 ) {
-    let registered_listener_is_gone = waiter.as_ref().is_some_and(|registered| {
-        listener_fd.is_none() || registered.listener_generation != listener_generation
-    });
-    if registered_listener_is_gone {
+    let listener_generation = waited_fds.listener.map(|(_, generation)| generation);
+    if waiter
+        .as_ref()
+        .is_some_and(|registered| registered.listener_generation != listener_generation)
+    {
         *waiter = None;
     }
-    if waiter.is_some() || *waiter_setup_failed {
+    if waiter.is_some() || *waiter_setup_failed || waited_fds.none_to_wait_on() {
         return;
     }
-    let Some(fd) = listener_fd else {
-        return;
-    };
-    match ReactiveLoopFdWaiter::new(fd, listener_generation, control_arrival_fd) {
+    match ReactiveLoopFdWaiter::new(waited_fds) {
         Ok(built) => *waiter = Some(built),
         Err(setup_failure) => {
             tracing::warn!(
@@ -560,11 +585,12 @@ fn refresh_reactive_loop_waiter(
     }
 }
 
-/// Which of the waiter's two fds a readiness-queue registration watches.
+/// Which of the waiter's fds a readiness-queue registration watches.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReactiveLoopFdRegistration {
     InputListener,
+    InputMailboxesWake,
     ControlArrival,
 }
 
@@ -575,23 +601,26 @@ impl ReactiveLoopFdRegistration {
         match self {
             Self::InputListener => 0,
             Self::ControlArrival => 1,
+            Self::InputMailboxesWake => 2,
         }
     }
 
     fn from_user_data(user_data: u64) -> Self {
         if user_data == Self::ControlArrival.user_data() {
             Self::ControlArrival
+        } else if user_data == Self::InputMailboxesWake.user_data() {
+            Self::InputMailboxesWake
         } else {
             Self::InputListener
         }
     }
 }
 
-/// Which registrations one wait found readable; neither means it timed out.
+/// What one wait found readable; nothing means it timed out.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Default, Clone, Copy)]
 struct ReactiveLoopReadableRegistrations {
-    input_listener: bool,
+    an_input_arrived: bool,
     control_arrival: bool,
 }
 
@@ -599,7 +628,8 @@ struct ReactiveLoopReadableRegistrations {
 impl ReactiveLoopReadableRegistrations {
     fn mark_readable(&mut self, registration: ReactiveLoopFdRegistration) {
         match registration {
-            ReactiveLoopFdRegistration::InputListener => self.input_listener = true,
+            ReactiveLoopFdRegistration::InputListener
+            | ReactiveLoopFdRegistration::InputMailboxesWake => self.an_input_arrived = true,
             ReactiveLoopFdRegistration::ControlArrival => self.control_arrival = true,
         }
     }
@@ -612,38 +642,46 @@ struct ReactiveLoopReadinessQueue {
     readiness_queue_fd: OwnedFd,
 }
 
-/// The waiter a reactive loop blocks in: its readiness queue watching the
-/// iceoryx2 listener fd and, when the host has one, its control arrival fd.
+/// The waiter a reactive loop blocks in: its readiness queue watching each fd
+/// of [`ReactiveLoopWaitedFds`] there is.
 ///
-/// Registers both fds without owning them; their owners outlive the loop.
+/// Registers the fds without owning them; their owners outlive the loop.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) struct ReactiveLoopFdWaiter {
     readiness_queue: ReactiveLoopReadinessQueue,
     /// Which of the destination's listeners this waiter registered, by the
-    /// generation the mailboxes assigned it. A listener created after the last
-    /// inbound link went away is a new fd the readiness queue never saw.
-    listener_generation: u64,
+    /// generation the mailboxes assigned it, or `None` for none. A listener
+    /// created after the last inbound link went away is a new fd the readiness
+    /// queue never saw.
+    listener_generation: Option<u64>,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl ReactiveLoopFdWaiter {
-    pub(crate) fn new(
-        listener_fd: std::os::fd::RawFd,
-        listener_generation: u64,
-        control_arrival_fd: Option<std::os::fd::RawFd>,
-    ) -> std::io::Result<Self> {
+    pub(crate) fn new(waited_fds: ReactiveLoopWaitedFds) -> std::io::Result<Self> {
         let readiness_queue = ReactiveLoopReadinessQueue::create()?;
-        readiness_queue
-            .register_readable_fd(listener_fd, ReactiveLoopFdRegistration::InputListener)?;
-        if let Some(control_arrival_fd) = control_arrival_fd {
-            readiness_queue.register_readable_fd(
-                control_arrival_fd,
+        let registrations = [
+            (
+                waited_fds.listener.map(|(fd, _)| fd),
+                ReactiveLoopFdRegistration::InputListener,
+            ),
+            (
+                waited_fds.reactive_loop_wake_fd,
+                ReactiveLoopFdRegistration::InputMailboxesWake,
+            ),
+            (
+                waited_fds.control_arrival_fd,
                 ReactiveLoopFdRegistration::ControlArrival,
-            )?;
+            ),
+        ];
+        for (fd, registration) in registrations {
+            if let Some(fd) = fd {
+                readiness_queue.register_readable_fd(fd, registration)?;
+            }
         }
         Ok(Self {
             readiness_queue,
-            listener_generation,
+            listener_generation: waited_fds.listener.map(|(_, generation)| generation),
         })
     }
 
@@ -661,7 +699,7 @@ impl ReactiveLoopFdWaiter {
             // A control outranks a notify reported by the same wait, so a stop
             // ends the loop before it drains one more frame.
             Ok(readable) if readable.control_arrival => ReactiveLoopWakeOutcome::ControlArrived,
-            Ok(readable) if readable.input_listener => ReactiveLoopWakeOutcome::Notified,
+            Ok(readable) if readable.an_input_arrived => ReactiveLoopWakeOutcome::Notified,
             Ok(_) => ReactiveLoopWakeOutcome::TimedOut,
         }
     }
@@ -712,7 +750,7 @@ impl ReactiveLoopReadinessQueue {
         wait_bound: Duration,
     ) -> std::io::Result<ReactiveLoopReadableRegistrations> {
         use std::os::fd::AsRawFd;
-        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 2];
+        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 3];
         let timeout_ms = wait_bound.as_millis().min(i32::MAX as u128) as i32;
         // SAFETY: epoll_wait writes up to events.len() events into the buffer.
         let ready_count = unsafe {
@@ -803,7 +841,7 @@ impl ReactiveLoopReadinessQueue {
             tv_nsec: wait_bound.subsec_nanos() as libc::c_long,
         };
         // SAFETY: an all-zero `kevent` is a valid out-slot.
-        let mut events: [libc::kevent; 2] = unsafe { std::mem::zeroed() };
+        let mut events: [libc::kevent; 3] = unsafe { std::mem::zeroed() };
         // SAFETY: kevent writes up to events.len() events into the buffer; the
         // timeout is a valid stack slot.
         let ready_count = unsafe {
@@ -881,9 +919,11 @@ mod tests {
             "Preactive",
             &mut waiter,
             &mut waiter_setup_failed,
-            Some(first_fd),
-            1,
-            None,
+            ReactiveLoopWaitedFds {
+                listener: Some((first_fd, 1)),
+                reactive_loop_wake_fd: None,
+                control_arrival_fd: None,
+            },
         );
         let first_readiness_queue_fd = waiter
             .as_ref()
@@ -896,9 +936,11 @@ mod tests {
             "Preactive",
             &mut waiter,
             &mut waiter_setup_failed,
-            Some(first_fd),
-            1,
-            None,
+            ReactiveLoopWaitedFds {
+                listener: Some((first_fd, 1)),
+                reactive_loop_wake_fd: None,
+                control_arrival_fd: None,
+            },
         );
         assert_eq!(
             waiter
@@ -914,9 +956,11 @@ mod tests {
             "Preactive",
             &mut waiter,
             &mut waiter_setup_failed,
-            None,
-            1,
-            None,
+            ReactiveLoopWaitedFds {
+                listener: None,
+                reactive_loop_wake_fd: None,
+                control_arrival_fd: None,
+            },
         );
         assert!(
             waiter.is_none(),
@@ -933,9 +977,11 @@ mod tests {
             "Preactive",
             &mut waiter,
             &mut waiter_setup_failed,
-            Some(second_fd),
-            2,
-            None,
+            ReactiveLoopWaitedFds {
+                listener: Some((second_fd, 2)),
+                reactive_loop_wake_fd: None,
+                control_arrival_fd: None,
+            },
         );
         let waiter = waiter.expect("a waiter for the new listener");
         let notifier = second.notifier_builder().create().unwrap();

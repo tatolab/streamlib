@@ -5,11 +5,12 @@
 //! run: handed to the stream whole, which checks every value, sets each apart from the graph and
 //! announces it, with no graph write lock, no graph render, no compile and no document staged.
 
-use streamlib::sdk::error::PortDirection;
 use streamlib::sdk::graph::input_values::{
     InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
     the_words_of_an_input_set_twice_live,
 };
+
+use streamlib::sdk::graph::PortInfo;
 
 use super::*;
 
@@ -26,7 +27,8 @@ impl StreamGraphTransactionExecutor<'_> {
     /// `stream_id_of_each_request`, when two of its value sets name one input of one node, at
     /// the second, whatever else it holds and whichever path applies it: the second value would
     /// replace the first before the node is handed either, so the first would never be
-    /// published.
+    /// published. A fire of a Trigger input replaces nothing, so an input fired twice fires
+    /// twice.
     ///
     /// A node is the one its UUID, or an earlier `add_node`'s `as`, names at its level. An input
     /// is the one its name, or a name it had, finds: on a node of the stream's own level as the
@@ -39,47 +41,43 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_id_of_each_request: &[String],
     ) -> Result<(), GraphTransactionRefusal> {
         let sets = the_value_set_of_each_request(requests, stream_id_of_each_request);
-        let mut input_names_of_each_node: HashMap<&NodeAValueSetNames, HashSet<&str>> =
-            HashMap::new();
+        let mut sets_on_each_node: HashMap<&NodeAValueSetNames, usize> = HashMap::new();
         for set in &sets {
-            input_names_of_each_node
-                .entry(&set.node)
-                .or_default()
-                .insert(set.input.as_str());
+            *sets_on_each_node.entry(&set.node).or_default() += 1;
         }
         let mut document_of_each_stream: HashMap<String, Option<StreamGraphDocument>> =
             HashMap::new();
         let mut inputs_set: HashSet<(&NodeAValueSetNames, String)> = HashSet::new();
         for set in &sets {
-            let may_hold_a_former_name = input_names_of_each_node
+            if sets_on_each_node
                 .get(&set.node)
-                .is_some_and(|input_names| input_names.len() > 1);
-            let current_input = if may_hold_a_former_name {
-                let node_type = self
-                    .the_node_a_stream_runs(&set.node, &mut document_of_each_stream)
-                    .map(|node| node.node_type)
-                    .or_else(|| {
-                        the_type_an_earlier_add_gives(
-                            &set.node,
-                            requests.get(..set.index).unwrap_or_default(),
-                            stream_id_of_each_request,
-                        )
-                    });
-                match self
-                    .operations_on_the_loaded_streams
+                .is_none_or(|count| *count < 2)
+            {
+                continue;
+            }
+            let node_type = self
+                .the_node_a_stream_runs(&set.node, &mut document_of_each_stream)
+                .map(|node| node.node_type)
+                .or_else(|| {
+                    the_type_an_earlier_add_gives(
+                        &set.node,
+                        requests.get(..set.index).unwrap_or_default(),
+                        stream_id_of_each_request,
+                    )
+                });
+            let ports_of_its_type = node_type.and_then(|node_type| {
+                self.operations_on_the_loaded_streams
                     .runtime_operations_of_the_stream_a_call_names(&set.node.stream_id)
-                {
-                    Ok(stream_operations) => the_current_name_of_a_port(
-                        set.input.clone(),
-                        PortDirection::Input,
-                        node_type,
-                        stream_operations.as_ref(),
-                    ),
-                    Err(_) => set.input.clone(),
-                }
-            } else {
-                set.input.clone()
-            };
+                    .ok()?
+                    .the_ports_a_node_type_declares(&node_type)
+            });
+            let input = ports_of_its_type
+                .as_ref()
+                .and_then(|ports| ports.input_named(&set.input));
+            if input.is_some_and(PortInfo::is_a_trigger) {
+                continue;
+            }
+            let current_input = input.map_or_else(|| set.input.clone(), |input| input.name.clone());
             if !inputs_set.insert((&set.node, current_input.clone())) {
                 let node_name = self
                     .the_node_a_stream_runs(&set.node, &mut document_of_each_stream)
@@ -193,6 +191,12 @@ impl StreamGraphTransactionExecutor<'_> {
                 return Err(refusal_of_the_set(
                     set_index,
                     GraphRequestRefusal::from(runtime_words),
+                ));
+            }
+            Err(LiveInputValueSetRefusal::TheNodeDoesNotRun { set_index, refusal }) => {
+                return Err(refusal_of_the_set(
+                    set_index,
+                    GraphRequestRefusal::from(refusal),
                 ));
             }
             Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over)) => {

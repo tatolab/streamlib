@@ -93,8 +93,12 @@ impl PinType {
     }
 
     /// `value` taken as a stored value of this type, or what the type takes instead. A type
-    /// that holds no stored value takes none.
+    /// that holds no stored value takes none, but a Trigger takes `null`, which a live set
+    /// sends to fire it.
     pub fn check_value(&self, value: &Value) -> Result<(), PinValueNotTaken> {
+        if matches!(self, Self::Trigger {}) && value.is_null() {
+            return Ok(());
+        }
         if self.is_a_stored_value(value) {
             return Ok(());
         }
@@ -215,12 +219,14 @@ impl PinType {
             ),
             Self::NodeReference { .. } => "a node reference, `{\"node\": \"<name>\"}`".to_owned(),
             Self::PinTypeChoice { .. } => "a pin type, `{\"type\": \"<name>\"}`".to_owned(),
+            Self::Trigger {} => {
+                "no value: a live set with no value, or `null`, fires it once".to_owned()
+            }
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }
             | Self::EncodedAudio { .. }
             | Self::Tensor {}
-            | Self::Trigger {}
             | Self::Named { .. } => "no value, only a link".to_owned(),
         }
     }

@@ -293,3 +293,43 @@ fn a_windowed_input_whose_pins_default_skips_messages_is_refused_by_name() {
         "{refusal}"
     );
 }
+
+#[test]
+fn a_trigger_input_reads_ordered_and_is_refused_any_other_stated_delivery() {
+    let trigger = || PinDeclaration::exactly(PinType::Trigger {});
+    let defaulted = a_node_type_with(
+        vec![
+            a_port("go", PortFamily::Records).with_pin_declaration(trigger()),
+            a_port("stated", PortFamily::Records)
+                .with_pin_declaration(trigger())
+                .with_delivery_profile("ordered"),
+        ],
+        vec![],
+    )
+    .with_input_deliveries_defaulted_by_pin()
+    .unwrap();
+    assert_eq!(
+        defaulted.inputs[0].delivery_profile.as_deref(),
+        Some("ordered")
+    );
+    assert_eq!(
+        defaulted.inputs[1].delivery_profile.as_deref(),
+        Some("ordered")
+    );
+
+    let read_newest = a_node_type_with(
+        vec![
+            a_port("go", PortFamily::Records)
+                .with_pin_declaration(trigger())
+                .with_delivery_profile("newest"),
+        ],
+        vec![],
+    );
+    assert_eq!(
+        read_newest
+            .with_input_deliveries_defaulted_by_pin()
+            .unwrap_err(),
+        "`tests.typed:Typed`: input port `go` is a Trigger and states the delivery profile \
+         `newest`; a Trigger reads every event, so it reads `ordered` — drop `delivery_profile`"
+    );
+}
