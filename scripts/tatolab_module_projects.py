@@ -23,7 +23,9 @@ What a storefront shows before a module is added, each from what the module proj
 - under each node, its `inputs` and `outputs` as the listing reads them, each a `name`, a
   `family` and a `description`, left out where the listing reads none;
 - `views`, each folder of its `views/` the archive carries, by its `tatolab_view.json`: its
-  `view_type` (`<project name>:<folder>`), `title`, `description` and `placement`;
+  `view_type` (`<project name>:<folder>`), `title`, `description`, `placement` and the
+  `devices` among its declared capabilities (`camera`, `microphone`, `gpu`); a manifest that
+  does not name what view contract 1.0 requires fails the catalog;
 - `gallery`, the URL of each picture `[tool.tatolab.catalog]` `gallery` names, the cover first,
   published beside the archive under `modules/<distribution>-<version>/gallery/`, left out
   when it names none;
@@ -58,6 +60,11 @@ CORE_PROJECT_DIRECTORY_NAMES = ("tatolab-core-nodes",)
 CATALOG_CATEGORIES = ("Sources", "Audio", "Effects", "Compositing & output", "Control", "I/O & codecs")
 VIEWS_DIRECTORY_NAME = "views"
 VIEW_MANIFEST_FILE_NAME = "tatolab_view.json"
+# What a view manifest must name to read against view contract 1.0, and the devices among the
+# capabilities it may declare.
+VIEW_MANIFEST_REQUIRED_FIELDS = ("contract", "title", "entry", "placement")
+VIEW_PLACEMENTS = ("area", "node")
+VIEW_DEVICE_CAPABILITIES = ("camera", "microphone", "gpu")
 GALLERY_DIRECTORY_NAME = "gallery"
 GALLERY_PICTURE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 CHANGELOG_FILE_NAME = "CHANGELOG.md"
@@ -415,12 +422,19 @@ def view_members_of_the_archive(archive):
         if not re.fullmatch(rf"{VIEWS_DIRECTORY_NAME}/[^/]+/{re.escape(VIEW_MANIFEST_FILE_NAME)}", member_name):
             continue
         manifest = json.loads(archive.read(member_name))
+        missing = [field for field in VIEW_MANIFEST_REQUIRED_FIELDS if not isinstance(manifest.get(field), str) or not manifest[field]]
+        if missing or manifest["placement"] not in VIEW_PLACEMENTS:
+            raise ModuleProjectNotDescribed(
+                f"{member_name} does not read against view contract 1.0: "
+                + (f"it names no {', '.join(missing)}" if missing else f"its placement {json.dumps(manifest['placement'])} is not area or node")
+            )
         members.append(
             {
                 "view_type": f"{project_name}:{member_name.split('/')[1]}",
-                "title": manifest.get("title", ""),
-                "description": manifest.get("description", ""),
-                "placement": manifest.get("placement", "area"),
+                "title": manifest["title"],
+                "description": manifest.get("description") or "",
+                "placement": manifest["placement"],
+                "devices": [capability for capability in manifest.get("capabilities", []) if capability in VIEW_DEVICE_CAPABILITIES],
             }
         )
     return members

@@ -43,6 +43,7 @@ PROGRAM_VIEW_MANIFEST = {
     "description": "The show as the audience gets it.",
     "entry": "index.html",
     "placement": "node",
+    "capabilities": ["read.selection", "camera"],
 }
 
 
@@ -260,8 +261,32 @@ class ModuleProjectArchives(unittest.TestCase):
         [entry] = json.loads(tatolab_module_projects.write_the_catalog(self.output_root, self.uv, self.tatolab_stream_wheel).read_text())["entries"]
         self.assertEqual(
             entry["views"],
-            [{"view_type": "Camera:program", "title": "Program", "description": "The show as the audience gets it.", "placement": "node"}],
+            [
+                {
+                    "view_type": "Camera:program",
+                    "title": "Program",
+                    "description": "The show as the audience gets it.",
+                    "placement": "node",
+                    "devices": ["camera"],
+                }
+            ],
         )
+
+    def test_a_view_whose_manifest_misses_what_the_view_contract_requires_fails_the_catalog(self):
+        for manifest in ({**PROGRAM_VIEW_MANIFEST, "placement": None}, {**PROGRAM_VIEW_MANIFEST, "placement": "floating"}, {"contract": "1.0", "title": "Program"}):
+            with self.subTest(manifest=manifest):
+                shutil.rmtree(self.workspace_root, ignore_errors=True)
+                shutil.rmtree(self.output_root, ignore_errors=True)
+                for wheel in self.wheels_directory.glob("*.whl"):
+                    wheel.unlink()
+
+                def write_the_view(module_directory, manifest=manifest):
+                    (module_directory / "views" / "program").mkdir(parents=True)
+                    (module_directory / "views" / "program" / "tatolab_view.json").write_text(json.dumps(manifest))
+
+                self.assemble_the_camera(before_assembling=write_the_view)
+                with self.assertRaises(tatolab_module_projects.ModuleProjectNotDescribed):
+                    tatolab_module_projects.write_the_catalog(self.output_root, self.uv, self.tatolab_stream_wheel)
 
     def test_the_catalog_names_the_lowest_runtime_the_modules_wheels_require(self):
         self.assemble_the_camera(runtime_requirements=("tatolab-stream (>=0.69.44)", "tatolab-stream>=0.69.44,<1; python_version >= '3.12'"))
@@ -372,7 +397,7 @@ class ModuleProjectListingDetails(unittest.TestCase):
         # The same value `an_imports_version_is_the_sha256_of_its_files_hashes_as_canonical_json`
         # pins in streamlib-project-repository: change both or neither.
         self.assertEqual(
-            tatolab_module_projects.copy_version_of({"tatolab-project.json": b"{}\n", "wheels/a.whl": b"wheel", ".tatolab/left-out": b"", "streams/.DS_Store": b""}),
+            tatolab_module_projects.copy_version_of({"tatolab-project.json": b"{}\n", "wheels/a.whl": b"wheel", ".tatolab/left-out": b"", "streams/.DS_Store": b"", "views/node_modules/x.js": b""}),
             "e26dca00880b66fe5d7f2f49e2a238ec7c9d881b48793ba29f09dd77d1c397a9",
         )
 
