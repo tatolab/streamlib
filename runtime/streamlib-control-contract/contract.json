@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 10
+    "x-contract-revision": 11
   },
   "methods": [
     {
@@ -4031,8 +4031,8 @@
     },
     {
       "name": "list_project_node_types",
-      "summary": "List the node types a project offers, from its own node files and the packages it installs.",
-      "description": "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.",
+      "summary": "List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.",
+      "description": "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -4088,7 +4088,191 @@
         "public"
       ],
       "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-replaced-by": "list_node_types"
+    },
+    {
+      "name": "list_pin_types",
+      "summary": "List every built-in pin type, how each is written, and what converts it.",
+      "description": "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` refuses a link that needs a conversion, so a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ListPinTypesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "list_pin_types_result",
+        "schema": {
+          "$ref": "#/components/schemas/ListPinTypesToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "node_type",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "reads_only",
       "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
+      "name": "list_node_types",
+      "summary": "List the node types and graph generators a project offers, by the source each comes from.",
+      "description": "List the node types and graph generators a project offers, each under `sources` by `source`: the project's own node code outside `imports/` (`project`), each import as its folder holds it now (`dependency`, with its `project`, `folder`, `version` and `project_name`), each installed distribution that declares `tatolab.nodes` entry points (`installed_distribution`, with its `distribution` and `distribution_version`), then the node types the runtime brings itself (`built_in`). Project code is read from source without running it. Each node type has its `node_type` (what `add_node` and `describe_node_types` take), the first line of its description as `documentation`, its `category`, its `kind` (`process`, `function` or `shader`) and `described_from`, where the runtime's description of it comes from: `built_in`, `source`, or `interpreter` when a loaded stream of the project described it in its own interpreter. `describe_node_types` answers each one's inputs and outputs. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, where it is declared, and the settings it promotes as `promoted_settings`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ListNodeTypesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "list_node_types_result",
+        "schema": {
+          "$ref": "#/components/schemas/ListNodeTypesToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "node_type",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "listed_as_a_tool"
+    },
+    {
+      "name": "describe_node_types",
+      "summary": "Describe the inputs and outputs of the node types named, each with its pin type.",
+      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`), its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow` and states its `family`, and a function or shader port read from source its `annotation`; its settings are listed after its ports as `setting_only` inputs, and those `set_exposed_config_fields` takes as `exposable_config_fields`. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/DescribeNodeTypesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "describe_node_types_result",
+        "schema": {
+          "$ref": "#/components/schemas/DescribeNodeTypesToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "node_type",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "list_project_views",
@@ -14242,6 +14426,1426 @@
         ],
         "description": "A module of a source that could not be read, and why."
       },
+      "ListPinTypesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project, by absolute path: a folder holding `tatolab-project.json`."
+          }
+        },
+        "required": [
+          "project_directory"
+        ],
+        "description": "`list_pin_types`' params."
+      },
+      "ListPinTypesToolResult": {
+        "type": "object",
+        "properties": {
+          "pin_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinTypeListed"
+            },
+            "description": "Each built-in pin type, in the order the contract's `x-pin-types` lists them."
+          }
+        },
+        "required": [
+          "pin_types"
+        ],
+        "description": "`list_pin_types`' answer: every built-in pin type."
+      },
+      "PinTypeListed": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/BuiltInPinTypeName",
+            "description": "Its name: the `type` tag of its pin type."
+          },
+          "label": {
+            "type": "string",
+            "description": "The words a person reads for it."
+          },
+          "documentation": {
+            "type": "string",
+            "description": "What it carries, in a sentence or two."
+          },
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinFlow"
+            },
+            "description": "The flows a pin of it may state, its default first."
+          },
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinAnnotationName"
+            },
+            "description": "The annotations a pin of it may state."
+          },
+          "python_forms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Each way a Python declaration writes it."
+          },
+          "typescript_form": {
+            "type": "string",
+            "description": "How the TypeScript SDK writes it: its name as a string literal."
+          },
+          "how_to_declare": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How a node declares a pin of a type built from another, a List or a bundle; absent on\nevery type its name alone declares."
+          },
+          "value_json_schema": {
+            "description": "The JSON Schema of its stored value, as the contract's components state it; absent on a\ntype that stores no value. A described input states its own, with what its declaration\nadds folded in."
+          },
+          "converts_to": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinTypeConversionListed"
+            },
+            "description": "Each conversion a node type of this runtime states from a pin of this type, which a link\nfrom it to the type converted to is made through."
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "documentation",
+          "flows",
+          "annotations",
+          "python_forms",
+          "typescript_form",
+          "converts_to"
+        ],
+        "description": "One built-in pin type: the contract's row for it, and what converts it on this runtime."
+      },
+      "BuiltInPinTypeName": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "boolean",
+            "description": "True or false."
+          },
+          {
+            "type": "string",
+            "const": "integer",
+            "description": "A whole number, exact to 2^53, or within the exact size the type states."
+          },
+          {
+            "type": "string",
+            "const": "float",
+            "description": "A number, held as a 64-bit float unless the type states a size."
+          },
+          {
+            "type": "string",
+            "const": "string",
+            "description": "Text."
+          },
+          {
+            "type": "string",
+            "const": "menu",
+            "description": "One of a fixed list of option names."
+          },
+          {
+            "type": "string",
+            "const": "color",
+            "description": "An sRGB colour with alpha, four numbers from 0 to 1."
+          },
+          {
+            "type": "string",
+            "const": "vector",
+            "description": "Two, three or four numbers, named x, y, z and w."
+          },
+          {
+            "type": "string",
+            "const": "rectangle",
+            "description": "A rectangle by its left and top edges, width and height."
+          },
+          {
+            "type": "string",
+            "const": "transform",
+            "description": "A 4 by 4 matrix, row by row."
+          },
+          {
+            "type": "string",
+            "const": "texture",
+            "description": "A GPU picture, in one of the pixel formats the type states."
+          },
+          {
+            "type": "string",
+            "const": "audio",
+            "description": "A stream of audio samples."
+          },
+          {
+            "type": "string",
+            "const": "encoded_video",
+            "description": "Encoded video, one access unit per message, in one of the codecs the type states."
+          },
+          {
+            "type": "string",
+            "const": "encoded_audio",
+            "description": "Encoded audio, one packet per message, in one of the codecs the type states."
+          },
+          {
+            "type": "string",
+            "const": "tensor",
+            "description": "An array of numbers with a shape."
+          },
+          {
+            "type": "string",
+            "const": "asset",
+            "description": "One of the project's assets, of the media the type states."
+          },
+          {
+            "type": "string",
+            "const": "trigger",
+            "description": "An event with no payload; its message's timestamp is the event."
+          },
+          {
+            "type": "string",
+            "const": "list_of",
+            "description": "A list of values of the one type it names."
+          },
+          {
+            "type": "string",
+            "const": "bundle",
+            "description": "Named members, each of its own type, carried as one message. It has no name of its own: two bundles with the same members are one type."
+          },
+          {
+            "type": "string",
+            "const": "named",
+            "description": "A type a module declares by its class, carried as the bytes that class packs."
+          },
+          {
+            "type": "string",
+            "const": "node_reference",
+            "description": "A setting naming another node of the graph. It never takes a wire."
+          },
+          {
+            "type": "string",
+            "const": "pin_type_choice",
+            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes a wire."
+          }
+        ],
+        "description": "The name of a built-in pin type: the `type` tag of its pin type."
+      },
+      "PinAnnotationName": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "range",
+            "description": "The lowest and highest number it holds."
+          },
+          {
+            "type": "string",
+            "const": "step",
+            "description": "The step a control moves a number by."
+          },
+          {
+            "type": "string",
+            "const": "unit",
+            "description": "The unit a number is in."
+          },
+          {
+            "type": "string",
+            "const": "meaning",
+            "description": "What its value stands for."
+          },
+          {
+            "type": "string",
+            "const": "control",
+            "description": "The control that edits or shows it."
+          },
+          {
+            "type": "string",
+            "const": "frame_rate",
+            "description": "The frame rate a Texture output's stream has."
+          },
+          {
+            "type": "string",
+            "const": "sample_rate",
+            "description": "The sample rate an Audio output's stream has."
+          },
+          {
+            "type": "string",
+            "const": "sample_type",
+            "description": "The sample type an Audio output's stream has."
+          },
+          {
+            "type": "string",
+            "const": "residency",
+            "description": "Where a Tensor output's values live."
+          },
+          {
+            "type": "string",
+            "const": "project_asset",
+            "description": "That a String holds the UUID of one of the project's assets."
+          }
+        ],
+        "description": "An annotation a pin of a type may state, by its key in [`super::PinAnnotations`]."
+      },
+      "PinTypeConversionListed": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The type it takes."
+          },
+          "to": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The type it gives."
+          },
+          "node_type": {
+            "type": "string",
+            "description": "The node type that converts, what `add_node` takes."
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "node_type"
+        ],
+        "description": "One conversion a node type states: its one wired input's type into its output's."
+      },
+      "ListNodeTypesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project, by absolute path: a folder holding `tatolab-project.json`."
+          }
+        },
+        "required": [
+          "project_directory"
+        ],
+        "description": "`list_node_types`' params."
+      },
+      "ListNodeTypesToolResult": {
+        "type": "object",
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project directory, symlinks resolved."
+          },
+          "project": {
+            "type": "string",
+            "description": "The project's UUID, from its `tatolab-project.json`."
+          },
+          "project_name": {
+            "type": "string",
+            "description": "The project's name."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypeSourceListed"
+            },
+            "description": "The project first, then each import, then each installed distribution, then the node\ntypes the runtime brings itself."
+          }
+        },
+        "required": [
+          "project_directory",
+          "project",
+          "project_name",
+          "sources"
+        ],
+        "description": "`list_node_types`' answer: what a project and each source it draws node code from offer."
+      },
+      "NodeTypeSourceListed": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "project"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The project's own node code, outside `imports/`."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "The imported project's UUID."
+              },
+              "folder": {
+                "type": "string",
+                "description": "Its folder under `imports/`."
+              },
+              "version": {
+                "type": "string",
+                "description": "The version its copy carried."
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The imported project's name as the project file in its folder holds it; `null` when\nthat file does not read."
+              },
+              "source": {
+                "type": "string",
+                "const": "dependency"
+              }
+            },
+            "required": [
+              "source",
+              "project",
+              "folder",
+              "version"
+            ],
+            "description": "An import's node code as its folder under `imports/` holds it now."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "distribution": {
+                "type": "string",
+                "description": "The distribution's name."
+              },
+              "distribution_version": {
+                "type": "string",
+                "description": "The distribution's version."
+              },
+              "source": {
+                "type": "string",
+                "const": "installed_distribution"
+              }
+            },
+            "required": [
+              "source",
+              "distribution",
+              "distribution_version"
+            ],
+            "description": "An installed distribution that declares `tatolab.nodes` entry points."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "built_in"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The node types the runtime brings itself, which every stream can add."
+          }
+        ],
+        "description": "One source's node types, graph generators, and the modules of it that could not be read.",
+        "properties": {
+          "node_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypeListed"
+            },
+            "description": "Each node type it declares; `describe_node_types` answers their inputs and outputs."
+          },
+          "graph_generators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphGeneratorListed"
+            },
+            "description": "Each `@graph_generator` it declares, by import path."
+          },
+          "unreadable_modules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeModuleNotReadable"
+            },
+            "description": "Each module that does not parse, with why and where; the rest of the source still lists."
+          }
+        },
+        "required": [
+          "node_types",
+          "graph_generators",
+          "unreadable_modules"
+        ]
+      },
+      "NodeTypeListed": {
+        "type": "object",
+        "properties": {
+          "node_type": {
+            "type": "string",
+            "description": "The type `add_node` takes: its import path, `<module>:<qualname>`."
+          },
+          "documentation": {
+            "type": "string",
+            "description": "The first line of its description; empty when it declares none."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group it is filed under, a path where the group is inside another, as\n`Effects/Stylize`; null when it declares none, or where its declaration source does not\nshow it."
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How its code runs; null for an entry point whose declaration source does not show it."
+          },
+          "described_from": {
+            "$ref": "#/components/schemas/NodeTypeDescribedFrom",
+            "description": "Where the runtime's description of it comes from."
+          }
+        },
+        "required": [
+          "node_type",
+          "documentation",
+          "described_from"
+        ],
+        "description": "One node type a source offers."
+      },
+      "NodeTypeKind": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "process",
+            "description": "A class in a process of its own."
+          },
+          {
+            "type": "string",
+            "const": "function",
+            "description": "A function evaluated where its reader reads."
+          },
+          {
+            "type": "string",
+            "const": "shader",
+            "description": "A shader on the GPU."
+          }
+        ],
+        "description": "How a node type's code runs."
+      },
+      "NodeTypeDescribedFrom": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "built_in",
+            "description": "The runtime brings it, and states its ports itself."
+          },
+          {
+            "type": "string",
+            "const": "source",
+            "description": "Its declaration, read from source without running it; a port's pin type is not read\nthere, so its ports state their family alone."
+          },
+          {
+            "type": "string",
+            "const": "interpreter",
+            "description": "A loaded stream of the project described it in its own interpreter, every port typed\nas the code states it."
+          }
+        ],
+        "description": "Where the runtime's description of a node type comes from."
+      },
+      "GraphGeneratorListed": {
+        "type": "object",
+        "properties": {
+          "generator": {
+            "type": "string",
+            "description": "The import path `import_graph_generator` takes: `<module>:<function>`."
+          },
+          "description": {
+            "type": "string",
+            "description": "Its docstring."
+          },
+          "promoted_settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphGeneratorPromotedSettingReadFromSource"
+            },
+            "description": "Each parameter after the builder: a setting the fragment promotes."
+          },
+          "path": {
+            "type": "string",
+            "description": "The file declaring it, relative to its source's root."
+          },
+          "line": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The line of its `def`."
+          }
+        },
+        "required": [
+          "generator",
+          "description",
+          "promoted_settings",
+          "path",
+          "line"
+        ],
+        "description": "One `@graph_generator` as its declaration states it in source."
+      },
+      "DescribeNodeTypesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project, by absolute path: a folder holding `tatolab-project.json`."
+          },
+          "node_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The node types to describe, each as `list_node_types` names it under `node_type`.",
+            "minItems": 1
+          }
+        },
+        "required": [
+          "project_directory",
+          "node_types"
+        ],
+        "description": "`describe_node_types`' params."
+      },
+      "DescribeNodeTypesToolResult": {
+        "type": "object",
+        "properties": {
+          "node_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypeDescribedOrWhyNot"
+            },
+            "description": "Each node type named, described, or with why it could not be."
+          }
+        },
+        "required": [
+          "node_types"
+        ],
+        "description": "`describe_node_types`' answer: each node type named, in the order named."
+      },
+      "NodeTypeDescribedOrWhyNot": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/NodeTypeDescription",
+            "description": "Its inputs and outputs."
+          },
+          {
+            "$ref": "#/components/schemas/NodeTypeNotDescribed",
+            "description": "Why it could not be described."
+          }
+        ],
+        "description": "One node type named: its description, or why the runtime has none."
+      },
+      "NodeTypeDescription": {
+        "type": "object",
+        "properties": {
+          "node_type": {
+            "type": "string",
+            "description": "The type `add_node` takes."
+          },
+          "described_from": {
+            "$ref": "#/components/schemas/NodeTypeDescribedFrom",
+            "description": "Where this description comes from."
+          },
+          "documentation": {
+            "type": "string",
+            "description": "What it does, as it describes itself."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group it is filed under; null when it declares none."
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How its code runs; null where its declaration source does not show it."
+          },
+          "declared_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectFilePlaceOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where it is declared, its path relative to its source's root; absent on a built-in."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypeInputDescribed"
+            },
+            "description": "Every input: each port that takes a wire, then each setting, which takes a value only."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypePortDescribed"
+            },
+            "description": "Every output."
+          },
+          "exposable_config_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The settings of a node type not yet typed that `set_exposed_config_fields` still takes;\nabsent when it takes none. Served until the contract's version changes."
+          }
+        },
+        "required": [
+          "node_type",
+          "described_from",
+          "documentation",
+          "inputs",
+          "outputs"
+        ],
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "project"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The project's own node code, outside `imports/`."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "The imported project's UUID."
+              },
+              "folder": {
+                "type": "string",
+                "description": "Its folder under `imports/`."
+              },
+              "version": {
+                "type": "string",
+                "description": "The version its copy carried."
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The imported project's name as the project file in its folder holds it; `null` when\nthat file does not read."
+              },
+              "source": {
+                "type": "string",
+                "const": "dependency"
+              }
+            },
+            "required": [
+              "source",
+              "project",
+              "folder",
+              "version"
+            ],
+            "description": "An import's node code as its folder under `imports/` holds it now."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "distribution": {
+                "type": "string",
+                "description": "The distribution's name."
+              },
+              "distribution_version": {
+                "type": "string",
+                "description": "The distribution's version."
+              },
+              "source": {
+                "type": "string",
+                "const": "installed_distribution"
+              }
+            },
+            "required": [
+              "source",
+              "distribution",
+              "distribution_version"
+            ],
+            "description": "An installed distribution that declares `tatolab.nodes` entry points."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "built_in"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The node types the runtime brings itself, which every stream can add."
+          }
+        ],
+        "description": "One node type's inputs and outputs, as the best description the runtime has states them."
+      },
+      "NodeTypeInputDescribed": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The port's name, what a link end and `set_node_input_value` name it by."
+          },
+          "documentation": {
+            "type": "string",
+            "description": "What it carries, as declared beside it."
+          },
+          "pin_type": {
+            "$ref": "#/components/schemas/DeclaredPinType",
+            "description": "The type it carries, or how that type is found."
+          },
+          "flow": {
+            "$ref": "#/components/schemas/PinFlow",
+            "description": "How its messages are read."
+          },
+          "annotations": {
+            "$ref": "#/components/schemas/PinAnnotations",
+            "description": "What it states besides its type, none of which decides a link."
+          },
+          "family": {
+            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`."
+          },
+          "annotation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeInputMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether it takes a wire, a stored value or both; absent where only source describes its\nnode type."
+          },
+          "read": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SettingReadTime"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the node reads a setting: once at setup, a change rebuilding the node, or each run.\nAbsent on an input that takes a wire."
+          },
+          "default_value": {
+            "description": "The value it reads while nothing feeds it and no value is set, null for an input that\nreads nothing by default; absent when it declares none."
+          },
+          "lifetime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeValueLifetime"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether a value set live on it outlives Stop. Absent where only source describes its\nnode type."
+          },
+          "value_json_schema": {
+            "description": "The JSON Schema a value set on it must satisfy, its range folded in; absent on an input\nthat holds no stored value and where its type is found with the graph."
+          }
+        },
+        "required": [
+          "name",
+          "documentation"
+        ],
+        "description": "One input of a node type: a port, with what a value set on it must be."
+      },
+      "DeclaredPinType": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pin_type": {
+                "$ref": "#/components/schemas/PinType",
+                "description": "The type."
+              },
+              "kind": {
+                "type": "string",
+                "const": "is"
+              }
+            },
+            "required": [
+              "kind",
+              "pin_type"
+            ],
+            "description": "Exactly this type."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pin_types": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PinType"
+                },
+                "description": "The types it takes."
+              },
+              "kind": {
+                "type": "string",
+                "const": "one_of"
+              }
+            },
+            "required": [
+              "kind",
+              "pin_types"
+            ],
+            "description": "Any one of these types."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "any"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false,
+            "description": "Every type. An input only."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input_port_name": {
+                "type": "string",
+                "description": "The input whose type it takes."
+              },
+              "kind": {
+                "type": "string",
+                "const": "same_as_input"
+              }
+            },
+            "required": [
+              "kind",
+              "input_port_name"
+            ],
+            "description": "The type of the named input's link."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input_name": {
+                "type": "string",
+                "description": "The input that chooses its type."
+              },
+              "kind": {
+                "type": "string",
+                "const": "set_by_input"
+              }
+            },
+            "required": [
+              "kind",
+              "input_name"
+            ],
+            "description": "The type the named pin type choice input holds."
+          }
+        ],
+        "description": "The pin type a port declares, or how it is found."
+      },
+      "PinAnnotations": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinNumberRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lowest and highest number it holds."
+          },
+          "step": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The step a control moves a number by."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The unit a number is in, such as `Hz`."
+          },
+          "meaning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What its value stands for, such as `frequency`."
+          },
+          "control": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The control that edits or shows it: one of the Studio's, or a module's qualified name."
+          },
+          "frame_rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageOutputPortFrameRate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The frame rate a Texture output's stream has, stated or read from a config key."
+          },
+          "sample_rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelsOutputPortSampleRate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sample rate an Audio output's stream has, stated or read from a config key."
+          },
+          "sample_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelsOutputPortSampleType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sample type an Audio output's stream has."
+          },
+          "residency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArrayOutputPortResidency"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a Tensor output's values live."
+          },
+          "project_asset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinProjectAssetAnnotation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That a String holds the UUID of one of the project's assets, so a client offers the\nproject's assets to pick from."
+          }
+        },
+        "description": "What a pin states besides its type. None of it decides a link."
+      },
+      "PinNumberRange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "minimum": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The lowest; absent, no lower bound."
+          },
+          "maximum": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The highest; absent, no upper bound."
+          }
+        },
+        "description": "The lowest and highest number a pin holds; either may be left open."
+      },
+      "ImageOutputPortFrameRate": {
+        "oneOf": [
+          {
+            "description": "Frames per second, stated on the class.",
+            "type": "object",
+            "properties": {
+              "stated": {
+                "$ref": "#/components/schemas/ImageStreamFrameRate"
+              }
+            },
+            "required": [
+              "stated"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The value of the node's config key of this name.",
+            "type": "object",
+            "properties": {
+              "from_config": {
+                "type": "object",
+                "properties": {
+                  "config_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "config_key"
+                ]
+              }
+            },
+            "required": [
+              "from_config"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "The frame rate an Image output states, written on the class or read from its node's config."
+      },
+      "ImageStreamFrameRate": {
+        "type": "object",
+        "properties": {
+          "numerator": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "denominator": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator"
+        ],
+        "additionalProperties": false,
+        "description": "An Image stream's frame rate, as a rational number of frames per second."
+      },
+      "ChannelsOutputPortSampleRate": {
+        "oneOf": [
+          {
+            "description": "Samples per second, stated on the class.",
+            "type": "object",
+            "properties": {
+              "stated": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "stated"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The value of the node's config key of this name.",
+            "type": "object",
+            "properties": {
+              "from_config": {
+                "type": "object",
+                "properties": {
+                  "config_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "config_key"
+                ]
+              }
+            },
+            "required": [
+              "from_config"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "The sample rate a Channels output states, written on the class or read from its node's config."
+      },
+      "ChannelsOutputPortSampleType": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "f32"
+          },
+          {
+            "type": "string",
+            "const": "f64"
+          }
+        ],
+        "description": "The sample type of a Channels output."
+      },
+      "ArrayOutputPortResidency": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "gpu"
+          },
+          {
+            "type": "string",
+            "const": "cpu"
+          }
+        ],
+        "description": "Where an Array output's attributes live."
+      },
+      "PinProjectAssetAnnotation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAssetMedia"
+            },
+            "description": "The media an asset must hold one of; empty, any asset of the project."
+          }
+        },
+        "description": "The project's assets a String holding an asset's UUID is picked from."
+      },
+      "NodeTypeInputMode": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "wire_or_value",
+            "description": "A link or a stored value, read each run."
+          },
+          {
+            "type": "string",
+            "const": "wire_only",
+            "description": "A link only, read each run."
+          },
+          {
+            "type": "string",
+            "const": "setting_only",
+            "description": "A stored value only, never a link: a setting."
+          }
+        ],
+        "description": "Whether an input takes a wire, a stored value, or both."
+      },
+      "SettingReadTime": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "at_setup",
+            "description": "Once, when the node is set up; a change rebuilds the node."
+          },
+          {
+            "type": "string",
+            "const": "each_run",
+            "description": "Each run, with no rebuild. Runtime-owned nodes only."
+          }
+        ],
+        "description": "When a node reads a setting-only input."
+      },
+      "NodeValueLifetime": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "kept",
+            "description": "Kept in the project's store: it survives Stop, Play, close and a restart."
+          },
+          {
+            "type": "string",
+            "const": "reset",
+            "description": "Forgotten at Stop: its live value is dropped, and the next Play reads its saved value, or\nits declared default where it has none."
+          }
+        ],
+        "description": "How long a value set live on an input lives, as the input declares it, or a `GraphInput`'s\nconfig for the value it publishes."
+      },
+      "NodeTypePortDescribed": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The port's name, what a link end and `set_node_input_value` name it by."
+          },
+          "documentation": {
+            "type": "string",
+            "description": "What it carries, as declared beside it."
+          },
+          "pin_type": {
+            "$ref": "#/components/schemas/DeclaredPinType",
+            "description": "The type it carries, or how that type is found."
+          },
+          "flow": {
+            "$ref": "#/components/schemas/PinFlow",
+            "description": "How its messages are read."
+          },
+          "annotations": {
+            "$ref": "#/components/schemas/PinAnnotations",
+            "description": "What it states besides its type, none of which decides a link."
+          },
+          "family": {
+            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`."
+          },
+          "annotation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes."
+          }
+        },
+        "required": [
+          "name",
+          "documentation"
+        ],
+        "description": "One port of a node type: its name, what it carries and how it is typed."
+      },
+      "NodeTypeNotDescribed": {
+        "type": "object",
+        "properties": {
+          "node_type": {
+            "type": "string",
+            "description": "The type named."
+          },
+          "not_described_because": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire",
+            "description": "Why it could not be described, with the call that checks its code when the runtime\nserves one."
+          }
+        },
+        "required": [
+          "node_type",
+          "not_described_because"
+        ],
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "project"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The project's own node code, outside `imports/`."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "The imported project's UUID."
+              },
+              "folder": {
+                "type": "string",
+                "description": "Its folder under `imports/`."
+              },
+              "version": {
+                "type": "string",
+                "description": "The version its copy carried."
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The imported project's name as the project file in its folder holds it; `null` when\nthat file does not read."
+              },
+              "source": {
+                "type": "string",
+                "const": "dependency"
+              }
+            },
+            "required": [
+              "source",
+              "project",
+              "folder",
+              "version"
+            ],
+            "description": "An import's node code as its folder under `imports/` holds it now."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "distribution": {
+                "type": "string",
+                "description": "The distribution's name."
+              },
+              "distribution_version": {
+                "type": "string",
+                "description": "The distribution's version."
+              },
+              "source": {
+                "type": "string",
+                "const": "installed_distribution"
+              }
+            },
+            "required": [
+              "source",
+              "distribution",
+              "distribution_version"
+            ],
+            "description": "An installed distribution that declares `tatolab.nodes` entry points."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "built_in"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The node types the runtime brings itself, which every stream can add."
+          }
+        ],
+        "description": "A node type named that the runtime could not describe."
+      },
       "ListProjectViewsRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -15888,370 +17492,6 @@
         ],
         "description": "What a port declares about what it carries."
       },
-      "DeclaredPinType": {
-        "oneOf": [
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "pin_type": {
-                "$ref": "#/components/schemas/PinType",
-                "description": "The type."
-              },
-              "kind": {
-                "type": "string",
-                "const": "is"
-              }
-            },
-            "required": [
-              "kind",
-              "pin_type"
-            ],
-            "description": "Exactly this type."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "pin_types": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/PinType"
-                },
-                "description": "The types it takes."
-              },
-              "kind": {
-                "type": "string",
-                "const": "one_of"
-              }
-            },
-            "required": [
-              "kind",
-              "pin_types"
-            ],
-            "description": "Any one of these types."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "any"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "additionalProperties": false,
-            "description": "Every type. An input only."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "input_port_name": {
-                "type": "string",
-                "description": "The input whose type it takes."
-              },
-              "kind": {
-                "type": "string",
-                "const": "same_as_input"
-              }
-            },
-            "required": [
-              "kind",
-              "input_port_name"
-            ],
-            "description": "The type of the named input's link."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "input_name": {
-                "type": "string",
-                "description": "The input that chooses its type."
-              },
-              "kind": {
-                "type": "string",
-                "const": "set_by_input"
-              }
-            },
-            "required": [
-              "kind",
-              "input_name"
-            ],
-            "description": "The type the named pin type choice input holds."
-          }
-        ],
-        "description": "The pin type a port declares, or how it is found."
-      },
-      "PinAnnotations": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "range": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PinNumberRange"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The lowest and highest number it holds."
-          },
-          "step": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "The step a control moves a number by."
-          },
-          "unit": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The unit a number is in, such as `Hz`."
-          },
-          "meaning": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What its value stands for, such as `frequency`."
-          },
-          "control": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The control that edits or shows it: one of the Studio's, or a module's qualified name."
-          },
-          "frame_rate": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ImageOutputPortFrameRate"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The frame rate a Texture output's stream has, stated or read from a config key."
-          },
-          "sample_rate": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ChannelsOutputPortSampleRate"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The sample rate an Audio output's stream has, stated or read from a config key."
-          },
-          "sample_type": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ChannelsOutputPortSampleType"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The sample type an Audio output's stream has."
-          },
-          "residency": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ArrayOutputPortResidency"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Where a Tensor output's values live."
-          },
-          "project_asset": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PinProjectAssetAnnotation"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "That a String holds the UUID of one of the project's assets, so a client offers the\nproject's assets to pick from."
-          }
-        },
-        "description": "What a pin states besides its type. None of it decides a link."
-      },
-      "PinNumberRange": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "minimum": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "The lowest; absent, no lower bound."
-          },
-          "maximum": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "The highest; absent, no upper bound."
-          }
-        },
-        "description": "The lowest and highest number a pin holds; either may be left open."
-      },
-      "ImageOutputPortFrameRate": {
-        "oneOf": [
-          {
-            "description": "Frames per second, stated on the class.",
-            "type": "object",
-            "properties": {
-              "stated": {
-                "$ref": "#/components/schemas/ImageStreamFrameRate"
-              }
-            },
-            "required": [
-              "stated"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "description": "The value of the node's config key of this name.",
-            "type": "object",
-            "properties": {
-              "from_config": {
-                "type": "object",
-                "properties": {
-                  "config_key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "config_key"
-                ]
-              }
-            },
-            "required": [
-              "from_config"
-            ],
-            "additionalProperties": false
-          }
-        ],
-        "description": "The frame rate an Image output states, written on the class or read from its node's config."
-      },
-      "ImageStreamFrameRate": {
-        "type": "object",
-        "properties": {
-          "numerator": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "denominator": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "numerator",
-          "denominator"
-        ],
-        "additionalProperties": false,
-        "description": "An Image stream's frame rate, as a rational number of frames per second."
-      },
-      "ChannelsOutputPortSampleRate": {
-        "oneOf": [
-          {
-            "description": "Samples per second, stated on the class.",
-            "type": "object",
-            "properties": {
-              "stated": {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "stated"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "description": "The value of the node's config key of this name.",
-            "type": "object",
-            "properties": {
-              "from_config": {
-                "type": "object",
-                "properties": {
-                  "config_key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "config_key"
-                ]
-              }
-            },
-            "required": [
-              "from_config"
-            ],
-            "additionalProperties": false
-          }
-        ],
-        "description": "The sample rate a Channels output states, written on the class or read from its node's config."
-      },
-      "ChannelsOutputPortSampleType": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "f32"
-          },
-          {
-            "type": "string",
-            "const": "f64"
-          }
-        ],
-        "description": "The sample type of a Channels output."
-      },
-      "ArrayOutputPortResidency": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "gpu"
-          },
-          {
-            "type": "string",
-            "const": "cpu"
-          }
-        ],
-        "description": "Where an Array output's attributes live."
-      },
-      "PinProjectAssetAnnotation": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "media": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ProjectAssetMedia"
-            },
-            "description": "The media an asset must hold one of; empty, any asset of the project."
-          }
-        },
-        "description": "The project's assets a String holding an asset's UUID is picked from."
-      },
       "NodeInputMode": {
         "oneOf": [
           {
@@ -16303,21 +17543,6 @@
           }
         ],
         "description": "Whether an input takes a wire, a stored value, or both."
-      },
-      "SettingReadTime": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "at_setup",
-            "description": "Once, when the node is set up; a change rebuilds the node."
-          },
-          {
-            "type": "string",
-            "const": "each_run",
-            "description": "Each run, with no rebuild. Runtime-owned nodes only."
-          }
-        ],
-        "description": "When a node reads a setting-only input."
       },
       "NodeUiManifest": {
         "type": "object",
@@ -16371,116 +17596,6 @@
           "script"
         ],
         "description": "A control a module registers for one pin type."
-      },
-      "BuiltInPinTypeName": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "boolean",
-            "description": "True or false."
-          },
-          {
-            "type": "string",
-            "const": "integer",
-            "description": "A whole number, exact to 2^53, or within the exact size the type states."
-          },
-          {
-            "type": "string",
-            "const": "float",
-            "description": "A number, held as a 64-bit float unless the type states a size."
-          },
-          {
-            "type": "string",
-            "const": "string",
-            "description": "Text."
-          },
-          {
-            "type": "string",
-            "const": "menu",
-            "description": "One of a fixed list of option names."
-          },
-          {
-            "type": "string",
-            "const": "color",
-            "description": "An sRGB colour with alpha, four numbers from 0 to 1."
-          },
-          {
-            "type": "string",
-            "const": "vector",
-            "description": "Two, three or four numbers, named x, y, z and w."
-          },
-          {
-            "type": "string",
-            "const": "rectangle",
-            "description": "A rectangle by its left and top edges, width and height."
-          },
-          {
-            "type": "string",
-            "const": "transform",
-            "description": "A 4 by 4 matrix, row by row."
-          },
-          {
-            "type": "string",
-            "const": "texture",
-            "description": "A GPU picture, in one of the pixel formats the type states."
-          },
-          {
-            "type": "string",
-            "const": "audio",
-            "description": "A stream of audio samples."
-          },
-          {
-            "type": "string",
-            "const": "encoded_video",
-            "description": "Encoded video, one access unit per message, in one of the codecs the type states."
-          },
-          {
-            "type": "string",
-            "const": "encoded_audio",
-            "description": "Encoded audio, one packet per message, in one of the codecs the type states."
-          },
-          {
-            "type": "string",
-            "const": "tensor",
-            "description": "An array of numbers with a shape."
-          },
-          {
-            "type": "string",
-            "const": "asset",
-            "description": "One of the project's assets, of the media the type states."
-          },
-          {
-            "type": "string",
-            "const": "trigger",
-            "description": "An event with no payload; its message's timestamp is the event."
-          },
-          {
-            "type": "string",
-            "const": "list_of",
-            "description": "A list of values of the one type it names."
-          },
-          {
-            "type": "string",
-            "const": "bundle",
-            "description": "Named members, each of its own type, carried as one message. It has no name of its own: two bundles with the same members are one type."
-          },
-          {
-            "type": "string",
-            "const": "named",
-            "description": "A type a module declares by its class, carried as the bytes that class packs."
-          },
-          {
-            "type": "string",
-            "const": "node_reference",
-            "description": "A setting naming another node of the graph. It never takes a wire."
-          },
-          {
-            "type": "string",
-            "const": "pin_type_choice",
-            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes a wire."
-          }
-        ],
-        "description": "The name of a built-in pin type: the `type` tag of its pin type."
       },
       "NodeUiManifestNodeBody": {
         "type": "object",

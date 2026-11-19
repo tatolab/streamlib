@@ -274,7 +274,7 @@ fn reads_as<StoredValue: DeserializeOwned>(value: &Value) -> bool {
 
 /// The lowest and highest whole number an Integer of `exact_size` holds; exact to 2^53 when it
 /// states no size.
-fn integer_bounds(exact_size: Option<IntegerSize>) -> (i128, i128) {
+pub(super) fn integer_bounds(exact_size: Option<IntegerSize>) -> (i128, i128) {
     match exact_size {
         None => (
             -i128::from(LARGEST_EXACT_WHOLE_NUMBER),
