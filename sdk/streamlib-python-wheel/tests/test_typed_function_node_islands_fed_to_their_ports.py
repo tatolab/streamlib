@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """An island of bare `@node` function nodes fed to a port: a node typed by a type parameter
-hands on the value linked into it, and each field of a returned `NamedTuple` is an output."""
+hands on the value linked into it, each field of a returned `NamedTuple` is an output, and a
+value of parts handed between its nodes is read with the free conversion a link allows."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import pytest
 
 from tatolab.runtime import _engine
 from tatolab.runtime._function_node_compilation import feed_each_input_port_from_its_function_node_island
-from tatolab.stream import Color, node
+from tatolab.stream import Color, Vector2, Vector4, node
 
 from function_node_test_nodes import an_island_of_one_node
 
@@ -48,9 +49,32 @@ def split_the_level(x: float = 0.25, spread: float = 0.5) -> LowAndHigh:
     return LowAndHigh(low=x - spread, high=x + spread)
 
 
+@node
+def a_vector_of_four(x: float = 0.0, y: float = 0.0, z: float = 0.0, w: float = 0.0) -> Vector4:
+    return Vector4(x, y, z, w)
+
+
+@node
+def a_spot_as_one_number(spot: Vector2 = Vector2(0.0, 0.0)) -> float:
+    return spot.x + 10 * spot.y
+
+
+@node
+def a_level(level: float = 0.5) -> float:
+    return level
+
+
 _FUNCTION_NODES_BY_IMPORT_PATH = {
     f"{__name__}:{function_node.__qualname__}": function_node
-    for function_node in (place_a_tint, hand_on, dim_a_tint, split_the_level)
+    for function_node in (
+        place_a_tint,
+        hand_on,
+        dim_a_tint,
+        split_the_level,
+        a_vector_of_four,
+        a_spot_as_one_number,
+        a_level,
+    )
 }
 
 
@@ -103,3 +127,36 @@ def test_each_field_of_a_named_tuple_feeds_the_port_its_output_is_linked_to(outp
     )
     assert fed.ran_compiled_by_node_id == {"split-1": True}, "a named tuple of numbers compiles"
     assert the_numbers_read_from(data_plane, "level", 1) == (level,)
+
+
+def an_island_of_two_nodes_feeding(input_port: str, first: str, second: str, port_linked: str) -> "dict[str, Any]":
+    return {
+        "input_port": input_port,
+        "link_id": f"L-{input_port}",
+        "output": {"node": "second-1", "port": "result"},
+        "nodes": [
+            a_node_of_an_island("first-1", 0, first),
+            a_node_of_an_island("second-1", 1, second, **{port_linked: "first-1"}),
+        ],
+    }
+
+
+def test_a_vector_of_four_into_a_vector_of_two_keeps_its_first_two_components():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["spot"], [])
+    island = an_island_of_two_nodes_feeding("spot", "a_vector_of_four", "a_spot_as_one_number", "spot")
+    island["nodes"][0]["pins"] = {"x": 0.25, "y": 0.5, "z": 9.0, "w": 9.0}
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__
+    )
+    assert the_numbers_read_from(data_plane, "spot", 1) == (5.25,)
+
+
+def test_one_number_into_a_colour_is_an_opaque_grey():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["dimmed"], [])
+    island = an_island_of_two_nodes_feeding("dimmed", "a_level", "dim_a_tint", "tint")
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__
+    )
+    assert the_numbers_read_from(data_plane, "dimmed", 4) == (0.25, 0.25, 0.25, 1.0)
