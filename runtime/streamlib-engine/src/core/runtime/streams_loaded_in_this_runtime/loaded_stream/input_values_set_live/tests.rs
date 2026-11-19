@@ -62,7 +62,9 @@ fn the_values_set_live(
     set_the_input_values_live_and_hand_each_node_its_own(
         graph,
         sets,
-        PlaybackOfTheStreamSetOn::NotStopped,
+        PlaybackOfTheStreamSetOn::NotStopped {
+            why_a_node_not_built_does_not_run: WhyANodeOfAStreamIsNotRunning::Preparing,
+        },
     )
 }
 

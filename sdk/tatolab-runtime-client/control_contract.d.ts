@@ -13,6 +13,17 @@ import type {
   BundleMember,
   NamedPinTypeImportPath,
   PinFlow,
+  BuiltInPinTypeName,
+  PinAnnotationName,
+  DeclaredPinType,
+  PinAnnotations,
+  PinNumberRange,
+  ImageOutputPortFrameRate,
+  ImageStreamFrameRate,
+  ChannelsOutputPortSampleRate,
+  ChannelsOutputPortSampleType,
+  ArrayOutputPortResidency,
+  PinProjectAssetAnnotation,
   BooleanPinValue,
   IntegerPinValue,
   FloatPinValue,
@@ -27,16 +38,6 @@ import type {
   BundlePinValue,
   NodeReferenceInConfig,
   PinDeclaration,
-  DeclaredPinType,
-  PinAnnotations,
-  PinNumberRange,
-  ImageOutputPortFrameRate,
-  ImageStreamFrameRate,
-  ChannelsOutputPortSampleRate,
-  ChannelsOutputPortSampleType,
-  ArrayOutputPortResidency,
-  PinProjectAssetAnnotation,
-  BuiltInPinTypeName,
 } from "./pin_types.js";
 export type {
   PinType,
@@ -48,6 +49,17 @@ export type {
   BundleMember,
   NamedPinTypeImportPath,
   PinFlow,
+  BuiltInPinTypeName,
+  PinAnnotationName,
+  DeclaredPinType,
+  PinAnnotations,
+  PinNumberRange,
+  ImageOutputPortFrameRate,
+  ImageStreamFrameRate,
+  ChannelsOutputPortSampleRate,
+  ChannelsOutputPortSampleType,
+  ArrayOutputPortResidency,
+  PinProjectAssetAnnotation,
   BooleanPinValue,
   IntegerPinValue,
   FloatPinValue,
@@ -62,16 +74,6 @@ export type {
   BundlePinValue,
   NodeReferenceInConfig,
   PinDeclaration,
-  DeclaredPinType,
-  PinAnnotations,
-  PinNumberRange,
-  ImageOutputPortFrameRate,
-  ImageStreamFrameRate,
-  ChannelsOutputPortSampleRate,
-  ChannelsOutputPortSampleType,
-  ArrayOutputPortResidency,
-  PinProjectAssetAnnotation,
-  BuiltInPinTypeName,
 } from "./pin_types.js";
 
 /**
@@ -1346,6 +1348,8 @@ export type PinLinkWarningOnTheWire = {
   warning: "menu_options_the_input_does_not_list";
 } | {
   warning: "texture_output_states_no_format";
+} | {
+  warning: "type_found_only_once_placed";
 };
 
 /**
@@ -2253,6 +2257,120 @@ export interface ConvertNodeToInsertOnTheWire {
    * The type that output gives.
    */
   output_pin_type: PinType;
+}
+
+/**
+ * `check_link_candidates`'s params: one placed end and the ends of the other direction it is
+ * judged against.
+ */
+export interface CheckLinkCandidatesRequest {
+  /**
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
+   */
+  stream: string;
+  /**
+   * The subgraph the links would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused.
+   */
+  level?: Array<string> | null;
+  /**
+   * The placed end each candidate is judged against.
+   */
+  from: LinkCandidatesFrom;
+  /**
+   * The candidate ends.
+   */
+  among: LinkCandidatesAmong;
+  /**
+   * Whether a candidate `connect` would refuse is listed too, with the refusal it would answer; false or omitted lists only the candidates that connect.
+   */
+  include_refused?: boolean;
+}
+
+/**
+ * The placed end `check_link_candidates` judges each candidate against, by its direction.
+ */
+export type LinkCandidatesFrom = {
+  output: StreamGraphActionLinkEnd;
+} | {
+  input: StreamGraphActionLinkEnd;
+};
+
+/**
+ * The candidate ends `check_link_candidates` judges, each of the direction other than its
+ * placed end's.
+ */
+export type LinkCandidatesAmong = "placed_ports" | "node_type_ports" | {
+  ends: Array<LinkCandidateEnd>;
+};
+
+/**
+ * One end `check_link_candidates` judges its placed end against, of the other direction.
+ */
+export type LinkCandidateEnd = {
+  /**
+   * The node, by the UUID `graph` lists as its `id`.
+   */
+  node: string;
+  /**
+   * The port's name, as `graph` lists it under the node's `ports`.
+   */
+  port: string;
+  kind: "placed_port";
+} | {
+  /**
+   * The node type, by the import path `add_node` takes as its `type`.
+   */
+  node_type: string;
+  /**
+   * The port's name, as the node type declares it.
+   */
+  port: string;
+  kind: "node_type_port";
+};
+
+/**
+ * `check_link_candidates`'s answer: for each candidate end, in the order judged, what
+ * `check_link` would answer for its link with the placed end.
+ */
+export interface LinkCandidatesCheckResult {
+  /**
+   * Each candidate checked; one `connect` would refuse is listed only when the request set
+   * `include_refused`.
+   */
+  candidates: Array<LinkCandidateChecked>;
+  /**
+   * Each candidate whose link is not checked yet, as `check_link` would not check it.
+   */
+  not_checked?: Array<LinkCandidateNotChecked>;
+}
+
+/**
+ * One candidate end and what `check_link` would answer for the link between it and the placed
+ * end.
+ */
+export interface LinkCandidateChecked {
+  /**
+   * The candidate end.
+   */
+  end: LinkCandidateEnd;
+  /**
+   * What `check_link` would answer for the link.
+   */
+  check: LinkCheckResult;
+}
+
+/**
+ * One candidate end whose link `check_link` would not check yet, and why.
+ */
+export interface LinkCandidateNotChecked {
+  /**
+   * The candidate end.
+   */
+  end: LinkCandidateEnd;
+  /**
+   * Why the link is not checked yet, in the runtime's words.
+   */
+  why: string;
 }
 
 /**
@@ -4690,6 +4808,508 @@ export interface NodeModuleNotReadable {
 }
 
 /**
+ * `list_pin_types`' params.
+ */
+export interface ListPinTypesRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+}
+
+/**
+ * `list_pin_types`' answer: every built-in pin type.
+ */
+export interface ListPinTypesToolResult {
+  /**
+   * Each built-in pin type, in the order the contract's `x-pin-types` lists them.
+   */
+  pin_types: Array<PinTypeListed>;
+}
+
+/**
+ * One built-in pin type: the contract's row for it, and what converts it on this runtime.
+ */
+export interface PinTypeListed {
+  /**
+   * Its name: the `type` tag of its pin type.
+   */
+  name: BuiltInPinTypeName;
+  /**
+   * The words a person reads for it.
+   */
+  label: string;
+  /**
+   * What it carries, in a sentence or two.
+   */
+  documentation: string;
+  /**
+   * The flows a pin of it may state, its default first.
+   */
+  flows: Array<PinFlow>;
+  /**
+   * The annotations a pin of it may state.
+   */
+  annotations: Array<PinAnnotationName>;
+  /**
+   * Each way a Python declaration writes it.
+   */
+  python_forms: Array<string>;
+  /**
+   * How the TypeScript SDK writes it: its name as a string literal.
+   */
+  typescript_form: string;
+  /**
+   * How a node declares a pin of a type built from another, a List or a bundle; absent on
+   * every type its name alone declares.
+   */
+  how_to_declare?: string | null;
+  /**
+   * The JSON Schema of its stored value, as the contract's components state it; absent on a
+   * type that stores no value. A described input states its own, with what its declaration
+   * adds folded in.
+   */
+  value_json_schema?: unknown;
+  /**
+   * Each conversion a node type of this runtime states from a pin of this type, which a link
+   * from it to the type converted to is made through.
+   */
+  converts_to: Array<PinTypeConversionListed>;
+}
+
+/**
+ * One conversion a node type states: its one wired input's type into its output's.
+ */
+export interface PinTypeConversionListed {
+  /**
+   * The type it takes.
+   */
+  from: PinType;
+  /**
+   * The type it gives.
+   */
+  to: PinType;
+  /**
+   * The node type that converts, what `add_node` takes.
+   */
+  node_type: string;
+}
+
+/**
+ * `list_node_types`' params.
+ */
+export interface ListNodeTypesRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+}
+
+/**
+ * `list_node_types`' answer: what a project and each source it draws node code from offer.
+ */
+export interface ListNodeTypesToolResult {
+  /**
+   * The project directory, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The project's UUID, from its `tatolab-project.json`.
+   */
+  project: string;
+  /**
+   * The project's name.
+   */
+  project_name: string;
+  /**
+   * The project first, then each import, then each installed distribution, then the node
+   * types the runtime brings itself.
+   */
+  sources: Array<NodeTypeSourceListed>;
+}
+
+/**
+ * One source's node types, graph generators, and the modules of it that could not be read.
+ */
+export type NodeTypeSourceListed = {
+  /**
+   * Each node type it declares; `describe_node_types` answers their inputs and outputs.
+   */
+  node_types: Array<NodeTypeListed>;
+  /**
+   * Each `@graph_generator` it declares, by import path.
+   */
+  graph_generators: Array<GraphGeneratorListed>;
+  /**
+   * Each module that does not parse, with why and where; the rest of the source still lists.
+   */
+  unreadable_modules: Array<NodeModuleNotReadable>;
+} & ({
+  source: "project";
+} | ({
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * Its folder under `imports/`.
+   */
+  folder: string;
+  /**
+   * The version its copy carried.
+   */
+  version: string;
+  /**
+   * The imported project's name as the project file in its folder holds it; `null` when
+   * that file does not read.
+   */
+  project_name?: string | null;
+  source: "dependency";
+}) | {
+  /**
+   * The distribution's name.
+   */
+  distribution: string;
+  /**
+   * The distribution's version.
+   */
+  distribution_version: string;
+  source: "installed_distribution";
+} | {
+  source: "built_in";
+});
+
+/**
+ * One node type a source offers.
+ */
+export interface NodeTypeListed {
+  /**
+   * The type `add_node` takes: its import path, `<module>:<qualname>`.
+   */
+  node_type: string;
+  /**
+   * The first line of its description; empty when it declares none.
+   */
+  documentation: string;
+  /**
+   * The group it is filed under, a path where the group is inside another, as
+   * `Effects/Stylize`; null when it declares none, or where its declaration source does not
+   * show it.
+   */
+  category?: string | null;
+  /**
+   * How its code runs; null for an entry point whose declaration source does not show it.
+   */
+  kind?: NodeTypeKind | null;
+  /**
+   * Where the runtime's description of it comes from.
+   */
+  described_from: NodeTypeDescribedFrom;
+}
+
+/**
+ * How a node type's code runs.
+ */
+export type NodeTypeKind = "process" | "function" | "shader";
+
+/**
+ * Where the runtime's description of a node type comes from.
+ */
+export type NodeTypeDescribedFrom = "built_in" | "source" | "interpreter";
+
+/**
+ * One `@graph_generator` as its declaration states it in source.
+ */
+export interface GraphGeneratorListed {
+  /**
+   * The import path `import_graph_generator` takes: `<module>:<function>`.
+   */
+  generator: string;
+  /**
+   * Its docstring.
+   */
+  description: string;
+  /**
+   * Each parameter after the builder: a setting the fragment promotes.
+   */
+  promoted_settings: Array<GraphGeneratorPromotedSettingReadFromSource>;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line of its `def`.
+   */
+  line: number;
+}
+
+/**
+ * `describe_node_types`' params.
+ */
+export interface DescribeNodeTypesRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The node types to describe, each as `list_node_types` names it under `node_type`.
+   */
+  node_types: Array<string>;
+}
+
+/**
+ * `describe_node_types`' answer: each node type named, in the order named.
+ */
+export interface DescribeNodeTypesToolResult {
+  /**
+   * Each node type named, described, or with why it could not be.
+   */
+  node_types: Array<NodeTypeDescribedOrWhyNot>;
+}
+
+/**
+ * One node type named: its description, or why the runtime has none.
+ */
+export type NodeTypeDescribedOrWhyNot = NodeTypeDescription | NodeTypeNotDescribed;
+
+/**
+ * One node type's inputs and outputs, as the best description the runtime has states them.
+ */
+export type NodeTypeDescription = {
+  /**
+   * The type `add_node` takes.
+   */
+  node_type: string;
+  /**
+   * Where this description comes from.
+   */
+  described_from: NodeTypeDescribedFrom;
+  /**
+   * What it does, as it describes itself.
+   */
+  documentation: string;
+  /**
+   * The group it is filed under; null when it declares none.
+   */
+  category?: string | null;
+  /**
+   * How its code runs; null where its declaration source does not show it.
+   */
+  kind?: NodeTypeKind | null;
+  /**
+   * Where it is declared, its path relative to its source's root; absent on a built-in.
+   */
+  declared_at?: ProjectFilePlaceOnTheWire | null;
+  /**
+   * Every input: each port that takes a wire, then each setting, which takes a value only.
+   */
+  inputs: Array<NodeTypeInputDescribed>;
+  /**
+   * Every output.
+   */
+  outputs: Array<NodeTypePortDescribed>;
+  /**
+   * The settings of a node type not yet typed that `set_exposed_config_fields` still takes;
+   * absent when it takes none. Served until the contract's version changes.
+   */
+  exposable_config_fields?: Array<string>;
+} & ({
+  source: "project";
+} | ({
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * Its folder under `imports/`.
+   */
+  folder: string;
+  /**
+   * The version its copy carried.
+   */
+  version: string;
+  /**
+   * The imported project's name as the project file in its folder holds it; `null` when
+   * that file does not read.
+   */
+  project_name?: string | null;
+  source: "dependency";
+}) | {
+  /**
+   * The distribution's name.
+   */
+  distribution: string;
+  /**
+   * The distribution's version.
+   */
+  distribution_version: string;
+  source: "installed_distribution";
+} | {
+  source: "built_in";
+});
+
+/**
+ * One input of a node type: a port, with what a value set on it must be.
+ */
+export interface NodeTypeInputDescribed {
+  /**
+   * The port's name, what a link end and `set_node_input_value` name it by.
+   */
+  name: string;
+  /**
+   * What it carries, as declared beside it.
+   */
+  documentation: string;
+  /**
+   * The type it carries, or how that type is found.
+   */
+  pin_type?: DeclaredPinType;
+  /**
+   * How its messages are read.
+   */
+  flow?: PinFlow;
+  /**
+   * What it states besides its type, none of which decides a link.
+   */
+  annotations?: PinAnnotations;
+  /**
+   * The port family a port of a node type not yet typed declares, with its family's keys.
+   * Served until the contract's version changes, for a client that reads no `pin_type`.
+   */
+  family?: unknown;
+  /**
+   * A function or shader port's annotation as its source writes it, where only source
+   * describes its node type. Served until the contract's version changes.
+   */
+  annotation?: string | null;
+  /**
+   * Whether it takes a wire, a stored value or both; absent where only source describes its
+   * node type.
+   */
+  mode?: NodeTypeInputMode | null;
+  /**
+   * When the node reads a setting: once at setup, a change rebuilding the node, or each run.
+   * Absent on an input that takes a wire.
+   */
+  read?: SettingReadTime | null;
+  /**
+   * The value it reads while nothing feeds it and no value is set, null for an input that
+   * reads nothing by default; absent when it declares none.
+   */
+  default_value?: unknown;
+  /**
+   * Whether a value set live on it outlives Stop. Absent where only source describes its
+   * node type.
+   */
+  lifetime?: NodeValueLifetime | null;
+  /**
+   * The JSON Schema a value set on it must satisfy, its range folded in; absent on an input
+   * that holds no stored value and where its type is found with the graph.
+   */
+  value_json_schema?: unknown;
+}
+
+/**
+ * Whether an input takes a wire, a stored value, or both.
+ */
+export type NodeTypeInputMode = "wire_or_value" | "wire_only" | "setting_only";
+
+/**
+ * When a node reads a setting-only input.
+ */
+export type SettingReadTime = "at_setup" | "each_run";
+
+/**
+ * How long a value set live on an input lives, as the input declares it, or a `GraphInput`'s
+ * config for the value it publishes.
+ */
+export type NodeValueLifetime = "kept" | "reset";
+
+/**
+ * One port of a node type: its name, what it carries and how it is typed.
+ */
+export interface NodeTypePortDescribed {
+  /**
+   * The port's name, what a link end and `set_node_input_value` name it by.
+   */
+  name: string;
+  /**
+   * What it carries, as declared beside it.
+   */
+  documentation: string;
+  /**
+   * The type it carries, or how that type is found.
+   */
+  pin_type?: DeclaredPinType;
+  /**
+   * How its messages are read.
+   */
+  flow?: PinFlow;
+  /**
+   * What it states besides its type, none of which decides a link.
+   */
+  annotations?: PinAnnotations;
+  /**
+   * The port family a port of a node type not yet typed declares, with its family's keys.
+   * Served until the contract's version changes, for a client that reads no `pin_type`.
+   */
+  family?: unknown;
+  /**
+   * A function or shader port's annotation as its source writes it, where only source
+   * describes its node type. Served until the contract's version changes.
+   */
+  annotation?: string | null;
+}
+
+/**
+ * A node type named that the runtime could not describe.
+ */
+export type NodeTypeNotDescribed = {
+  /**
+   * The type named.
+   */
+  node_type: string;
+  /**
+   * Why it could not be described, with the call that checks its code when the runtime
+   * serves one.
+   */
+  not_described_because: ProjectActionRefusalOnTheWire;
+} & ({
+  source: "project";
+} | ({
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * Its folder under `imports/`.
+   */
+  folder: string;
+  /**
+   * The version its copy carried.
+   */
+  version: string;
+  /**
+   * The imported project's name as the project file in its folder holds it; `null` when
+   * that file does not read.
+   */
+  project_name?: string | null;
+  source: "dependency";
+}) | {
+  /**
+   * The distribution's name.
+   */
+  distribution: string;
+  /**
+   * The distribution's version.
+   */
+  distribution_version: string;
+  source: "installed_distribution";
+} | {
+  source: "built_in";
+});
+
+/**
  * `list_project_views`'s params.
  */
 export interface ListProjectViewsRequest {
@@ -5587,11 +6207,6 @@ export type NodeInputMode = {
 };
 
 /**
- * When a node reads a setting-only input.
- */
-export type SettingReadTime = "at_setup" | "each_run";
-
-/**
  * What a module's `node_ui/tatolab_node_ui.json` registers.
  */
 export interface NodeUiManifest {
@@ -5747,6 +6362,13 @@ export interface ControlContractComponents {
   LinkCheckResult: LinkCheckResult;
   PinLinkOutcomeOnTheWire: PinLinkOutcomeOnTheWire;
   ConvertNodeToInsertOnTheWire: ConvertNodeToInsertOnTheWire;
+  CheckLinkCandidatesRequest: CheckLinkCandidatesRequest;
+  LinkCandidatesFrom: LinkCandidatesFrom;
+  LinkCandidatesAmong: LinkCandidatesAmong;
+  LinkCandidateEnd: LinkCandidateEnd;
+  LinkCandidatesCheckResult: LinkCandidatesCheckResult;
+  LinkCandidateChecked: LinkCandidateChecked;
+  LinkCandidateNotChecked: LinkCandidateNotChecked;
   ImportGraphGeneratorRequest: ImportGraphGeneratorRequest;
   OneNodeGraphEditRequest: OneNodeGraphEditRequest;
   SetNodeConfigRequest: SetNodeConfigRequest;
@@ -5852,6 +6474,38 @@ export interface ControlContractComponents {
   GraphGeneratorReadFromSource: GraphGeneratorReadFromSource;
   GraphGeneratorPromotedSettingReadFromSource: GraphGeneratorPromotedSettingReadFromSource;
   NodeModuleNotReadable: NodeModuleNotReadable;
+  ListPinTypesRequest: ListPinTypesRequest;
+  ListPinTypesToolResult: ListPinTypesToolResult;
+  PinTypeListed: PinTypeListed;
+  BuiltInPinTypeName: BuiltInPinTypeName;
+  PinAnnotationName: PinAnnotationName;
+  PinTypeConversionListed: PinTypeConversionListed;
+  ListNodeTypesRequest: ListNodeTypesRequest;
+  ListNodeTypesToolResult: ListNodeTypesToolResult;
+  NodeTypeSourceListed: NodeTypeSourceListed;
+  NodeTypeListed: NodeTypeListed;
+  NodeTypeKind: NodeTypeKind;
+  NodeTypeDescribedFrom: NodeTypeDescribedFrom;
+  GraphGeneratorListed: GraphGeneratorListed;
+  DescribeNodeTypesRequest: DescribeNodeTypesRequest;
+  DescribeNodeTypesToolResult: DescribeNodeTypesToolResult;
+  NodeTypeDescribedOrWhyNot: NodeTypeDescribedOrWhyNot;
+  NodeTypeDescription: NodeTypeDescription;
+  NodeTypeInputDescribed: NodeTypeInputDescribed;
+  DeclaredPinType: DeclaredPinType;
+  PinAnnotations: PinAnnotations;
+  PinNumberRange: PinNumberRange;
+  ImageOutputPortFrameRate: ImageOutputPortFrameRate;
+  ImageStreamFrameRate: ImageStreamFrameRate;
+  ChannelsOutputPortSampleRate: ChannelsOutputPortSampleRate;
+  ChannelsOutputPortSampleType: ChannelsOutputPortSampleType;
+  ArrayOutputPortResidency: ArrayOutputPortResidency;
+  PinProjectAssetAnnotation: PinProjectAssetAnnotation;
+  NodeTypeInputMode: NodeTypeInputMode;
+  SettingReadTime: SettingReadTime;
+  NodeValueLifetime: NodeValueLifetime;
+  NodeTypePortDescribed: NodeTypePortDescribed;
+  NodeTypeNotDescribed: NodeTypeNotDescribed;
   ListProjectViewsRequest: ListProjectViewsRequest;
   ListProjectViewsToolResult: ListProjectViewsToolResult;
   ProjectViewListed: ProjectViewListed;
@@ -5912,20 +6566,9 @@ export interface ControlContractComponents {
   BundlePinValue: BundlePinValue;
   NodeReferenceInConfig: NodeReferenceInConfig;
   PinDeclaration: PinDeclaration;
-  DeclaredPinType: DeclaredPinType;
-  PinAnnotations: PinAnnotations;
-  PinNumberRange: PinNumberRange;
-  ImageOutputPortFrameRate: ImageOutputPortFrameRate;
-  ImageStreamFrameRate: ImageStreamFrameRate;
-  ChannelsOutputPortSampleRate: ChannelsOutputPortSampleRate;
-  ChannelsOutputPortSampleType: ChannelsOutputPortSampleType;
-  ArrayOutputPortResidency: ArrayOutputPortResidency;
-  PinProjectAssetAnnotation: PinProjectAssetAnnotation;
   NodeInputMode: NodeInputMode;
-  SettingReadTime: SettingReadTime;
   NodeUiManifest: NodeUiManifest;
   NodeUiManifestControl: NodeUiManifestControl;
-  BuiltInPinTypeName: BuiltInPinTypeName;
   NodeUiManifestNodeBody: NodeUiManifestNodeBody;
 }
 
@@ -6076,6 +6719,17 @@ export interface ControlOperations {
   check_link: {
     params: CheckLinkRequest;
     result: LinkCheckResult;
+  };
+  /**
+   * Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.
+   *
+   * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, as `check_link` refuses it, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
+   *
+   * Since contract version 3, experimental.
+   */
+  check_link_candidates: {
+    params: CheckLinkCandidatesRequest;
+    result: LinkCandidatesCheckResult;
   };
   /**
    * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
@@ -6670,15 +7324,48 @@ export interface ControlOperations {
     result: ProjectCodeCheckResult;
   };
   /**
-   * List the node types a project offers, from its own node files and the packages it installs.
+   * List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.
    *
-   * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
+   * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.
    *
    * Since contract version 1, stable.
    */
   list_project_node_types: {
     params: ListProjectNodeTypesRequest;
     result: ListProjectNodeTypesToolResult;
+  };
+  /**
+   * List every built-in pin type, how each is written, and what converts it.
+   *
+   * List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` refuses a link that needs a conversion, so a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.
+   *
+   * Since contract version 3, experimental.
+   */
+  list_pin_types: {
+    params: ListPinTypesRequest;
+    result: ListPinTypesToolResult;
+  };
+  /**
+   * List the node types and graph generators a project offers, by the source each comes from.
+   *
+   * List the node types and graph generators a project offers, each under `sources` by `source`: the project's own node code outside `imports/` (`project`), each import as its folder holds it now (`dependency`, with its `project`, `folder`, `version` and `project_name`), each installed distribution that declares `tatolab.nodes` entry points (`installed_distribution`, with its `distribution` and `distribution_version`), then the node types the runtime brings itself (`built_in`). Project code is read from source without running it. Each node type has its `node_type` (what `add_node` and `describe_node_types` take), the first line of its description as `documentation`, its `category`, its `kind` (`process`, `function` or `shader`) and `described_from`, where the runtime's description of it comes from: `built_in`, `source`, or `interpreter` when a loaded stream of the project described it in its own interpreter. `describe_node_types` answers each one's inputs and outputs. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, where it is declared, and the settings it promotes as `promoted_settings`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
+   *
+   * Since contract version 3, experimental.
+   */
+  list_node_types: {
+    params: ListNodeTypesRequest;
+    result: ListNodeTypesToolResult;
+  };
+  /**
+   * Describe the inputs and outputs of the node types named, each with its pin type.
+   *
+   * Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`), its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow` and states its `family`, and a function or shader port read from source its `annotation`; its settings are listed after its ports as `setting_only` inputs, and those `set_exposed_config_fields` takes as `exposable_config_fields`. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.
+   *
+   * Since contract version 3, experimental.
+   */
+  describe_node_types: {
+    params: DescribeNodeTypesRequest;
+    result: DescribeNodeTypesToolResult;
   };
   /**
    * List the Tato Studio views a project brings.
@@ -6869,7 +7556,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 11;
+export declare const CONTROL_CONTRACT_REVISION: 13;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

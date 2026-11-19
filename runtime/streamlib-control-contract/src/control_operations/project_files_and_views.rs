@@ -8,7 +8,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     WriteStudioViewOutputToolResult,
 };
 
-use super::{EVERY_SURFACE, SetNodeInputValue};
+use super::{EVERY_SURFACE, ListNodeTypes, SetNodeInputValue};
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
     ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
@@ -120,8 +120,8 @@ impl ControlOperation for ListProjectNodeTypes {
     type Request = ListProjectNodeTypesRequest;
     type Result = ListProjectNodeTypesToolResult;
     const METHOD_NAME: &'static str = "list_project_node_types";
-    const ONE_LINE_DOC: &'static str = "List the node types a project offers, from its own node files and the packages it installs.";
-    const AGENT_USAGE_NOTE: &'static str = "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.";
+    const ONE_LINE_DOC: &'static str = "List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.";
+    const AGENT_USAGE_NOTE: &'static str = "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::NodeType;
@@ -129,6 +129,7 @@ impl ControlOperation for ListProjectNodeTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const REPLACED_BY: Option<&'static str> = Some(ListNodeTypes::METHOD_NAME);
 }
 
 /// `list_project_views`: list the Tato Studio views a project brings.

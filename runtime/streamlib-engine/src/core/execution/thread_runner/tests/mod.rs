@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::core::execution::node_scheduling_loop::{
-    ContinuousLoopWaitOutcome, PAUSE_CHECK_INTERVAL, ReactiveLoopFdWaiter, ReactiveLoopWakeOutcome,
-    next_continuous_deadline_ns, wait_for_a_deadline_or_a_control,
+    ContinuousLoopWaitOutcome, PAUSE_CHECK_INTERVAL, ReactiveLoopFdWaiter, ReactiveLoopWaitedFds,
+    ReactiveLoopWakeOutcome, next_continuous_deadline_ns, wait_for_a_deadline_or_a_control,
 };
 use crate::core::graph::{NodeState, ShutdownChannelComponent};
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
@@ -478,14 +478,17 @@ fn a_drained_listener_waits_for_the_next_send_however_many_came_before() {
         crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
             .unwrap(),
     );
-    let waiter = ReactiveLoopFdWaiter::new(
-        input_mailboxes
-            .listener_fd()
-            .expect("the listener was just installed"),
-        1,
-        None,
-    )
-    .expect("the readiness queue registers the listener fd");
+    let waiter = ReactiveLoopFdWaiter::new(ReactiveLoopWaitedFds {
+        listener: Some((
+            input_mailboxes
+                .listener_fd()
+                .expect("the listener was just installed"),
+            1,
+        )),
+        reactive_loop_wake_fd: input_mailboxes.reactive_loop_wake_fd(),
+        control_arrival_fd: None,
+    })
+    .expect("the readiness queue registers the listener fd and the mailboxes' wake");
     let node = Arc::new(Mutex::new(instance));
 
     for _ in 0..8192 {
@@ -529,11 +532,11 @@ impl ListenerWaiterFixture {
             crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
                 .unwrap();
         let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
-        let waiter = ReactiveLoopFdWaiter::new(
-            listener_fd_of(&listener),
-            1,
-            Some(shutdown_wake_fd.as_raw_fd()),
-        )
+        let waiter = ReactiveLoopFdWaiter::new(ReactiveLoopWaitedFds {
+            listener: Some((listener_fd_of(&listener), 1)),
+            reactive_loop_wake_fd: None,
+            control_arrival_fd: Some(shutdown_wake_fd.as_raw_fd()),
+        })
         .expect("the readiness queue registers both fds");
         Self {
             _node: node,
@@ -944,3 +947,5 @@ fn a_continuous_loop_behind_the_step_barrier_sends_a_kept_message() {
     );
     assert_eq!(received.as_deref(), Some(&b"the value"[..]));
 }
+
+mod trigger_reads;

@@ -4,6 +4,8 @@
 //! Execution configuration and runtime loop.
 
 pub mod node_scheduling_loop;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod readable_wake_descriptor;
 pub mod thread_runner;
 
 pub use streamlib_node_schema::{ExecutionConfig, ProcessExecution, ThreadPriority};

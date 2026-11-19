@@ -8,7 +8,7 @@ use super::*;
 
 /// A venv interpreter whose node type listing keeps the request it was sent in
 /// `listing-request.json` and prints `listing.json`, which a test writes first.
-const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._project_node_type_listing_entry*) cat > listing-request.json; cat listing.json ;;\nesac\nexit 0\n";
+pub(super) const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._project_node_type_listing_entry*) cat > listing-request.json; cat listing.json ;;\nesac\nexit 0\n";
 
 /// Project `cell` imports project `arm`: the listing is sent the Python files of `arm`'s folder
 /// under `imports/` as they are on disk and nothing else of it, and answers each source as the

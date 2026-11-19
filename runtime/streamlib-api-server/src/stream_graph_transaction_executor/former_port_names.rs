@@ -14,7 +14,7 @@ use super::*;
 /// The current name of the port `name` names in `direction` on a node of `node_type`, as
 /// `stream_operations` resolves the type: the port's own name, also when `name` is one it had;
 /// `name` as it is when it is current, finds no port, or no type is known.
-pub(super) fn the_current_name_of_a_port(
+pub(crate) fn the_current_name_of_a_port(
     name: String,
     direction: PortDirection,
     node_type: Option<String>,

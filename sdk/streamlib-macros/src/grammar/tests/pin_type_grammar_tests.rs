@@ -200,3 +200,35 @@ fn a_windowed_input_whose_pins_default_skips_messages_is_refused() {
         "got: {msg}"
     );
 }
+
+#[test]
+fn a_trigger_port_carries_records_flows_as_a_trigger_and_reads_ordered_alone() {
+    let schema = parse_ok(quote! {
+        execution = reactive,
+        input("go", pin_type = Trigger),
+        input("stated", pin_type = Trigger, delivery_profile = "ordered"),
+        output("fired", pin_type = Trigger),
+    })
+    .to_node_schema();
+    for port in schema.inputs.iter().chain(&schema.outputs) {
+        assert_eq!(port.pin_type, Some(PinType::Trigger {}), "{}", port.name);
+        assert_eq!(port.family.family, PortFamily::Records, "{}", port.name);
+    }
+
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("go", pin_type = Trigger, delivery_profile = "newest"),
+    });
+    assert!(
+        msg.contains("input port `go` is a Trigger and states the delivery profile `newest`"),
+        "got: {msg}"
+    );
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("go", pin_type = Trigger, flow = Value),
+    });
+    assert!(
+        msg.contains("states the flow `value`, which the Trigger type does not allow"),
+        "got: {msg}"
+    );
+}

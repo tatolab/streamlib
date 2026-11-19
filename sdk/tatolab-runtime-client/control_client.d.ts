@@ -68,6 +68,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   check_link(params: ControlOperations["check_link"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["check_link"]["result"]>;
   /**
+   * Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.
+   */
+  check_link_candidates(params: ControlOperations["check_link_candidates"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["check_link_candidates"]["result"]>;
+  /**
    * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
    */
   import_graph_generator(params: ControlOperations["import_graph_generator"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["import_graph_generator"]["result"]>;
@@ -284,9 +288,21 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   check_project_code(params: ControlOperations["check_project_code"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["check_project_code"]["result"]>;
   /**
-   * List the node types a project offers, from its own node files and the packages it installs.
+   * List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.
    */
   list_project_node_types(params: ControlOperations["list_project_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_types"]["result"]>;
+  /**
+   * List every built-in pin type, how each is written, and what converts it.
+   */
+  list_pin_types(params: ControlOperations["list_pin_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_pin_types"]["result"]>;
+  /**
+   * List the node types and graph generators a project offers, by the source each comes from.
+   */
+  list_node_types(params: ControlOperations["list_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_node_types"]["result"]>;
+  /**
+   * Describe the inputs and outputs of the node types named, each with its pin type.
+   */
+  describe_node_types(params: ControlOperations["describe_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["describe_node_types"]["result"]>;
   /**
    * List the Tato Studio views a project brings.
    */

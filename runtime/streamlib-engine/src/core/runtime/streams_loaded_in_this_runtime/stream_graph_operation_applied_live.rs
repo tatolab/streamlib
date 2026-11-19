@@ -1,15 +1,17 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use streamlib_project_repository::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphDocumentLink, StreamGraphOperation, is_a_graph_interface_node_type,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    is_a_graph_interface_node_type,
 };
 
 use uuid::Uuid;
 
-use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassImportPath, PortDescriptor};
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
@@ -20,12 +22,17 @@ use crate::core::graph::{
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
-use crate::core::runtime::operations::{RuntimeOperations, WhatALiveConnectMakesOfALink};
-use crate::core::runtime::operations_runtime::{
-    ConfigReferencesOfTheAddedNode, describe_the_type_an_add_names_when_it_must,
-    the_verdict_connect_takes_on_a_link,
+use crate::core::compiler::compiler_ops::node_interpreter_describe::a_node_interpreter_describes;
+use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::runtime::operations::{
+    ANodeTypesPort, RuntimeOperations, WhatALiveConnectMakesOfALink,
 };
-use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
+use crate::core::runtime::operations_runtime::{
+    ALinkEndTheGraphHolds, ANodeTypesPortToJudge, ConfigReferencesOfTheAddedNode,
+    describe_the_type_an_add_names_when_it_must, the_verdict_connect_takes_on_a_link,
+    the_verdicts_connect_takes_on_links_with_node_types_ports,
+};
+use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 
 impl LoadedStreamInThisRuntime {
     /// Apply `graph_operation` to the live graph, each port it names under its current name,
@@ -491,6 +498,84 @@ impl LoadedStreamInThisRuntime {
             .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
     }
 
+    /// What a connect of each link between `held`, an end of the live graph by its node's UUID
+    /// and of `held_direction`, and one of `node_types_ports` would make of it, in their order,
+    /// were a node of the type placed: judged as [`Self::what_a_connect_makes_of_the_link`]
+    /// judges a link, and made nowhere, the graph's lock taken once for them all. Nothing is
+    /// described or registered: a type the stream has not described yet is judged only once a
+    /// node of it is placed, as is a port of a type whose nodes run as no node of their own, a
+    /// fragment or a graph interface naming no family, and each link with an end at a node the
+    /// graph as drawn holds and no node runs as.
+    pub(crate) fn what_a_connect_makes_of_links_with_node_types_ports(
+        &self,
+        held: &StreamGraphDocumentLinkEnd,
+        held_direction: PortDirection,
+        node_types_ports: &[ANodeTypesPort<'_>],
+    ) -> Result<Vec<Result<WhatALiveConnectMakesOfALink>>> {
+        let node_run_id = match self.the_node_of_the_node(held.node) {
+            Ok(node_run_id) => node_run_id,
+            Err(refusal) => {
+                let drawn =
+                    StreamGraphDocument::from_value(self.to_json()?).map_err(Error::GraphError)?;
+                if !drawn.nodes().iter().any(|node| node.id == held.node) {
+                    return Err(refusal);
+                }
+                return Ok(node_types_ports
+                    .iter()
+                    .map(|_| Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade))
+                    .collect());
+            }
+        };
+        let held = match held_direction {
+            PortDirection::Output => {
+                ALinkEndTheGraphHolds::Output(OutputLinkPortRef::new(node_run_id, &held.port))
+            }
+            PortDirection::Input => {
+                ALinkEndTheGraphHolds::Input(InputLinkPortRef::new(node_run_id, &held.port))
+            }
+        };
+        let node_types = self.node_types_this_stream_resolves();
+        let mut answers = Vec::with_capacity(node_types_ports.len());
+        let mut to_judge = Vec::new();
+        let mut ports_of_each_type = HashMap::new();
+        for port in node_types_ports {
+            match how_a_node_types_port_is_judged(
+                node_types,
+                &mut ports_of_each_type,
+                port,
+                held_direction.opposite(),
+            ) {
+                HowANodeTypesPortIsJudged::Answered(answer) => answers.push(Some(answer)),
+                HowANodeTypesPortIsJudged::OnAPlacedNode(port) => {
+                    to_judge.push(*port);
+                    answers.push(None);
+                }
+            }
+        }
+        if to_judge.is_empty() {
+            return Ok(answers.into_iter().flatten().collect());
+        }
+        let mut verdicts = the_verdicts_connect_takes_on_links_with_node_types_ports(
+            &self.compiler,
+            held,
+            to_judge,
+        )?
+        .into_iter();
+        let mut in_their_order = Vec::with_capacity(answers.len());
+        for answer in answers {
+            in_their_order.push(match answer {
+                Some(answer) => answer,
+                None => verdicts
+                    .next()
+                    .ok_or_else(|| {
+                        Error::GraphError("a node type's port was judged no verdict".into())
+                    })?
+                    .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new))),
+            });
+        }
+        Ok(in_their_order)
+    }
+
     /// The output and the input `link` names, each node by its UUID.
     fn the_ends_of_the_link(
         &self,
@@ -532,6 +617,70 @@ impl LoadedStreamInThisRuntime {
                 .map(|held| held.id.clone())
         }))
     }
+}
+
+/// How a link with a port of a node type is judged: answered before any node is placed, or on a
+/// node of the type placed for it.
+enum HowANodeTypesPortIsJudged {
+    /// Answered as it is: a type whose nodes run as no node of their own, one the stream has not
+    /// described yet, and one no node interpreter describes and the stream does not resolve.
+    Answered(Result<WhatALiveConnectMakesOfALink>),
+    /// Judged on a node of the type placed for it.
+    OnAPlacedNode(Box<ANodeTypesPortToJudge>),
+}
+
+/// How a link with `port`, of `direction`, is judged in a stream resolving `node_types`; the
+/// ports of `direction` each type declares are read from its descriptor once, into
+/// `ports_of_each_type`, and shared by every port of the type judged.
+fn how_a_node_types_port_is_judged(
+    node_types: &NodeTypesOneStreamResolves,
+    ports_of_each_type: &mut HashMap<NodeClassImportPath, Arc<[PortDescriptor]>>,
+    port: &ANodeTypesPort<'_>,
+    direction: PortDirection,
+) -> HowANodeTypesPortIsJudged {
+    let node_type = match NodeClassImportPath::new(port.node_type) {
+        Ok(node_type) => node_type,
+        Err(refusal) => {
+            return HowANodeTypesPortIsJudged::Answered(Err(Error::GraphError(format!(
+                "node type `{}`: {refusal}",
+                port.node_type
+            ))));
+        }
+    };
+    if node_type.as_str() == STREAM_FRAGMENT_NODE_TYPE
+        || is_a_graph_interface_node_naming_no_family(node_type.as_str(), &serde_json::Map::new())
+    {
+        return HowANodeTypesPortIsJudged::Answered(Ok(
+            WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade,
+        ));
+    }
+    let ports_of_its_direction = match ports_of_each_type.get(&node_type) {
+        Some(ports) => Arc::clone(ports),
+        None => {
+            let Some(descriptor) = node_types.descriptor(&node_type) else {
+                return HowANodeTypesPortIsJudged::Answered(
+                    if a_node_interpreter_describes(&node_type) {
+                        Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed)
+                    } else {
+                        Err(Error::UnknownNodeType { ident: node_type })
+                    },
+                );
+            };
+            let ports: Arc<[PortDescriptor]> = match direction {
+                PortDirection::Input => descriptor.inputs,
+                PortDirection::Output => descriptor.outputs,
+            }
+            .into();
+            ports_of_each_type.insert(node_type.clone(), Arc::clone(&ports));
+            ports
+        }
+    };
+    HowANodeTypesPortIsJudged::OnAPlacedNode(Box::new(ANodeTypesPortToJudge::of(
+        node_types,
+        node_type,
+        ports_of_its_direction,
+        port.port,
+    )))
 }
 
 /// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config

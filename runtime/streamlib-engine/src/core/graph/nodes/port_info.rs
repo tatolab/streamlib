@@ -129,6 +129,13 @@ impl PortInfo {
             .is_none_or(crate::core::descriptors::NodeInputMode::takes_a_wire)
     }
 
+    /// Whether this port is a Trigger, whose messages each carry an event and no value.
+    pub fn is_a_trigger(&self) -> bool {
+        self.pin
+            .as_ref()
+            .is_some_and(|pin| pin.flow == crate::core::descriptors::PinFlow::Trigger)
+    }
+
     /// Whether this input is a setting a node reads each run, whose value is set live apart
     /// from the graph.
     pub fn is_a_setting_read_each_run(&self) -> bool {

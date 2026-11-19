@@ -9,6 +9,7 @@ use crate::iceoryx2::input_port_message_payload::{BorrowedChannelSample, InputPo
 use crate::iceoryx2::loss_counters::InboundLinkDroppedBagCounter;
 use crate::iceoryx2::read_mode::ReadMode;
 
+use super::queued_trigger_fires::QueuedTriggerFire;
 use super::{
     BagBodyForTheReader, DataChannelPayloadDescriptorKind, InputMailboxesInner,
     InstalledInputPortAudioWindowing, MessageReadFromInputPort, SharedAudioWindowStage,
@@ -312,8 +313,14 @@ impl InputMailboxesInner {
     }
 
     /// The next message on `port`, its payload untouched, or `None` when the
-    /// mailbox is empty.
+    /// mailbox is empty. A fire queued on an unlinked Trigger input is read as the Trigger
+    /// message a link would deliver, stamped with the stream time it was fired at.
     pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
+        match self.take_a_queued_trigger_fire(port) {
+            QueuedTriggerFire::Taken(fire) => return Ok(Some(fire)),
+            QueuedTriggerFire::NoneWaitsOnAnInputWithNoLinkYet => return Ok(None),
+            QueuedTriggerFire::NeverFired => {}
+        }
         if let Some(island_port) = self.function_node_island_feeding(port) {
             return island_port.read_the_island_output(
                 self.a_message_waits_at_a_reader_input_port_of(&island_port),

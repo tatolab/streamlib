@@ -80,6 +80,15 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
         }
+        fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+            &'a self,
+            _held: &'a ::streamlib_project_repository::StreamGraphDocumentLinkEnd,
+            _held_direction: ::streamlib::sdk::error::PortDirection,
+            node_types_ports: &'a [::streamlib::sdk::runtime::ANodeTypesPort<'a>],
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'a, ::streamlib::sdk::error::Result<::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>>>> {
+            let answers = node_types_ports.iter().map(|_| Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))).collect();
+            Box::pin(async move { Ok(answers) })
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             node_type: &str,

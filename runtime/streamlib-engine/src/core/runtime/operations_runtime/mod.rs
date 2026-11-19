@@ -37,7 +37,8 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
 pub(super) use link_connected_between_two_ports::{
-    connect_impl, the_verdict_connect_takes_on_a_link,
+    ALinkEndTheGraphHolds, ANodeTypesPortToJudge, connect_impl,
+    the_verdict_connect_takes_on_a_link, the_verdicts_connect_takes_on_links_with_node_types_ports,
 };
 
 // =============================================================================
@@ -680,6 +681,21 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink> {
         self.what_a_connect_makes_of_the_link(link)
+    }
+
+    fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
+        &'a self,
+        held: &'a streamlib_project_repository::StreamGraphDocumentLinkEnd,
+        held_direction: crate::core::PortDirection,
+        node_types_ports: &'a [crate::core::runtime::ANodeTypesPort<'a>],
+    ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>> {
+        self.in_this_streams_log_route(async move {
+            self.what_a_connect_makes_of_links_with_node_types_ports(
+                held,
+                held_direction,
+                node_types_ports,
+            )
+        })
     }
 
     fn the_name_a_node_added_with_none_takes(

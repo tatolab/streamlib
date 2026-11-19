@@ -184,9 +184,20 @@ impl LocalApiMcpServerHandler {
             exported_live_graph_json(&stream_operations).await?,
         )
         .map_err(|e| McpError::internal_error(format!("graph export did not parse: {e}"), None))?;
-        let node_catalog = operations_on_the_loaded_streams
-            .node_catalog_of_the_stream_a_call_names(stream_id)
-            .map_err(|refusal| prompt_stream_refusal(&refusal))?;
+        // Off the async runtime: a stream that unloaded since the lookup above is held from its
+        // document for the read, which takes the stream-action lock.
+        let node_catalog = tokio::task::spawn_blocking({
+            let operations_on_the_loaded_streams = Arc::clone(operations_on_the_loaded_streams);
+            let stream_id = stream_id.to_owned();
+            move || {
+                operations_on_the_loaded_streams.node_catalog_of_the_stream_a_call_names(&stream_id)
+            }
+        })
+        .await
+        .map_err(|e| {
+            McpError::internal_error(format!("the node catalog read did not finish: {e}"), None)
+        })?
+        .map_err(|refusal| prompt_stream_refusal(&refusal))?;
         let stream_id_as_the_graph_reports_it = live_graph
             .stream
             .clone()

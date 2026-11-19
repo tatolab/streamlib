@@ -6,7 +6,6 @@
 //! applied live to the running streams alone.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -39,6 +38,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionToolResult,
     NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
+    SuggestedOperationCall,
 };
 use uuid::Uuid;
 
@@ -50,21 +50,25 @@ use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
 mod former_port_names;
+mod fragments_a_changed_module_defines;
+pub(crate) use fragments_a_changed_module_defines::the_refresh_of_each_fragment_a_changed_module_defines;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
+mod ports_of_the_node_a_refusal_names;
 mod request_application;
 mod request_to_graph_operation;
 mod streams_each_operation_names;
 pub(crate) use streams_each_operation_names::StreamsTheRuntimeHolds;
 mod transaction_answers;
 
+pub(crate) use former_port_names::the_current_name_of_a_port;
 use former_port_names::{
-    move_each_former_port_name, the_current_name_of_a_port,
-    the_link_ends_under_their_current_port_names,
+    move_each_former_port_name, the_link_ends_under_their_current_port_names,
     the_placed_streams_with_each_former_port_name_moved, the_request_under_the_current_port_names,
 };
 use input_value_sets::*;
+pub(crate) use request_to_graph_operation::the_node_a_connects_end_names;
 use request_to_graph_operation::{
     graph_operation_for_the_request, refuse_a_link_the_graph_already_holds,
     the_operation_a_connect_asks,
@@ -481,6 +485,7 @@ pub(crate) struct GraphTransactionRefusal {
     refused_operation_index: Option<usize>,
     what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
     refusal: GraphRequestRefusal,
+    suggested_call: Option<Box<SuggestedOperationCall>>,
 }
 
 impl GraphTransactionRefusal {
@@ -493,6 +498,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: Some(refused_operation_index),
             what_the_refused_operation_names: Box::new(what_the_refused_operation_names),
             refusal: refusal.into(),
+            suggested_call: None,
         }
     }
 
@@ -511,6 +517,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: None,
             what_the_refused_operation_names: Box::default(),
             refusal: refusal.into(),
+            suggested_call: None,
         }
     }
 
@@ -554,6 +561,7 @@ impl GraphTransactionRefusal {
             refused_operation_index: self.refused_operation_index,
             refused_link: what_the_refused_operation_names.link,
             refused_params_pointer,
+            suggested_call: self.suggested_call.map(|suggested| *suggested),
             ..code_and_place.on_the_refusal_of(tool_name, runtime_words)
         }
     }
@@ -594,8 +602,36 @@ impl StreamGraphTransactionExecutor<'_> {
                 .into_iter()
                 .unzip();
         let stream_locations = the_location_of_each_listed_stream(listings);
+        self.apply_to_the_streams_each_names(
+            requests,
+            &stream_id_of_each_request,
+            &stream_locations,
+            mode,
+            author,
+            idempotency_key,
+        )
+        .map_err(|refusal| {
+            self.suggesting_the_ports_of_the_node_type_a_port_not_found_names(
+                refusal,
+                &stream_id_of_each_request,
+                &stream_locations,
+            )
+        })
+    }
+
+    /// Apply `requests`, each on the stream of the same place in `stream_id_of_each_request`,
+    /// as one transaction by `author`.
+    fn apply_to_the_streams_each_names(
+        &self,
+        requests: Vec<StreamGraphAction>,
+        stream_id_of_each_request: &[String],
+        stream_locations: &HashMap<String, StreamLocation>,
+        mode: GraphEditMode,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+    ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
         let mut stream_ids_in_order: Vec<String> = Vec::new();
-        for stream_id in &stream_id_of_each_request {
+        for stream_id in stream_id_of_each_request {
             if !stream_ids_in_order.contains(stream_id) {
                 stream_ids_in_order.push(stream_id.clone());
             }
@@ -603,13 +639,13 @@ impl StreamGraphTransactionExecutor<'_> {
         if mode == GraphEditMode::Live {
             self.refuse_an_input_set_twice_in_a_live_transaction(
                 &requests,
-                &stream_id_of_each_request,
+                stream_id_of_each_request,
             )?;
         }
         if mode == GraphEditMode::Live
             && let Some(applied) = self.apply_input_values_set_live_apart_from_the_graph(
                 &requests,
-                &stream_id_of_each_request,
+                stream_id_of_each_request,
             )?
         {
             return Ok(applied);
@@ -617,7 +653,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let project_repository = match mode {
             GraphEditMode::Live => None,
             GraphEditMode::Commit => Some(
-                self.the_one_project_the_streams_belong_to(&stream_ids_in_order, &stream_locations)
+                self.the_one_project_the_streams_belong_to(&stream_ids_in_order, stream_locations)
                     .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             ),
         };
@@ -634,12 +670,12 @@ impl StreamGraphTransactionExecutor<'_> {
         let applied = self.apply_the_requests(
             requests
                 .into_iter()
-                .zip(stream_id_of_each_request)
+                .zip(stream_id_of_each_request.iter().cloned())
                 .collect(),
             mode,
             author,
             idempotency_key,
-            &stream_locations,
+            stream_locations,
             project_repository_held.as_deref_mut(),
         )?;
         if let Some(project_repository_held) = project_repository_held {
@@ -906,92 +942,6 @@ fn the_fragment_an_imported_stream_places(
     let fragment =
         the_fragment_a_stream_fragment_places(project_directory, fragment_node, held_stream)?;
     Ok((fragment, stream_name))
-}
-
-/// The module a project's Python file at `changed_file` is imported as: its path from the
-/// project directory, `/` read as `.`, a package's `__init__.py` as the package; `None` for a
-/// file that is no `.py` or lies outside the project.
-fn the_module_a_project_file_is_imported_as(
-    project_directory: &std::path::Path,
-    changed_file: &std::path::Path,
-) -> Option<String> {
-    let relative_file = if changed_file.is_absolute() {
-        changed_file.strip_prefix(project_directory).ok()?
-    } else {
-        changed_file
-    };
-    if relative_file.extension()? != "py" {
-        return None;
-    }
-    let mut module_parts: Vec<String> = relative_file
-        .with_extension("")
-        .components()
-        .map(|component| match component {
-            std::path::Component::Normal(part) => part.to_str().map(str::to_owned),
-            _ => None,
-        })
-        .collect::<Option<_>>()?;
-    if module_parts.last().is_some_and(|last| last == "__init__") {
-        module_parts.pop();
-    }
-    (!module_parts.is_empty()).then(|| module_parts.join("."))
-}
-
-/// An `import_graph_generator` for each top-level fragment of each loaded stream of the project
-/// at `project_directory` whose generator, or one nested in it, a module of `changed_files`
-/// defines, run with the promoted settings the fragment keeps.
-pub(crate) fn the_refresh_of_each_fragment_a_changed_module_defines(
-    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
-    project_repositories: &ProjectRepositoriesOpenInThisRuntime,
-    project_directory: &std::path::Path,
-    changed_files: &[PathBuf],
-) -> Result<Vec<StreamGraphAction>, ProjectRepositoryRefusal> {
-    let changed_modules: std::collections::HashSet<String> = changed_files
-        .iter()
-        .filter_map(|changed_file| {
-            the_module_a_project_file_is_imported_as(project_directory, changed_file)
-        })
-        .collect();
-    if changed_modules.is_empty() {
-        return Ok(Vec::new());
-    }
-    let project_repository = project_repositories.the_project_repository_at(project_directory)?;
-    let project_repository = project_repository.lock();
-    let project = project_repository.project_file().project;
-    let mut refreshes = Vec::new();
-    for listing in operations_on_the_loaded_streams.list_streams() {
-        let Some(stream_location) = listing.stream_location.filter(|stream_location| {
-            stream_location.project == project && listing.node_count.is_some()
-        }) else {
-            continue;
-        };
-        let staged_graph =
-            project_repository.stream_graph_document(stream_location.stream_asset)?;
-        for fragment_node in staged_graph.fragment_nodes() {
-            if fragment_node.node_type == STREAM_FRAGMENT_NODE_TYPE {
-                continue;
-            }
-            let defined_in_a_changed_module = fragment_node
-                .graph_generators_a_refresh_runs()
-                .iter()
-                .any(|generator| {
-                    generator
-                        .split_once(':')
-                        .is_some_and(|(module, _)| changed_modules.contains(module))
-                });
-            if !defined_in_a_changed_module {
-                continue;
-            }
-            refreshes.push(StreamGraphAction::ImportGraphGenerator {
-                stream: stream_location.stream_asset,
-                generator: fragment_node.node_type,
-                name: Some(fragment_node.name),
-                config: Some(fragment_node.input_values),
-                label: None,
-            });
-        }
-    }
-    Ok(refreshes)
 }
 
 #[cfg(test)]

@@ -72,6 +72,14 @@ impl PortDirection {
             Self::Output => "output",
         }
     }
+
+    /// The direction a link's other end has.
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::Input => Self::Output,
+            Self::Output => Self::Input,
+        }
+    }
 }
 
 impl std::fmt::Display for PortDirection {

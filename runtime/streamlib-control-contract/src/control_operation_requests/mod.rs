@@ -12,6 +12,7 @@ mod asset_and_stream_requests;
 mod dependency_requests;
 mod discovery_and_subscription_requests;
 mod graph_edit_requests;
+mod node_type_requests;
 mod playback_and_stream_action_requests;
 mod project_file_and_view_requests;
 mod project_lifecycle_requests;
@@ -36,13 +37,15 @@ pub use discovery_and_subscription_requests::{
     SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest,
 };
 pub use graph_edit_requests::{
-    AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkRequest,
-    CollapseSelectionIntoSubgraphRequest, ImportGraphGeneratorRequest, OneLinkGraphEditRequest,
-    OneNodeGraphEditRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
-    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
-    SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
-    TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest, WriteGraphInputRequest,
+    AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkCandidatesRequest, CheckLinkRequest,
+    CollapseSelectionIntoSubgraphRequest, ImportGraphGeneratorRequest, LinkCandidatesAmong,
+    LinkCandidatesFrom, OneLinkGraphEditRequest, OneNodeGraphEditRequest, RemoveGroupRequest,
+    RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
+    SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
+    SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
+    WriteGraphInputRequest,
 };
+pub use node_type_requests::{DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest};
 pub use playback_and_stream_action_requests::{
     OneStreamActionRequest, STREAM_ACTION_ARGUMENT_DESCRIPTION,
     STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION, SetStreamClockScaleRequest,

@@ -27,6 +27,7 @@ use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::{Error, Result};
 
+mod node_types_port_tests;
 mod texture_formats_tests;
 
 const FLOAT_SOURCE: &str = "VerdictCheckFloatSource";
