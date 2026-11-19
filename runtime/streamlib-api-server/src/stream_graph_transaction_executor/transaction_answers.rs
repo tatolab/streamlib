@@ -4,10 +4,12 @@
 use super::*;
 
 /// What the answer of a graph transaction names beside the operations it applied: the `as` of
-/// each node added, and each input value set that a link overrides.
+/// each node added, each input value set that a link overrides, and each node built again for a
+/// setting it reads at setup.
 pub(super) struct WhatAnAnswerNamesBesideItsOperations<'labels> {
     pub(super) labels_of_added_nodes: &'labels HashMap<Uuid, String>,
     pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    pub(super) nodes_rebuilt: Vec<GraphTransactionRebuiltNode>,
 }
 
 impl StreamGraphTransactionExecutor<'_> {
@@ -49,6 +51,7 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &HashMap::new(),
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
+                nodes_rebuilt: Vec::new(),
             },
         )
     }
@@ -63,6 +66,7 @@ impl StreamGraphTransactionExecutor<'_> {
         WhatAnAnswerNamesBesideItsOperations {
             labels_of_added_nodes,
             overridden_by_links,
+            nodes_rebuilt,
         }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
         let mut added_nodes = Vec::new();
@@ -158,7 +162,7 @@ impl StreamGraphTransactionExecutor<'_> {
             connected_links,
             added_groups,
             added_notes,
-            nodes_rebuilt: Vec::new(),
+            nodes_rebuilt,
             overridden_by_links,
         }
     }

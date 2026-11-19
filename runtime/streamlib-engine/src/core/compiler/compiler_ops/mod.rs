@@ -17,6 +17,7 @@ mod prepare_node_op;
 pub(crate) mod project_node_types_listed_from_source;
 pub(crate) mod python_node_declaration;
 pub(crate) mod python_node_declarations_checked_in_the_projects_interpreter;
+pub(crate) mod running_nodes_restarted;
 pub(crate) mod shader_node_island;
 pub(crate) mod shader_node_island_program;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -16,11 +16,11 @@ use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::LoadedStre
 use crate::core::context::{
     CaptureDeviceAccessPrompting, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
 };
-use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::input_values::{
     LiveInputValuesKeptInTheProjectStore, LiveInputValuesOfAStream,
 };
+use crate::core::graph::{NodeRunId, cast_exposed_name_to_url_safe};
 use crate::core::json_schema::ConfigNodeReferenceEdgeOnTheWire;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::nodes::NodeTypesOneStreamResolves;
@@ -149,6 +149,9 @@ pub struct LoadedStreamInThisRuntime {
     /// Each edit its graph document holds that its running graph did not take, as the
     /// diagnostic at the part it changes, until the stream is brought to its document.
     edits_its_document_holds_not_live: Mutex<Vec<DiagnosticOnTheWire>>,
+    /// Each running node a setting it reads at setup was set on since it was last built, once,
+    /// in the order they were set, so the edit that set them builds each again once.
+    pub(in crate::core::runtime) nodes_a_setting_read_at_setup_was_set_on: Mutex<Vec<NodeRunId>>,
 }
 
 /// What a loaded stream is keyed by and shown as: its id, its display name,
@@ -331,6 +334,7 @@ impl LoadedStreamInThisRuntime {
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
             is_held_stopped: AtomicBool::new(false),
             edits_its_document_holds_not_live: Mutex::new(Vec::new()),
+            nodes_a_setting_read_at_setup_was_set_on: Mutex::new(Vec::new()),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,

@@ -384,9 +384,10 @@ impl NodeInstanceFactory {
         Ok(())
     }
 
-    /// Register `descriptor` with `constructor` and a config check that takes any config.
-    #[cfg(test)]
-    pub(crate) fn register_with_a_constructor_for_a_test(
+    /// Register `descriptor` with `constructor` and a config check that takes any config, for a
+    /// test whose node type declares what no `#[node]` attribute states.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn register_with_a_constructor_for_a_test(
         &self,
         descriptor: NodeDescriptor,
         constructor: DynamicNodeConstructorFn,

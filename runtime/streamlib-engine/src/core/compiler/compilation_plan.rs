@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use super::compiler_ops::shader_node_island::RunningShaderNodesALiveEditRestarts;
+use super::compiler_ops::running_nodes_restarted::RunningNodesALiveEditRestarts;
 use crate::core::graph::{Graph, LinkUniqueId, NodeRunId, WhyTheNodeLeaves};
 
 /// Categorized operations ready for execution.
@@ -15,6 +15,8 @@ pub(super) struct CompilationPlan {
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
     pub(super) config_updates: Vec<(NodeRunId, serde_json::Value)>,
+    /// Each running node to stop and build again from the values its inputs hold, once.
+    pub(super) nodes_to_rebuild: Vec<NodeRunId>,
     /// Each function node to promote out of the islands of the reader whose
     /// helper it crashed, beside that reader and why.
     pub(super) function_node_promotions:
@@ -39,6 +41,7 @@ impl CompilationPlan {
             && self.links_to_add.is_empty()
             && self.links_to_remove.is_empty()
             && self.config_updates.is_empty()
+            && self.nodes_to_rebuild.is_empty()
             && self.function_node_promotions.is_empty()
     }
 
@@ -71,7 +74,7 @@ impl CompilationPlan {
     /// of its links to be wired again.
     pub(super) fn add_each_node_and_link_restarted(
         &mut self,
-        restarted: &RunningShaderNodesALiveEditRestarts,
+        restarted: &RunningNodesALiveEditRestarts,
     ) {
         for node_id in &restarted.nodes {
             if !self.nodes_to_add.contains(node_id) {

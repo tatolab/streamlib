@@ -7,12 +7,15 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Make each of `operations`, each by the loaded stream it changes, on that running stream,
     /// once the project's graph documents hold it. A running stream that refuses one holds it,
     /// and each later one of that stream, as an edit not live yet, which `graph` draws and its
-    /// diagnostics list until its playback stops and brings it to its document.
+    /// diagnostics list until its playback stops and brings it to its document. Each node a
+    /// setting it reads at setup was set on is then built again, and answered; one that fails
+    /// its setup is left in `Error` with its reason, since the documents already hold the edit.
     pub(super) fn make_live_what_the_documents_now_hold(
         &self,
         operations: Vec<(String, StreamGraphOperation)>,
-    ) {
+    ) -> Vec<GraphTransactionRebuiltNode> {
         let mut refusal_of_each_stream_that_refused: HashMap<String, String> = HashMap::new();
+        let mut streams_made_live: Vec<(String, Arc<dyn RuntimeOperations>)> = Vec::new();
         for (stream_id, operation) in operations {
             let stream_operations = match self
                 .operations_on_the_loaded_streams
@@ -29,6 +32,9 @@ impl StreamGraphTransactionExecutor<'_> {
                     continue;
                 }
             };
+            if !streams_made_live.iter().any(|(held, _)| *held == stream_id) {
+                streams_made_live.push((stream_id.clone(), Arc::clone(&stream_operations)));
+            }
             if let Some(refusal) = refusal_of_each_stream_that_refused.get(&stream_id) {
                 stream_operations.hold_an_edit_its_document_holds_not_live(
                     &operation,
@@ -52,6 +58,46 @@ impl StreamGraphTransactionExecutor<'_> {
                     .hold_an_edit_its_document_holds_not_live(&held_if_refused, &refusal);
                 refusal_of_each_stream_that_refused.insert(stream_id, refusal);
             }
+        }
+        self.build_again_each_node_a_setting_was_set_on(&streams_made_live)
+            .unwrap_or_else(|not_built_again| {
+                tracing::warn!(
+                    %not_built_again,
+                    "the project's graph documents hold a setting a node reads at setup, and the \
+                     node built again with it failed its setup; it is left in Error"
+                );
+                Vec::new()
+            })
+    }
+
+    /// Build again, on each of `streams` by its stream id, each running node a setting it reads
+    /// at setup was set on since the last build, once each, and wait for each one's setup.
+    /// Answers each node built again by its stream; refuses with the reason of each node that
+    /// failed its setup, left in `Error`, once every stream is built.
+    pub(super) fn build_again_each_node_a_setting_was_set_on(
+        &self,
+        streams: &[(String, Arc<dyn RuntimeOperations>)],
+    ) -> Result<Vec<GraphTransactionRebuiltNode>, String> {
+        let mut built_again = Vec::new();
+        let mut refusals = Vec::new();
+        for (stream_id, stream_operations) in streams {
+            match self
+                .async_runtime
+                .block_on(stream_operations.build_again_each_node_a_setting_was_set_on())
+            {
+                Ok(nodes) => {
+                    built_again.extend(nodes.into_iter().map(|node| GraphTransactionRebuiltNode {
+                        stream: stream_id.clone(),
+                        node: node.to_string(),
+                    }))
+                }
+                Err(refusal) => refusals.push(refusal.to_string()),
+            }
+        }
+        if refusals.is_empty() {
+            Ok(built_again)
+        } else {
+            Err(refusals.join("; "))
         }
     }
 
@@ -172,6 +218,24 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
             }
         }
+        let streams_edited_live: Vec<(String, Arc<dyn RuntimeOperations>)> = streams
+            .iter()
+            .map(|(stream_id, stream)| (stream_id.clone(), Arc::clone(&stream.stream_operations)))
+            .collect();
+        if let Err(not_built_again) =
+            self.build_again_each_node_a_setting_was_set_on(&streams_edited_live)
+        {
+            let and_with_its_former_values = self
+                .reverse_what_was_applied_live(&streams, applied_live)
+                .map(|refused_again| {
+                    format!(
+                        "; built again with its former values, it failed its setup too and is \
+                         left in Error: {refused_again}"
+                    )
+                })
+                .unwrap_or_default();
+            return Err(format!("{not_built_again}{and_with_its_former_values}").into());
+        }
         match project_repository.apply_project_operations(
             author,
             idempotency_key.as_ref(),
@@ -272,13 +336,15 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 
     /// Apply the inverse of each operation of `applied_live`, newest first, to the running
-    /// stream it was applied to, setting live again each value set live it replaced, so a
-    /// refused transaction leaves the streams as they were.
+    /// stream it was applied to, setting live again each value set live it replaced, then build
+    /// again each node a setting it reads at setup was set back on, so a refused transaction
+    /// leaves the streams as they were. Answers the reason of each node built again with its
+    /// former values that failed its setup too, and is left in `Error`.
     pub(super) fn reverse_what_was_applied_live(
         &self,
         streams: &BTreeMap<String, StreamATransactionEdits>,
         applied_live: Vec<(String, OneOperationAppliedLive)>,
-    ) {
+    ) -> Option<String> {
         for (stream_id, applied) in applied_live.into_iter().rev() {
             let Some(stream) = streams.get(&stream_id) else {
                 continue;
@@ -289,6 +355,19 @@ impl StreamGraphTransactionExecutor<'_> {
                 &applied,
             );
         }
+        let streams: Vec<(String, Arc<dyn RuntimeOperations>)> = streams
+            .iter()
+            .map(|(stream_id, stream)| (stream_id.clone(), Arc::clone(&stream.stream_operations)))
+            .collect();
+        let not_built_again = self
+            .build_again_each_node_a_setting_was_set_on(&streams)
+            .err()?;
+        tracing::error!(
+            %not_built_again,
+            "a node built again with the values a refused graph transaction set back failed its \
+             setup; it is left in Error"
+        );
+        Some(not_built_again)
     }
 
     /// Reverse `applied` on the running stream `stream_operations` serves: apply its inverse,

@@ -95,9 +95,8 @@ impl CompilerTransactionHandle {
         self.inner.lock().retain(|operation| match operation {
             PendingOperation::AddNode(node_run_id)
             | PendingOperation::RemoveNode(node_run_id, _)
-            | PendingOperation::UpdateNodeConfig { node_run_id, .. } => {
-                !nodes.contains(node_run_id)
-            }
+            | PendingOperation::UpdateNodeConfig { node_run_id, .. }
+            | PendingOperation::RebuildNode(node_run_id) => !nodes.contains(node_run_id),
             PendingOperation::AddLink(link_id) | PendingOperation::RemoveLink(link_id) => {
                 !links.contains(link_id)
             }

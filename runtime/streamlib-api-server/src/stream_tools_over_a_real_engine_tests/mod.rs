@@ -64,6 +64,7 @@ mod project_node_type_listing_tests;
 mod project_view_and_graph_input_tests;
 mod project_zip_import_tests;
 mod renamed_pin_tests;
+mod setting_read_at_setup_tests;
 mod stream_input_of_a_playing_stream_tests;
 mod stream_listing_actions_and_record_tests;
 mod stream_named_by_its_id_tests;

@@ -203,6 +203,14 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<bool> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn build_again_each_node_a_setting_was_set_on(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::std::vec::Vec<::uuid::Uuid>>,
+        > {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn hold_an_edit_its_document_holds_not_live(
             &self,
             _graph_operation: &::streamlib_project_repository::StreamGraphOperation,

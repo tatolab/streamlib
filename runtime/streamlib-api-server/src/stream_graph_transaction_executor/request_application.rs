@@ -148,6 +148,28 @@ impl StreamGraphTransactionExecutor<'_> {
             labels_of_added_nodes,
             ..
         } = staged;
+        let streams_edited: Vec<(String, Arc<dyn RuntimeOperations>)> = streams
+            .iter()
+            .map(|(stream_id, stream)| (stream_id.clone(), Arc::clone(&stream.stream_operations)))
+            .collect();
+        let mut nodes_rebuilt =
+            match self.build_again_each_node_a_setting_was_set_on(&streams_edited) {
+                Ok(nodes_rebuilt) => nodes_rebuilt,
+                Err(not_built_again) => {
+                    let and_with_its_former_values = self
+                        .reverse_what_was_applied_live(&streams, applied_live)
+                        .map(|refused_again| {
+                            format!(
+                                "; built again with its former values, it failed its setup too and \
+                             is left in Error: {refused_again}"
+                            )
+                        })
+                        .unwrap_or_default();
+                    return Err(GraphTransactionRefusal::of_the_whole_transaction(format!(
+                        "{not_built_again}{and_with_its_former_values}"
+                    )));
+                }
+            };
         if !project_operations.is_empty() {
             project_operations.splice(0..0, former_port_names_moved);
         }
@@ -169,9 +191,9 @@ impl StreamGraphTransactionExecutor<'_> {
                         self.project_repositories
                             .announce_the_transaction_if_applied_now(project_repository, &outcome);
                         let applied = outcome.into_applied_transaction();
-                        self.make_live_what_the_documents_now_hold(
+                        nodes_rebuilt.extend(self.make_live_what_the_documents_now_hold(
                             made_live_once_the_documents_hold_them,
-                        );
+                        ));
                         (
                             Some(applied.transaction.transaction.to_string()),
                             Some(applied.commit),
@@ -203,6 +225,7 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &labels_of_added_nodes,
                 overridden_by_links,
+                nodes_rebuilt,
             },
         ))
     }

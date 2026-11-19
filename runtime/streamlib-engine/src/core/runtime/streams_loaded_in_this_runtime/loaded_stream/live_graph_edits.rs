@@ -100,7 +100,8 @@ impl LoadedStreamInThisRuntime {
     /// off, in place of any value set live on the input; hand it to that node alone, wherever it
     /// is hosted, and announce the input's new value. No node, link or port changes, so nothing
     /// compiles; on an input held on the graph, a setting its type holds in its config, the graph
-    /// change is announced.
+    /// change is announced. A setting a built node reads at setup logs its rebuild for the next
+    /// commit.
     pub(crate) fn set_pin_value(
         &self,
         node_run_id: &NodeRunId,
@@ -117,6 +118,7 @@ impl LoadedStreamInThisRuntime {
             for change in changes_announced {
                 self.publish_on_this_streams_topic(change);
             }
+            self.build_the_node_again_when_it_reads_the_input_at_setup(node_run_id, input);
             Ok(())
         })
     }

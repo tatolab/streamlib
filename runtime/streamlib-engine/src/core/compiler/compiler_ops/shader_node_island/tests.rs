@@ -3,12 +3,17 @@
 
 use super::super::function_node_island::tests::{a_function_node_type, add_a_node, link};
 use super::super::function_node_island::{HowALinkIsWired, how_a_link_is_wired};
+use super::super::running_nodes_restarted::{
+    RunningNodesALiveEditRestarts, forget_the_build_of_each_node_restarted,
+    the_host_the_island_of_a_fused_node_was_placed_on,
+};
 use super::super::shader_node_island_program::tests::shader_program;
 use super::*;
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily,
     PortFamilyDeclaration,
 };
+use crate::core::graph::NodeMetrics;
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves};
 
 fn a_descriptor(
@@ -335,11 +340,12 @@ fn a_live_link_into_a_fused_nodes_output_restarts_its_whole_island_and_a_teardow
         std::slice::from_ref(&second_sink),
         &[],
         std::slice::from_ref(&into_a_fused_node_output),
+        &[],
     )
     .unwrap();
     assert_eq!(
         restarted,
-        RunningShaderNodesALiveEditRestarts {
+        RunningNodesALiveEditRestarts {
             nodes: sorted(&[
                 stream.tint.clone(),
                 stream.blur.clone(),
@@ -354,6 +360,7 @@ fn a_live_link_into_a_fused_nodes_output_restarts_its_whole_island_and_a_teardow
         &[],
         &every_node,
         &stream.links,
+        &[],
     )
     .unwrap();
     assert!(teardown.is_empty(), "{teardown:?}");
@@ -390,11 +397,12 @@ fn a_live_link_joining_two_running_shader_nodes_restarts_both_with_their_other_l
         &[],
         &[],
         std::slice::from_ref(&mix_into_kaleidoscope),
+        &[],
     )
     .unwrap();
     assert_eq!(
         restarted,
-        RunningShaderNodesALiveEditRestarts {
+        RunningNodesALiveEditRestarts {
             nodes: sorted(&[mix, kaleidoscope]),
             links: sorted(&links_already_running),
         }
@@ -426,6 +434,7 @@ fn a_live_link_from_a_process_into_a_running_islands_host_restarts_nothing() {
         std::slice::from_ref(&second_source),
         &[],
         std::slice::from_ref(&into_a_host),
+        &[],
     )
     .unwrap();
     assert!(restarted.is_empty(), "{restarted:?}");
@@ -446,6 +455,7 @@ fn a_live_edit_restarting_shader_nodes_a_function_node_feeds_is_refused_naming_i
         &[],
         &[],
         std::slice::from_ref(&mix_into_tint),
+        &[],
     )
     .unwrap_err()
     .to_string();
@@ -475,6 +485,7 @@ fn a_live_link_from_a_function_node_into_a_running_island_is_refused_naming_it()
         std::slice::from_ref(&lfo),
         &[],
         std::slice::from_ref(&into_a_fused_node),
+        &[],
     )
     .unwrap_err()
     .to_string();
@@ -510,7 +521,7 @@ fn a_restarted_island_reads_its_old_host_and_forgets_every_part_of_its_build() {
             .unwrap()
             .insert(NodeMetrics::default());
     }
-    forget_the_build_of_each_shader_node_restarted(&mut stream.graph, &island);
+    forget_the_build_of_each_node_restarted(&mut stream.graph, &island);
     for node_id in &island {
         let node = stream.graph.traversal().v(node_id).first().unwrap();
         assert!(!node.has::<NodeMetrics>());

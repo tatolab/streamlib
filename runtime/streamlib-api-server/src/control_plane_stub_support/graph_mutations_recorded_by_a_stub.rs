@@ -158,6 +158,14 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<bool> {
             Ok(true)
         }
+        fn build_again_each_node_a_setting_was_set_on(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::std::vec::Vec<::uuid::Uuid>>,
+        > {
+            Box::pin(::std::future::ready(Ok(Vec::new())))
+        }
         fn hold_an_edit_its_document_holds_not_live(
             &self,
             graph_operation: &::streamlib_project_repository::StreamGraphOperation,

@@ -21,6 +21,11 @@ pub(crate) enum PendingOperation {
         config_to_apply: serde_json::Value,
     },
 
+    /// Stop a running node and build it again from the values its inputs hold now, so it
+    /// reads a setting it takes only when it is set up. A node named twice before a commit is
+    /// built again once.
+    RebuildNode(NodeRunId),
+
     /// Move a function node whose call crashed or stalled its reader's helper,
     /// and every function node downstream of it, out of that reader's islands
     /// into a helper process of its own.
@@ -42,6 +47,7 @@ impl std::fmt::Display for PendingOperation {
             PendingOperation::UpdateNodeConfig { node_run_id, .. } => {
                 write!(f, "UpdateNodeConfig({})", node_run_id)
             }
+            PendingOperation::RebuildNode(id) => write!(f, "RebuildNode({})", id),
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                 function_node_id,
                 reader_id,

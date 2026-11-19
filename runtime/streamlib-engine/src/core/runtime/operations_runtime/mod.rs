@@ -36,6 +36,7 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
+mod nodes_built_again_for_a_setting;
 pub(super) use link_connected_between_two_ports::{
     ALinkEndTheGraphHolds, ANodeTypesPortToJudge, connect_impl,
     the_verdict_connect_takes_on_a_link, the_verdicts_connect_takes_on_links_with_node_types_ports,
@@ -662,6 +663,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>> {
         self.in_this_streams_log_route(
             self.apply_a_stream_graph_operation_to_the_live_graph(graph_operation),
+        )
+    }
+
+    fn build_again_each_node_a_setting_was_set_on(&self) -> BoxFuture<'_, Result<Vec<uuid::Uuid>>> {
+        self.in_this_streams_log_route(
+            LoadedStreamInThisRuntime::build_again_each_node_a_setting_was_set_on(self),
         )
     }
 

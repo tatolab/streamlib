@@ -245,6 +245,7 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &HashMap::new(),
                 overridden_by_links,
+                nodes_rebuilt: Vec::new(),
             },
         )))
     }
