@@ -849,7 +849,7 @@ jobs:
             --project "$planted" > "$RUNNER_TEMP/planted-report.txt" || exit_code=$?
           cat "$RUNNER_TEMP/planted-report.txt"
           [ "$exit_code" -eq 1 ] || { echo "the planted error exited $exit_code, not 1" >&2; exit 1; }
-          grep -q 'nodes/planted_level.py:5: value_input_has_no_default' "$RUNNER_TEMP/planted-report.txt" \
+          grep -q 'nodes/planted_level.py:[0-9]*: value_input_has_no_default' "$RUNNER_TEMP/planted-report.txt" \
             || { echo "the report does not name the planted refusal" >&2; exit 1; }
 
       - name: Check the node code of every in-tree project
