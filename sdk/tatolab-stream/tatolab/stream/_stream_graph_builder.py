@@ -76,7 +76,7 @@ def place_graph_generator(
     name: str | None = None,
     promoted_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run a `@graph_generator` function as a fragment placed under `name` (cast) or its own name, and return the fragment node a graph document stores: its `name`, its generator as `type`, its promoted settings as `config` and its `fragment`."""
+    """Run a `@graph_generator` function as a fragment placed under `name` (cast) or its own name, and return the fragment node a graph document stores: its `name`, its generator as `type`, its promoted settings as `input_values` and its `fragment`."""
     if not is_graph_generator(generator_function):
         raise TypeError(
             f"{generator_function!r} is not a graph generator: decorate it with "

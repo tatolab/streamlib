@@ -50,7 +50,7 @@ def test_the_built_in_class_cannot_be_instantiated(built_in_node_class):
 
 
 def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
-    with pytest.raises(TypeError, match=r"stream_builder\.add\(ChannelsToRecords, config="):
+    with pytest.raises(TypeError, match=r"stream_builder\.add\(ChannelsToRecords, input_values="):
         tatolab.stream.ChannelsToRecords()  # pyright: ignore[reportCallIssue]
 
 
@@ -68,7 +68,7 @@ def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
     assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
         ("channelstorecords", "tatolab.stream:ChannelsToRecords"),
     ]
-    assert graph["nodes"][0]["config"] == {"channel_names": ["level"]}
+    assert graph["nodes"][0]["input_values"] == {"channel_names": ["level"]}
 
 
 @graph_generator

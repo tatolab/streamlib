@@ -68,12 +68,12 @@ def test_each_node_is_named_by_its_import_path_in_the_module_and_names_others_by
     nodes = nodes_by_type(run_graph_generator(a_track_sent_through_a_variable_and_read_back))
     gateway_name = nodes["tatolab.moq:MoqGateway"]["name"]
 
-    assert nodes["tatolab.moq:MoqTrack"]["config"] == {
+    assert nodes["tatolab.moq:MoqTrack"]["input_values"] == {
         "gateway": {"node": gateway_name},
         "track": "camera",
     }
-    assert nodes["tatolab.moq:MoqTrackSend"]["config"] == {"track": {"node": "get-camera-track"}}
-    assert nodes["tatolab.moq:MoqTrackReceive"]["config"]["gateway"] == {"node": gateway_name}
+    assert nodes["tatolab.moq:MoqTrackSend"]["input_values"] == {"track": {"node": "get-camera-track"}}
+    assert nodes["tatolab.moq:MoqTrackReceive"]["input_values"]["gateway"] == {"node": gateway_name}
 
 
 def node_reference_keyword_of(node_class: type, config_key: str) -> "dict[str, Any]":

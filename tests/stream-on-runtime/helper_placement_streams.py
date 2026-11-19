@@ -24,6 +24,7 @@ from helper_placement_nodes import (
     HangsAfterItsFirstCalls,
     LabelsTheLevel,
     LevelScaledByItsGain,
+    LevelScaledByItsTypedGain,
     LendsTheLabelToItsNativeHalf,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
@@ -188,6 +189,18 @@ def clamp_with_its_input_linked_to_nothing_into_python_sink(stream_builder: Stre
 def level_scaled_by_its_gain_into_python_sink(stream_builder: StreamBuilder) -> None:
     """A function node scaling its level by the `gain` of its config, read by a Python class."""
     scaled = stream_builder.add(LevelScaledByItsGain, name="scaled")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(scaled.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def typed_level_scaled_by_the_gain_its_input_values_hold_into_python_sink(
+    stream_builder: StreamBuilder,
+) -> None:
+    """A typed function node built with `input_values` setting its `gain` to 0.5, read by a Python class."""
+    scaled = stream_builder.add(
+        LevelScaledByItsTypedGain, name="scaled", input_values={"gain": 0.5}
+    )
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(scaled.output("result"), sink.input("brightness"))
 

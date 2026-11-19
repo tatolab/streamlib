@@ -9,8 +9,18 @@ process can import.
 """
 
 import dataclasses
+from typing import Annotated, Literal
 
-from tatolab.stream import Input, Output, Packets, RuntimeContextLimitedAccess, node
+from tatolab.stream import (
+    Color,
+    Input,
+    Int8,
+    NumberRange,
+    Output,
+    Packets,
+    RuntimeContextLimitedAccess,
+    node,
+)
 
 
 @node.function
@@ -78,3 +88,16 @@ class RigMonitor:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.inputs.read("video")
+
+
+@node
+def TintedLevel(
+    level: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 0.5,
+    tint: Color = Color(1.0, 1.0, 1.0),
+    voices: Int8 = 1,
+    waveform: Literal["sine", "square"] = "sine",
+    steps: list[float] = [0.0],  # noqa: B006
+    detune: float | None = None,
+) -> float:
+    """A typed node: its level, scaled by how bright its tint is."""
+    return level * (tint.red + tint.green + tint.blue) / 3
