@@ -35,7 +35,9 @@ from ._pin_types import (
     INTEGER_BOUNDS_OF_EACH_SIZE,
     INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS,
     PIN_TYPE_SPELLINGS,
+    PIN_VALUE_CLASSES,
     ExactNumberSize,
+    PinValueOfParts,
     pin_type_spelling_written_as,
 )
 
@@ -115,7 +117,7 @@ class DeclaredPin:
     leave without a value."""
 
     default_value: object
-    """An input's default as its type holds it, `None` for an input that may be unset, and
+    """An input's default in its stored JSON form, `None` for an input that may be unset, and
     `NO_DEFAULT` on an output."""
 
 
@@ -249,6 +251,8 @@ class _PinReading:
                 f"fix: type it as one of {_spellings_read_today()}.",
                 "pin_type_not_read_yet",
             )
+        if _is_a_value_class_of_parts(written_type):
+            return dict(written_type.pin_type)  # pyright: ignore[reportReturnType]
         if exact_size is None:
             pin_type: PinType = {"type": spelling.pin_type_name}  # pyright: ignore[reportAssignmentType]
             return pin_type
@@ -292,6 +296,8 @@ class _PinReading:
             return "Literal"
         if written_type is list or typing.get_origin(written_type) is list:
             return "list"
+        if _is_a_value_class_of_parts(written_type):
+            return written_type.__name__
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
         )
@@ -424,8 +430,24 @@ class _PinReading:
                         "pin_default_not_of_its_type",
                     )
                 return float(default)
+            case {"type": "color" | "vector" | "rectangle" | "transform"}:
+                value_class = _the_value_class_of(pin_type)
+                if type(default) is not value_class:
+                    raise not_of_its_type
+                return default.stored_value()
             case _:
                 raise not_of_its_type
+
+
+def _is_a_value_class_of_parts(written_type: object) -> typing.TypeGuard[type[PinValueOfParts]]:
+    return written_type in PIN_VALUE_CLASSES
+
+
+def _the_value_class_of(pin_type: PinType) -> type[PinValueOfParts]:
+    (value_class,) = [
+        value_class for value_class in PIN_VALUE_CLASSES if value_class.pin_type == pin_type
+    ]
+    return value_class
 
 
 def _annotation_on_the_wire(annotation: object) -> Any:

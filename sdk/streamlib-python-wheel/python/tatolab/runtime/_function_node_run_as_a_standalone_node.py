@@ -6,13 +6,15 @@
 Each input reads the newest value its link carries, an island its own helper
 evaluates or a channel from a class node or another promoted node, and keeps
 its pin value until one arrives. A number input reads the first sample of a
-Channels block, f32 or f64, exactly as an island reads one, and refuses any
-other message by name; an `UnreadMessage` input holds only the
+Channels block, f32 or f64, exactly as an island reads one, a Color, Vector,
+Rectangle or Transform input the first sample of each channel, and each
+refuses any other message by name; an `UnreadMessage` input holds only the
 message that arrived since the last call, and the node is not called while it
 holds none. A live config update, and so each value a link gives a field the
 node exposes, reaches the next call. A number or bool output is written as a
-control value, one f64 sample on one channel at rate 0, a `dict` output as a
-Records message, and an `UnreadMessage` output exactly as the message arrived.
+control message, one f64 sample on one channel at rate 0, a Color, Vector,
+Rectangle or Transform output one f64 sample on each channel of its parts, a
+`dict` output as a Records message, and an `UnreadMessage` output exactly as the message arrived.
 """
 
 from __future__ import annotations
@@ -39,7 +41,9 @@ from tatolab.runtime._engine import (
     hand_an_unread_message_on,
     read_the_control_value_at_an_input_port,
     read_the_message_at_an_input_port_unread,
+    read_the_parts_at_an_input_port,
 )
+from tatolab.runtime._function_node_carried_values import PART_VALUE_TYPES
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeBodyRunAsPython,
     FunctionNodeCompiledToItsEvaluateEntry,
@@ -50,7 +54,7 @@ from tatolab.runtime._function_node_compilation import (
     prepare_function_node_to_evaluate,
 )
 
-# A control value on a wire: one f64 sample, at no regular rate.
+# A control message on a wire: one f64 sample on each channel, at no regular rate.
 _CONTROL_VALUE_SAMPLE_RATE = 0
 
 
@@ -189,6 +193,7 @@ class _FunctionNodeRunAsAStandaloneNode:
         prepared = self._prepared
         ports_carrying_records = _ports_carrying_records(prepared)
         ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
+        value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
         for input_index, input_port in enumerate(prepared.input_ports):
             if input_port in ports_carrying_an_unread_message:
                 self._input_values[input_index] = read_the_message_at_an_input_port_unread(
@@ -200,11 +205,20 @@ class _FunctionNodeRunAsAStandaloneNode:
                 if record is not None:
                     self._input_values[input_index] = record
                 continue
-            control_value = read_the_control_value_at_an_input_port(
-                link_data_access=self._link_data_access, node_id=self._node_id, input_port=input_port
-            )
-            if control_value is not None:
-                self._input_values[input_index] = control_value
+            value_type = value_type_by_input_port.get(input_port, "float")
+            if value_type in PART_VALUE_TYPES:
+                read: Any = read_the_parts_at_an_input_port(
+                    link_data_access=self._link_data_access,
+                    node_id=self._node_id,
+                    input_port=input_port,
+                    value_type=value_type,
+                )
+            else:
+                read = read_the_control_value_at_an_input_port(
+                    link_data_access=self._link_data_access, node_id=self._node_id, input_port=input_port
+                )
+            if read is not None:
+                self._input_values[input_index] = read
         input_values = [value for value in self._input_values if value is not None]
         if len(input_values) != len(self._input_values):
             return
@@ -228,9 +242,10 @@ class _FunctionNodeRunAsAStandaloneNode:
             if output_port in ports_carrying_records:
                 ctx.outputs.write(getattr(type(self), output_port), output_value)
                 continue
+            parts = output_value if isinstance(output_value, tuple) else (output_value,)
             ctx.outputs.write_channels_block(
                 output_port,
-                memoryview(struct.pack("=d", output_value)).cast("d", (1, 1)),
+                memoryview(struct.pack(f"={len(parts)}d", *parts)).cast("d", (len(parts), 1)),
                 start_sample=self._control_values_written,
                 sample_rate=_CONTROL_VALUE_SAMPLE_RATE,
             )

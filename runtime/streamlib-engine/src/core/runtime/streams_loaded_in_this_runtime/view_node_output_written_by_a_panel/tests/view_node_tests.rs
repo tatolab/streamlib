@@ -436,7 +436,7 @@ fn a_reader_that_connects_after_a_write_reads_the_value_its_output_keeps() {
     let beat = the_next_message_read(&mut beat_reader);
     assert_eq!(
         beat.payload,
-        1.0_f32.to_le_bytes().to_vec(),
+        1.0_f64.to_le_bytes().to_vec(),
         "the control value written before the reader connected"
     );
 }

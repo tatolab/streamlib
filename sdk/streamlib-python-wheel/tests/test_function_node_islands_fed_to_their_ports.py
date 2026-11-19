@@ -22,7 +22,17 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeDoesNotCompile,
     feed_each_input_port_from_its_function_node_island,
 )
-from tatolab.stream import PreviousValue, State, Stateful, UnreadMessage, node
+from tatolab.stream import (
+    Color,
+    PreviousValue,
+    Rectangle,
+    State,
+    Stateful,
+    Transform,
+    UnreadMessage,
+    Vector2,
+    node,
+)
 
 from function_node_test_nodes import (
     WeightedSumCountingItsCalls,
@@ -686,3 +696,119 @@ def test_an_unlinked_optional_message_input_takes_none_and_its_island_feeds_its_
         data_plane, [island], {import_path: one_without_a_frame_and_two_with_one}.__getitem__
     )
     assert the_value_read_from(data_plane, "level") == 1.0
+
+
+@node
+def place_a_tint(
+    tint: Color = Color(1.0, 0.5, 0.25),
+    spot: Vector2 = Vector2(0.5, 0.5),
+    area: Rectangle = Rectangle(0.0, 0.0, 1.0, 1.0),
+    move: Transform = Transform.identity(),
+) -> Color:
+    x = move.numbers[0] * spot.x + move.numbers[3]
+    inside = area.x <= x <= area.x + area.width
+    return tint if inside else Color(0.0, 0.0, 0.0, tint.alpha)
+
+
+@node
+def dim_a_tint(tint: Color = Color(0.0, 0.0, 0.0)) -> Color:
+    return Color(tint.red / 2, tint.green / 2, tint.blue / 2, tint.alpha)
+
+
+_FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH = {
+    f"{__name__}:{function_node.__qualname__}": function_node
+    for function_node in (place_a_tint, dim_a_tint)
+}
+
+
+def the_parts_read_from(data_plane: Any, input_port: str, part_count: int) -> "tuple[float, ...]":
+    payload = data_plane.read_from_input_port(input_port)
+    assert payload is not None
+    return struct.unpack(f"<{part_count}d", bytes(payload))
+
+
+def test_a_colour_vector_rectangle_and_transform_set_on_inputs_reach_the_body_as_set():
+    import_path = f"{__name__}:place_a_tint"
+    island = an_island_of_one_node("tint", import_path, None, "place-1")
+    island["nodes"][0]["pins"] = {
+        "tint": {"red": 0.2, "green": 0.4, "blue": 0.6, "alpha": 0.8},
+        "spot": {"x": 0.25, "y": 0.0},
+        "area": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0},
+        "move": [1, 0, 0, 0.5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    }
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["tint"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__
+    )
+    assert fed.ran_compiled_by_node_id == {"place-1": False}, "a value of parts runs as Python"
+    assert the_parts_read_from(data_plane, "tint", 4) == (0.0, 0.0, 0.0, 0.8), (
+        "the spot, moved by 0.5, falls outside an area half the frame wide"
+    )
+    island["nodes"][0]["pins"]["move"] = Transform.identity().stored_value()
+    fed.feed_an_input_port_from_its_island(island)
+    assert the_parts_read_from(data_plane, "tint", 4) == (0.2, 0.4, 0.6, 0.8)
+
+
+def test_an_input_of_parts_with_no_pin_reads_its_declared_default():
+    import_path = f"{__name__}:place_a_tint"
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["tint"], [])
+    feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_one_node("tint", import_path, None, "place-1")],
+        _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__,
+    )
+    assert the_parts_read_from(data_plane, "tint", 4) == (1.0, 0.5, 0.25, 1.0)
+
+
+def test_a_colour_travels_from_one_node_to_the_next_unchanged():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["dimmed"], [])
+    island = {
+        "input_port": "dimmed",
+        "link_id": "L-island",
+        "output": {"node": "dim-1", "port": "result"},
+        "nodes": [
+            {
+                "node": "place-1",
+                "breadcrumb_number": 0,
+                "import_path": f"{__name__}:place_a_tint",
+                "config": None,
+                "links_into": [],
+            },
+            {
+                "node": "dim-1",
+                "breadcrumb_number": 1,
+                "import_path": f"{__name__}:dim_a_tint",
+                "config": None,
+                "links_into": [{"port": "tint", "from": {"node": "place-1", "port": "result"}}],
+            },
+        ],
+    }
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__
+    )
+    assert the_parts_read_from(data_plane, "dimmed", 4) == (0.5, 0.25, 0.125, 1.0)
+
+
+@pytest.mark.parametrize(
+    ("pin", "value", "refused_because"),
+    [
+        ("tint", {"red": 1.0, "green": 0.5, "blue": 0.2}, "exactly red, green, blue, alpha"),
+        ("spot", {"x": 1.0, "y": 2.0, "z": 3.0}, "exactly x, y"),
+        ("area", {"x": 0.0, "y": 0.0, "width": -1.0, "height": 1.0}, "width is 0 or more"),
+        ("move", [1.0, 0.0], "16 numbers"),
+    ],
+)
+def test_a_pin_value_of_parts_of_the_wrong_shape_is_refused_by_name(
+    pin: str, value: Any, refused_because: str
+):
+    island = an_island_of_one_node("tint", f"{__name__}:place_a_tint", None, "place-1")
+    island["nodes"][0]["pins"] = {pin: value}
+    with pytest.raises(FunctionNodeDoesNotCompile, match=f"pin on input `{pin}`.*{refused_because}"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [island],
+            _FUNCTION_NODES_OF_PARTS_BY_IMPORT_PATH.__getitem__,
+        )

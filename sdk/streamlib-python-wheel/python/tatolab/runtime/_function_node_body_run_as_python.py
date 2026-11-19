@@ -17,7 +17,9 @@ from tatolab.runtime._function_node_carried_values import (
     FunctionNodeDoesNotCompile,
     FunctionNodeReadyToEvaluate,
     FunctionNodeRunAsPythonInItsReader,
+    PART_VALUE_TYPES,
     UNREAD_MESSAGE_VALUE_TYPE,
+    value_class_of_a_part_value_type,
 )
 
 
@@ -55,7 +57,8 @@ class FunctionNodeBodyRunAsPython:
     def evaluate(self, input_values: "list[Any]", now_ns: int) -> "list[Any]":
         """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.
 
-        A number or bool output is answered as a `float`, a `dict` as given.
+        A number or bool output is answered as a `float`, a Color, Vector, Rectangle or
+        Transform as the `tuple` of its parts, a `dict` as given.
         The new state is kept only once every output is answered.
         """
         signature = self._run_as_python.function_signature
@@ -145,6 +148,8 @@ class FunctionNodeBodyRunAsPython:
                     f"and was handed {type(input_value).__name__}"
                 )
             return copy.deepcopy(input_value)
+        if value_type in PART_VALUE_TYPES:
+            return value_class_of_a_part_value_type(value_type).from_parts(input_value)
         return _python_value_of_an_f64(float(input_value), value_type)
 
     def _the_output_the_evaluator_takes(
@@ -171,6 +176,14 @@ class FunctionNodeBodyRunAsPython:
             if not isinstance(output_value, dict):
                 raise TypeError(f"{what_it_is} is a dict, and the body gave {type(output_value).__name__}")
             return output_value
+        if each_output["value_type"] in PART_VALUE_TYPES:
+            value_class = value_class_of_a_part_value_type(each_output["value_type"])
+            if output_value is None or type(output_value) is not value_class:
+                raise TypeError(
+                    f"{what_it_is} is a `{value_class.__name__}`, and the body gave "
+                    f"{type(output_value).__name__}"
+                )
+            return output_value.parts
         if not isinstance(output_value, (bool, int, float)):
             raise TypeError(
                 f"{what_it_is} is {each_output['value_type']}, and the body gave "
