@@ -192,6 +192,15 @@ pub trait RuntimeOperations: Send + Sync {
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
 
+    /// Rebuild, once each, every running node whose setting read at setup a live operation set
+    /// since the last rebuild, and wait for each to finish its setup; the UUID of each rebuilt.
+    /// A stream not started rebuilds none, its nodes built from the values saved at its start.
+    /// Refused in the node's own words when one does not build with the values set, the node
+    /// left as its setup left it, for the caller to put its earlier values back and rebuild it.
+    fn rebuild_each_node_a_setting_read_at_setup_changed(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<uuid::Uuid>>>;
+
     /// Hold `graph_operation`, which this stream's graph document holds and its live graph
     /// refused in the runtime's words `refusal`, as an edit not live yet: listed among the
     /// stream's diagnostics and drawn in its `graph` until its playback stops.

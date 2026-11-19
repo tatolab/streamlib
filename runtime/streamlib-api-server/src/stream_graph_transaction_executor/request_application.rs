@@ -169,6 +169,13 @@ impl StreamGraphTransactionExecutor<'_> {
             self.reverse_what_was_applied_live(&staged.streams, applied_live);
             return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
         }
+        let mut nodes_rebuilt: Vec<GraphTransactionRebuiltNode> = Vec::new();
+        if let Err(refusal) = self
+            .rebuild_each_node_a_setting_read_at_setup_changed(&staged.streams, &mut nodes_rebuilt)
+        {
+            self.reverse_what_was_applied_live(&staged.streams, applied_live);
+            return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
+        }
         let WhatTheTransactionHasStaged {
             streams,
             what_the_answer_names_of_each_added_node,
@@ -234,6 +241,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links,
                 why_each_link_was_made_unjudged,
+                nodes_rebuilt,
             },
         ))
     }
@@ -571,6 +579,10 @@ impl StreamGraphTransactionExecutor<'_> {
                     stream_operations.as_ref(),
                     the_open_batch_of(streams, stream_id).ok(),
                     &applied_on_the_running_stream,
+                );
+                self.rebuild_each_node_a_reversal_put_its_settings_back_on(
+                    stream_id,
+                    stream_operations.as_ref(),
                 );
                 return Err(format!(
                     "stream `{stream_id}`'s graph document does not hold what its running graph \
