@@ -109,7 +109,16 @@ fn the_port_to_judge(
     let descriptor = node_types
         .descriptor(&class_path(node_type))
         .expect("the fixture's node type is registered");
-    ANodeTypesPortToJudge::of(node_types, descriptor, port, direction)
+    let ports_of_its_direction = match direction {
+        PortDirection::Input => descriptor.inputs,
+        PortDirection::Output => descriptor.outputs,
+    };
+    ANodeTypesPortToJudge::of(
+        node_types,
+        descriptor.node_class_import_path,
+        ports_of_its_direction.into(),
+        port,
+    )
 }
 
 /// The verdict on the link between `held` and port `port` of `node_type`, judged alone; the

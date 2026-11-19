@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use streamlib_project_repository::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
@@ -10,7 +11,7 @@ use streamlib_project_repository::{
 
 use uuid::Uuid;
 
-use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassImportPath, PortDescriptor};
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
@@ -536,8 +537,14 @@ impl LoadedStreamInThisRuntime {
         let node_types = self.node_types_this_stream_resolves();
         let mut answers = Vec::with_capacity(node_types_ports.len());
         let mut to_judge = Vec::new();
+        let mut ports_of_each_type = HashMap::new();
         for port in node_types_ports {
-            match how_a_node_types_port_is_judged(node_types, port, held_direction.opposite()) {
+            match how_a_node_types_port_is_judged(
+                node_types,
+                &mut ports_of_each_type,
+                port,
+                held_direction.opposite(),
+            ) {
                 HowANodeTypesPortIsJudged::Answered(answer) => answers.push(Some(answer)),
                 HowANodeTypesPortIsJudged::OnAPlacedNode(port) => {
                     to_judge.push(*port);
@@ -622,9 +629,12 @@ enum HowANodeTypesPortIsJudged {
     OnAPlacedNode(Box<ANodeTypesPortToJudge>),
 }
 
-/// How a link with `port`, of `direction`, is judged in a stream resolving `node_types`.
+/// How a link with `port`, of `direction`, is judged in a stream resolving `node_types`; the
+/// ports of `direction` each type declares are read from its descriptor once, into
+/// `ports_of_each_type`, and shared by every port of the type judged.
 fn how_a_node_types_port_is_judged(
     node_types: &NodeTypesOneStreamResolves,
+    ports_of_each_type: &mut HashMap<NodeClassImportPath, Arc<[PortDescriptor]>>,
     port: &ANodeTypesPort<'_>,
     direction: PortDirection,
 ) -> HowANodeTypesPortIsJudged {
@@ -644,15 +654,32 @@ fn how_a_node_types_port_is_judged(
             WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade,
         ));
     }
-    let Some(descriptor) = node_types.descriptor(&node_type) else {
-        return HowANodeTypesPortIsJudged::Answered(if a_node_interpreter_describes(&node_type) {
-            Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed)
-        } else {
-            Err(Error::UnknownNodeType { ident: node_type })
-        });
+    let ports_of_its_direction = match ports_of_each_type.get(&node_type) {
+        Some(ports) => Arc::clone(ports),
+        None => {
+            let Some(descriptor) = node_types.descriptor(&node_type) else {
+                return HowANodeTypesPortIsJudged::Answered(
+                    if a_node_interpreter_describes(&node_type) {
+                        Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyOnceItsNodeTypeIsDescribed)
+                    } else {
+                        Err(Error::UnknownNodeType { ident: node_type })
+                    },
+                );
+            };
+            let ports: Arc<[PortDescriptor]> = match direction {
+                PortDirection::Input => descriptor.inputs,
+                PortDirection::Output => descriptor.outputs,
+            }
+            .into();
+            ports_of_each_type.insert(node_type.clone(), Arc::clone(&ports));
+            ports
+        }
     };
     HowANodeTypesPortIsJudged::OnAPlacedNode(Box::new(ANodeTypesPortToJudge::of(
-        node_types, descriptor, port.port, direction,
+        node_types,
+        node_type,
+        ports_of_its_direction,
+        port.port,
     )))
 }
 

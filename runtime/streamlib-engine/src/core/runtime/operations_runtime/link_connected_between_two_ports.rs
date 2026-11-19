@@ -16,8 +16,8 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::{
-    DeclaredPinType, NodeClassImportPath, NodeDescriptor, PinLinkOutcome, PinLinkVerdict,
-    PinLinkWarning, PinType, PortDescriptor, ResolvedPin,
+    DeclaredPinType, NodeClassImportPath, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
+    PortDescriptor, ResolvedPin,
 };
 use crate::core::graph::legacy_config_of_a_node::node_spec_holding_the_input_values;
 use crate::core::graph::{
@@ -215,28 +215,18 @@ pub(in crate::core::runtime) struct ANodeTypesPortToJudge {
     node_type: NodeClassImportPath,
     spec: NodeSpec,
     port_name: String,
-    ports_of_its_direction: Vec<PortDescriptor>,
+    ports_of_its_direction: Arc<[PortDescriptor]>,
 }
 
 impl ANodeTypesPortToJudge {
-    /// Port `port_name` of `direction` of the type `descriptor` describes, as `node_types`
-    /// resolves the type.
+    /// Port `port_name` of `node_type`, as `node_types` resolves the type, among the type's
+    /// `ports_of_its_direction`, which every port of the type judged in one batch shares.
     pub(in crate::core::runtime) fn of(
         node_types: &NodeTypesOneStreamResolves,
-        descriptor: NodeDescriptor,
+        node_type: NodeClassImportPath,
+        ports_of_its_direction: Arc<[PortDescriptor]>,
         port_name: &str,
-        direction: PortDirection,
     ) -> Self {
-        let NodeDescriptor {
-            node_class_import_path: node_type,
-            inputs,
-            outputs,
-            ..
-        } = descriptor;
-        let ports_of_its_direction = match direction {
-            PortDirection::Input => inputs,
-            PortDirection::Output => outputs,
-        };
         Self {
             spec: node_spec_holding_the_input_values(
                 node_types,
@@ -269,7 +259,7 @@ pub(in crate::core::runtime) fn the_verdicts_connect_takes_on_links_with_node_ty
     node_types_ports: Vec<ANodeTypesPortToJudge>,
 ) -> Result<Vec<Result<Option<PinLinkVerdict>>>> {
     compiler.scope(|graph, _tx| {
-        let held_from = std::time::Instant::now();
+        let graph_lock_taken_at = std::time::Instant::now();
         let ports_judged = node_types_ports.len();
         let held = held.under_its_current_port_name(graph)?;
         let the_held_ends_type = held.its_pin_type(graph);
@@ -284,7 +274,7 @@ pub(in crate::core::runtime) fn the_verdicts_connect_takes_on_links_with_node_ty
         }
         tracing::debug!(
             ports_judged,
-            held_for = ?held_from.elapsed(),
+            graph_lock_held_for = ?graph_lock_taken_at.elapsed(),
             "node types' ports judged under one hold of the graph's lock"
         );
         Ok(verdicts)
@@ -320,9 +310,9 @@ fn the_verdict_on_a_link_with_a_node_types_port(
     };
     let as_placed = judge(placed.graph())?;
     let Some(declaration) = ports_of_its_direction
-        .into_iter()
+        .iter()
         .find(|port| port.name == port_name)
-        .and_then(|port| port.pin_declaration)
+        .and_then(|port| port.pin_declaration.clone())
     else {
         return Ok(as_placed);
     };

@@ -7,7 +7,7 @@
       "source_label": "source",
       "source_config": { "width": 320, "height": 180 },
       "source_output": "video",
-      "compositor_node_type": "tatolab.compositor:AlphaOverCompositor",
+      "compositor_node_type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor",
       "compositor_label": "compositor",
       "compositor_input": "layer_0",
       "clamp_node_type": "nodes.clamp:Clamp",

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import tomllib
 import uuid
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,11 @@ from runtime_unit_under_test import REPOSITORY_ROOT
 CONTROL_CONTRACT_FILE = REPOSITORY_ROOT / "runtime" / "streamlib-control-contract" / "contract.json"
 COMPONENT_SCHEMA_REFERENCE_PREFIX = "#/components/schemas/"
 BUILD_A_GRAPH_SCRIPT_NAME = "build_a_graph"
+PACKAGES_DIRECTORY = REPOSITORY_ROOT / "packages"
+INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP = "tatolab.nodes"
+#: A project's own node types live under `nodes/`; the runtime describes one when it is placed.
+PROJECT_NODE_TYPE_PREFIX = "nodes."
+NODE_TYPE_NOT_DESCRIBED_YET = "the node type is not described yet; place a node of it first"
 
 
 def a_json_object(text: str) -> "dict[str, Any]":
@@ -44,6 +50,17 @@ def a_json_object(text: str) -> "dict[str, Any]":
 
 def the_committed_control_contract() -> "dict[str, Any]":
     return a_json_object(CONTROL_CONTRACT_FILE.read_text(encoding="utf-8"))
+
+
+def the_installed_modules_node_types() -> "set[str]":
+    """Every `tatolab.nodes` entry point value this repository's packages declare: the import
+    paths the runtime's node catalog keys an installed module's node types by."""
+    node_types: "set[str]" = set()
+    for pyproject_path in PACKAGES_DIRECTORY.glob("*/pyproject.toml"):
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        entry_points = pyproject.get("project", {}).get("entry-points", {})
+        node_types.update(entry_points.get(INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP, {}).values())
+    return node_types
 
 
 class StandInRefusal(Exception):
@@ -70,6 +87,10 @@ class ContractBackedAgentSession:
     """A stand-in MCP session: its tool list, groups and schemas are the committed contract's,
     and it holds one running stream whose graph `transact` and `undo` edit.
 
+    Its node catalog is the runtime's: the installed modules' node types under the import paths
+    their entry points declare, and each project node type once a node of it is placed. Placing
+    any other type is refused, and asking about one answers it as not checked yet.
+
     The answers it gives are checked against the contract's result schemas, so the script is
     replayed against shapes the runtime declares.
     """
@@ -94,6 +115,9 @@ class ContractBackedAgentSession:
              "type": "tatolab.testpattern:TestPatternSource"}
         ]
         self.links: "list[dict[str, Any]]" = []
+        self.described_node_types = the_installed_modules_node_types() | {
+            node["type"] for node in self.nodes
+        }
         #: The inputs a link from a picture output connects to; `check_link` refuses any other.
         self.picture_inputs = {"layer_0"}
         self.transactions: "list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]" = []
@@ -195,6 +219,13 @@ class ContractBackedAgentSession:
         if operation == "check_link_candidates":
             assert arguments["stream"] == self.stream_id, arguments
             self.the_node_of_the_id(arguments["from"]["output"]["node"])
+            ends = arguments["among"]["ends"]
+            not_checked = [
+                {"end": end, "why": NODE_TYPE_NOT_DESCRIBED_YET}
+                for end in ends
+                if end["kind"] == "node_type_port"
+                and end["node_type"] not in self.described_node_types
+            ]
             candidates = [
                 {"end": end, "check": {"outcome": "connects"}}
                 if end["port"] in self.picture_inputs
@@ -202,12 +233,16 @@ class ContractBackedAgentSession:
                     "refusal_code": "link_pin_types_do_not_connect", "action": "connect",
                     "runtime_words": "a Texture output does not connect to a Float input",
                 }}}
-                for end in arguments["among"]["ends"]
+                for end in ends
+                if end not in (each["end"] for each in not_checked)
             ]
-            return self.checked_against_the_result_schema(operation, {"candidates": [
-                candidate for candidate in candidates
-                if arguments.get("include_refused") or candidate["check"]["outcome"] != "refused"
-            ]})
+            return self.checked_against_the_result_schema(operation, {
+                "candidates": [
+                    candidate for candidate in candidates
+                    if arguments.get("include_refused") or candidate["check"]["outcome"] != "refused"
+                ],
+                "not_checked": not_checked,
+            })
         if operation == "graph":
             assert arguments.get("stream") == self.stream_id, arguments
             return {"stream": self.stream_id, "nodes": self.nodes, "links": self.links}
@@ -240,6 +275,10 @@ class ContractBackedAgentSession:
         for each in requested:
             assert each["stream"] == self.stream_id, each
             if each["operation"] == "add_node":
+                if each["type"].startswith(PROJECT_NODE_TYPE_PREFIX):
+                    self.described_node_types.add(each["type"])
+                elif each["type"] not in self.described_node_types:
+                    raise StandInRefusal(f"the node catalog lists no node type `{each['type']}`")
                 node = {"id": str(uuid.uuid4()), "name": each.get("as") or "node",
                         "type": each["type"]}
                 node_by_label[each.get("as") or node["id"]] = node
@@ -462,7 +501,32 @@ def test_build_a_graph_places_the_node_type_its_ask_answered_after_the_ask() -> 
         for name, arguments in session.tool_calls
     ]
     asked_at = names.index("check_link_candidates")
-    [placed] = [
+    placed = next(
         arguments for name, arguments in session.tool_calls[asked_at:] if name == "transact"
-    ][:1]
+    )
     assert placed["operations"][0]["type"] == document["task"]["givens"]["compositor_node_type"]
+
+
+def test_the_compositor_given_is_a_node_type_the_catalog_lists() -> None:
+    assert (
+        build_a_graph_document()["task"]["givens"]["compositor_node_type"]
+        in the_installed_modules_node_types()
+    )
+
+
+def test_a_node_type_the_catalog_does_not_list_is_not_checked_and_fails_the_run() -> None:
+    document = build_a_graph_document()
+    # The import path the catalog keys the compositor by is its entry point's, not its package's.
+    document["task"]["givens"]["compositor_node_type"] = "tatolab.compositor:AlphaOverCompositor"
+    session = ContractBackedAgentSession(the_committed_control_contract())
+
+    with pytest.raises(AgentLoopScriptRunFailed, match="node_types_the_source_feeds.*`/candidates`"):
+        played(agent_loop_script_from(document), session)
+
+
+def test_placing_a_node_type_the_catalog_does_not_list_fails_the_run() -> None:
+    document = build_a_graph_document()
+    document["task"]["givens"]["source_node_type"] = "tatolab.testpattern.source:TestPatternSource"
+
+    with pytest.raises(AgentLoopScriptRunFailed, match="lists no node type"):
+        played(agent_loop_script_from(document), ContractBackedAgentSession(the_committed_control_contract()))
