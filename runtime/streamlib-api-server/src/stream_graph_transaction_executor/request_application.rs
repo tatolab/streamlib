@@ -112,6 +112,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
+        let mut why_each_link_was_made_unjudged = BTreeMap::new();
         let mut project_operations: Vec<ProjectOperation> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
             Vec::new();
@@ -132,6 +133,12 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
             };
             for applied in applied {
+                why_each_link_was_made_unjudged.extend(
+                    applied
+                        .links_made_unjudged
+                        .into_iter()
+                        .map(|(link, why)| ((stream_id.clone(), link), why)),
+                );
                 operations_answered.push((stream_id.clone(), applied.operation_answered));
                 project_operations.extend(applied.project_operations);
                 made_live_once_the_documents_hold_them
@@ -203,6 +210,7 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &labels_of_added_nodes,
                 overridden_by_links,
+                why_each_link_was_made_unjudged,
             },
         ))
     }
@@ -220,27 +228,22 @@ impl StreamGraphTransactionExecutor<'_> {
         let stream = streams
             .get(stream_id)
             .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
-        let kept = std::cell::RefCell::new(None);
-        stream
-            .staged_graph
-            .clone()
-            .the_level_a_path_of_placed_streams_reaches(
-                stream.stream_location.stream_asset,
-                level,
-                &mut |placed_stream| {
-                    let project_repository = project_repository.ok_or_else(|| {
-                        format!("an edit inside a placed stream is refused live: {DOCUMENTS_FIRST}")
-                    })?;
-                    the_staged_graph_of_the_stream(
-                        placed_stream,
-                        streams,
-                        staged_graph_of_each_stream_not_running,
-                        project_repository,
-                    )
-                    .map_err(|refusal| refusal.words_kept_in(&kept))
-                },
-            )
-            .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))
+        the_level_reached(
+            stream.staged_graph.clone(),
+            stream.stream_location.stream_asset,
+            level,
+            &|placed_stream| {
+                let project_repository = project_repository.ok_or_else(|| {
+                    format!("an edit inside a placed stream is refused live: {DOCUMENTS_FIRST}")
+                })?;
+                the_staged_graph_of_the_stream(
+                    placed_stream,
+                    streams,
+                    staged_graph_of_each_stream_not_running,
+                    project_repository,
+                )
+            },
+        )
     }
 
     /// Apply `request`, an action on the loaded stream `stream_id`: an edit of its own level
@@ -477,6 +480,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 project_operations,
                 made_live_once_the_documents_hold_them: Vec::new(),
                 overridden_by_a_link,
+                links_made_unjudged: Vec::new(),
             });
         }
 
@@ -501,14 +505,22 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let mut placed_document_after_the_edit = reached.document.clone();
         placed_document_after_the_edit.apply(&edit)?;
-        if !reached.is_the_streams_own_level()
-            && let StreamGraphOperation::Connect { link } = &edit
-        {
-            stream_operations
-                .what_a_connect_makes_of_a_link_at_a_placed_level(&reached.document, link)?;
-        }
+        let why_each_link_goes_unjudged = if reached.is_the_streams_own_level() {
+            Vec::new()
+        } else {
+            why_each_link_an_edit_makes_at_a_placed_level_goes_unjudged(
+                stream_operations.as_ref(),
+                &reached.document,
+                &edit,
+            )?
+        };
         let operation_answered =
             reached.the_operation_as_drawn(&edit, &placed_document_after_the_edit)?;
+        let links_made_unjudged = the_links_an_operation_makes(&operation_answered)
+            .iter()
+            .zip(why_each_link_goes_unjudged)
+            .filter_map(|(link, why)| Some((link.clone(), why?)))
+            .collect();
         label_what_the_operation_adds(
             label,
             &edit,
@@ -572,6 +584,7 @@ impl StreamGraphTransactionExecutor<'_> {
             project_operations,
             made_live_once_the_documents_hold_them,
             overridden_by_a_link,
+            links_made_unjudged,
         })
     }
 
@@ -632,4 +645,21 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         Ok(carried)
     }
+}
+
+/// The level `level` of placed streams reaches from `document`, the graph document of the
+/// stream asset `stream`, each placed stream's document as `document_of_the_stream` reads it;
+/// refused as that read refuses, or as the path refuses.
+pub(super) fn the_level_reached(
+    document: StreamGraphDocument,
+    stream: Uuid,
+    level: &[Uuid],
+    document_of_the_stream: &dyn Fn(Uuid) -> Result<StreamGraphDocument, GraphRequestRefusal>,
+) -> Result<StreamGraphLevelOfAPlacedStream, GraphRequestRefusal> {
+    let kept = std::cell::RefCell::new(None);
+    document
+        .the_level_a_path_of_placed_streams_reaches(stream, level, &mut |placed_stream| {
+            document_of_the_stream(placed_stream).map_err(|refusal| refusal.words_kept_in(&kept))
+        })
+        .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))
 }

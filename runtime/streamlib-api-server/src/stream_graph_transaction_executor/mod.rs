@@ -57,8 +57,11 @@ mod live_application_and_reversal;
 mod request_application;
 mod request_to_graph_operation;
 mod streams_each_operation_names;
-use connect_asked_at_a_level::the_operation_a_connect_asks_at_the_level;
 pub(crate) use connect_asked_at_a_level::the_operation_a_connect_asks_inside_a_placed_stream;
+use connect_asked_at_a_level::{
+    the_operation_a_connect_asks_at_the_level,
+    why_each_link_an_edit_makes_at_a_placed_level_goes_unjudged,
+};
 pub(crate) use streams_each_operation_names::StreamsTheRuntimeHolds;
 mod transaction_answers;
 
@@ -73,7 +76,7 @@ use request_to_graph_operation::{
     the_operation_a_connect_asks,
 };
 use streams_each_operation_names::the_stream_each_operation_names;
-use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
+use transaction_answers::{WhatAnAnswerNamesBesideItsOperations, the_links_an_operation_makes};
 
 /// The link from `source` to `target` an action on a link names, as its caller named it.
 fn what_a_link_action_names(
@@ -170,14 +173,16 @@ struct StreamATransactionEdits {
 
 /// One graph operation applied: the operation its answer reports, as the stream it names draws
 /// it; what it made on that running stream; the project operations it records, in order; each
-/// operation a loaded stream takes once the project's documents hold it; and the link that
-/// overrides the input value it sets, when one feeds that input.
+/// operation a loaded stream takes once the project's documents hold it; the link that
+/// overrides the input value it sets, when one feeds that input; and each link it made without
+/// judging it, as the stream draws it, with why.
 struct OneGraphRequestApplied {
     operation_answered: StreamGraphOperation,
     applied_live: Option<OneOperationAppliedLive>,
     project_operations: Vec<ProjectOperation>,
     made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)>,
     overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
+    links_made_unjudged: Vec<(StreamGraphDocumentLink, String)>,
 }
 
 /// One operation made on a running stream, and the value set live on the input it set that it

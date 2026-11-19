@@ -230,3 +230,55 @@ async fn a_link_inside_a_placed_stream_is_judged_by_its_pin_types() {
         ["mixer/level -> mixer/gain"]
     );
 }
+
+/// A link inside a placed stream reaching a `GraphOutput` that names no family, which runs as
+/// no node of its own, is saved without being judged, and its entry under `connected_links`
+/// says why.
+///
+/// Mental-revert: discarding what the judgement of a link at a placed level answers leaves the
+/// entry with no `not_judged_because`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let inside = engine
+        .the_mixer_collapsed_into_a_placed_stream(&project)
+        .await;
+    let added = engine
+        .the_answer_or_the_refusal_of(
+            "add_node",
+            json!({ "stream": stream_asset, "level": [inside.subgraph],
+                    "type": "tatolab.stream:GraphOutput", "name": "level-out",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("a `GraphOutput` naming no family is added inside `sub`");
+    let output = added["added_nodes"][0]["node"]
+        .as_str()
+        .expect("the output's UUID")
+        .to_owned();
+
+    let connected = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            json!({
+                "stream": stream_asset, "level": [inside.subgraph],
+                "author": an_agent_named("alice"),
+                "source": { "node": inside.mixer, "port": "level" },
+                "target": { "node": output, "port": "value" },
+            }),
+        )
+        .await
+        .expect("a link into a `GraphOutput` naming no family is saved");
+
+    let why = connected["connected_links"][0]["not_judged_because"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the link says why it was not judged: {connected}"));
+    assert!(why.contains("names no family"), "{why}");
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_of("sub")),
+        ["mixer/level -> level-out/value"]
+    );
+}

@@ -35,6 +35,32 @@ pub enum WhatALiveConnectMakesOfALink {
     /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
     /// graph judges it only as it is reconciled to a document holding it.
     JudgesItOnlyAsItIsMade,
+    /// The link, at a level of a placed stream, reaches the node `node_name` of that level, which
+    /// is not built to judge it because of `why`, such as a type that is not described.
+    ReachesANodeNotBuilt {
+        /// The node's name, as the level names it.
+        node_name: String,
+        /// Why it is not built, in the runtime's words.
+        why: String,
+    },
+}
+
+impl WhatALiveConnectMakesOfALink {
+    /// Why a connect would make the link without judging it, in the runtime's words; `None` when
+    /// it judges the link.
+    pub fn why_it_makes_the_link_unjudged(&self) -> Option<String> {
+        match self {
+            Self::Makes(_) => None,
+            Self::JudgesItOnlyAsItIsMade => Some(
+                "the link reaches a node that runs as no node of its own, such as a fragment, or \
+                 a `GraphInput` or `GraphOutput` that names no family"
+                    .to_owned(),
+            ),
+            Self::ReachesANodeNotBuilt { node_name, why } => Some(format!(
+                "the link reaches node `{node_name}`, which is not built to judge it: {why}"
+            )),
+        }
+    }
 }
 
 pub trait RuntimeOperations: Send + Sync {

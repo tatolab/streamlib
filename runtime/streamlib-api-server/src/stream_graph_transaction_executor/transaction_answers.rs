@@ -4,10 +4,23 @@
 use super::*;
 
 /// What the answer of a graph transaction names beside the operations it applied: the `as` of
-/// each node added, and each input value set that a link overrides.
+/// each node added, each input value set that a link overrides, and why each link made without
+/// being judged was, by its stream id and the link as that stream draws it.
 pub(super) struct WhatAnAnswerNamesBesideItsOperations<'labels> {
     pub(super) labels_of_added_nodes: &'labels HashMap<Uuid, String>,
     pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    pub(super) why_each_link_was_made_unjudged: BTreeMap<(String, StreamGraphDocumentLink), String>,
+}
+
+/// The links `operation` makes, in the order it makes them.
+pub(super) fn the_links_an_operation_makes(
+    operation: &StreamGraphOperation,
+) -> &[StreamGraphDocumentLink] {
+    match operation {
+        StreamGraphOperation::Connect { link } => std::slice::from_ref(link),
+        StreamGraphOperation::AddNode { links, .. } => links.as_slice(),
+        _ => &[],
+    }
 }
 
 impl StreamGraphTransactionExecutor<'_> {
@@ -49,6 +62,7 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &HashMap::new(),
                 overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
+                why_each_link_was_made_unjudged: BTreeMap::new(),
             },
         )
     }
@@ -63,6 +77,7 @@ impl StreamGraphTransactionExecutor<'_> {
         WhatAnAnswerNamesBesideItsOperations {
             labels_of_added_nodes,
             overridden_by_links,
+            mut why_each_link_was_made_unjudged,
         }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
         let mut added_nodes = Vec::new();
@@ -106,12 +121,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
                 _ => {}
             }
-            let links_the_operation_connects = match &applied {
-                StreamGraphOperation::Connect { link } => std::slice::from_ref(link),
-                StreamGraphOperation::AddNode { links, .. } => links.as_slice(),
-                _ => &[],
-            };
-            for link in links_the_operation_connects {
+            for link in the_links_an_operation_makes(&applied) {
                 let graph_render = graph_render_of_each_stream
                     .entry(stream_id.clone())
                     .or_insert_with(|| {
@@ -141,6 +151,8 @@ impl StreamGraphTransactionExecutor<'_> {
                     target: link_end_on_the_wire(&link.target),
                     state,
                     error_reason,
+                    not_judged_because: why_each_link_was_made_unjudged
+                        .remove(&(stream_id.clone(), link.clone())),
                 });
             }
             let mut operation = serde_json::to_value(&applied).unwrap_or_default();

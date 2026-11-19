@@ -5,6 +5,7 @@
 //! `connect` reads it and made nowhere: the stream's own level as its graph renders it, or a
 //! level inside a placed stream as the project's documents hold it.
 
+use super::request_application::the_level_reached;
 use super::*;
 
 /// The document of the level `level` of placed streams reaches inside the stream asset
@@ -22,15 +23,12 @@ pub(crate) fn the_operation_a_connect_asks_inside_a_placed_stream(
     stream_operations: &dyn RuntimeOperations,
     project_repository: &ProjectRepository,
 ) -> Result<(StreamGraphDocument, StreamGraphOperation), GraphRequestRefusal> {
-    let kept = std::cell::RefCell::new(None);
-    let reached = project_repository
-        .stream_graph_document(stream)?
-        .the_level_a_path_of_placed_streams_reaches(stream, level, &mut |placed_stream| {
-            project_repository
-                .stream_graph_document(placed_stream)
-                .map_err(|refusal| GraphRequestRefusal::from(refusal).words_kept_in(&kept))
-        })
-        .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))?;
+    let reached = the_level_reached(
+        project_repository.stream_graph_document(stream)?,
+        stream,
+        level,
+        &|placed_stream| Ok(project_repository.stream_graph_document(placed_stream)?),
+    )?;
     let operation = the_operation_a_connect_asks_at_the_level(
         source,
         target,
@@ -75,4 +73,38 @@ pub(super) fn the_operation_a_connect_asks_at_the_level(
         refuse_a_link_the_graph_already_holds(level_as_drawn, link)?;
     }
     Ok(operation)
+}
+
+/// Why each link `edit` makes at `level`, a level of a placed stream as its document held it
+/// before the edit, is made without being judged, in the order the edit makes them, `None` for
+/// one judged: each judged by the engine's judgement of a link at a placed level, a node `edit`
+/// adds placed first and each link judged among the ones made before it, as a running stream
+/// makes them. Refused as a connect of a refused link is.
+pub(super) fn why_each_link_an_edit_makes_at_a_placed_level_goes_unjudged(
+    stream_operations: &dyn RuntimeOperations,
+    level: &StreamGraphDocument,
+    edit: &StreamGraphOperation,
+) -> Result<Vec<Option<String>>, GraphRequestRefusal> {
+    let why_unjudged = |level: &StreamGraphDocument, link: &StreamGraphDocumentLink| {
+        stream_operations
+            .what_a_connect_makes_of_a_link_at_a_placed_level(level, link)
+            .map(|made| made.why_it_makes_the_link_unjudged())
+    };
+    match edit {
+        StreamGraphOperation::Connect { link } => Ok(vec![why_unjudged(level, link)?]),
+        StreamGraphOperation::AddNode { node, links } if !links.is_empty() => {
+            let mut level = level.clone();
+            level.apply(&StreamGraphOperation::AddNode {
+                node: node.clone(),
+                links: Vec::new(),
+            })?;
+            let mut why_each_link_goes_unjudged = Vec::with_capacity(links.len());
+            for link in links {
+                why_each_link_goes_unjudged.push(why_unjudged(&level, link)?);
+                level.apply(&StreamGraphOperation::Connect { link: link.clone() })?;
+            }
+            Ok(why_each_link_goes_unjudged)
+        }
+        _ => Ok(Vec::new()),
+    }
 }

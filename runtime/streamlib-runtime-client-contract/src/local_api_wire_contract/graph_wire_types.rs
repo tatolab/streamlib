@@ -76,6 +76,11 @@ pub struct GraphTransactionConnectedLink {
     /// Why a link reading `error` will carry nothing, in the refusing end's own words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
+    /// Why the link was saved without its two ends being judged, when it was: inside a placed
+    /// stream, it reaches a node that runs as no node of its own, or one that is not built to
+    /// judge it, such as one whose type is not described.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_judged_because: Option<String>,
 }
 
 /// An input a graph transaction set a value on while a link feeds it, so the link's messages

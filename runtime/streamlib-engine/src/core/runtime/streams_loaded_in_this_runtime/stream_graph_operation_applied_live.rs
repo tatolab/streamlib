@@ -4,14 +4,15 @@
 use std::collections::HashSet;
 use streamlib_project_repository::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphDocumentLink, StreamGraphOperation, is_a_graph_interface_node_type,
+    StreamGraphDocumentLink, StreamGraphDocumentNode, StreamGraphOperation,
+    is_a_graph_interface_node_type,
 };
 
 use uuid::Uuid;
 
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::legacy_config_of_a_node::{
-    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
+    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_of_a_document_node,
 };
 use crate::core::graph::{
     LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
@@ -68,17 +69,11 @@ impl LoadedStreamInThisRuntime {
                 .await?;
                 let (mut node, links) =
                     self.the_added_node_under_the_current_port_names(node, links);
-                let mut spec = node_spec_holding_the_input_values(
+                let spec = node_spec_of_a_document_node(
                     self.node_types_this_stream_resolves(),
                     node_type,
-                    &node.input_values,
-                    node.studio.to_map(),
-                )
-                .with_exposed_config_fields(node.exposed_config_fields.clone())
-                .with_node_uuid(node.id);
-                if !node.name.is_empty() {
-                    spec = spec.with_display_name(node.name.clone());
-                }
+                    node.clone(),
+                );
                 let a_node_held_the_uuid_before_the_add =
                     self.the_node_of_the_node(node.id).is_ok();
                 let added = match self.add_node_async(spec).await {
@@ -202,12 +197,7 @@ impl LoadedStreamInThisRuntime {
         let no_node_runs_as = |node: Uuid| self.the_node_of_the_node(node).is_err();
         match graph_operation {
             StreamGraphOperation::AddNode { node, links } => {
-                node.fragment.is_some()
-                    || node.node_type == STREAM_FRAGMENT_NODE_TYPE
-                    || is_a_graph_interface_node_naming_no_family(
-                        &node.node_type,
-                        &node.input_values,
-                    )
+                runs_as_no_node_of_its_own(node)
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
@@ -534,9 +524,17 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
+/// Whether `node`, a node of a graph document, runs as no node of its own: a fragment, a stream
+/// fragment, or a `GraphInput` or `GraphOutput` naming no family.
+pub(in crate::core::runtime) fn runs_as_no_node_of_its_own(node: &StreamGraphDocumentNode) -> bool {
+    node.fragment.is_some()
+        || node.node_type == STREAM_FRAGMENT_NODE_TYPE
+        || is_a_graph_interface_node_naming_no_family(&node.node_type, &node.input_values)
+}
+
 /// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config
 /// names no family, so the family it carries is resolved with the graph's links.
-pub(in crate::core::runtime) fn is_a_graph_interface_node_naming_no_family(
+fn is_a_graph_interface_node_naming_no_family(
     node_type: &str,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> bool {

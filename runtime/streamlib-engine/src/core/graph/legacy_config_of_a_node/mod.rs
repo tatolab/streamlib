@@ -169,6 +169,29 @@ pub(crate) fn node_spec_holding_the_input_values(
     NodeSpec::new(node_type, config).with_pins_and_studio_fields(pin_values, studio)
 }
 
+/// The spec that places `node`, a node of a graph document of type `node_type`, as a load places
+/// it: its input values split as its type takes them, its studio fields, its exposed config
+/// fields, its UUID, and its name unless it names none.
+pub(crate) fn node_spec_of_a_document_node(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: NodeClassImportPath,
+    node: streamlib_project_repository::StreamGraphDocumentNode,
+) -> NodeSpec {
+    let spec = node_spec_holding_the_input_values(
+        node_types,
+        node_type,
+        &node.input_values,
+        node.studio.to_map(),
+    )
+    .with_exposed_config_fields(node.exposed_config_fields)
+    .with_node_uuid(node.id);
+    if node.name.is_empty() {
+        spec
+    } else {
+        spec.with_display_name(node.name)
+    }
+}
+
 /// The config a node shows where it is rendered as drawn over its running node: each of its
 /// input values but those `pin_values`, the running node's, names.
 pub(crate) fn config_of_a_node_as_drawn(

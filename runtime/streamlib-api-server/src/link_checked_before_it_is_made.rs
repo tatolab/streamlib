@@ -32,10 +32,12 @@ impl ControlOperationDispatcher {
     /// documents as a transaction's `connect` reads it, and judged among that level's nodes by
     /// the engine's own judgement of a link there.
     ///
-    /// Two links are refused unchecked: one closing a loop of function nodes no
-    /// `PreviousValue` node is in, which `connect` closes through a `PreviousValue` node it
-    /// adds; and one reaching a node that runs as no node of its own, which the live graph
-    /// judges only as it is reconciled to a document holding the link.
+    /// Links `connect` makes without judging them are refused unchecked, in the words of why:
+    /// one reaching a node that runs as no node of its own, which the live graph judges only as
+    /// it is reconciled to a document holding the link, and, inside a placed stream, one
+    /// reaching a node not built to judge it, such as one whose type is not described. So is one
+    /// closing a loop of function nodes no `PreviousValue` node is in, which `connect` closes
+    /// through a `PreviousValue` node it adds.
     pub(crate) async fn check_link(
         &self,
         CheckLinkRequest {
@@ -61,16 +63,16 @@ impl ControlOperationDispatcher {
             )
         };
         let listings = self.operations_on_the_loaded_streams.list_streams();
-        let (stream_asset, stream_id) =
-            match StreamsTheRuntimeHolds::listed_in(&listings).the_stream_named(&stream) {
-                Ok(named) => named,
-                Err(runtime_words) => {
-                    return Ok(refused_as_connect_refuses(GraphRequestRefusal::coded(
-                        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
-                        runtime_words,
-                    )));
-                }
-            };
+        let streams_the_runtime_holds = StreamsTheRuntimeHolds::listed_in(&listings);
+        let (stream_asset, stream_id) = match streams_the_runtime_holds.the_stream_named(&stream) {
+            Ok(named) => named,
+            Err(runtime_words) => {
+                return Ok(refused_as_connect_refuses(GraphRequestRefusal::coded(
+                    RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
+                    runtime_words,
+                )));
+            }
+        };
         let stream_operations = self
             .operations_on_the_loaded_streams
             .runtime_operations_of_the_stream_a_call_names(&stream_id)
@@ -89,10 +91,8 @@ impl ControlOperationDispatcher {
             )
             .map(|operation| (None, operation))
         } else {
-            let project_directory = listings
-                .iter()
-                .find(|listing| listing.stream_id == stream_id)
-                .and_then(|listing| listing.stream_location.as_ref())
+            let project_directory = streams_the_runtime_holds
+                .the_location_of(&stream_id)
                 .map(|stream_location| stream_location.project_directory.clone());
             let project_repositories = Arc::clone(&self.project_repositories);
             let stream_operations = Arc::clone(&stream_operations);
@@ -142,8 +142,10 @@ impl ControlOperationDispatcher {
             Ok(WhatALiveConnectMakesOfALink::Makes(verdict)) => {
                 Ok(LinkCheckResult::of_a_link_connect_makes(verdict.as_deref()))
             }
-            Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade) => Err(not_checked_yet(
-                "the link reaches a node that runs as no node of its own, such as a fragment",
+            Ok(made_unjudged) => Err(not_checked_yet(
+                &made_unjudged
+                    .why_it_makes_the_link_unjudged()
+                    .unwrap_or_default(),
             )),
             Err(refusal) => Ok(refused_as_connect_refuses(refusal.into())),
         }
