@@ -128,6 +128,7 @@ class NoaaStationFeed:
         self.timeline = _timeline_of(responses)
         self.latest_live: dict | None = None
         self.stop = threading.Event()
+        self.poller: threading.Thread | None = None
         if self.config.mode == "live":
             self.poller = threading.Thread(target=self._poll, daemon=True)
             self.poller.start()
@@ -137,6 +138,16 @@ class NoaaStationFeed:
             readings=len(self.timeline),
             snapshot_fetched_at=snapshot["fetched_at_utc"],
         )
+
+    def configure(self, config: NoaaStationFeedConfig) -> None:
+        """Switched live: start polling NOAA; switched to replay: the poller stops."""
+        self.config = config
+        if config.mode == "live" and (self.poller is None or not self.poller.is_alive()):
+            self.stop = threading.Event()
+            self.poller = threading.Thread(target=self._poll, daemon=True)
+            self.poller.start()
+        elif config.mode != "live":
+            self.stop.set()
 
     def _poll(self) -> None:
         log_path = DATA_FOLDER / "station_log.jsonl"
@@ -156,7 +167,7 @@ class NoaaStationFeed:
             reading, live = self.latest_live, 1.0
         else:
             seconds = self.take_clock.seconds_at(ctx)
-            fraction = min(max(seconds / self.config.take_seconds, 0.0), 1.0)
+            fraction = (max(seconds, 0.0) / self.config.take_seconds) % 1.0
             span = self.config.replay_hours_per_take / 24.0
             start = 1.0 - span
             index = int((start + fraction * span) * (len(self.timeline) - 1))

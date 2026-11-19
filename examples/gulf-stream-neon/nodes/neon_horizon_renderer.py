@@ -20,12 +20,14 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
     Image,
     ImageFrameToWrite,
     Input,
     NodeOutputTextureRing,
+    NumberRange,
     Output,
     Records,
     RuntimeContextFullAccess,
@@ -43,6 +45,7 @@ from nodes.neon_world import (
     WORLD_SLANG,
     TakeClock,
     camera_basis,
+    stage_moment,
     sun_direction,
     take_moment_at,
 )
@@ -96,9 +99,9 @@ float3 sky_colour(float3 direction, bool with_sun) {
     float3 zenith = lerp(lerp(float3(0.20, 0.12, 0.42), float3(0.13, 0.04, 0.27), smoothstep(0.0, 0.5, tod)),
                          NIGHT * 0.3, smoothstep(0.5, 1.0, tod));
     float3 middle = lerp(lerp(CORAL, MAGENTA * 0.9, smoothstep(0.0, 0.55, tod)),
-                         float3(0.13, 0.03, 0.22), smoothstep(0.55, 1.0, tod));
+                         float3(0.08, 0.02, 0.15), smoothstep(0.55, 1.0, tod));
     float3 horizon = lerp(lerp(PEACH * 1.35, HOT_PINK * 1.2, smoothstep(0.0, 0.5, tod)),
-                          MAGENTA * 0.38, smoothstep(0.5, 1.0, tod));
+                          MAGENTA * 0.2, smoothstep(0.5, 1.0, tod));
     float3 colour = lerp(horizon, middle, smoothstep(0.0, 0.12, elevation));
     colour = lerp(colour, zenith, smoothstep(0.1, 0.5, elevation));
 
@@ -110,7 +113,7 @@ float3 sky_colour(float3 direction, bool with_sun) {
     float bands = fbm(float2(cloud_uv.x * 0.9 + dials.seconds * 0.02, cloud_uv.y * 3.5), 5);
     float cloud = smoothstep(0.52, 0.78, bands) * smoothstep(0.0, 0.04, elevation) * (1.0 - smoothstep(0.12, 0.3, elevation));
     float3 cloud_lit = lerp(MAGENTA * 0.35, PEACH * 1.6, pow(saturate(sun_cos * 0.5 + 0.5), 6.0)) * (1.0 - 0.6 * tod);
-    colour = lerp(colour, cloud_lit + HOT_PINK * 0.15, cloud * 0.85);
+    colour = lerp(colour, cloud_lit + HOT_PINK * 0.15 * (1.0 - 0.7 * tod), cloud * 0.85);
 
     // Stars come out after the sun goes.
     float2 star_cell = floor(float2(atan2(direction.x, direction.y) * 300.0, elevation * 480.0));
@@ -359,15 +362,15 @@ float3 chart_colour(float2 w, float4 relief, float footprint) {
     colour *= 0.55 + 0.75 * shade;
     // The coastline, crisp and white.
     float coast_km = relief.a;
-    float coast_width_km = max(0.25, footprint * 333.0 * 1.2);
+    float coast_width_km = max(0.08, footprint * 333.0 * 1.2);
     colour = lerp(colour, float3(1.0, 1.0, 1.0), 1.0 - smoothstep(coast_width_km * 0.5, coast_width_km, coast_km));
     // The half-degree graticule.
     float2 degrees = latitude_longitude_of(w) * 2.0;
     float2 to_line = abs(frac(degrees + 0.5) - 0.5) / 2.0;
     float per_world_degree = (LATITUDE_NORTH - LATITUDE_SOUTH) / (2.0 * WORLD_HALF_EXTENT);
-    float line_width = max(footprint * 2.0 * WORLD_HALF_EXTENT * per_world_degree * 1.3, 0.002);
+    float line_width = max(footprint * 2.0 * WORLD_HALF_EXTENT * per_world_degree * 1.3, 0.0004);
     float grid = 1.0 - smoothstep(line_width * 0.5, line_width, min(to_line.x, to_line.y));
-    colour = lerp(colour, float3(0.9, 0.95, 1.0), grid * 0.45);
+    colour = lerp(colour, float3(0.9, 0.95, 1.0), grid * 0.3);
     return colour * 0.9;
 }
 
@@ -462,13 +465,22 @@ LAYER_USAGE = ["storage_binding", "texture_binding"]
 
 @dataclass
 class NeonHorizonRendererConfig:
-    """NeonHorizonRenderer's settings: the picture's extent and lens, and the skyline's height."""
+    """NeonHorizonRenderer's settings: the picture's extent and lens, and the skyline's height.
+
+    In `take` mode the take's choreography flies the camera; in `stage` mode the
+    stage view steers it, and `time_of_day` (0 golden hour to 1 night), `morph`
+    (0 the real chart to 1 neon) and `glow` are the stage's sliders, set live.
+    """
 
     width: int = 1080
     height: int = 1920
     vertical_field_of_view_degrees: float = 62.0
-    exposure: float = 0.5
-    skyline_height: float = 0.055
+    exposure: Annotated[float, NumberRange(minimum=0.05, maximum=2.0)] = 0.5
+    skyline_height: Annotated[float, NumberRange(minimum=0.0, maximum=0.15)] = 0.055
+    mode: str = "take"
+    time_of_day: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 0.35
+    morph: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 1.0
+    glow: Annotated[float, NumberRange(minimum=0.0, maximum=3.0)] = 1.0
 
 
 @node.meta(
@@ -487,6 +499,7 @@ class NeonHorizonRenderer:
     trails = Input(Image, delivery="newest", description="From GulfStreamCurrent")
     soundtrack = Input(Records, delivery="newest", description="beat, energy: from SoundtrackPulse")
     station = Input(Records, delivery="newest", description="wind: from NoaaStationFeed")
+    stage = Input(Records, delivery="newest", description="The stage view's camera: orbit, zoom and fly")
     scene = Output(Image, description="The HDR picture, rgba16_float, distance in alpha")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -499,7 +512,13 @@ class NeonHorizonRenderer:
         self.latest = {"contours": None, "relief": None, "trails": None}
         self.latest_soundtrack: dict = {}
         self.latest_station: dict = {}
+        self.latest_stage: dict = {}
         self.last_rendered_ns: int | None = None
+
+    def configure(self, config: NeonHorizonRendererConfig) -> None:
+        """A setting changed live: the stage's sliders land here."""
+        self.config = config
+        self.focal = 1.0 / math.tan(math.radians(config.vertical_field_of_view_degrees) / 2.0)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         for name in ("contours", "relief", "trails"):
@@ -512,16 +531,26 @@ class NeonHorizonRenderer:
         station = ctx.inputs.read(self.station)
         if station is not None:
             self.latest_station = station
+        stage = ctx.inputs.read(self.stage)
+        if stage is not None:
+            self.latest_stage = stage
         if any(frame is None for frame in self.latest.values()):
             return
         frame_ns = self.latest["trails"].timestamp_ns
-        if frame_ns == self.last_rendered_ns or self.latest["contours"].timestamp_ns != frame_ns:
+        if frame_ns == self.last_rendered_ns:
+            return
+        # On a stepped take every layer of a step lands before it is drawn; live, the newest of each will do.
+        if ctx.stream_clock.mode == "stepped" and self.latest["contours"].timestamp_ns != frame_ns:
             return
         self.last_rendered_ns = frame_ns
 
         width, height = self.config.width, self.config.height
         seconds = self.take_clock.seconds_at(ctx, frame_ns)
-        moment = take_moment_at(seconds, width / height)
+        on_stage = self.config.mode == "stage"
+        if on_stage:
+            moment = stage_moment(self.latest_stage, self.config.time_of_day, 1.0 - self.config.morph)
+        else:
+            moment = take_moment_at(seconds, width / height)
         forward, right, up = camera_basis(
             moment.camera_yaw_degrees, moment.camera_pitch_degrees, moment.camera_roll_degrees
         )
@@ -549,7 +578,7 @@ class NeonHorizonRenderer:
                 moment.camera_altitude,
                 self.focal,
                 *forward,
-                1.0 + 0.4 * moment.drop + 0.3 * energy,
+                self.config.glow * (1.0 + 0.4 * moment.drop + 0.3 * energy),
                 *right,
                 beat,
                 *up,

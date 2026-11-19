@@ -16,12 +16,14 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
     Image,
     ImageFrameToWrite,
     Input,
     NodeOutputTextureRing,
+    NumberRange,
     Output,
     Records,
     RuntimeContextFullAccess,
@@ -75,6 +77,11 @@ struct CurrentDials {
     float wind_east;
     float wind_north;
     float brightness;
+    float eddy_x;
+    float eddy_y;
+    float eddy_age;
+    float eddy_strength;
+    float burst_now;
 };
 [[vk::push_constant]] ConstantBuffer<CurrentDials> dials;
 
@@ -95,7 +102,11 @@ float2 flow_at(float2 w, float4 here) {
     float calm = 1.0 - saturate(here.w / 1.2);
     float2 eddies = float2(dpdy, -dpdx) * dials.turbulence * (0.006 + 0.02 * calm);
     float2 wind = float2(dials.wind_east, dials.wind_north) * 0.0009;
-    return water + eddies + wind;
+    // A dropped eddy: a vortex that spins up, rides the current and fades.
+    float2 to_eddy = w - float2(dials.eddy_x, dials.eddy_y);
+    float spin = dials.eddy_strength * exp(-dials.eddy_age * 0.5) * smoothstep(0.0, 0.3, dials.eddy_age);
+    float2 vortex = float2(-to_eddy.y, to_eddy.x) / (dot(to_eddy, to_eddy) + 0.0009) * spin * 0.01;
+    return water + eddies + wind + vortex;
 }
 
 float3 streak_colour(float speed01, float seed) {
@@ -139,6 +150,16 @@ void main(uint3 id : SV_DispatchThreadID) {
         life = 1.5 + 3.5 * r4;
         here = field_at(position);
     }
+    // A burst: one particle in sixteen is thrown into a ring where the stage was clicked.
+    bool bursting = (index % 16u) == 0u;
+    if (dials.burst_now > 0.5 && bursting) {
+        float angle = hash11(float(index) * 0.37) * 6.2831853;
+        float radius = 0.004 + 0.035 * sqrt(hash11(float(index) * 0.91 + 3.1));
+        position = float2(dials.eddy_x, dials.eddy_y) + float2(cos(angle), sin(angle)) * radius;
+        age = 0.0;
+        life = 3.5 + 2.5 * hash11(float(index) * 0.53);
+        here = field_at(position);
+    }
 
     float2 velocity = flow_at(position, here);
     float2 next = position + velocity * dials.step_seconds;
@@ -149,6 +170,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     float fade = sin(PI * saturate(age / life));
     float lit = (0.0002 + 0.0028 * speed01 * speed01 * speed01) * fade * (1.0 + 1.8 * dials.beat * speed01) * dials.brightness;
     float3 colour = streak_colour(speed01, seed) * lit;
+    float burst_glow = (bursting ? 1.0 : 0.0) * exp(-dials.eddy_age * 0.45) * step(dials.eddy_age, 6.0) * dials.eddy_strength;
+    colour += lerp(CYAN, float3(1.0, 1.0, 1.0), 0.25) * burst_glow * 0.035 * fade;
 
     // The streak spans this step and the one before, so it reads as motion.
     float2 from_texel = world_to_texel(position - velocity * dials.step_seconds);
@@ -167,7 +190,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 """
 
 FADE_DIALS = struct.Struct("<ff")
-CURRENT_DIALS = struct.Struct("<12f")
+CURRENT_DIALS = struct.Struct("<17f")
 FIELD_FORMAT = "rgba32_float"
 LAYER_USAGE = ["storage_binding", "texture_binding"]
 
@@ -181,10 +204,11 @@ class GulfStreamCurrentConfig:
     """GulfStreamCurrent's settings."""
 
     particle_count: int = 2_097_152
-    trail_decay: float = 0.86
-    turbulence: float = 1.0
-    time_lapse: float = 9000.0
-    brightness: float = 1.0
+    trail_decay: Annotated[float, NumberRange(minimum=0.0, maximum=0.99)] = 0.86
+    turbulence: Annotated[float, NumberRange(minimum=0.0, maximum=5.0)] = 1.0
+    time_lapse: Annotated[float, NumberRange(minimum=0.0, maximum=40000.0)] = 9000.0
+    brightness: Annotated[float, NumberRange(minimum=0.0, maximum=4.0)] = 1.0
+    active_particles: Annotated[int, NumberRange(minimum=1024, maximum=4_194_304)] = 2_097_152
     step_seconds: float = 1.0 / 30.0
 
 
@@ -201,6 +225,7 @@ class GulfStreamCurrent:
 
     soundtrack = Input(Records, delivery="newest", description="beat, energy: from SoundtrackPulse")
     station = Input(Records, delivery="newest", description="wind_speed_mps, wind_from_degrees: from NoaaStationFeed")
+    stage = Input(Records, delivery="newest", description="The stage view: its camera, and where it was clicked to drop an eddy")
     trails = Output(Image, description="The particle trails in world space, HDR")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -219,7 +244,44 @@ class GulfStreamCurrent:
         self.frame_index = 0
         self.latest_soundtrack: dict = {}
         self.latest_station: dict = {}
+        self.latest_stage: dict = {}
+        self.bursts_seen: float | None = None
+        self.eddy = (0.0, 0.0)
+        self.eddy_age = 99.0
+        self.eddy_strength = 0.0
+        self.field_on_cpu = baked_currents(size).reshape(size, size, 4)
         log.info("current snapshot uploaded", particles=self.config.particle_count)
+
+    def configure(self, config: GulfStreamCurrentConfig) -> None:
+        """A setting changed live: the stage's sliders land here. The particle buffer keeps its size."""
+        config.particle_count = self.config.particle_count
+        self.config = config
+
+    def _active(self) -> int:
+        return max(1024, min(self.config.active_particles, self.config.particle_count))
+
+    def _follow_the_eddy(self) -> bool:
+        """Start an eddy where the stage was last clicked, and carry the one there is north on the real current."""
+        step = self.config.step_seconds
+        bursts = self.latest_stage.get("bursts")
+        started = False
+        if bursts is not None and self.bursts_seen is not None and float(bursts) > self.bursts_seen:
+            point = self.latest_stage.get("burst_x"), self.latest_stage.get("burst_y")
+            if point[0] is not None and point[1] is not None:
+                self.eddy = (float(point[0]), float(point[1]))
+                self.eddy_age = 0.0
+                self.eddy_strength = 1.0
+                started = True
+        if bursts is not None:
+            self.bursts_seen = float(bursts)
+        size = self.field_on_cpu.shape[0]
+        column = int(min(max((self.eddy[0] / 2.5 * 0.5 + 0.5) * size, 0), size - 1))
+        row = int(min(max((0.5 - self.eddy[1] / 2.5 * 0.5) * size, 0), size - 1))
+        east, north = self.field_on_cpu[row, column, 0], self.field_on_cpu[row, column, 1]
+        scale = self.config.time_lapse / METRES_PER_WORLD_UNIT
+        self.eddy = (self.eddy[0] + float(east) * scale * step, self.eddy[1] + float(north) * scale * step)
+        self.eddy_age += step
+        return started
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         soundtrack = ctx.inputs.read(self.soundtrack)
@@ -228,6 +290,10 @@ class GulfStreamCurrent:
         station = ctx.inputs.read(self.station)
         if station is not None:
             self.latest_station = station
+        stage = ctx.inputs.read(self.stage)
+        if stage is not None:
+            self.latest_stage = stage
+        burst_now = self._follow_the_eddy()
         seconds = self.take_clock.seconds_at(ctx)
         moment = take_moment_at(seconds)
         beat = float(self.latest_soundtrack.get("beat", 0.0))
@@ -247,10 +313,10 @@ class GulfStreamCurrent:
         )
         self.current_kernel.dispatch(
             bindings={"particles": self.particles, "trails": self.trail_texture, "field": self.field},
-            group_count=(workgroups(self.config.particle_count, 256), 1, 1),
+            group_count=(workgroups(self._active(), 256), 1, 1),
             push_constants=CURRENT_DIALS.pack(
                 size,
-                self.config.particle_count,
+                self._active(),
                 seconds,
                 self.config.step_seconds,
                 speed,
@@ -261,6 +327,11 @@ class GulfStreamCurrent:
                 wind_east,
                 wind_north,
                 self.config.brightness,
+                self.eddy[0],
+                self.eddy[1],
+                self.eddy_age,
+                self.eddy_strength,
+                1.0 if burst_now else 0.0,
             ),
         )
         self.frame_index += 1

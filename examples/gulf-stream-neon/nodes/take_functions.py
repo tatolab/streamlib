@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from tatolab.stream import node
 
-from nodes.neon_world import camera_basis, project_to_frame, smoothstep, sun_direction, take_moment_at
+from nodes.neon_world import TakeMoment, camera_basis, project_to_frame, smoothstep, stage_moment, sun_direction, take_moment_at
 from nodes.soundtrack_analysis import soundtrack_curves
 
 
@@ -79,7 +79,11 @@ def SunOnScreen(  # noqa: N802
     seconds: float = 0.0, aspect: float = 0.5625, vertical_fov_degrees: float = 62.0
 ) -> ScreenPlacement:
     """The sun's and the horizon's place in the frame at `seconds`, for a frame of `aspect` and lens."""
-    moment = take_moment_at(seconds, aspect)
+    return _placement_of(take_moment_at(seconds, aspect), aspect, vertical_fov_degrees)
+
+
+def _placement_of(moment: TakeMoment, aspect: float, vertical_fov_degrees: float) -> ScreenPlacement:
+    """Where `moment`'s camera sees the sun and the horizon."""
     sun = sun_direction(moment.time_of_day)
     far = 500.0
     sun_point = (
@@ -103,3 +107,15 @@ def SunOnScreen(  # noqa: N802
     inside = smoothstep(-0.35, 0.0, x) * (1.0 - smoothstep(1.0, 1.35, x)) * smoothstep(-0.35, 0.0, y) * (1.0 - smoothstep(1.0, 1.35, y))
     above_sea = smoothstep(-0.1, 0.02, sun[2])
     return ScreenPlacement(x, y, inside * above_sea * (1.0 - moment.reveal), horizon_y)
+
+
+@node.meta(
+    category="Gulf Stream Neon",
+    description="Where the stage view's camera sees the sun and the horizon, as frame positions from 0 to 1, for god rays, flares and heat haze while you fly it.",
+)
+@node.function
+def StageSunOnScreen(  # noqa: N802
+    stage: dict, time_of_day: float = 0.35, aspect: float = 1.7778, vertical_fov_degrees: float = 50.0
+) -> ScreenPlacement:
+    """The sun's and the horizon's place in the frame for the stage's camera at `time_of_day`."""
+    return _placement_of(stage_moment(stage, time_of_day, 0.0), aspect, vertical_fov_degrees)

@@ -1,6 +1,6 @@
 {
   "dependencies": [],
-  "description": "The Gulf Stream off Miami as a neon river of light: a GPU particle current over glowing seafloor contours, under a synthwave sky.",
+  "description": "Real data, live on the GPU: NOAA bathymetry, a HYCOM Gulf Stream snapshot and NOAA Virginia Key readings off Miami, as a neon Deco skyline over a river of two million particles.",
   "name": "Gulf Stream Neon",
   "project": "5b0f6c2e-8d7a-4f1e-9c3b-2a6e4d8f1c70"
 }

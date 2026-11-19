@@ -167,6 +167,7 @@ class TakeMoment:
 MIAMI = world_of(-80.19, 25.77)
 MIAMI_BEACH = world_of(-80.13, 25.80)
 OVERHEAD_CENTRE = world_of(-79.95, 25.80)
+OVERHEAD_CENTRE_TALL = world_of(-79.73, 25.62)
 
 
 def take_moment_at(seconds: float, aspect: float = 9.0 / 16.0) -> TakeMoment:
@@ -219,11 +220,12 @@ def take_moment_at(seconds: float, aspect: float = 9.0 / 16.0) -> TakeMoment:
     yaw = lerp(yaw, -150.0, finale)
 
     # The reveal: straight up over the Straits until the map holds the frame.
-    half_height_needed = 1.25 if aspect < 1.0 else 0.80
+    half_height_needed = 1.5 if aspect < 1.0 else 0.80
+    overhead_centre = OVERHEAD_CENTRE_TALL if aspect < 1.0 else OVERHEAD_CENTRE
     overhead_altitude = half_height_needed / math.tan(math.radians(31.0 if aspect < 1.0 else 24.0))
     hold = smoothstep(5.0, 8.6, t)
-    camera_x = lerp(camera_x, OVERHEAD_CENTRE[0], rise)
-    camera_y = lerp(camera_y, OVERHEAD_CENTRE[1] + 0.05 * hold, rise)
+    camera_x = lerp(camera_x, overhead_centre[0], rise)
+    camera_y = lerp(camera_y, overhead_centre[1] + 0.05 * hold, rise)
     altitude = lerp(altitude, overhead_altitude * lerp(1.0, 0.9, hold), rise * rise)
     pitch = lerp(pitch, 89.9, smoothstep(4.0, 5.0, t) * (1.0 - smoothstep(8.6, 9.6, t)))
     yaw = lerp(yaw, 0.0, rise)
@@ -250,6 +252,59 @@ def take_moment_at(seconds: float, aspect: float = 9.0 / 16.0) -> TakeMoment:
         reveal=reveal,
         focus_distance=focus,
     )
+
+
+# Where the stage view's camera starts: low over the Straits, Miami Beach ahead and left.
+STAGE_HOME = {
+    "target_x": world_of(-80.02, 25.86)[0],
+    "target_y": world_of(-80.02, 25.86)[1],
+    "distance": 0.32,
+    "yaw_degrees": -22.0,
+    "pitch_degrees": 16.0,
+}
+
+
+def stage_moment(stage: dict | None, time_of_day: float, morph: float) -> TakeMoment:
+    """The camera the stage view steers: an orbit around a point on the sea.
+
+    `stage` is the view's camera record: the point it orbits (`target_x`,
+    `target_y`, in world units), how far away (`distance`), and the heading and
+    tilt (`yaw_degrees` from north, `pitch_degrees` down). Missing keys keep
+    their home values.
+    """
+    view = dict(STAGE_HOME)
+    view.update({key: float(value) for key, value in (stage or {}).items() if key in STAGE_HOME})
+    pitch = min(max(view["pitch_degrees"], 2.0), 89.9)
+    distance = min(max(view["distance"], 0.02), 6.0)
+    forward, _right, _up = camera_basis(view["yaw_degrees"], pitch)
+    return TakeMoment(
+        camera_x=view["target_x"] - forward[0] * distance,
+        camera_y=view["target_y"] - forward[1] * distance,
+        camera_altitude=max(0.006, -forward[2] * distance),
+        camera_pitch_degrees=pitch,
+        camera_yaw_degrees=view["yaw_degrees"],
+        camera_roll_degrees=0.0,
+        time_of_day=min(max(time_of_day, 0.0), 1.0),
+        current_speed=1.0,
+        drop=0.0,
+        reveal=min(max(morph, 0.0), 1.0),
+        focus_distance=distance,
+    )
+
+
+def frame_point_on_the_sea(moment: TakeMoment, u: float, v: float, aspect: float, vertical_fov_degrees: float):
+    """The world point on the sea seen at frame position (u, v), v down, or None above the horizon."""
+    forward, right, up = camera_basis(
+        moment.camera_yaw_degrees, moment.camera_pitch_degrees, moment.camera_roll_degrees
+    )
+    focal = 1.0 / math.tan(math.radians(vertical_fov_degrees) / 2.0)
+    x = (u - 0.5) * 2.0 * aspect
+    y = (0.5 - v) * 2.0
+    direction = [forward[i] * focal + right[i] * x + up[i] * y for i in range(3)]
+    if direction[2] >= -1e-6:
+        return None
+    t = moment.camera_altitude / -direction[2]
+    return moment.camera_x + direction[0] * t, moment.camera_y + direction[1] * t
 
 
 def camera_basis(yaw_degrees: float, pitch_degrees: float, roll_degrees: float = 0.0):

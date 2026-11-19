@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gulf Stream Neon stage</title>
+<link rel="stylesheet" href="stage.css">
+</head>
+<body>
+<main class="stage">
+  <section class="stage-view">
+    <div class="stage-frame">
+      <canvas class="stage-picture" tabindex="0" aria-label="The ocean off Miami. Drag to orbit, scroll to zoom, WASD to fly, click the water to drop an eddy."></canvas>
+      <canvas class="stage-labels" aria-hidden="true"></canvas>
+      <div class="stage-hud">
+        <span class="stage-live-dot"></span><span class="stage-fps">— fps</span>
+      </div>
+      <aside class="stage-data" aria-label="Live data">
+        <h3>NOAA CO-OPS 8723214 · Virginia Key, FL</h3>
+        <p class="stage-data-mode">—</p>
+        <dl>
+          <dt>Observed</dt><dd class="d-time">—</dd>
+          <dt>Water level</dt><dd class="d-level">—</dd>
+          <dt>Wind</dt><dd class="d-wind">—</dd>
+          <dt>Water temp</dt><dd class="d-water">—</dd>
+          <dt>Air</dt><dd class="d-air">—</dd>
+        </dl>
+      </aside>
+      <p class="stage-notice" role="status"></p>
+    </div>
+    <div class="stage-controls">
+      <button type="button" class="stage-home">Home</button>
+      <span class="stage-hint">Drag to orbit · scroll to zoom · WASD / arrows to fly · click the water to drop an eddy</span>
+    </div>
+  </section>
+  <aside class="stage-panel" aria-label="Controls">
+    <h2 class="stage-panel-title">Gulf Stream Neon</h2>
+    <p class="stage-panel-status" role="status">Finding the stream…</p>
+    <div class="stage-panel-controls"></div>
+  </aside>
+</main>
+<script type="module" src="stage.js"></script>
+</body>
+</html>
