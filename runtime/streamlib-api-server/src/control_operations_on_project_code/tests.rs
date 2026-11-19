@@ -36,6 +36,7 @@ fn the_answer_of_the_declaration_check(
             findings: Vec::new(),
             files_checked: Vec::new(),
         },
+        None,
     )
 }
 

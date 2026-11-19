@@ -112,6 +112,11 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "{no_uv}; every stream whose project's .venv needs making is recorded failed"
         ),
     }
+    for no_code_checker in
+        crate::runtime_unit_executable_beside_tatolabd::code_checkers_the_runtime_unit_does_not_carry()
+    {
+        tracing::warn!("{no_code_checker}; a project's views and controls cannot be checked");
+    }
     if let Err(first_commit_refusal) =
         engine.set_created_project_first_commit(std::sync::Arc::new(|project_directory| {
             streamlib_project_repository::ProjectRepository::commit_a_written_project_as_its_first(

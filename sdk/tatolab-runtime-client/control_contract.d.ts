@@ -5548,6 +5548,198 @@ export interface ProjectViewDeclaredPort {
 }
 
 /**
+ * `list_project_node_ui_elements`'s params.
+ */
+export interface ListProjectNodeUiElementsRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+}
+
+/**
+ * The `list_project_node_ui_elements` tool's result: the controls and node bodies the project
+ * and each of its imports register, read from each one's `node_ui/tatolab_node_ui.json` with
+ * none of its scripts run.
+ */
+export interface ListProjectNodeUiElementsToolResult {
+  /**
+   * The project directory, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The project's UUID, from its `tatolab-project.json`.
+   */
+  project: string;
+  /**
+   * The project's name.
+   */
+  project_name: string;
+  /**
+   * Each element registered, the project's own first, then each import's in the order its
+   * project file records them, each module's in the order its manifest writes them.
+   */
+  elements: Array<ProjectNodeUiElementListed>;
+  /**
+   * Each manifest that reads, as written, in the same order.
+   */
+  manifests: Array<ProjectNodeUiManifestListed>;
+  /**
+   * Each manifest that does not read, with its file and why; the other modules still list.
+   */
+  unreadable_manifests: Array<ProjectNodeUiManifestNotRead>;
+}
+
+/**
+ * One control or node body a module registers.
+ */
+export interface ProjectNodeUiElementListed {
+  /**
+   * The module that registers it.
+   */
+  module: ProjectNodeUiModule;
+  /**
+   * Its script, relative to the project, as `node_ui/knob.ts` or
+   * `imports/<folder>/node_ui/knob.ts`, which names it to a project file read.
+   */
+  script_path: string;
+  /**
+   * What it is, and the pin type or node type it is for.
+   */
+  element: ProjectNodeUiElement;
+}
+
+/**
+ * The module that registers a node UI element: the listed project itself, or one of its
+ * imports.
+ */
+export interface ProjectNodeUiModule {
+  /**
+   * The module's project UUID.
+   */
+  project: string;
+  /**
+   * That project's name, which qualifies a control name it registers, as `acme:knob`.
+   */
+  project_name: string;
+  /**
+   * Its folder under `imports/`; `null` for the listed project's own.
+   */
+  import_folder?: string | null;
+}
+
+/**
+ * What a node UI element is, under `kind`.
+ */
+export type ProjectNodeUiElement = ({
+  /**
+   * The pin type whose inputs it edits or shows.
+   */
+  pin_type: BuiltInPinTypeName;
+  /**
+   * Its name, which a pin's `control` annotation picks it by; `null` for its pin type's
+   * default.
+   */
+  control?: string | null;
+  kind: "control";
+}) | {
+  /**
+   * The node type whose node it draws.
+   */
+  node_type: string;
+  kind: "node_body";
+};
+
+/**
+ * One module's manifest that reads.
+ */
+export interface ProjectNodeUiManifestListed {
+  /**
+   * The module whose manifest it is.
+   */
+  module: ProjectNodeUiModule;
+  /**
+   * Its file, relative to the project, as `node_ui/tatolab_node_ui.json` or
+   * `imports/<folder>/node_ui/tatolab_node_ui.json`.
+   */
+  manifest_path: string;
+  /**
+   * The manifest as written.
+   */
+  manifest: NodeUiManifest;
+}
+
+/**
+ * What a module's `node_ui/tatolab_node_ui.json` registers.
+ */
+export interface NodeUiManifest {
+  /**
+   * The view contract the elements were built for, as `"1.1"`.
+   */
+  contract: string;
+  /**
+   * Each control the module registers, which edits or shows an input of one pin type.
+   */
+  controls?: Array<NodeUiManifestControl>;
+  /**
+   * Each node body the module registers, which draws the inside of one node type's node.
+   */
+  node_bodies?: Array<NodeUiManifestNodeBody>;
+}
+
+/**
+ * A control a module registers for one pin type.
+ */
+export interface NodeUiManifestControl {
+  /**
+   * The pin type whose inputs the control edits or shows.
+   */
+  type: BuiltInPinTypeName;
+  /**
+   * The control's name, which a pin's `control` annotation picks it by. Left out, the control
+   * is its pin type's default.
+   */
+  control?: string;
+  /**
+   * The script that default-exports the control's element class, inside the node UI folder.
+   */
+  script: string;
+}
+
+/**
+ * A node body a module registers for one node type.
+ */
+export interface NodeUiManifestNodeBody {
+  /**
+   * The node type whose node it draws, as `acme:Crossfade`.
+   */
+  node_type: string;
+  /**
+   * The script that default-exports the node body's element class, inside the node UI folder.
+   */
+  script: string;
+}
+
+/**
+ * One module's manifest that does not read.
+ */
+export interface ProjectNodeUiManifestNotRead {
+  /**
+   * The module whose manifest it is.
+   */
+  module: ProjectNodeUiModule;
+  /**
+   * Its file, relative to the project.
+   */
+  manifest_path: string;
+  /**
+   * Why it does not read: it cannot be read, is not JSON, or does not read against the view
+   * contract, each as "`field`: why.".
+   */
+  why: string;
+}
+
+/**
  * `write_studio_view_output`'s params.
  */
 export interface WriteStudioViewOutputRequest {
@@ -6325,57 +6517,6 @@ export type NodeInputMode = {
   mode: "setting_only";
 };
 
-/**
- * What a module's `node_ui/tatolab_node_ui.json` registers.
- */
-export interface NodeUiManifest {
-  /**
-   * The view contract the elements were built for, as `"1.1"`.
-   */
-  contract: string;
-  /**
-   * Each control the module registers, which edits or shows an input of one pin type.
-   */
-  controls?: Array<NodeUiManifestControl>;
-  /**
-   * Each node body the module registers, which draws the inside of one node type's node.
-   */
-  node_bodies?: Array<NodeUiManifestNodeBody>;
-}
-
-/**
- * A control a module registers for one pin type.
- */
-export interface NodeUiManifestControl {
-  /**
-   * The pin type whose inputs the control edits or shows.
-   */
-  type: BuiltInPinTypeName;
-  /**
-   * The control's name, which a pin's `control` annotation picks it by. Left out, the control
-   * is its pin type's default.
-   */
-  control?: string;
-  /**
-   * The script that default-exports the control's element class, inside the node UI folder.
-   */
-  script: string;
-}
-
-/**
- * A node body a module registers for one node type.
- */
-export interface NodeUiManifestNodeBody {
-  /**
-   * The node type whose node it draws, as `acme:Crossfade`.
-   */
-  node_type: string;
-  /**
-   * The script that default-exports the node body's element class, inside the node UI folder.
-   */
-  script: string;
-}
-
 /** Every component of the contract, by name: the type its schema states. */
 export interface ControlContractComponents {
   ProjectActionRefusalOnTheWire: ProjectActionRefusalOnTheWire;
@@ -6633,6 +6774,16 @@ export interface ControlContractComponents {
   ListProjectViewsToolResult: ListProjectViewsToolResult;
   ProjectViewListed: ProjectViewListed;
   ProjectViewDeclaredPort: ProjectViewDeclaredPort;
+  ListProjectNodeUiElementsRequest: ListProjectNodeUiElementsRequest;
+  ListProjectNodeUiElementsToolResult: ListProjectNodeUiElementsToolResult;
+  ProjectNodeUiElementListed: ProjectNodeUiElementListed;
+  ProjectNodeUiModule: ProjectNodeUiModule;
+  ProjectNodeUiElement: ProjectNodeUiElement;
+  ProjectNodeUiManifestListed: ProjectNodeUiManifestListed;
+  NodeUiManifest: NodeUiManifest;
+  NodeUiManifestControl: NodeUiManifestControl;
+  NodeUiManifestNodeBody: NodeUiManifestNodeBody;
+  ProjectNodeUiManifestNotRead: ProjectNodeUiManifestNotRead;
   WriteStudioViewOutputRequest: WriteStudioViewOutputRequest;
   WriteStudioViewOutputToolResult: WriteStudioViewOutputToolResult;
   WriteGraphInputRequest: WriteGraphInputRequest;
@@ -6690,9 +6841,6 @@ export interface ControlContractComponents {
   NodeReferenceInConfig: NodeReferenceInConfig;
   PinDeclaration: PinDeclaration;
   NodeInputMode: NodeInputMode;
-  NodeUiManifest: NodeUiManifest;
-  NodeUiManifestControl: NodeUiManifestControl;
-  NodeUiManifestNodeBody: NodeUiManifestNodeBody;
 }
 
 /** A component the contract names, which the checker reads a value as. */
@@ -7438,7 +7586,7 @@ export interface ControlOperations {
   /**
    * Check a project's code on disk without running a stream, answering each finding as data.
    *
-   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Two checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
+   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Two checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers a built-in type's default control, which only the Studio's own module may register, an `error` coded `default_control_not_the_modules_to_register`, and a `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`; when that listing is refused, the node bodies are not judged and the check answers `not_checked` with the listing's refusal. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
    *
    * Since contract version 3, experimental.
    */
@@ -7511,6 +7659,17 @@ export interface ControlOperations {
   list_project_views: {
     params: ListProjectViewsRequest;
     result: ListProjectViewsToolResult;
+  };
+  /**
+   * List the controls and node bodies a project and its imports register.
+   *
+   * List every control and node body a project registers in its own `node_ui/tatolab_node_ui.json`, then those each import registers in `imports/<folder>/node_ui/tatolab_node_ui.json`, read from the manifest without running any of its scripts and without waiting on a compiler. Each row under `elements` names its `module` — the `project`, `project_name` and `import_folder` (null for the project's own) of the project registering it, whose name qualifies a control name it registers, as `acme:knob` — its `script_path`, the script relative to the project, which names it to a project file read, and its `element`, whose `kind` is `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, null for the type's default, or `node_body`, with the `node_type` whose node it draws. `manifests` holds each manifest that reads as written, with its `manifest_path`. A manifest that cannot be read, is not JSON, or does not read against view contract 1.1 is listed under `unreadable_manifests` with its `manifest_path` and why; the other modules still list. A module with no manifest registers nothing. Whether an entry is one its module may register is judged by `check_project_code`'s `extension_manifest` check, not here: a listed entry may still fail it.
+   *
+   * Since contract version 3, experimental.
+   */
+  list_project_node_ui_elements: {
+    params: ListProjectNodeUiElementsRequest;
+    result: ListProjectNodeUiElementsToolResult;
   };
   /**
    * Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.

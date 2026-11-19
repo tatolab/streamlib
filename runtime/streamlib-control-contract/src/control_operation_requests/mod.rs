@@ -54,9 +54,9 @@ pub use playback_and_stream_action_requests::{
 };
 pub use project_file_and_view_requests::{
     CheckProjectCodeRequest, CloseViewerRequest, CreateNodeFileRequest, ListProjectFilesRequest,
-    ListProjectNodeTypesRequest, ListProjectViewsRequest, OpenViewerRequest,
-    PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION, ReadProjectFileRequest, STREAM_ARGUMENT_DESCRIPTION,
-    WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest, ListProjectViewsRequest,
+    OpenViewerRequest, PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION, ReadProjectFileRequest,
+    STREAM_ARGUMENT_DESCRIPTION, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 pub use project_lifecycle_requests::{
     CreateProjectRequest, DuplicateProjectRequest, ImportProjectRequest, ListSamplesRequest,

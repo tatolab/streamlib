@@ -38,10 +38,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
     ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
     ListDependenciesToolResult, ListNodeTypesToolResult, ListPinTypesToolResult,
-    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
-    ListSamplesToolResult, ListStreamsToolResult, ListedStreamState, LogsToolResult,
-    OpenViewerToolResult, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
-    ProjectCodeCheckResult, ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
+    ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
+    ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
+    ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
+    PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectCodeCheckResult,
+    ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
     ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
     ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
     RemoveProjectToolResult, ResumePlaybackToolResult, SetNodeTypeGroupToolResult,
@@ -172,6 +173,8 @@ pub(crate) enum ControlOperationAnswer {
     SetNodeTypeGroup(SetNodeTypeGroupToolResult),
     /// `list_project_views`'s.
     ListProjectViews(ListProjectViewsToolResult),
+    /// `list_project_node_ui_elements`'.
+    ListProjectNodeUiElements(ListProjectNodeUiElementsToolResult),
     /// `write_studio_view_output`'s.
     WriteStudioViewOutput(WriteStudioViewOutputToolResult),
     /// `write_graph_input`'s.
@@ -675,6 +678,10 @@ impl ControlOperationDispatcher {
                 .list_project_views(request)
                 .await
                 .map(ControlOperationAnswer::ListProjectViews),
+            ControlOperationCall::ListProjectNodeUiElements(request) => self
+                .list_project_node_ui_elements(request)
+                .await
+                .map(ControlOperationAnswer::ListProjectNodeUiElements),
             ControlOperationCall::WriteStudioViewOutput(request) => self
                 .write_studio_view_output(request, request_origin)
                 .await

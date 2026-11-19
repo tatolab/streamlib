@@ -1,18 +1,15 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `node_ui/tatolab_node_ui.json`: the controls and node bodies a module registers. The shape is
-//! written here once; the control contract renders it, and the runtime client's TypeScript type
-//! and the JSON Schema an author's editor reads are generated from that.
+//! `node_ui/tatolab_node_ui.json`, the controls and node bodies a module registers, read against
+//! the view contract. Its shape is the contract's [`NodeUiManifest`].
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use streamlib_node_schema::pin_type::BuiltInPinTypeName;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeUiManifest;
 
 use crate::manifest_fields::{
-    a_value_never_written_as_null, is_a_contract_version,
-    is_a_contract_version_of_major_up_to_minor, is_a_path_inside_its_own_folder,
-    the_field_a_serde_refusal_names,
+    is_a_contract_version, is_a_contract_version_of_major_up_to_minor,
+    is_a_path_inside_its_own_folder, the_field_a_serde_refusal_names,
 };
 use crate::tatolab_view_manifest::VIEW_CONTRACT_READ_MAJOR;
 
@@ -25,53 +22,6 @@ pub const NODE_UI_MANIFEST_FILE_NAME: &str = "tatolab_node_ui.json";
 /// The highest minor of [`VIEW_CONTRACT_READ_MAJOR`] a node UI manifest is read against: a
 /// manifest that names a later minor, or another major, does not open.
 pub const NODE_UI_CONTRACT_READ_MINOR: u64 = 1;
-
-/// What a module's `node_ui/tatolab_node_ui.json` registers.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "mcp-tool-json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct NodeUiManifest {
-    /// The view contract the elements were built for, as `"1.1"`.
-    pub contract: String,
-    /// Each control the module registers, which edits or shows an input of one pin type.
-    #[serde(default)]
-    pub controls: Vec<NodeUiManifestControl>,
-    /// Each node body the module registers, which draws the inside of one node type's node.
-    #[serde(default)]
-    pub node_bodies: Vec<NodeUiManifestNodeBody>,
-}
-
-/// A control a module registers for one pin type.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "mcp-tool-json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct NodeUiManifestControl {
-    /// The pin type whose inputs the control edits or shows.
-    #[serde(rename = "type")]
-    pub pin_type: BuiltInPinTypeName,
-    /// The control's name, which a pin's `control` annotation picks it by. Left out, the control
-    /// is its pin type's default.
-    #[serde(
-        default,
-        deserialize_with = "a_value_never_written_as_null",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[cfg_attr(feature = "mcp-tool-json-schema", schemars(with = "String"))]
-    pub control: Option<String>,
-    /// The script that default-exports the control's element class, inside the node UI folder.
-    pub script: String,
-}
-
-/// A node body a module registers for one node type.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "mcp-tool-json-schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct NodeUiManifestNodeBody {
-    /// The node type whose node it draws, as `acme:Crossfade`.
-    pub node_type: String,
-    /// The script that default-exports the node body's element class, inside the node UI folder.
-    pub script: String,
-}
 
 /// `manifest_json`, a module's `node_ui/tatolab_node_ui.json` as parsed, read as a
 /// [`NodeUiManifest`], or every way it falls short, each as "`field`: why.".

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The executables the runtime unit carries beside `tatolabd` — the local
-//! relay and uv — as the unit lays them out in `bin/` and the macOS app bundle
-//! in `Contents/MacOS`.
+//! relay, uv, and the TypeScript compiler and linter a project's views and
+//! controls are checked with — as the unit lays them out in `bin/` and the
+//! macOS app bundle in `Contents/MacOS`.
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,22 @@ pub(crate) fn runtime_unit_executable_beside_this_one(
         .and_then(std::fs::canonicalize)
         .map_err(|failure| format!("this executable's own path cannot be named: {failure}"))?;
     runtime_unit_executable_beside(&this_executable, executable_file_name)
+}
+
+/// The programs a project's views and controls are checked with, each relative
+/// to the directory `tatolabd` sits in.
+const RUNTIME_UNIT_CODE_CHECKERS: [&str; 2] = [
+    streamlib::sdk::node_interpreter::RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY,
+    streamlib::sdk::node_interpreter::RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME,
+];
+
+/// Why each program a project's views and controls are checked with is not
+/// beside this executable, naming the program.
+pub(crate) fn code_checkers_the_runtime_unit_does_not_carry() -> Vec<String> {
+    RUNTIME_UNIT_CODE_CHECKERS
+        .into_iter()
+        .filter_map(|code_checker| runtime_unit_executable_beside_this_one(code_checker).err())
+        .collect()
 }
 
 /// The executable `executable_file_name` beside `canonical_executable`, or why
@@ -56,6 +73,22 @@ mod tests {
             runtime_unit_executable_beside(&tatolabd, "uv"),
             Ok(runtime_unit_bin.path().join("uv"))
         );
+    }
+
+    #[test]
+    fn the_typescript_compiler_is_found_in_its_directory_beside_tatolabd() {
+        let runtime_unit_bin = tempfile::tempdir().unwrap();
+        let tatolabd = runtime_unit_bin.path().join("tatolabd");
+        std::fs::create_dir_all(runtime_unit_bin.path().join("typescript")).unwrap();
+        std::fs::write(runtime_unit_bin.path().join("typescript/tsc"), "tsc").unwrap();
+
+        assert_eq!(
+            runtime_unit_executable_beside(&tatolabd, RUNTIME_UNIT_CODE_CHECKERS[0]),
+            Ok(runtime_unit_bin.path().join("typescript/tsc"))
+        );
+        let refusal = runtime_unit_executable_beside(&tatolabd, RUNTIME_UNIT_CODE_CHECKERS[1])
+            .expect_err("no linter sits beside it");
+        assert!(refusal.contains("oxlint"), "{refusal}");
     }
 
     #[test]

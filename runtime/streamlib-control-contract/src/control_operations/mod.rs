@@ -18,20 +18,21 @@ use crate::control_operation_requests::{
     DescribeNodeTypesRequest, DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest,
     GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest,
     ListAssetsRequest, ListDependenciesRequest, ListNodeTypesRequest, ListPinTypesRequest,
-    ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectViewsRequest,
-    ListSamplesRequest, ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest,
-    OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
-    OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest,
-    RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest,
-    RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
-    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
-    SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest, SetPinValueRequest,
-    SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
-    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
-    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
-    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
-    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
-    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest,
+    ListProjectViewsRequest, ListSamplesRequest, ListStreamsRequest, LogsRequest,
+    OneLinkGraphEditRequest, OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest,
+    OneStreamActionRequest, OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest,
+    RefreshFragmentsRequest, RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest,
+    RemoveNoteRequest, RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest,
+    SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
+    SetNodeConfigRequest, SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest,
+    SetPinValueRequest, SetProjectCoverRequest, SetProjectDescriptionRequest,
+    SetStreamClockScaleRequest, SetStreamDisplayNameRequest, SetStudioFieldsRequest,
+    SubscribeInputValueChangesRequest, SubscribeProjectChangesRequest,
+    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
+    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
+    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
+    WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 
 mod assets_and_streams;
@@ -69,7 +70,8 @@ pub use playback_and_stream_actions::{
 };
 pub use project_files_and_views::{
     CheckProjectCode, CloseViewer, CreateNodeFile, ListProjectFiles, ListProjectNodeTypes,
-    ListProjectViews, OpenViewer, ReadProjectFile, WriteProjectFile, WriteStudioViewOutput,
+    ListProjectNodeUiElements, ListProjectViews, OpenViewer, ReadProjectFile, WriteProjectFile,
+    WriteStudioViewOutput,
 };
 pub use project_lifecycle::{
     CloseProject, CreateProject, DeleteProject, DuplicateProject, ImportProject, ListSamples,
@@ -170,6 +172,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<DescribeNodeTypes>(),
     ControlOperationDeclaration::of::<SetNodeTypeGroup>(),
     ControlOperationDeclaration::of::<ListProjectViews>(),
+    ControlOperationDeclaration::of::<ListProjectNodeUiElements>(),
     ControlOperationDeclaration::of::<WriteStudioViewOutput>(),
     ControlOperationDeclaration::of::<WriteGraphInput>(),
     ControlOperationDeclaration::of::<ImportProject>(),
@@ -336,6 +339,8 @@ pub enum ControlOperationCall {
     SetNodeTypeGroup(SetNodeTypeGroupRequest),
     /// A `list_project_views` call.
     ListProjectViews(ListProjectViewsRequest),
+    /// A `list_project_node_ui_elements` call.
+    ListProjectNodeUiElements(ListProjectNodeUiElementsRequest),
     /// A `write_studio_view_output` call.
     WriteStudioViewOutput(WriteStudioViewOutputRequest),
     /// A `write_graph_input` call.
@@ -612,6 +617,10 @@ impl ControlOperationCall {
             ListProjectViews::METHOD_NAME => {
                 the_request_of::<ListProjectViews>(params).map(Self::ListProjectViews)
             }
+            ListProjectNodeUiElements::METHOD_NAME => {
+                the_request_of::<ListProjectNodeUiElements>(params)
+                    .map(Self::ListProjectNodeUiElements)
+            }
             WriteStudioViewOutput::METHOD_NAME => {
                 the_request_of::<WriteStudioViewOutput>(params).map(Self::WriteStudioViewOutput)
             }
@@ -723,6 +732,7 @@ impl ControlOperationCall {
             Self::DescribeNodeTypes(_) => DescribeNodeTypes::METHOD_NAME,
             Self::SetNodeTypeGroup(_) => SetNodeTypeGroup::METHOD_NAME,
             Self::ListProjectViews(_) => ListProjectViews::METHOD_NAME,
+            Self::ListProjectNodeUiElements(_) => ListProjectNodeUiElements::METHOD_NAME,
             Self::WriteStudioViewOutput(_) => WriteStudioViewOutput::METHOD_NAME,
             Self::WriteGraphInput(_) => WriteGraphInput::METHOD_NAME,
             Self::ImportProject(_) => ImportProject::METHOD_NAME,

@@ -3,9 +3,9 @@
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CloseViewerToolResult, CreateNodeFileToolResult, ListProjectFilesToolResult,
-    ListProjectNodeTypesToolResult, ListProjectViewsToolResult, OpenViewerToolResult,
-    ProjectCodeCheckResult, ProjectFileTransactionToolResult, ReadProjectFileToolResult,
-    WriteStudioViewOutputToolResult,
+    ListProjectNodeTypesToolResult, ListProjectNodeUiElementsToolResult,
+    ListProjectViewsToolResult, OpenViewerToolResult, ProjectCodeCheckResult,
+    ProjectFileTransactionToolResult, ReadProjectFileToolResult, WriteStudioViewOutputToolResult,
 };
 
 use super::{EVERY_SURFACE, ListNodeTypes, SetNodeInputValue};
@@ -15,8 +15,9 @@ use crate::control_operation::{
 };
 use crate::control_operation_requests::{
     CheckProjectCodeRequest, CloseViewerRequest, CreateNodeFileRequest, ListProjectFilesRequest,
-    ListProjectNodeTypesRequest, ListProjectViewsRequest, OpenViewerRequest,
-    ReadProjectFileRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest, ListProjectViewsRequest,
+    OpenViewerRequest, ReadProjectFileRequest, WriteProjectFileRequest,
+    WriteStudioViewOutputRequest,
 };
 
 /// `list_project_files`: list the files of a project that are not assets.
@@ -102,7 +103,7 @@ impl ControlOperation for CheckProjectCode {
     const METHOD_NAME: &'static str = "check_project_code";
     const ONE_LINE_DOC: &'static str =
         "Check a project's code on disk without running a stream, answering each finding as data.";
-    const AGENT_USAGE_NOTE: &'static str = "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Two checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.";
+    const AGENT_USAGE_NOTE: &'static str = "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Two checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers a built-in type's default control, which only the Studio's own module may register, an `error` coded `default_control_not_the_modules_to_register`, and a `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`; when that listing is refused, the node bodies are not judged and the check answers `not_checked` with the listing's refusal. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::File;
@@ -143,6 +144,26 @@ impl ControlOperation for ListProjectViews {
     const AGENT_USAGE_NOTE: &'static str = "List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project name>:<view folder>`, which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, a `family`, a `description` and an Array port's `range`; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::View;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `list_project_node_ui_elements`: list the controls and node bodies a project and its imports
+/// register.
+pub struct ListProjectNodeUiElements;
+
+impl ControlOperation for ListProjectNodeUiElements {
+    type Request = ListProjectNodeUiElementsRequest;
+    type Result = ListProjectNodeUiElementsToolResult;
+    const METHOD_NAME: &'static str = "list_project_node_ui_elements";
+    const ONE_LINE_DOC: &'static str =
+        "List the controls and node bodies a project and its imports register.";
+    const AGENT_USAGE_NOTE: &'static str = "List every control and node body a project registers in its own `node_ui/tatolab_node_ui.json`, then those each import registers in `imports/<folder>/node_ui/tatolab_node_ui.json`, read from the manifest without running any of its scripts and without waiting on a compiler. Each row under `elements` names its `module` — the `project`, `project_name` and `import_folder` (null for the project's own) of the project registering it, whose name qualifies a control name it registers, as `acme:knob` — its `script_path`, the script relative to the project, which names it to a project file read, and its `element`, whose `kind` is `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, null for the type's default, or `node_body`, with the `node_type` whose node it draws. `manifests` holds each manifest that reads as written, with its `manifest_path`. A manifest that cannot be read, is not JSON, or does not read against view contract 1.1 is listed under `unreadable_manifests` with its `manifest_path` and why; the other modules still list. A module with no manifest registers nothing. Whether an entry is one its module may register is judged by `check_project_code`'s `extension_manifest` check, not here: a listed entry may still fail it.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::View;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;

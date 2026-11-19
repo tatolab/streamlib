@@ -12,6 +12,7 @@ mod graph_wire_types;
 mod link_check_wire_types;
 mod log_wire_types;
 mod node_type_wire_types;
+mod node_ui_wire_types;
 mod project_code_check_wire_types;
 mod project_wire_types;
 mod runtime_health_wire_types;
@@ -56,6 +57,11 @@ pub use node_type_wire_types::{
     NodeTypeDescription, NodeTypeInputDescribed, NodeTypeInputMode, NodeTypeKind, NodeTypeListed,
     NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortPin, NodeTypeSourceListed,
     NodeTypeSourceListedOrigin, PinTypeConversionListed, PinTypeListed, SetNodeTypeGroupToolResult,
+};
+pub use node_ui_wire_types::{
+    ListProjectNodeUiElementsToolResult, NodeUiManifest, NodeUiManifestControl,
+    NodeUiManifestNodeBody, ProjectNodeUiElement, ProjectNodeUiElementListed,
+    ProjectNodeUiManifestListed, ProjectNodeUiManifestNotRead, ProjectNodeUiModule,
 };
 pub use project_code_check_wire_types::{
     ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,

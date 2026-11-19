@@ -82,6 +82,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "describe_node_types",
   "set_node_type_group",
   "list_project_views",
+  "list_project_node_ui_elements",
   "write_studio_view_output",
   "write_graph_input",
   "import_project",
@@ -112,6 +113,7 @@ export const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES = Object.freeze([
   "list_node_types",
   "describe_node_types",
   "set_node_type_group",
+  "list_project_node_ui_elements",
 ]);
 
 export const CONTROL_JSON_RPC_ROUTE_PATH = "/control";

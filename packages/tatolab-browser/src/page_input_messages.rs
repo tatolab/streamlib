@@ -63,6 +63,15 @@ impl PageInputAudioBlock {
                 .collect(),
         })
     }
+
+    /// Whether any sample is not zero: a block of digital silence is one a
+    /// page has nothing to play from.
+    pub fn carries_sound(&self) -> bool {
+        let (samples, _partial_sample) = self.interleaved_samples_le_f32.as_chunks::<4>();
+        samples
+            .iter()
+            .any(|sample| f32::from_le_bytes(*sample) != 0.0)
+    }
 }
 
 #[cfg(test)]
@@ -72,6 +81,18 @@ mod tests {
         ModuleHostChannelsBlockSampleType, ModuleHostImageFrameH273Colour,
         records_message_payload_descriptor,
     };
+
+    #[test]
+    fn a_block_carries_sound_once_one_sample_is_not_zero() {
+        let block_of = |samples: &[f32]| PageInputAudioBlock {
+            sample_rate: 48_000,
+            channel_count: 2,
+            interleaved_samples_le_f32: le_f32_bytes(samples),
+        };
+        assert!(!block_of(&[0.0, -0.0, 0.0, 0.0]).carries_sound());
+        assert!(!block_of(&[]).carries_sound());
+        assert!(block_of(&[0.0, 0.0, 0.0, 1.0e-6]).carries_sound());
+    }
 
     /// The module host table's wire kind of a GPU pool slot frame.
     const GPU_POOL_SLOT_FRAME_PAYLOAD_KIND: u32 = 1;
