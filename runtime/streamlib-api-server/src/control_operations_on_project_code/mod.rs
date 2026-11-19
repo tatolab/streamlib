@@ -18,7 +18,6 @@ use streamlib::sdk::runtime::{
 use streamlib_control_contract::CheckProjectCodeRequest;
 use streamlib_project_repository::{
     NodeUiManifestToCheck, ViewManifestsChecked, check_a_projects_view_manifests,
-    is_a_projects_own_node_ui_manifest, is_the_manifest_of_a_projects_own_view,
     the_findings_of_a_node_ui_manifest, the_node_ui_manifest_a_check_reads,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -30,6 +29,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
 
 const CHECK_PROJECT_CODE: &str = "check_project_code";
+
+/// The suffix of a file the `python_node_declarations` check imports; any other path among
+/// `paths` is for another check, and `paths` naming none runs it over nothing.
+const PYTHON_SOURCE_FILE_SUFFIX: &str = ".py";
 
 impl ControlOperationDispatcher {
     pub(crate) async fn check_project_code(
@@ -75,22 +78,25 @@ impl ControlOperationDispatcher {
                 extension_paths.as_deref(),
             )
         });
-        let module_paths: Option<Vec<String>> = paths.map(|paths| {
-            paths
-                .into_iter()
-                .filter(|path| {
-                    !is_the_manifest_of_a_projects_own_view(path)
-                        && !is_a_projects_own_node_ui_manifest(path)
-                })
-                .collect()
-        });
-        let declaration_check = tokio::task::spawn_blocking(move || {
-            check_a_projects_python_node_declarations(&project_directory, module_paths.as_deref())
-        })
-        .await
-        .map_err(ControlOperationRefusal::the_task_did_not_finish(
-            "check_project_code failed: the declaration check",
-        ))?;
+        let module_paths = the_python_module_paths_among(paths);
+        let declaration_check = if module_paths.as_ref().is_some_and(Vec::is_empty) {
+            PythonNodeDeclarationCheck {
+                checked_with: Vec::new(),
+                modules_checked: Vec::new(),
+                not_finished: None,
+            }
+        } else {
+            tokio::task::spawn_blocking(move || {
+                check_a_projects_python_node_declarations(
+                    &project_directory,
+                    module_paths.as_deref(),
+                )
+            })
+            .await
+            .map_err(ControlOperationRefusal::the_task_did_not_finish(
+                "check_project_code failed: the declaration check",
+            ))?
+        };
         let extension_code_check = extension_code_check.await.map_err(
             ControlOperationRefusal::the_task_did_not_finish(
                 "check_project_code failed: the extension code check",
@@ -156,6 +162,17 @@ struct NodeUiManifestChecked {
     /// Why its node bodies were not judged: the refusal of the node type listing they are
     /// judged against.
     node_bodies_not_judged_because: Option<ProjectActionRefusalOnTheWire>,
+}
+
+/// The paths among `paths` the `python_node_declarations` check imports, or every module of the
+/// project when `paths` names none.
+fn the_python_module_paths_among(paths: Option<Vec<String>>) -> Option<Vec<String>> {
+    paths.map(|paths| {
+        paths
+            .into_iter()
+            .filter(|path| path.ends_with(PYTHON_SOURCE_FILE_SUFFIX))
+            .collect()
+    })
 }
 
 /// The answer of a `python_node_declarations` run that ended as `declaration_check` did, and an

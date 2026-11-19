@@ -117,10 +117,4 @@ fn a_project_with_no_node_ui_manifest_has_nothing_to_check() {
         the_node_ui_manifest_a_check_reads(project_directory.path(), None),
         None
     );
-    assert!(is_a_projects_own_node_ui_manifest(
-        "node_ui/tatolab_node_ui.json"
-    ));
-    assert!(!is_a_projects_own_node_ui_manifest(
-        "imports/levels/node_ui/tatolab_node_ui.json"
-    ));
 }
