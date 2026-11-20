@@ -91,7 +91,19 @@ impl<'contract> AgentReadTextWalk<'contract> {
                                 self.read_schema(&property_place, property_schema);
                             }
                         }
-                        "default" | "examples" | "const" | "enum" | "title" => {}
+                        "enum" | "const" => {
+                            let texts: Vec<&str> = match value {
+                                Value::String(text) => vec![text.as_str()],
+                                Value::Array(items) => {
+                                    items.iter().filter_map(Value::as_str).collect()
+                                }
+                                _ => Vec::new(),
+                            };
+                            for text in texts {
+                                self.read_text(place, text);
+                            }
+                        }
+                        "default" | "examples" | "title" => {}
                         _ => self.read_schema(place, value),
                     }
                 }

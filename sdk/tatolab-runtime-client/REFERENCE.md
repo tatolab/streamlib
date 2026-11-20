@@ -657,6 +657,13 @@ Example answer:
         "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
         "port": "layer_0"
       }
+    },
+    {
+      "operation": "set_node_input_value",
+      "stream": "night-show-main-3fa2b1",
+      "node": "5e1a7c3d-9f2b-4d8e-a6c4-2b0d8f6e4a19",
+      "input": "width",
+      "value": 320
     }
   ],
   "added_nodes": [

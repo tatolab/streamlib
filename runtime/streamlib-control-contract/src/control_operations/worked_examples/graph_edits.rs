@@ -93,6 +93,13 @@ pub(in crate::control_operations) const TRANSACT: ControlOperationExample =
                         "source": { "node": ADDED_SOURCE_NODE, "port": "video" },
                         "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
                     },
+                    {
+                        "operation": "set_node_input_value",
+                        "stream": STREAM,
+                        "node": ADDED_SOURCE_NODE,
+                        "input": "width",
+                        "value": 320,
+                    },
                 ],
                 "added_nodes": [{
                     "stream": STREAM,
