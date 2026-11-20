@@ -17,9 +17,11 @@ from tatolab.runtime._function_node_carried_values import (
     FunctionNodeDoesNotCompile,
     FunctionNodeReadyToEvaluate,
     FunctionNodeRunAsPythonInItsReader,
+    NAMED_VALUE_TYPE,
     PART_VALUE_TYPES,
     UNREAD_MESSAGE_VALUE_TYPE,
     parts_a_value_type_reads,
+    the_class_a_named_pin_type_names,
     value_class_of_a_part_value_type,
 )
 from tatolab.runtime._function_node_stored_values import (
@@ -50,6 +52,22 @@ class FunctionNodeBodyRunAsPython:
             each_input["parameter"]: each_input.get("pin_type") for each_input in signature["inputs"]
         }
         self._input_parameters = list(self._value_type_by_input_parameter)
+        self._named_class_by_input_parameter: "dict[str, type]" = {
+            each_input["parameter"]: the_class_a_named_pin_type_names(
+                each_input["pin_type"]["named_pin_type"],
+                f"function node `{node_id}`'s input `{each_input['parameter']}`",
+            )
+            for each_input in signature["inputs"]
+            if each_input["value_type"] == NAMED_VALUE_TYPE
+        }
+        self._named_class_by_output_port: "dict[str, type]" = {
+            each_output["port"]: the_class_a_named_pin_type_names(
+                each_output["pin_type"]["named_pin_type"],
+                f"function node `{node_id}`'s output `{each_output['port']}`",
+            )
+            for each_output in signature["outputs"]
+            if each_output["value_type"] == NAMED_VALUE_TYPE
+        }
         self._positional_only_parameters = [
             parameter.name
             for parameter in inspect.signature(run_as_python.body).parameters.values()
@@ -69,7 +87,8 @@ class FunctionNodeBodyRunAsPython:
 
         A number or bool output is answered as a `float`, a Color, Vector, Rectangle or
         Transform as the `tuple` of its parts, a String, Menu, Asset or List as the record
-        `{"value": <stored JSON form>}` it travels as, a `dict` as given.
+        `{"value": <stored JSON form>}` it travels as, a value of a named type as the `bytes`
+        its class packs, a `dict` as given.
         The new state is kept only once every output is answered.
         """
         signature = self._run_as_python.function_signature
@@ -159,6 +178,15 @@ class FunctionNodeBodyRunAsPython:
                     f"and was handed {type(input_value).__name__}"
                 )
             return copy.deepcopy(input_value)
+        if value_type == NAMED_VALUE_TYPE:
+            if input_value is None:
+                return None
+            if not isinstance(input_value, bytes):
+                raise TypeError(
+                    f"function node `{self._node_id}`'s input `{parameter_name}` takes the bytes "
+                    f"of a named type, and was handed {type(input_value).__name__}"
+                )
+            return self._named_class_by_input_parameter[parameter_name].from_bytes(input_value)
         if value_type in PART_VALUE_TYPES:
             return value_class_of_a_part_value_type(value_type).from_parts(
                 parts_a_value_type_reads(value_type, input_value)
@@ -200,6 +228,14 @@ class FunctionNodeBodyRunAsPython:
             if not isinstance(output_value, dict):
                 raise TypeError(f"{what_it_is} is a dict, and the body gave {type(output_value).__name__}")
             return output_value
+        if each_output["value_type"] == NAMED_VALUE_TYPE:
+            named_class = self._named_class_by_output_port[each_output["port"]]
+            if output_value is None or type(output_value) is not named_class:
+                raise TypeError(
+                    f"{what_it_is} is the named type `{each_output['pin_type']['named_pin_type']}`, "
+                    f"and the body gave {type(output_value).__name__}"
+                )
+            return bytes(output_value.to_bytes())
         if each_output["value_type"] in PART_VALUE_TYPES:
             value_class = value_class_of_a_part_value_type(each_output["value_type"])
             if output_value is None or type(output_value) is not value_class:

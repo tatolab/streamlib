@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! How a function node input reads the messages a link from outside its island carries: a
-//! control value, the parts of a value, a record or a stored value, off the newest message.
+//! control value, the parts of a value, a record, a stored value or the bytes of a named type,
+//! off the newest message.
 
 use super::*;
 
@@ -22,6 +23,8 @@ pub(super) enum HowAnInputReadsALinkFromOutsideItsIsland {
     /// String, a Menu, an Asset and a List travel as within an island, read off the message its
     /// type packs as.
     StoredValue(PinType),
+    /// As the bytes a value of a module's named type packs as: the payload of a Bytes message.
+    NamedValue,
     /// As the message itself, handed on unread: nothing at an evaluation no new
     /// message arrived before.
     MessageHandedOnUnread,
@@ -33,6 +36,7 @@ impl HowAnInputReadsALinkFromOutsideItsIsland {
         match value_type {
             "float" | "int" | "bool" => Ok(Self::ControlValue),
             "records" => Ok(Self::Record),
+            "named" => Ok(Self::NamedValue),
             "unread_message" => Ok(Self::MessageHandedOnUnread),
             value_type => the_pin_type_a_value_type_carries_in_parts(value_type)
                 .map(Self::Parts)
@@ -40,7 +44,7 @@ impl HowAnInputReadsALinkFromOutsideItsIsland {
                     format!(
                         "an input of value type {value_type:?} cannot read a link from a node \
                          outside its island; it reads a number, a Color, a Vector, a \
-                         Rectangle, a Transform, a dict or an `UnreadMessage`"
+                         Rectangle, a Transform, a dict, a named type or an `UnreadMessage`"
                     )
                 }),
         }
@@ -141,6 +145,26 @@ pub(super) fn the_stored_value_a_record_carries_packed(
     )
     .and_then(|stored_value| pack_pin_value(pin_type, &stored_value, 0))
     .map_err(|refusal| Error::Runtime(format!("{what_it_is} is a {pin_type}, and {refusal}")))
+}
+
+/// The bytes a value of a named type packs as, which `message`, a Bytes message, carries.
+pub(super) fn the_bytes_a_message_of_a_named_type_carries(
+    message: &MessageReadFromInputPort,
+    node_id: &str,
+    reader_input_port: &str,
+) -> Result<Arc<[u8]>> {
+    match message.payload_descriptor.known_kind() {
+        Ok(DataChannelPayloadDescriptorKind::Bytes) => Ok(Arc::from(message.payload.bytes())),
+        Ok(kind) => Err(Error::Runtime(format!(
+            "function node `{node_id}` reads a value of a named type off the link it reads at \
+             {reader_input_port:?}, which carried a {kind:?} message; a named type travels as \
+             the bytes its class packs"
+        ))),
+        Err(refusal) => Err(Error::Runtime(format!(
+            "function node `{node_id}` reads a value of a named type off the link it reads at \
+             {reader_input_port:?}, and {refusal}"
+        ))),
+    }
 }
 
 /// The number a control message carries: the first sample of its first channel.

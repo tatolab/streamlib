@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use streamlib_node_schema::NodeValueLifetime;
 use streamlib_node_schema::pin_type::{
-    BuiltInPinTypeName, DeclaredPinType, NodeInputMode, PinAnnotationName, PinAnnotations, PinFlow,
-    PinType, SettingReadTime,
+    BuiltInPinTypeName, DeclaredPinType, NamedPinTypeImportPath, NodeInputMode, PinAnnotationName,
+    PinAnnotations, PinFlow, PinType, SettingReadTime,
 };
 
 use super::{
@@ -24,12 +24,54 @@ use super::{
     ProjectActionRefusalOnTheWire, ProjectFilePlaceOnTheWire,
 };
 
-/// `list_pin_types`' answer: every built-in pin type.
+/// `list_pin_types`' answer: every built-in pin type, and each named type the project's node
+/// code brings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListPinTypesToolResult {
     /// Each built-in pin type, in the order the contract's `x-pin-types` lists them.
     pub pin_types: Vec<PinTypeListed>,
+    /// Each named type a module of the project, an import or an installed distribution
+    /// declares, by its import path, read from source; empty while the project's node code
+    /// does not list, as `named_pin_types_not_listed_because` then says.
+    #[serde(default)]
+    pub named_pin_types: Vec<NamedPinTypeListed>,
+    /// Why the project's node code did not list, so no named type of it is answered; absent
+    /// when it listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named_pin_types_not_listed_because: Option<String>,
+}
+
+/// One named type a module declares with `@named_pin_type`, which a pin typed with it carries
+/// as the bytes its class packs and links only to a pin of the same name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct NamedPinTypeListed {
+    /// Where the module declaring it comes from.
+    #[serde(flatten)]
+    pub origin: NodeTypeSourceListedOrigin,
+    /// The pin type a pin of it states: `{"type": "named", "named_pin_type": …}`.
+    pub pin_type: PinType,
+    /// What a value of it is, as its declaration describes it.
+    pub documentation: String,
+    /// The file declaring it, relative to its source's root.
+    pub path: String,
+    /// The line of its `class`.
+    pub line: u32,
+}
+
+/// One named type as its `@named_pin_type` declaration states it in source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct NamedPinTypeReadFromSource {
+    /// Its name: the class's import path, `<module>:<qualname>`.
+    pub named_pin_type: NamedPinTypeImportPath,
+    /// What a value of it is; empty where its `description` is no string in source.
+    pub description: String,
+    /// The file declaring it, relative to its source's root.
+    pub path: String,
+    /// The line of its `class`.
+    pub line: u32,
 }
 
 /// One built-in pin type: the contract's row for it, and what converts it on this runtime.

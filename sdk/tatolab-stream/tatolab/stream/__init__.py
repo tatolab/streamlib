@@ -28,6 +28,8 @@ from ._exposed_name_cast import (
 )
 from ._description import Description as Description
 from ._formerly_named import FormerlyNamed as FormerlyNamed
+from ._named_pin_type_declaration import NamedPinTypeValue as NamedPinTypeValue
+from ._named_pin_type_declaration import named_pin_type as named_pin_type
 from ._number_range import NumberRange as NumberRange
 from ._pin_annotations import NumberStep as NumberStep
 from ._pin_annotations import NumberUnit as NumberUnit
@@ -232,6 +234,7 @@ __all__ = [
     "NodeReference",
     "NodeReferenceToNodeType",
     "FormerlyNamed",
+    "NamedPinTypeValue",
     "NumberRange",
     "NumberStep",
     "NumberUnit",
@@ -306,6 +309,7 @@ __all__ = [
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
     "monotonic_now_ns",
+    "named_pin_type",
     "node",
     "run_graph_generator",
     "start_monotonic_timer",
