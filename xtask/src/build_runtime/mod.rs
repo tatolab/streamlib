@@ -82,7 +82,7 @@ const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 4] = [
     ("tatolabd", "tatolabd"),
     ("tatolab-cli", "tatolab"),
     ("tatolab-video-poster-frame", "tatolab-video-poster-frame"),
-    ("tatolab-video-encode-host", "tatolab-video-encode-host"),
+    ("tatolab-video-codec-host", "tatolab-video-codec-host"),
 ];
 
 /// The cargo feature that moves the machine runtime lock, the state directory

@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
+use std::os::fd::{BorrowedFd, FromRawFd as _, IntoRawFd, OwnedFd};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -42,7 +43,7 @@ fn cmsg_space_for(n: usize) -> usize {
 /// kernel duplicates them into the receiver's fd table on successful
 /// `recvmsg`; the sender retains ownership of its copies (close after send).
 ///
-/// Returns an error if `fds.len() > MAX_DMA_BUF_PLANES` without performing
+/// Returns an error if `fds.len() > MAX_SCM_RIGHTS_FDS` without performing
 /// any syscalls — the caller still owns every fd in that case.
 pub fn send_message_with_fds(
     stream: &UnixStream,
@@ -59,68 +60,48 @@ pub fn send_message_with_fds(
             ),
         ));
     }
-
-    // First send the length prefix
     let len_bytes = (data.len() as u32).to_be_bytes();
-    let mut len_iov = libc::iovec {
-        iov_base: len_bytes.as_ptr() as *mut libc::c_void,
-        iov_len: 4,
-    };
-    let mut len_msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    len_msg.msg_iov = &mut len_iov;
-    len_msg.msg_iovlen = 1;
-
-    let n = unsafe { libc::sendmsg(stream.as_raw_fd(), &len_msg, 0) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    // Then send the data payload with optional fds
-    let mut iov = libc::iovec {
-        iov_base: data.as_ptr() as *mut libc::c_void,
-        iov_len: data.len(),
-    };
-
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-
-    // Size the control buffer for the worst case the wire allows
-    // ([`MAX_SCM_RIGHTS_FDS`]) so a sender that fills every plane slot plus
-    // both timeline-semaphore slots doesn't overrun `cmsg_buf`. The
-    // kernel reads `msg.msg_controllen` bytes from `cmsg_buf.as_mut_ptr()`
-    // during `sendmsg`; that count is computed from `fds.len()` below, so
-    // the buffer must always be large enough for the maximum allowed
-    // count even when the actual send is shorter.
-    let cmsg_space = cmsg_space_for(MAX_SCM_RIGHTS_FDS);
-    let mut cmsg_buf = vec![0u8; cmsg_space];
-
-    if !fds.is_empty() {
-        let payload_space = cmsg_space_for(fds.len());
-        msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-        msg.msg_controllen = payload_space;
-
-        let cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
-        if cmsg_ptr.is_null() {
-            return Err(std::io::Error::other("CMSG_FIRSTHDR returned null"));
-        }
-        let fd_bytes = std::mem::size_of_val(fds) as libc::c_uint;
-        unsafe {
-            (*cmsg_ptr).cmsg_level = libc::SOL_SOCKET;
-            (*cmsg_ptr).cmsg_type = libc::SCM_RIGHTS;
-            (*cmsg_ptr).cmsg_len = libc::CMSG_LEN(fd_bytes) as usize;
-            let dst = libc::CMSG_DATA(cmsg_ptr) as *mut RawFd;
-            std::ptr::copy_nonoverlapping(fds.as_ptr(), dst, fds.len());
-        }
-        msg.msg_controllen = payload_space;
-    }
-
-    let n = unsafe { libc::sendmsg(stream.as_raw_fd(), &msg, 0) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
+    sendmsg_with_fds(stream, &len_bytes, &[])?;
+    sendmsg_with_fds(stream, data, fds)?;
     Ok(())
+}
+
+/// Write every byte of `bytes` to `stream`, with `fds` attached as one
+/// `SCM_RIGHTS` record to the first of them, so a reader receives the fds
+/// with the first bytes it reads. The caller keeps its own copies of `fds`.
+pub fn write_all_with_fds_attached(
+    stream: &UnixStream,
+    bytes: &[u8],
+    fds: &[BorrowedFd<'_>],
+) -> std::io::Result<()> {
+    let raw_fds: Vec<RawFd> = fds.iter().map(AsRawFd::as_raw_fd).collect();
+    let bytes_sent = loop {
+        match sendmsg_with_fds(stream, bytes, &raw_fds) {
+            Ok(bytes_sent) => break bytes_sent,
+            Err(failure) if failure.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(failure) => return Err(failure),
+        }
+    };
+    let mut stream_writer = stream;
+    stream_writer.write_all(&bytes[bytes_sent..])
+}
+
+/// Read once from `stream` into `buffer`, receiving the fds attached to the
+/// bytes read: up to `max_fds` of them, or an error that closes every fd
+/// received when a peer attached more. Answers how many bytes were read, `0`
+/// when the peer closed.
+pub fn read_with_fds_attached(
+    stream: &UnixStream,
+    buffer: &mut [u8],
+    max_fds: usize,
+) -> std::io::Result<(usize, Vec<OwnedFd>)> {
+    loop {
+        match recvmsg_with_fds(stream, buffer, max_fds) {
+            Ok(received) => return Ok(received),
+            Err(failure) if failure.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(failure) => return Err(failure),
+        }
+    }
 }
 
 /// Receive a length-prefixed message payload with up to `max_fds` SCM_RIGHTS
@@ -133,8 +114,8 @@ pub fn send_message_with_fds(
 /// `max_fds` sizes the `cmsg` buffer allocated for the `recvmsg` call. It
 /// MUST be at least as large as the greatest fd count any peer will send
 /// on this connection — if the kernel delivers more fds than the buffer
-/// holds, `MSG_CTRUNC` is set and **the surplus fds are silently leaked into
-/// the peer's table**; this helper treats that condition as an error.
+/// holds, `MSG_CTRUNC` is set and this helper closes the fds that did fit
+/// and reports an error.
 /// Callers that expect single-plane traffic can pass `1`; callers that
 /// accept multi-plane should pass `MAX_DMA_BUF_PLANES`; callers that also
 /// receive trailing timeline-semaphore FDs (`produce_done` / `consume_done`)
@@ -147,60 +128,101 @@ pub fn recv_message_with_fds(
     msg_len: usize,
     max_fds: usize,
 ) -> std::io::Result<(Vec<u8>, Vec<RawFd>)> {
-    let cap = max_fds.min(MAX_SCM_RIGHTS_FDS);
-    let cmsg_space = cmsg_space_for(cap.max(1));
-    let mut cmsg_buf = vec![0u8; cmsg_space];
-
     let mut buf = vec![0u8; msg_len];
-
-    let mut iov = libc::iovec {
-        iov_base: buf.as_mut_ptr() as *mut libc::c_void,
-        iov_len: msg_len,
-    };
-
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-    msg.msg_controllen = cmsg_space;
-
-    let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if n == 0 {
+    let (bytes_read, received_fds) =
+        recvmsg_with_fds(stream, &mut buf, max_fds.min(MAX_SCM_RIGHTS_FDS))?;
+    if bytes_read == 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "Connection closed",
         ));
     }
-
-    let received_fds = extract_cmsg_fds(&msg);
-
-    // Check for truncated control message AFTER extracting whatever fds did
-    // fit, so we can close them instead of leaking them.
-    if msg.msg_flags & libc::MSG_CTRUNC != 0 {
-        for fd in &received_fds {
-            unsafe { libc::close(*fd) };
-        }
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "SCM_RIGHTS control message truncated (peer sent more fds than max_fds)",
-        ));
-    }
-
     let mut stream_reader = stream;
-    if let Err(read_failure) = stream_reader.read_exact(&mut buf[n as usize..]) {
-        for fd in &received_fds {
-            unsafe { libc::close(*fd) };
-        }
+    // A failed read drops `received_fds`, which closes them.
+    if let Err(read_failure) = stream_reader.read_exact(&mut buf[bytes_read..]) {
         return Err(the_peer_closing_named(
             read_failure,
             "Connection closed during message read",
         ));
     }
+    Ok((
+        buf,
+        received_fds
+            .into_iter()
+            .map(IntoRawFd::into_raw_fd)
+            .collect(),
+    ))
+}
 
-    Ok((buf, received_fds))
+/// One `sendmsg` of `bytes` with `fds` attached as one `SCM_RIGHTS` record,
+/// answering how many bytes the kernel took.
+fn sendmsg_with_fds(stream: &UnixStream, bytes: &[u8], fds: &[RawFd]) -> std::io::Result<usize> {
+    let mut iov = libc::iovec {
+        iov_base: bytes.as_ptr() as *mut libc::c_void,
+        iov_len: bytes.len(),
+    };
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    let mut cmsg_buf = vec![0u8; cmsg_space_for(fds.len())];
+    if !fds.is_empty() {
+        msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
+        msg.msg_controllen = cmsg_buf.len();
+        let cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+        if cmsg_ptr.is_null() {
+            return Err(std::io::Error::other("CMSG_FIRSTHDR returned null"));
+        }
+        let fd_bytes = std::mem::size_of_val(fds) as libc::c_uint;
+        unsafe {
+            (*cmsg_ptr).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg_ptr).cmsg_type = libc::SCM_RIGHTS;
+            (*cmsg_ptr).cmsg_len = libc::CMSG_LEN(fd_bytes) as usize;
+            let dst = libc::CMSG_DATA(cmsg_ptr) as *mut RawFd;
+            std::ptr::copy_nonoverlapping(fds.as_ptr(), dst, fds.len());
+        }
+    }
+    let bytes_sent = unsafe { libc::sendmsg(stream.as_raw_fd(), &msg, 0) };
+    if bytes_sent < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(bytes_sent as usize)
+}
+
+/// One `recvmsg` into `buffer` taking up to `max_fds` attached fds, answering
+/// how many bytes were read and the fds received. A peer that attached more
+/// than `max_fds` is refused, with every fd that did arrive closed.
+fn recvmsg_with_fds(
+    stream: &UnixStream,
+    buffer: &mut [u8],
+    max_fds: usize,
+) -> std::io::Result<(usize, Vec<OwnedFd>)> {
+    let mut cmsg_buf = vec![0u8; cmsg_space_for(max_fds.max(1))];
+    let mut iov = libc::iovec {
+        iov_base: buffer.as_mut_ptr() as *mut libc::c_void,
+        iov_len: buffer.len(),
+    };
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
+    msg.msg_controllen = cmsg_buf.len();
+    let bytes_read = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
+    if bytes_read < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: every fd an `SCM_RIGHTS` record carries was just installed in
+    // this process's table, and nothing else owns it.
+    let received_fds: Vec<OwnedFd> = extract_cmsg_fds(&msg)
+        .into_iter()
+        .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+        .collect();
+    if msg.msg_flags & libc::MSG_CTRUNC != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("SCM_RIGHTS control message truncated (peer sent more than {max_fds} fds)"),
+        ));
+    }
+    Ok((bytes_read as usize, received_fds))
 }
 
 /// `read_failure`, with the peer closing mid-read said as `closed_during`
@@ -734,5 +756,57 @@ mod tests {
             .expect_err("the peer closed mid-answer");
         assert_eq!(failure.kind(), std::io::ErrorKind::UnexpectedEof);
         assert_eq!(failure.to_string(), "Connection closed during message read");
+    }
+
+    #[test]
+    fn bytes_written_with_fds_attached_arrive_with_the_fds_on_the_first_read() {
+        use std::os::fd::{AsFd as _, FromRawFd as _};
+
+        let (writer, reader) = UnixStream::pair().expect("socket pair");
+        let first = unsafe { OwnedFd::from_raw_fd(make_memfd_with(b"first")) };
+        let second = unsafe { OwnedFd::from_raw_fd(make_memfd_with(b"second")) };
+        let message = b"a message longer than its first read";
+        write_all_with_fds_attached(&writer, message, &[first.as_fd(), second.as_fd()])
+            .expect("write with fds");
+
+        let mut prefix = [0u8; 4];
+        let (bytes_read, fds) = read_with_fds_attached(&reader, &mut prefix, 2).expect("read");
+        assert_eq!(&prefix[..bytes_read], &message[..bytes_read]);
+        let contents: Vec<Vec<u8>> = fds
+            .into_iter()
+            .map(|fd| read_all_from_fd(fd.into_raw_fd()))
+            .collect();
+        assert_eq!(contents, vec![b"first".to_vec(), b"second".to_vec()]);
+
+        let mut rest = vec![0u8; message.len() - bytes_read];
+        let mut reader_stream = &reader;
+        reader_stream.read_exact(&mut rest).expect("the rest");
+        assert_eq!(&rest[..], &message[bytes_read..]);
+    }
+
+    #[test]
+    fn a_read_offered_more_fds_than_it_takes_is_refused() {
+        use std::os::fd::{AsFd as _, FromRawFd as _};
+
+        let (writer, reader) = UnixStream::pair().expect("socket pair");
+        let fds: Vec<OwnedFd> = (0..3)
+            .map(|_| unsafe { OwnedFd::from_raw_fd(make_memfd_with(b"x")) })
+            .collect();
+        let borrowed: Vec<_> = fds.iter().map(|fd| fd.as_fd()).collect();
+        write_all_with_fds_attached(&writer, b"msg", &borrowed).expect("write with fds");
+
+        let mut buffer = [0u8; 3];
+        let failure = read_with_fds_attached(&reader, &mut buffer, 1).expect_err("too many fds");
+        assert_eq!(failure.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_read_after_the_peer_closed_reads_nothing() {
+        let (writer, reader) = UnixStream::pair().expect("socket pair");
+        drop(writer);
+        let mut buffer = [0u8; 4];
+        let (bytes_read, fds) = read_with_fds_attached(&reader, &mut buffer, 1).expect("read");
+        assert_eq!(bytes_read, 0);
+        assert!(fds.is_empty());
     }
 }

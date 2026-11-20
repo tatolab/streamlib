@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use streamlib_consumer_rhi::{
-    ConsumerRhiError, OwnedVulkanVideoCodecDevice, VulkanVideoCodecDirection,
+    OwnedVulkanVideoCodecDevice, VulkanVideoCodecDirection,
     runtime_vulkan_device_uuid_named_at_spawn,
 };
 use streamlib_video_bitstream::annex_b_access_unit::{
@@ -34,6 +34,7 @@ use crate::image_frame_on_the_video_port::{
     H273ColorVuiWireNames, image_frame_payload_descriptor_of_a_decoded_picture,
 };
 use crate::video_codec_retry_gate::VideoCodecRefusal;
+use crate::video_decode_on_a_device::why_the_decode_device_was_refused;
 use crate::video_decoder_settings::VideoDecoderSettings;
 
 /// The node output pool decoded pictures are converted into.
@@ -47,20 +48,6 @@ const DECODED_PICTURE_POOL_ROTATION_DEPTH: u32 = 4;
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
 const DECODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
-
-/// Why the owned decode device was refused: for now when the GPU lacked a
-/// resource another of its clients may free, such as the BAR1 aperture.
-pub(crate) fn why_the_decode_device_was_refused(
-    node_type_name: &str,
-    refusal: ConsumerRhiError,
-) -> VideoCodecRefusal {
-    let message =
-        format!("{node_type_name}: the owned Vulkan Video decode device was refused: {refusal}");
-    match refusal {
-        ConsumerRhiError::GpuOutOfResourcesForNow(_) => VideoCodecRefusal::ForNow(message),
-        _ => VideoCodecRefusal::ForGood(message),
-    }
-}
 
 /// One exported picture buffer the host adopted, reused while the decoder's
 /// ring and the picture's layout in it hold.
