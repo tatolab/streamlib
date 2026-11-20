@@ -101,6 +101,12 @@ impl<'listed> StreamsTheRuntimeHolds<'listed> {
         }
     }
 
+    /// Where the stream listed under the stream id `stream_id` lives, when it is listed with a
+    /// location.
+    pub(crate) fn the_location_of(&self, stream_id: &str) -> Option<&'listed StreamLocation> {
+        the_location_of_the_stream_listed_as(self.listings, stream_id)
+    }
+
     /// The stream asset `stream` names and the stream id of the stream it applies to: a stream
     /// id keeps the stream it names, and a stream asset's UUID takes the stream running it. The
     /// words of why, naming the streams the runtime holds, when it matches none.

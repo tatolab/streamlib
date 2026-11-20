@@ -102,6 +102,13 @@ macro_rules! graph_mutation_ops_record_the_call {
             let answers = node_types_ports.iter().map(|_| Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))).collect();
             Box::pin(async move { Ok(answers) })
         }
+        fn what_a_connect_makes_of_each_link_at_a_placed_level(
+            &self,
+            _level: &::streamlib_project_repository::StreamGraphDocument,
+            links: &[::streamlib_project_repository::StreamGraphDocumentLink],
+        ) -> ::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>> {
+            links.iter().map(|_| Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))).collect()
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             node_type: &str,

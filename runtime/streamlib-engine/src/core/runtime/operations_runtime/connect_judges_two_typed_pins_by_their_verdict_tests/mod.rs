@@ -29,6 +29,7 @@ use crate::core::{Error, Result};
 
 mod convert_node_held_settings_tests;
 mod node_types_port_tests;
+mod placed_level_tests;
 mod texture_formats_tests;
 
 const FLOAT_SOURCE: &str = "VerdictCheckFloatSource";

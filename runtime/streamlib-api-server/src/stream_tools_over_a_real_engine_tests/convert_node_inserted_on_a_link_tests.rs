@@ -55,7 +55,7 @@ impl ManualNode for ConvertNodeTestModuleGateToAudio::Node {
 
 /// Register the test ends, the module's conversion and the built-in conversions, once per test
 /// binary.
-fn register_the_convert_node_test_node_types_once() {
+pub(super) fn register_the_convert_node_test_node_types_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         NODE_REGISTRY.register::<ConvertNodeTestEnd::Node>();
@@ -65,7 +65,7 @@ fn register_the_convert_node_test_node_types_once() {
 }
 
 const CAMERA_NODE_UUID: &str = "c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4";
-const MODEL_NODE_UUID: &str = "d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5d5";
+pub(super) const MODEL_NODE_UUID: &str = "d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5d5";
 
 /// A project whose stream `main` holds two [`ConvertNodeTestEnd`]s, `camera` drawn at (0, 0) and
 /// `model` drawn at (200, 100), and no link.
@@ -94,7 +94,7 @@ fn camera_into_model(stream: Uuid, output: &str, input: &str) -> Value {
 }
 
 /// `link` as `connect` takes it, by the agent `alice`.
-fn connected_by_alice(link: &Value) -> Value {
+pub(super) fn connected_by_alice(link: &Value) -> Value {
     let mut connect = link.clone();
     connect["author"] = an_agent_named("alice");
     connect

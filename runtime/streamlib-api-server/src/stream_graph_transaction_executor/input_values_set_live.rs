@@ -245,6 +245,7 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 what_the_answer_names_of_each_added_node: &HashMap::new(),
                 overridden_by_links,
+                why_each_link_was_made_unjudged: BTreeMap::new(),
             },
         )))
     }
