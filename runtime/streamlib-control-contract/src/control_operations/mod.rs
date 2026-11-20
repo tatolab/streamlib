@@ -43,6 +43,7 @@ mod node_types;
 mod playback_and_stream_actions;
 mod project_files_and_views;
 mod project_lifecycle;
+mod worked_examples;
 
 pub use assets_and_streams::{
     CreateStream, DeleteAsset, DeleteStream, DescribeAsset, ImportAsset, ListAssets,
@@ -83,7 +84,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 22;
+pub const CONTROL_CONTRACT_REVISION: u32 = 23;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,

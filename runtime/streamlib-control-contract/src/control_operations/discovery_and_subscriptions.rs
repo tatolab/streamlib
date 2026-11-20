@@ -6,10 +6,12 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectTransactionsResourceContents,
 };
 
+use super::worked_examples;
 use super::{EVERY_SURFACE, EVERY_SURFACE_BUT_THE_AGENT_SURFACE};
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListStreamsRequest, LogsRequest,
@@ -168,6 +170,7 @@ impl ControlOperation for DescribeRuntime {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_RUNTIME);
 }
 
 /// `list_streams`: every stream the runtime holds, with its state.
@@ -187,6 +190,7 @@ impl ControlOperation for ListStreams {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_STREAMS);
 }
 
 /// `graph`: a loaded stream's graph, or every loaded stream's.
@@ -205,6 +209,7 @@ impl ControlOperation for Graph {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::GRAPH);
 }
 
 /// `logs`: read a project's log records after a cursor, oldest first.
@@ -223,4 +228,5 @@ impl ControlOperation for Logs {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LOGS);
 }
