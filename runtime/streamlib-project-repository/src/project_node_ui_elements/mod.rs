@@ -77,7 +77,7 @@ pub fn every_node_ui_element_a_project_and_its_imports_bring(
                             module: read.module.clone(),
                             script_path: read.the_path_of_a_script(&control.script),
                             element: ProjectNodeUiElement::Control {
-                                pin_type: control.pin_type,
+                                pin_type: control.pin_type.clone(),
                                 control: control.control.clone(),
                             },
                         })

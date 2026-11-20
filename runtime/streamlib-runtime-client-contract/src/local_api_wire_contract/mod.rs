@@ -61,9 +61,10 @@ pub use node_type_wire_types::{
     PinTypeListed, SetNodeTypeGroupToolResult,
 };
 pub use node_ui_wire_types::{
-    ListProjectNodeUiElementsToolResult, NodeUiManifest, NodeUiManifestControl,
-    NodeUiManifestNodeBody, ProjectNodeUiElement, ProjectNodeUiElementListed,
-    ProjectNodeUiManifestListed, ProjectNodeUiManifestNotRead, ProjectNodeUiModule,
+    ListProjectNodeUiElementsToolResult, NodeUiControlPinType, NodeUiManifest,
+    NodeUiManifestControl, NodeUiManifestNodeBody, ProjectNodeUiElement,
+    ProjectNodeUiElementListed, ProjectNodeUiManifestListed, ProjectNodeUiManifestNotRead,
+    ProjectNodeUiModule,
 };
 pub use project_code_check_wire_types::{
     ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,

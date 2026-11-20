@@ -62,6 +62,8 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
     "tally": {"picture": "texture", "tally": None},
     "bars": {"bars": "texture"},
     "bars_check": {"bars": "texture"},
+    "sweep": {"position": "float", "width": "float", "result": "named"},
+    "sweep_position": {"sweep": "named", "result": "float"},
 }
 
 #: The control each input of `Caption` names, which the Studio draws in place of its type's
@@ -79,7 +81,17 @@ CONTROL_NAMED_BY_EACH_CAPTION_INPUT = {
 }
 
 #: The nodes whose `process()`, or evaluation, must never raise while the stream plays.
-NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally", "caption", "bars", "bars_check")
+NODES_THAT_MUST_RUN_CLEANLY = (
+    "beat",
+    "warmth",
+    "glow",
+    "tally",
+    "caption",
+    "bars",
+    "bars_check",
+    "sweep",
+    "sweep_position",
+)
 
 #: More than the first converted picture: `bars_check` raises on the first one whose bars are
 #: not the colours `bars` wrote.

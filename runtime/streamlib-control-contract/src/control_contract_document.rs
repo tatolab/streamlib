@@ -574,7 +574,8 @@ mod tests {
     }
 
     #[test]
-    fn the_node_ui_manifest_is_a_component_whose_control_type_names_a_built_in_pin_type() {
+    fn the_node_ui_manifest_is_a_component_whose_control_type_names_a_built_in_or_a_named_pin_type()
+    {
         let document = control_contract_document();
         let schemas = &document["components"]["schemas"];
         let manifest = &schemas["NodeUiManifest"];
@@ -589,7 +590,20 @@ mod tests {
         assert_eq!(control["required"], json!(["type", "script"]));
         assert_eq!(
             control["properties"]["type"]["$ref"],
-            json!("#/components/schemas/BuiltInPinTypeName")
+            json!("#/components/schemas/NodeUiControlPinType")
+        );
+        let either: Vec<Value> = schemas["NodeUiControlPinType"]["anyOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`NodeUiControlPinType` is an `anyOf`"))
+            .iter()
+            .map(|alternative| alternative["$ref"].clone())
+            .collect();
+        assert_eq!(
+            either,
+            [
+                json!("#/components/schemas/BuiltInPinTypeName"),
+                json!("#/components/schemas/NamedPinTypeImportPath")
+            ]
         );
         assert_eq!(control["properties"]["control"]["type"], json!("string"));
         let listed_names: Vec<Value> = schemas["BuiltInPinTypeName"]["oneOf"]

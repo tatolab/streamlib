@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use streamlib_node_schema::pin_type::BuiltInPinTypeName;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    NodeUiManifest, NodeUiManifestControl, NodeUiManifestNodeBody, ProjectNodeUiElement,
+    NodeUiControlPinType, NodeUiManifest, NodeUiManifestControl, NodeUiManifestNodeBody,
+    ProjectNodeUiElement,
 };
 
 use super::project_files::FileToWrite;
@@ -50,10 +50,15 @@ impl ProjectRepository {
                  another, such as `knob.ts`"
             )));
         }
-        if let ProjectNodeUiElement::Control { control: None, .. } = element {
+        if let ProjectNodeUiElement::Control {
+            pin_type: NodeUiControlPinType::BuiltIn(_),
+            control: None,
+        } = element
+        {
             return Err(not_registered(
                 "a control with no `control` name is its pin type's default control, which only \
-                 the Studio's own module registers; give it a name, such as `knob`"
+                 the Studio's own module registers for a built-in type; give it a name, such as \
+                 `knob`"
                     .to_owned(),
             ));
         }
@@ -125,14 +130,14 @@ fn the_manifest_registering(
                     "it already registers {} in `{}`",
                     match control {
                         Some(control) =>
-                            format!("the control `{control}` for `{}`", the_name_of(*pin_type)),
-                        None => format!("the default control for `{}`", the_name_of(*pin_type)),
+                            format!("the control `{control}` for `{}`", pin_type.as_written()),
+                        None => format!("the default control for `{}`", pin_type.as_written()),
                     },
                     registered.script
                 ));
             }
             manifest.controls.push(NodeUiManifestControl {
-                pin_type: *pin_type,
+                pin_type: pin_type.clone(),
                 control: control.clone(),
                 script: script.to_owned(),
             });
@@ -155,12 +160,4 @@ fn the_manifest_registering(
         }
     }
     Ok(manifest)
-}
-
-/// `pin_type` as a manifest writes it, as `float`.
-fn the_name_of(pin_type: BuiltInPinTypeName) -> String {
-    serde_json::to_value(pin_type)
-        .ok()
-        .and_then(|name| name.as_str().map(str::to_owned))
-        .unwrap_or_default()
 }

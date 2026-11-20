@@ -9,7 +9,9 @@ use streamlib_project_repository::{
     ProjectActionApplyOutcome, ProjectRepository, ProjectRepositoryRefusal,
     ProjectTransactionAuthor, ProjectTransactionAuthorKind,
 };
-use streamlib_runtime_client_contract::local_api_wire_contract::ProjectNodeUiElement;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    NodeUiControlPinType, ProjectNodeUiElement,
+};
 
 const A_CONTROL_SCRIPT: &[u8] = b"export default class Knob extends HTMLElement {}\n";
 
@@ -73,7 +75,7 @@ fn a_person() -> ProjectTransactionAuthor {
 
 fn a_float_knob() -> ProjectNodeUiElement {
     ProjectNodeUiElement::Control {
-        pin_type: BuiltInPinTypeName::Float,
+        pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Float),
         control: Some("knob".to_owned()),
     }
 }
@@ -146,7 +148,7 @@ fn an_element_the_manifest_already_registers_or_a_script_already_there_is_refuse
     assert!(matches!(
         project.create(
             &ProjectNodeUiElement::Control {
-                pin_type: BuiltInPinTypeName::Float,
+                pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Float),
                 control: Some("dial".to_owned()),
             },
             "knob.ts",
@@ -195,7 +197,7 @@ fn a_control_with_no_name_or_a_script_named_as_the_manifest_is_refused_and_nothi
     assert!(matches!(
         project.create(
             &ProjectNodeUiElement::Control {
-                pin_type: BuiltInPinTypeName::Float,
+                pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Float),
                 control: None,
             },
             "knob.ts",

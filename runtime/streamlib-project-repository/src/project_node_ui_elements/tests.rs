@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use streamlib_node_schema::pin_type::BuiltInPinTypeName;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeUiControlPinType;
 
 use super::*;
 use crate::project_file::{PROJECT_FILE_NAME, ProjectImport};
@@ -92,7 +93,7 @@ fn each_element_is_listed_with_its_module_its_file_and_what_it_is_for_and_a_mani
                 "acme",
                 "node_ui/knob.ts",
                 &ProjectNodeUiElement::Control {
-                    pin_type: BuiltInPinTypeName::Float,
+                    pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Float),
                     control: Some("knob".to_owned()),
                 }
             ),
@@ -109,7 +110,7 @@ fn each_element_is_listed_with_its_module_its_file_and_what_it_is_for_and_a_mani
                 "levels",
                 "imports/levels/node_ui/meter.ts",
                 &ProjectNodeUiElement::Control {
-                    pin_type: BuiltInPinTypeName::Audio,
+                    pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Audio),
                     control: Some("meter".to_owned()),
                 }
             ),
