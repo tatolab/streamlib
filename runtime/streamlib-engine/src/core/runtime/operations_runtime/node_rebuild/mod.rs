@@ -276,3 +276,6 @@ impl LoadedStreamInThisRuntime {
         })
     }
 }
+
+#[cfg(test)]
+mod wired_setting_rebuild_tests;
