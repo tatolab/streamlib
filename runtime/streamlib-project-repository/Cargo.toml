@@ -41,8 +41,8 @@ serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
 sha2.workspace = true
-streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.68.82" }
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.82" }
+streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.69.152" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.69.152" }
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }
 toml_edit.workspace = true
