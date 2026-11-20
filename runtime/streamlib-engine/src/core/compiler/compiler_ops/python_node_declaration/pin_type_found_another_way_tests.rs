@@ -353,6 +353,7 @@ fn hold_frame_takes_a_texture_as_a_value_and_refuses_a_number_linked_into_it() {
         member_name: None,
         pin_type: &number,
         meaning: None,
+        flow: None,
     };
     let verdict = pin_link_verdict(
         output,

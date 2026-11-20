@@ -18,6 +18,7 @@ use crate::core::nodes::NodeTypesOneStreamResolves;
 mod bundle_input_read;
 mod live_input_values;
 mod live_input_values_kept_in_the_project_store;
+mod values_wires_carry_into_settings;
 
 pub(crate) use bundle_input_read::{
     ValuesABundleInputHolds, the_bundle_members_of, the_input_values_a_live_set_is_checked_against,
@@ -31,9 +32,13 @@ pub(crate) use live_input_values::{
     the_input_port_takes_a_value, the_input_value_change, the_lifetime_of_the_input,
     the_node_reads_a_value_set_on_the_input_whole, the_pin_values_with_the_live_ones_over_them,
     the_read_of_an_input_a_link_feeds, the_read_of_an_unfed_input, the_unlinked_input_values,
-    the_value_an_input_reads,
+    the_value_a_setting_reads_with_no_wire, the_value_an_input_reads,
 };
 pub(crate) use live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
+pub(crate) use values_wires_carry_into_settings::forget_what_a_link_into_a_setting_carried;
+pub use values_wires_carry_into_settings::{
+    ValueAWireCarriedIntoASetting, ValuesWiresCarryIntoSettings,
+};
 
 /// The number a Channels input reads of `pin_value`: the number, or 1 and 0 for a bool.
 pub(crate) fn the_control_value_of_a_pin(pin_value: &Value) -> Option<f64> {
@@ -323,7 +328,7 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
             words,
         ));
     }
-    if !port.takes_a_wire() && port.pin.is_none() {
+    if port.is_a_setting() && port.pin.is_none() {
         return refuse_a_value_a_setting_of_a_family_does_not_carry(node_name, port, value);
     }
     if let Some(checked) = port.check_value(value) {
@@ -340,7 +345,7 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         // A setting's value lands in the node's settings, never on a Channels wire, so its pin
         // type alone judges it.
         if value.is_null()
-            || !port.takes_a_wire()
+            || port.is_a_setting()
             || the_node_reads_a_value_set_on_the_input_whole(node_kind, port)
         {
             return Ok(());
@@ -499,3 +504,5 @@ fn names_in_backticks(names: &[String]) -> String {
 mod function_and_shader_node_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod values_wires_carry_into_settings_tests;

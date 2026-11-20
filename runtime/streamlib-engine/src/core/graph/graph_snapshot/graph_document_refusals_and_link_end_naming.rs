@@ -338,7 +338,7 @@ pub(crate) fn the_ports_of_a_graph_document_node(
 
 /// Refuse `port` unless `node` has it in `direction`, whether its type declares it or it is
 /// a config field the node exposes, listing the ports it does have there; and refuse an input
-/// that is a setting, which takes no wire, as the end of a link.
+/// that is a setting taking no wire as the end of a link.
 pub(crate) fn refuse_a_port_the_node_does_not_have(
     node_types: &NodeTypesOneStreamResolves,
     node_name: &str,

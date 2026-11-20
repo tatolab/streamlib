@@ -780,6 +780,7 @@ pub(super) fn unwire_and_remove_a_link(
     drop(graph);
 
     let mut graph = graph_arc.write();
+    crate::core::graph::input_values::forget_what_a_link_into_a_setting_carried(&graph, link_id);
     if graph.traversal_mut().e(link_id).drop().exists() {
         return Err(Error::GraphError("value was not dropped".into()));
     }

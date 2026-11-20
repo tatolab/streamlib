@@ -195,10 +195,23 @@ impl PortInfo {
         self.annotations.0.meaning.as_deref()
     }
 
-    /// Whether a link may end at this input: every input but a setting.
+    /// Whether a link may end at this input: every input but a setting read each run, and a
+    /// setting of a type no message carries, such as a node reference.
     pub fn takes_a_wire(&self) -> bool {
+        self.input_mode.is_none_or(|input_mode| {
+            input_mode.takes_a_wire()
+                && !(input_mode.is_a_setting()
+                    && self
+                        .pin
+                        .as_ref()
+                        .is_some_and(|pin| !pin.pin_type.takes_a_wire()))
+        })
+    }
+
+    /// Whether this input is a setting, read at setup or each run.
+    pub fn is_a_setting(&self) -> bool {
         self.input_mode
-            .is_none_or(crate::core::descriptors::NodeInputMode::takes_a_wire)
+            .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting)
     }
 
     /// Whether this port is a Trigger, whose messages each carry an event and no value.

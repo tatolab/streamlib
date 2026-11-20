@@ -186,7 +186,7 @@ fn refuse_a_link_connect_refuses(
     a_link_connected: ALinkConnected,
 ) -> Result<(Option<PinLinkVerdict>, ChannelName)> {
     refuse_a_source_this_graph_cannot_take(graph, from)?;
-    refuse_a_destination_this_graph_cannot_take(graph, to)?;
+    refuse_a_destination_this_graph_cannot_take(graph, from, to)?;
     let verdict =
         refuse_a_link_its_pin_types_or_families_refuse(graph, from, to, a_link_connected)?;
     let channel =

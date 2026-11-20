@@ -396,7 +396,11 @@ impl GraphTransactionRefusal {
             .link
             .as_ref()
             .filter(|_| {
-                code_and_place.refusal_code == ControlOperationRefusalCode::InputTakesNoWire
+                matches!(
+                    code_and_place.refusal_code,
+                    ControlOperationRefusalCode::InputTakesNoWire
+                        | ControlOperationRefusalCode::LinkStreamsIntoASetting
+                )
             })
             .map(|link| link.target.node.clone());
         code_and_place.refused_node = what_the_refused_operation_names

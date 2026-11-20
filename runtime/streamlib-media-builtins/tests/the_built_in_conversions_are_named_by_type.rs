@@ -280,6 +280,7 @@ fn the_verdict_between(
             member_name: None,
             pin_type: output_pin_type,
             meaning: None,
+            flow: None,
         },
         PinLinkInputEnd {
             end: PinLinkEnd {
@@ -288,6 +289,7 @@ fn the_verdict_between(
                 member_name: None,
                 pin_type: input_pin_type,
                 meaning: None,
+                flow: None,
             },
             input_mode: None,
         },

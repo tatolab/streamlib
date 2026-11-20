@@ -128,6 +128,7 @@ pub(crate) fn the_verdict_of_a_link_between_declared_ports(
             member_name: None,
             pin_type,
             meaning: port.meaning(),
+            flow: port.pin.as_ref().map(|pin| pin.flow),
         }
     }
     Some(pin_link_verdict(
@@ -161,6 +162,7 @@ impl<'end> TypedEnd<'end> {
                 Some(member) => member.meaning.as_deref(),
                 None => self.port.meaning(),
             },
+            flow: self.port.pin.as_ref().map(|pin| pin.flow),
         }
     }
 
@@ -193,6 +195,17 @@ fn verdict_between(
     conversions: &[PinConversion],
 ) -> PinLinkVerdict {
     if matches!(input.pin_type, PinTypeInItsGraph::Any) {
+        // An input of any type takes the output's own, judged by its mode and its flow alone.
+        if let Some(output_pin_type) = output.the_types_it_may_carry().first() {
+            return pin_link_verdict(
+                output.link_end(output_pin_type),
+                PinLinkInputEnd {
+                    end: input.link_end(output_pin_type),
+                    input_mode: input.port.input_mode,
+                },
+                &[],
+            );
+        }
         return PinLinkVerdict {
             outcome: if input.port.takes_a_wire() {
                 PinLinkOutcome::Connects

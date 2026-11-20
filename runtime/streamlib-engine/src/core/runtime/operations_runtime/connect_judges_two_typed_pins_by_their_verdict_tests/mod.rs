@@ -16,9 +16,9 @@ use super::{ALinkConnected, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     FreePinConversion, NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName,
-    NodeDescriptor, NodeInputMode, OutputPortDeclaredNames, PinDeclaration, PinLinkOutcome,
-    PinLinkRefusal, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime,
-    TexturePixelFormat,
+    NodeDescriptor, NodeInputMode, OutputPortDeclaredNames, PinDeclaration, PinFlow,
+    PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    SettingReadTime, TexturePixelFormat,
 };
 use crate::core::graph::{
     InputLinkPortRef, NodeRunId, OutputLinkPortRef,
@@ -35,6 +35,7 @@ mod placed_level_tests;
 mod texture_formats_tests;
 
 const FLOAT_SOURCE: &str = "VerdictCheckFloatSource";
+const FLOAT_STREAM_SOURCE: &str = "VerdictCheckFloatStreamSource";
 const NUMBER_SINK: &str = "VerdictCheckNumberSink";
 const CELSIUS_SOURCE: &str = "VerdictCheckCelsiusSource";
 const FAHRENHEIT_SINK: &str = "VerdictCheckFahrenheitSink";
@@ -79,6 +80,15 @@ fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
     let family = PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records);
     PortDescriptor::new(name, name, true, PortFamilyDeclaration::of_family(family))
         .with_pin_declaration(PinDeclaration::exactly(pin_type))
+}
+
+/// A port carrying `pin_type` that flows as a stream of values, never as a held value.
+fn a_streamed_port(name: &str, pin_type: PinType) -> PortDescriptor {
+    let mut port = a_typed_port(name, pin_type);
+    if let Some(pin) = port.pin_declaration.as_mut() {
+        pin.flow = PinFlow::Stream;
+    }
+    port
 }
 
 /// A Texture port stating `pixel_formats`, by its pin type and by its family as a declaration of
@@ -146,6 +156,11 @@ fn register_the_verdict_fixture_node_types() {
             class_path(FLOAT_SOURCE),
             Vec::new(),
             vec![a_typed_port("value", float())],
+        ));
+        register(a_node_type(
+            class_path(FLOAT_STREAM_SOURCE),
+            Vec::new(),
+            vec![a_streamed_port("value", float())],
         ));
         register(a_node_type(
             class_path(NUMBER_SINK),
@@ -431,30 +446,53 @@ fn two_typed_pins_no_rule_connects_are_refused_naming_both_types() {
     );
 }
 
+/// A Value wire into a setting read at setup connects as its types do, and a stream of values
+/// into it is refused, naming the node that samples it as the fix.
+///
+/// Mental-revert: refusing every link into a setting refuses the Value wire too.
 #[test]
-fn a_typed_link_into_a_setting_is_refused_as_taking_no_wire() {
+fn a_value_wire_into_a_setting_connects_and_a_stream_into_it_is_refused() {
     register_the_verdict_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let source = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let streamed = a_node_of(&compiler, class_path(FLOAT_STREAM_SOURCE));
     let sink = a_node_of(&compiler, class_path(NUMBER_SINK));
 
     let refusal = the_verdicts_refusal(
         connect_on_this_thread(
             &compiler,
-            OutputLinkPortRef::new(source, "value"),
-            InputLinkPortRef::new(sink, "gain"),
+            OutputLinkPortRef::new(streamed, "value"),
+            InputLinkPortRef::new(sink.clone(), "gain"),
         )
-        .expect_err("a setting takes no wire"),
+        .expect_err("a setting takes a Value wire only"),
     );
-
+    let PinLinkRefusal::StreamIntoASetting {
+        output_flow,
+        node_name,
+        input_name,
+        ..
+    } = &refusal
+    else {
+        panic!("a stream into a setting is refused as one: {refusal:?}");
+    };
     assert_eq!(
-        refusal,
-        PinLinkRefusal::InputTakesNoWire {
-            node_name: NUMBER_SINK.to_lowercase(),
-            input_name: "gain".to_owned(),
-        }
+        (output_flow, node_name.as_str(), input_name.as_str()),
+        (
+            &PinFlow::Stream,
+            NUMBER_SINK.to_lowercase().as_str(),
+            "gain"
+        )
     );
+    assert!(refusal.to_string().contains("samples"), "{refusal}");
     assert_eq!(the_links_in(&compiler), 0);
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(source, "value"),
+        InputLinkPortRef::new(sink, "gain"),
+    )
+    .expect("a Value wire into a setting connects as its types do");
+    assert_eq!(the_links_in(&compiler), 1);
 }
 
 /// A link a built-in conversion bridges is refused by the engine's own connect, which never
@@ -543,7 +581,7 @@ fn a_conversion_of_another_shape_is_refused_at_registration() {
         .to_string();
     assert!(
         refusal.contains(
-            "states that it is a conversion, and it has 1 inputs that take a wire and 2 outputs"
+            "states that it is a conversion, and it has 1 inputs besides its settings and 2 outputs"
         ),
         "{refusal}"
     );
@@ -645,7 +683,7 @@ fn a_typed_output_whose_family_follows_an_input_is_judged_by_what_it_carries_on(
 }
 
 /// A link a saved graph holds whose pin types alone refuse it is kept when its ports' families
-/// take it, its names, codec and formats with them; a link into a setting is refused still.
+/// take it, its names, codec and formats with them; a stream into a setting is refused still.
 ///
 /// Mental-revert: judging a saved graph's link as one made now refuses the temperatures.
 #[test]
@@ -664,7 +702,7 @@ fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take
     .expect("a saved link both ends' families take is kept");
     assert_eq!(the_links_in(&compiler), 1);
 
-    let level = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let level = a_node_of(&compiler, class_path(FLOAT_STREAM_SOURCE));
     let numbers = a_node_of(&compiler, class_path(NUMBER_SINK));
     let refusal = the_verdicts_refusal(
         connect_on_this_thread_as(
@@ -673,10 +711,10 @@ fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take
             InputLinkPortRef::new(numbers, "gain"),
             ALinkConnected::OfASavedGraph,
         )
-        .expect_err("a setting takes no wire, saved or not"),
+        .expect_err("a setting takes no stream, saved or not"),
     );
     assert!(
-        matches!(refusal, PinLinkRefusal::InputTakesNoWire { .. }),
+        matches!(refusal, PinLinkRefusal::StreamIntoASetting { .. }),
         "{refusal:?}"
     );
     assert_eq!(the_links_in(&compiler), 1);
@@ -754,6 +792,7 @@ fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing
     let number_sink = a_node_of(&compiler, class_path(NUMBER_SINK));
     let celsius_source = a_node_of(&compiler, class_path(CELSIUS_SOURCE));
     let fahrenheit_sink = a_node_of(&compiler, class_path(FAHRENHEIT_SINK));
+    let float_stream_source = a_node_of(&compiler, class_path(FLOAT_STREAM_SOURCE));
 
     let verdict = the_verdict_connect_takes_on_a_link(
         &compiler,
@@ -773,7 +812,7 @@ fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing
             InputLinkPortRef::new(number_sink.clone(), "label"),
         ),
         (
-            OutputLinkPortRef::new(float_source.clone(), "value"),
+            OutputLinkPortRef::new(float_stream_source, "value"),
             InputLinkPortRef::new(number_sink.clone(), "gain"),
         ),
     ] {

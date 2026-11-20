@@ -97,9 +97,12 @@ fn a_conversion_of_any_other_shape_is_refused_naming_the_node_type() {
         vec![a_typed_port("texture", texture())],
     );
     for (descriptor, why) in [
-        (two_wired_inputs, "2 inputs that take a wire and 1 outputs"),
-        (two_outputs, "1 inputs that take a wire and 2 outputs"),
-        (only_settings, "0 inputs that take a wire and 1 outputs"),
+        (
+            two_wired_inputs,
+            "2 inputs besides its settings and 1 outputs",
+        ),
+        (two_outputs, "1 inputs besides its settings and 2 outputs"),
+        (only_settings, "0 inputs besides its settings and 1 outputs"),
         (
             an_untyped_input,
             "its input `tensor` states no one pin type",

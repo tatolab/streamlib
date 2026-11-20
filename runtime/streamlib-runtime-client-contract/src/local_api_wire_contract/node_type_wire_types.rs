@@ -422,7 +422,8 @@ pub enum NodeTypeInputMode {
     WireOrValue,
     /// A link only, read each run.
     WireOnly,
-    /// A stored value only, never a link: a setting.
+    /// A setting: a stored value, read when its `read` says; one read at setup also takes a
+    /// link from an output that flows as a value, each change of either rebuilding its node.
     SettingOnly,
 }
 

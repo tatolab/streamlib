@@ -3,8 +3,8 @@
 
 """How a class node's input takes its value and its messages, each written as one object on its annotation.
 
-`radius: Annotated[float, SettingOnly()] = 4.0` declares a field that takes no wire and is read
-at setup. `WireOnly()` declares a field that takes only a wire, and `InputValueLifetime("reset")`
+`radius: Annotated[float, SettingOnly()] = 4.0` declares a field that is read at setup, from its
+set value or from a Value wire, each change of either rebuilding the node. `WireOnly()` declares a field that takes only a wire, and `InputValueLifetime("reset")`
 one whose live value is forgotten at Stop. `voice: InputPin[Annotated[Audio,
 StreamDelivery("ordered")]]` declares how a Stream input reads its messages. None of them is a
 pin annotation of the contract: each says how the engine serves the input, so each is sent as a
@@ -53,10 +53,12 @@ type SettingReadTime = Literal["at_setup", "each_run"]
 
 @final
 class SettingOnly:
-    """A field that takes no wire and is read once, at setup, so a change rebuilds the node: `Annotated[int, SettingOnly()]`.
+    """A field read once, at setup, so a change rebuilds the node: `Annotated[int, SettingOnly()]`.
 
-    `SettingOnly(read="each_run")` is read on every run with no rebuild, which only the
-    runtime's own nodes declare."""
+    It takes a set value or a wire from an output that flows as a value, which the engine reads
+    in the node's place, rebuilding the node with each new value it carries.
+    `SettingOnly(read="each_run")` is read on every run with no rebuild and takes no wire, which
+    only the runtime's own nodes declare."""
 
     __slots__ = ("_read",)
 

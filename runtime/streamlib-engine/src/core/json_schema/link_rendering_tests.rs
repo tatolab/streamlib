@@ -134,6 +134,7 @@ fn the_verdict_between(
         member_name: None,
         pin_type: output,
         meaning: None,
+        flow: None,
     };
     let input = PinLinkInputEnd {
         end: PinLinkEnd {

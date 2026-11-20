@@ -4,7 +4,8 @@
 //! A value set on a setting a node reads at setup rebuilds that one node while its stream runs:
 //! each set saves the value and leaves the node to rebuild, and the next rebuild stops it and
 //! builds it again once, however many of its settings were set, the rest of the stream running
-//! on. A rebuild that fails is answered with the node's own words.
+//! on. A rebuild that fails is answered with the node's own words. A value a Value wire carries
+//! into such a setting rebuilds its node the same way, once for a burst of them.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use uuid::Uuid;
 
 use super::{LoadedStreamInThisRuntime, RuntimeStatus};
 use crate::core::compiler::PendingOperation;
+use crate::core::graph::input_values::ValueAWireCarriedIntoASetting;
 use crate::core::graph::{GraphNodeWithComponents, NodeRunId, ObservableNodeState, StateComponent};
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::nodes::NodeState;
@@ -23,6 +25,11 @@ use crate::core::{Error, Result};
 /// a helper process is given to start and register, so a helper-hosted node's own refusal
 /// arrives before the wait ends.
 const LONGEST_WAIT_FOR_A_REBUILT_NODE_TO_SET_UP: Duration = Duration::from_secs(90);
+
+/// How long a rebuild a wire into a setting asks for waits for more of a burst of values on
+/// wires into the stream's settings, so the burst rebuilds each node once with its last values.
+pub(crate) const A_BURST_OF_VALUES_ON_A_WIRE_INTO_A_SETTING_SETTLES_WITHIN: Duration =
+    Duration::from_millis(50);
 
 /// A node a rebuild builds again: its name, its UUID and its state.
 struct NodeRebuilt {
@@ -77,6 +84,12 @@ impl LoadedStreamInThisRuntime {
         &self,
     ) -> Result<Vec<Uuid>> {
         let node_run_ids = std::mem::take(&mut *self.nodes_a_setting_read_at_setup_rebuilds.lock());
+        self.rebuild_the_nodes(node_run_ids).await
+    }
+
+    /// Rebuild each of `node_run_ids` once, as
+    /// [`Self::rebuild_each_node_a_setting_read_at_setup_changed`] does.
+    async fn rebuild_the_nodes(&self, node_run_ids: Vec<NodeRunId>) -> Result<Vec<Uuid>> {
         if node_run_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -155,5 +168,66 @@ impl LoadedStreamInThisRuntime {
             )));
         }
         Ok(nodes_rebuilt.iter().map(|node| node.node_uuid).collect())
+    }
+
+    /// Rebuild, once each, every running node a Value wire into one of its settings read at
+    /// setup carried a new value into, after a burst of them settles: each node is built with
+    /// the last value each of its wires carried. A node that does not build with them is
+    /// refused in its own words, logged, and built again from the values it had; the values it
+    /// refused are not tried again until its wire carries another. A stream not started leaves
+    /// the values waiting.
+    pub(crate) async fn rebuild_each_node_a_wire_into_its_settings_changed(&self) {
+        tokio::time::sleep(A_BURST_OF_VALUES_ON_A_WIRE_INTO_A_SETTING_SETTLES_WITHIN).await;
+        if *self.status.lock() != RuntimeStatus::Started {
+            return;
+        }
+        let carried = self
+            .compiler
+            .scope(|graph, _tx| Arc::clone(graph.values_wires_carry_into_settings()));
+        let values = carried.take_each_value_waiting();
+        let node_run_ids = self.the_nodes_holding_the_settings(&values);
+        if node_run_ids.is_empty() {
+            return;
+        }
+        let refusal = match self.rebuild_the_nodes(node_run_ids.clone()).await {
+            Ok(rebuilt) => {
+                tracing::info!(
+                    nodes_rebuilt = rebuilt.len(),
+                    "rebuilt each node a wire into its settings carried a new value into"
+                );
+                return;
+            }
+            Err(refusal) => refusal,
+        };
+        tracing::warn!(
+            %refusal,
+            "a node did not build with what a wire into its settings carried, so it is built \
+             again from the values it had"
+        );
+        carried.put_back(&values);
+        if let Err(not_rebuilt) = self.rebuild_the_nodes(node_run_ids).await {
+            tracing::error!(
+                %not_rebuilt,
+                "a node whose wired settings were put back did not build with them either"
+            );
+        }
+    }
+
+    /// Each node of this stream, once, that holds a setting of `values`.
+    fn the_nodes_holding_the_settings(
+        &self,
+        values: &[ValueAWireCarriedIntoASetting],
+    ) -> Vec<NodeRunId> {
+        self.compiler.scope(|graph, _tx| {
+            let mut node_run_ids: Vec<NodeRunId> = Vec::new();
+            for carried in values {
+                if let Some(node) = graph.node_by_uuid(carried.node)
+                    && !node_run_ids.contains(&node.id)
+                {
+                    node_run_ids.push(node.id.clone());
+                }
+            }
+            node_run_ids
+        })
     }
 }

@@ -172,8 +172,8 @@ impl RefusalCodeAndPlace {
     pub(crate) fn of_an_engine_error(refusal: &Error) -> Self {
         use ControlOperationRefusalCode::{
             InputTakesNoWire, LinkAlreadyExists, LinkNeedsAModuleConversion,
-            LinkPinTypesDoNotConnect, NodeNameTaken, NodeNotFound, NodeNotRunning,
-            NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
+            LinkPinTypesDoNotConnect, LinkStreamsIntoASetting, NodeNameTaken, NodeNotFound,
+            NodeNotRunning, NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
         };
         match refusal {
             Error::NodeOfAStreamIsNotRunning {
@@ -232,6 +232,15 @@ impl RefusalCodeAndPlace {
                     refused_node: Some(node_name.clone()),
                     refused_field: Some(input_name.clone()),
                     ..Self::coded(InputTakesNoWire)
+                },
+                PinLinkRefusal::StreamIntoASetting {
+                    node_name,
+                    input_name,
+                    ..
+                } => Self {
+                    refused_node: Some(node_name.clone()),
+                    refused_field: Some(input_name.clone()),
+                    ..Self::coded(LinkStreamsIntoASetting)
                 },
                 PinLinkRefusal::PinTypesDoNotConnect {
                     conversions_that_bridge,

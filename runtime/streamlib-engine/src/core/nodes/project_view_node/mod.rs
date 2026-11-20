@@ -133,7 +133,7 @@ fn is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(
         && ports
             .inputs
             .iter()
-            .any(|port| port.name == input && !port.takes_a_wire())
+            .any(|port| port.name == input && port.is_a_setting())
 }
 
 /// A port carried as a value of any type, its family alone deciding what it takes; an output so

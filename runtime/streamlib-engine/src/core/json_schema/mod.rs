@@ -389,7 +389,7 @@ pub struct NodeDescriptorOutput {
 }
 
 impl NodeDescriptorOutput {
-    /// Each input a link may end at: every input but a setting.
+    /// Each input a link may end at: every input but a setting read each run.
     pub fn inputs_taking_a_wire(&self) -> impl Iterator<Item = &PortDescriptorOutput> {
         self.inputs.iter().filter(|input| input.takes_a_wire())
     }
@@ -439,8 +439,8 @@ pub struct PortDescriptorOutput {
     #[schema(value_type = Option<Object>)]
     pub input_mode: Option<NodeInputMode>,
     /// The value a setting reads while no value is set on its node, as its
-    /// schema or its declaration states it. Absent on an input that takes a
-    /// wire, and on a setting that states none.
+    /// schema or its declaration states it. Absent on an input that is no
+    /// setting, and on a setting that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
     /// What it states besides its type: a port's range, step, unit, meaning and
@@ -454,13 +454,13 @@ pub struct PortDescriptorOutput {
 }
 
 impl PortDescriptorOutput {
-    /// Whether a link may end at this input: every input but a setting.
+    /// Whether a link may end at this input: every input but a setting read each run.
     pub fn takes_a_wire(&self) -> bool {
         self.input_mode.is_none_or(NodeInputMode::takes_a_wire)
     }
 
-    /// The input a config field of a node type not yet typed is: one that takes
-    /// no wire, read when the node is set up.
+    /// The input a config field of a node type not yet typed is: a setting read
+    /// when the node is set up, which takes no wire until its type is typed.
     fn of_a_config_field(setting: ConfigFieldDescribedAsASetting) -> Self {
         Self {
             name: setting.name,
@@ -885,7 +885,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             input_mode: port.input_mode,
             default_value: port
                 .input_mode
-                .filter(|input_mode| !input_mode.takes_a_wire())
+                .filter(|input_mode| input_mode.is_a_setting())
                 .and(port.pin_default.clone()),
             annotations,
         }

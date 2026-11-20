@@ -140,6 +140,7 @@ impl GraphInterfacePort {
             member_name: linked_port.member.as_deref(),
             pin_type: &linked_pin.pin_type,
             meaning: linked.meaning(),
+            flow: Some(linked_pin.flow),
         };
         let interface_end = PinLinkEnd {
             node_name: &self.interface_node,
@@ -147,6 +148,7 @@ impl GraphInterfacePort {
             member_name: None,
             pin_type: chosen,
             meaning: None,
+            flow: None,
         };
         let verdict = match self.direction {
             GraphInterfacePortDirection::Output => pin_link_verdict(

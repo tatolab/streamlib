@@ -25,8 +25,7 @@ pub struct RemoveProjectToolResult {
 pub struct DeleteProjectToolResult {
     /// The queued deletion, as `describe_stream_action` takes it.
     pub action: String,
-    /// The project whose streams it forgets and whose folder it moves to the Trash, symlinks
-    /// resolved.
+    /// The project whose streams it forgets and whose folder goes to the Trash, symlinks resolved.
     pub project_directory: PathBuf,
 }
 
@@ -484,9 +483,10 @@ pub enum ControlOperationRefusalCode {
     /// type. With exactly one, `suggested_call` is the `transact` that places it between them,
     /// only when both ends are UUID-named nodes the edited level holds.
     LinkNeedsAModuleConversion,
-    /// The link sent ends at an input that is a setting, which takes a stored value and never a
-    /// link; `refused_field` names it.
+    /// The link sent ends at a setting that takes no link; `refused_field` names it.
     InputTakesNoWire,
+    /// The link sent carries a Stream or a Trigger into a setting; `refused_field` names it.
+    LinkStreamsIntoASetting,
     /// The project holds no file or folder at the path sent; `refused_file` names it.
     FileNotFound,
     /// The file changed, or was taken out, since it was read, so the write was not made;

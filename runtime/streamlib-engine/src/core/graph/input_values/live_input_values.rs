@@ -275,7 +275,7 @@ pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeVa
 /// input does not state that it takes a wire or a value, only a Channels input; on a port that
 /// names no pin type, any input of a function node.
 pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &PortInfo) -> bool {
-    if !port.takes_a_wire() {
+    if port.is_a_setting() {
         return true;
     }
     match &port.pin {
@@ -416,19 +416,49 @@ fn the_value_an_unlinked_input_is_handed(
 }
 
 /// The value each input of `node` in `graph` reads while no link feeds it, by input: its live
-/// value, else its saved one, else its declared default. An input that takes no stored value, a
-/// config field the node exposes as an input, which reads the node's config, and an input with
-/// none of the three are left out.
+/// value, else its saved one, else its declared default. A setting read at setup that a wire
+/// feeds reads instead the value its wire last carried, once it has carried one. An input that
+/// takes no stored value, a config field the node exposes as an input, which reads the node's
+/// config, and an input with none of these are left out.
 pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<String, Value> {
     node.ports
         .inputs
         .iter()
         .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
         .filter_map(|port| {
-            the_value_an_unlinked_input_is_handed(graph, node, port)
+            the_value_a_wire_into_the_setting_carried(graph, node, port)
+                .or_else(|| the_value_an_unlinked_input_is_handed(graph, node, port))
                 .map(|value| (port.name.clone(), value))
         })
         .collect()
+}
+
+/// The value setting `setting` of `node` in `graph` reads while no wire has carried it one: its
+/// live value, else its saved one, else its declared default; `None` with none of the three.
+pub(crate) fn the_value_a_setting_reads_with_no_wire(
+    graph: &Graph,
+    node: &GraphNode,
+    setting: &str,
+) -> Option<Value> {
+    the_value_an_unlinked_input_is_handed(graph, node, node.input_port(setting)?)
+}
+
+/// The value the wire into `port` of `node` in `graph` last carried that the node is built
+/// with, when `port` is a setting read at setup a link feeds; `None` otherwise, and while its
+/// wire has carried none.
+fn the_value_a_wire_into_the_setting_carried(
+    graph: &Graph,
+    node: &GraphNode,
+    port: &PortInfo,
+) -> Option<Value> {
+    if !port.is_a_setting_read_at_setup()
+        || !WhatTheLinksIntoAnInputFeed::of(graph, &node.id, &port.name).the_whole_input()
+    {
+        return None;
+    }
+    graph
+        .values_wires_carry_into_settings()
+        .the_value_its_node_is_built_with(node.node_uuid, &port.name)
 }
 
 /// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now, under
