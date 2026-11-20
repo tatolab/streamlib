@@ -42,6 +42,7 @@ pub(crate) use what_a_value_port_carries::{
     what_the_value_port_of_an_interface_node_carries,
 };
 
+pub(crate) use graph_input_annotations::is_an_annotation_setting_of_a_graph_input;
 use graph_input_annotations::the_annotations_a_graph_input_config_states;
 use interface_node_config::{
     WhatAnInterfaceNodeDeclares, refuse_a_config_key_the_interface_node_does_not_take,

@@ -79,27 +79,27 @@ class GraphInput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ] = None
     range: Annotated[
         list[float] | None,
-        SettingOnly(),
+        SettingOnly(read="each_run"),
         Description("`[lowest, highest]`, the span a control moves the Input's number in"),
     ] = None
     step: Annotated[
         float | None,
-        SettingOnly(),
+        SettingOnly(read="each_run"),
         Description("The step a control moves the Input's number by"),
     ] = None
     unit: Annotated[
         str | None,
-        SettingOnly(),
+        SettingOnly(read="each_run"),
         Description("The unit the Input's number is in, such as `Hz`"),
     ] = None
     meaning: Annotated[
         str | None,
-        SettingOnly(),
+        SettingOnly(read="each_run"),
         Description("What the Input's value stands for, such as `frequency`"),
     ] = None
     control: Annotated[
         str | None,
-        SettingOnly(),
+        SettingOnly(read="each_run"),
         Description(
             "The control that sets the Input's value, such as `dial`: one of the Studio's, or "
             "a module's qualified name"

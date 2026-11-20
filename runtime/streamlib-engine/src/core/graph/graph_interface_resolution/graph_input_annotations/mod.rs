@@ -35,7 +35,7 @@ pub(super) fn the_annotation_settings_of_a_graph_input() -> impl Iterator<Item =
 
 /// Whether `setting` is a setting of a top-level `GraphInput` stating an annotation of its
 /// `value`.
-pub(super) fn is_an_annotation_setting_of_a_graph_input(setting: &str) -> bool {
+pub(crate) fn is_an_annotation_setting_of_a_graph_input(setting: &str) -> bool {
     the_annotation_settings_of_a_graph_input()
         .any(|annotation_setting| annotation_setting == setting)
 }

@@ -171,6 +171,8 @@ def test_a_graph_inputs_fields_declare_the_settings_and_the_value_the_runtime_de
     assert inputs["lifetime"]["pin_default"] == "kept"
     assert inputs["pin_type"]["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
     assert inputs["value"]["input_mode"] == {"mode": "setting_only", "read": "each_run"}
+    for annotation in ["range", "step", "unit", "meaning", "control"]:
+        assert inputs[annotation]["input_mode"] == {"mode": "setting_only", "read": "each_run"}
     assert inputs["value"]["pin_declaration"]["pin_type"] == set_by_pin_type
     assert inputs["value"]["pin_declaration"]["former_names"] == ["default"]
     assert inputs["value"]["pin_declaration"]["may_be_unset"] is True

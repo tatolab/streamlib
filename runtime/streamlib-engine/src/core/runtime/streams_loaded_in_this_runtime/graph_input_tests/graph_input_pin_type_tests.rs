@@ -204,3 +204,86 @@ fn a_graph_input_renders_the_annotations_it_saves_on_its_value_input_and_refuses
     );
     assert_eq!(the_value_input_rendered()["annotations"], annotations);
 }
+
+/// A playing `GraphInput` linked into a function node takes a saved change of its `control` and
+/// its `unit` live: neither is refused nor leaves the node to rebuild, `graph` renders both on
+/// its `value` input straight away, and the node goes on publishing its value.
+///
+/// Mental-revert: with the annotation settings read at setup, each change leaves the node to
+/// rebuild, and a rebuild of a node linked to a function node is refused.
+#[test]
+#[serial]
+fn a_playing_graph_input_linked_into_a_function_node_takes_a_change_of_its_annotations_live() {
+    let project_directory = a_project_on_disk();
+    let async_runtime = an_async_runtime();
+    let lines = Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    stream
+        .node_types_this_stream_resolves()
+        .register_a_type_described_in_this_streams_node_interpreter(
+            crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type(
+                "graph_input_annotation_tests::Caption",
+                &["lines"],
+                &["result"],
+            ),
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                node_once_promoted_to_its_own_process: Box::new(|node| {
+                    Err(Error::Configuration(format!(
+                        "`{}` builds no node in this test",
+                        node.id
+                    )))
+                }),
+            },
+        )
+        .unwrap();
+    let document = json!({
+        "nodes": [
+            a_graph_input_in_a_document(
+                lines,
+                "lines",
+                json!({
+                    "port": "lines", "pin_type": { "type": "integer" }, "value": 2,
+                    "range": [1, 8], "control": "dial",
+                }),
+            ),
+            { "name": "caption", "type": "graph_input_annotation_tests::Caption" },
+        ],
+        "links": [{
+            "source": { "node": "lines", "port": VALUE },
+            "target": { "node": "caption", "port": "lines" },
+        }],
+    });
+    stream
+        .load_graph_snapshot_into_this_stream(
+            &GraphSnapshot::from_graph_document(document).unwrap(),
+            None,
+        )
+        .expect("the graph loads");
+    play(&stream);
+
+    set_the_saved_input(&stream, &async_runtime, lines, "control", json!("slider"));
+    set_the_saved_input(&stream, &async_runtime, lines, "unit", json!("lines"));
+    let rebuilt = async_runtime
+        .block_on(RuntimeOperations::rebuild_each_node_a_setting_read_at_setup_changed(&*stream))
+        .expect("nothing is left to rebuild");
+
+    assert_eq!(rebuilt, Vec::<Uuid>::new());
+    let rendered = the_rendered_node(&stream, lines);
+    let value_input = rendered["ports"]["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|input| input["name"] == VALUE)
+        .unwrap_or_else(|| panic!("`value` renders: {rendered}"));
+    assert_eq!(
+        value_input["annotations"],
+        json!({
+            "range": { "minimum": 1.0, "maximum": 8.0 }, "unit": "lines", "control": "slider",
+        }),
+        "{rendered}"
+    );
+    let integer = json!({ "type": "integer" });
+    let (_viewer, mut reader) = a_reader_of_the_value_of(&stream, &async_runtime, lines);
+    assert_eq!(the_typed_value_read(&mut reader, &integer), json!(2));
+    stream.stop().expect("the stream ends");
+}
