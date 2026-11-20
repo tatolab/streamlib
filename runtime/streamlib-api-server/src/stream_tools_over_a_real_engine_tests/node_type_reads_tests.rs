@@ -376,7 +376,18 @@ async fn a_projects_node_types_are_listed_by_source_with_the_runtimes_own_last()
         .iter()
         .filter_map(|listed| listed["node_type"].as_str())
         .collect();
-    assert!(names.is_sorted(), "{names:?}");
+    let (run_by_node_code, of_the_graph_itself) = names.split_at(names.len() - 4);
+    assert!(run_by_node_code.is_sorted(), "{names:?}");
+    assert_eq!(
+        of_the_graph_itself,
+        [
+            "tatolab.stream:GraphInput",
+            "tatolab.stream:GraphOutput",
+            "tatolab.stream:SetVariable",
+            "tatolab.stream:GetVariable",
+        ],
+        "the graph's own node types come last"
+    );
 }
 
 /// A built-in node type is described from the runtime's own description: a typed input with its

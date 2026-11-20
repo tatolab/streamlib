@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use streamlib_node_schema::{NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references};
 
 use crate::core::descriptors::NodeClassImportPath;
+use crate::core::graph::PortInfo;
 use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
@@ -26,10 +27,12 @@ use crate::core::graph::legacy_config_of_a_node::{
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphNodeComponentsOnTheWire, GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
-    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
-    redraw_a_node_over_its_pins,
+    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, redraw_a_node_over_its_pins,
 };
-use crate::core::nodes::{NodeTypesOneStreamResolves, the_settings_of_a_graph_variable_node};
+use crate::core::nodes::{
+    NodeTypesOneStreamResolves, the_settings_of_a_get_variable_offering,
+    the_settings_of_a_graph_variable_node, the_value_port_of_a_graph_variable_node,
+};
 use crate::core::{Error, Result};
 use streamlib_runtime_client_contract::local_api_wire_contract::GraphVariableOnTheWire;
 
@@ -62,6 +65,18 @@ pub struct GraphVariablesAsDrawn {
     /// Each config that named a get, as drawn and as resolved, by the cast of
     /// its node's name.
     pub configs_naming_a_get_by_node_name: HashMap<String, ConfigNamingAGet>,
+    /// What each `GetVariable` reads, by the cast of its node's name.
+    pub what_each_get_reads: HashMap<String, WhatAGetVariableReads>,
+}
+
+/// What one `GetVariable` reads: the value its setter holds, and every variable a setter on
+/// its level or an enclosing one sets, which it may read instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhatAGetVariableReads {
+    /// Every variable it may read, sorted.
+    pub variables_it_may_read: Vec<String>,
+    /// What the setter of its variable holds; `None` while no setter sets it.
+    pub value: Option<ValueASetVariableHolds>,
 }
 
 /// A node's config that named a get: as drawn, and as the runtime runs it.
@@ -202,26 +217,23 @@ impl GraphVariablesAsDrawn {
                 }),
                 ..GraphNodeComponentsOnTheWire::default()
             };
-            let value_port = GraphNodePortOnTheWire {
-                name: GRAPH_VARIABLE_VALUE_PORT_NAME.to_string(),
-                description: String::new(),
-                port_kind: PortKindOnTheWire::default(),
-                delivery_profile: None,
-                borrow_quota: None,
-                audio_window: None,
-                stream_facts: None,
-                values_checked: None,
-                family: None,
-                pin_default: None,
-                pin: None,
-                annotations: crate::core::descriptors::PinAnnotations::default(),
-                takes_a_wire: None,
-                value_read: None,
-                pin_group_slot: None,
-            };
+            let what_the_get_reads = self.what_each_get_reads.get(&variable_node_cast);
+            let value_port = the_value_port_rendered(
+                &variable_node.node_type,
+                what_the_get_reads,
+                &graph_response.nodes,
+            );
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
+            let settings_declared = match what_the_get_reads {
+                Some(reads) => {
+                    the_settings_of_a_get_variable_offering(&reads.variables_it_may_read)
+                }
+                None => the_settings_of_a_graph_variable_node(&variable_node.node_type)
+                    .unwrap_or(&[])
+                    .to_vec(),
+            };
             let settings = the_settings_rendered_reading_the_values_held(
-                the_settings_of_a_graph_variable_node(&variable_node.node_type).unwrap_or(&[]),
+                &settings_declared,
                 &variable_node.input_values,
             )
             .into_iter();
@@ -267,6 +279,47 @@ impl GraphVariablesAsDrawn {
     }
 }
 
+/// The `value` port of a variable node of `node_type` as `graph` renders it among
+/// `rendered_nodes`: a getter's as the output its setter is linked from renders, of that port's
+/// type, when its setter holds one; else as the node type declares it, of any type.
+fn the_value_port_rendered(
+    node_type: &NodeClassImportPath,
+    what_the_get_reads: Option<&WhatAGetVariableReads>,
+    rendered_nodes: &[GraphNodeOutput],
+) -> GraphNodePortOnTheWire {
+    let declared = GraphNodePortOnTheWire::from(&PortInfo::from(
+        &the_value_port_of_a_graph_variable_node(node_type)
+            .expect("a variable node type declares its `value` port"),
+    ));
+    let Some(WhatAGetVariableReads {
+        value: Some(ValueASetVariableHolds::PortOutput(setter_source)),
+        ..
+    }) = what_the_get_reads
+    else {
+        return declared;
+    };
+    let cast = |name: &str| {
+        cast_exposed_name_to_url_safe(name)
+            .map(std::borrow::Cow::into_owned)
+            .unwrap_or_else(|_| name.to_string())
+    };
+    rendered_nodes
+        .iter()
+        .find(|node| cast(&node.name) == cast(&setter_source.node))
+        .and_then(|node| {
+            node.ports
+                .outputs
+                .iter()
+                .find(|output| cast(&output.name) == cast(&setter_source.port))
+        })
+        .map(|source_port| GraphNodePortOnTheWire {
+            name: declared.name.clone(),
+            description: declared.description.clone(),
+            ..source_port.clone()
+        })
+        .unwrap_or(declared)
+}
+
 /// One link the runtime runs in place of a get's drawn link.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkResolvedFromAGraphVariable {
@@ -305,6 +358,8 @@ pub enum ValueASetVariableHolds {
     PortOutput(LinkPortRefOutput),
     /// The node its `node_reference` config names.
     NodeReference(String),
+    /// Nothing yet: no port is linked into its `value`, and it names no node.
+    Nothing,
 }
 
 /// One `SetVariable` node and the value it holds, checked against the graph
@@ -323,13 +378,15 @@ struct OneSetter<'graph> {
 }
 
 impl GraphSnapshot {
-    /// Resolve this graph's variables, refusing by name a get with no setter,
-    /// two setters of one name on one level, a setter holding both a port's
-    /// output and a node reference or neither, and a get read as the kind of
-    /// value its variable does not hold. A variable is set on the level of its
-    /// setter, the stream or one of `fragments_flattened`, and a get reads the
-    /// setter on its own level or else the nearest enclosing one. A graph with
-    /// no variable node resolves to itself.
+    /// Resolve this graph's variables, refusing by name a get read with no
+    /// setter or whose variable holds nothing yet, two setters of one name on
+    /// one level, a setter holding both a port's output and a node reference,
+    /// and a get read as the kind of value its variable does not hold. A setter
+    /// holding neither, and a get nothing reads, are drawn as placed, so either
+    /// is placed before what it holds or reads. A variable is set on the level
+    /// of its setter, the stream or one of `fragments_flattened`, and a get
+    /// reads the setter on its own level or else the nearest enclosing one. A
+    /// graph with no variable node resolves to itself.
     pub fn with_graph_variables_resolved(
         &self,
         fragments_flattened: &GraphFragmentsAsDrawn,
@@ -400,16 +457,11 @@ impl GraphSnapshot {
             }
         }
 
-        let setter_of = |get_node: &str, variable: &str| -> Result<&OneSetter<'_>> {
+        let variables_a_get_may_read = |get_node: &str| -> Vec<String> {
             let mut level = levels.level_of(get_node);
-            let mut variables_the_get_can_read = Vec::new();
+            let mut variables = HashSet::new();
             loop {
-                if let Some(setter) =
-                    setters_by_level_and_variable.get(&(level.to_string(), variable.to_string()))
-                {
-                    return Ok(setter);
-                }
-                variables_the_get_can_read.extend(
+                variables.extend(
                     setters_by_level_and_variable
                         .keys()
                         .filter(|(setter_level, _)| setter_level == level)
@@ -420,21 +472,43 @@ impl GraphSnapshot {
                 }
                 level = levels.level_of(level);
             }
+            sorted(variables.iter())
+        };
+        let setter_of = |get_node: &str, variable: &str| -> Result<&OneSetter<'_>> {
+            let mut level = levels.level_of(get_node);
+            loop {
+                if let Some(setter) =
+                    setters_by_level_and_variable.get(&(level.to_string(), variable.to_string()))
+                {
+                    return Ok(setter);
+                }
+                if level.is_empty() {
+                    break;
+                }
+                level = levels.level_of(level);
+            }
             Err(Error::GraphError(format!(
                 "`GetVariable` node `{get_node}` reads the variable `{variable}`, which no \
                  `SetVariable` on its level or an enclosing one sets. It can read: {}",
-                names_listed_for_a_refusal(
-                    sorted(variables_the_get_can_read.iter()),
-                    "no variable"
-                )
+                names_listed_for_a_refusal(variables_a_get_may_read(get_node), "no variable")
             )))
         };
 
+        let mut what_each_get_reads = HashMap::new();
         for get_node in variable_nodes
             .iter()
             .filter(|node| node.node_type.as_str() == GET_VARIABLE_NODE_TYPE)
         {
-            setter_of(&get_node.name, &variable_a_node_names(get_node)?)?;
+            let value = setter_of(&get_node.name, &variable_a_node_names(get_node)?)
+                .ok()
+                .map(|setter| setter.holds.clone());
+            what_each_get_reads.insert(
+                cast_of(&get_node.name)?,
+                WhatAGetVariableReads {
+                    variables_it_may_read: variables_a_get_may_read(&get_node.name),
+                    value,
+                },
+            );
         }
 
         let mut runtime_links = Vec::new();
@@ -474,13 +548,24 @@ impl GraphSnapshot {
             };
             refuse_a_variable_port_other_than_value(&link.source, "a link leaves")?;
             let setter = setter_of(&link.source.node, variable)?;
-            let ValueASetVariableHolds::PortOutput(setter_source) = &setter.holds else {
-                return Err(Error::GraphError(format!(
-                    "`GetVariable` node `{}` is linked to `{}/{}`, and its variable \
-                     `{variable}` holds a node reference, which a config key reads, never \
-                     a link",
-                    link.source.node, link.target.node, link.target.port
-                )));
+            let setter_source = match &setter.holds {
+                ValueASetVariableHolds::PortOutput(setter_source) => setter_source,
+                ValueASetVariableHolds::NodeReference(_) => {
+                    return Err(Error::GraphError(format!(
+                        "`GetVariable` node `{}` is linked to `{}/{}`, and its variable \
+                         `{variable}` holds a node reference, which a config key reads, never \
+                         a link",
+                        link.source.node, link.target.node, link.target.port
+                    )));
+                }
+                ValueASetVariableHolds::Nothing => {
+                    return Err(the_refusal_of_a_get_of_a_variable_holding_nothing(
+                        &link.source.node,
+                        &format!("is linked to `{}/{}`", link.target.node, link.target.port),
+                        variable,
+                        setter,
+                    ));
+                }
             };
             let resolved = GraphSnapshotLink {
                 source: setter_source.clone(),
@@ -517,13 +602,24 @@ impl GraphSnapshot {
                     return Ok(None);
                 };
                 let setter = setter_of(referenced, variable)?;
-                let ValueASetVariableHolds::NodeReference(referenced_node) = &setter.holds else {
-                    return Err(Error::GraphError(format!(
-                        "node `{}`'s `{config_key_path}` reads `GetVariable` node \
+                let referenced_node = match &setter.holds {
+                    ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
+                    ValueASetVariableHolds::PortOutput(_) => {
+                        return Err(Error::GraphError(format!(
+                            "node `{}`'s `{config_key_path}` reads `GetVariable` node \
                              `{referenced}`, and its variable `{variable}` holds a port's \
                              output, which a link reads, never a config value",
-                        node.name
-                    )));
+                            node.name
+                        )));
+                    }
+                    ValueASetVariableHolds::Nothing => {
+                        return Err(the_refusal_of_a_get_of_a_variable_holding_nothing(
+                            referenced,
+                            &format!("is read by node `{}`'s `{config_key_path}`", node.name),
+                            variable,
+                            setter,
+                        ));
+                    }
                 };
                 named_a_get = true;
                 Ok(Some(referenced_node.clone()))
@@ -590,6 +686,7 @@ impl GraphSnapshot {
                 positions_of_links_touching_a_variable_node,
                 links_resolved_from_a_variable,
                 configs_naming_a_get_by_node_name,
+                what_each_get_reads,
             },
         })
     }
@@ -655,12 +752,7 @@ fn value_one_setter_holds(
                 referenced.to_string(),
             ))
         }
-        ([], None) => Err(Error::GraphError(format!(
-            "`SetVariable` node `{}` sets the variable `{variable}` to nothing: link a port \
-             into its `{GRAPH_VARIABLE_VALUE_PORT_NAME}` input, or name a node in its \
-             `{SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY}` config",
-            setter.name
-        ))),
+        ([], None) => Ok(ValueASetVariableHolds::Nothing),
         (_, Some(_)) => Err(Error::GraphError(format!(
             "`SetVariable` node `{}` sets the variable `{variable}` both from a link and \
              from its `{SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY}` config; a variable holds \
@@ -674,6 +766,22 @@ fn value_one_setter_holds(
             links_in.len()
         ))),
     }
+}
+
+/// Why `GetVariable` node `get_node`, which `is_read` says how something reads, cannot be read:
+/// its variable `variable`, set by `setter`, holds nothing yet.
+fn the_refusal_of_a_get_of_a_variable_holding_nothing(
+    get_node: &str,
+    is_read: &str,
+    variable: &str,
+    setter: &OneSetter<'_>,
+) -> Error {
+    Error::GraphError(format!(
+        "`GetVariable` node `{get_node}` {is_read}, and its variable `{variable}` holds nothing \
+         yet: link a port into the `{GRAPH_VARIABLE_VALUE_PORT_NAME}` input of `SetVariable` \
+         node `{}`, or name a node in its `{SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY}` input",
+        setter.node.name
+    ))
 }
 
 /// Replace each node reference in `config_value` that `resolve` resolves with
