@@ -31,6 +31,7 @@ from ._input_declaration_annotations import (
     StreamDelivery,
     WireOnly,
 )
+from ._bundle_pin_type import dataclass_a_bundle_pin_is_written_as
 from ._pin_declaration import (
     NO_DEFAULT,
     DeclaredPin,
@@ -71,6 +72,10 @@ class ClassNodeMember:
 
     default: object
     """The field's default, `NO_DEFAULT` for a pin."""
+
+    bundle_class: Optional[type] = None
+    """The frozen dataclass its bundle, or its List's bundle elements, is written as, which the
+    running node is handed and gives; `None` for a member that holds no bundle."""
 
 # The direction each pin form declares.
 _DIRECTION_OF_EACH_PIN_FORM: Final[dict[type, PinDirection]] = {
@@ -161,6 +166,9 @@ class _ClassNodeReading:
                         getattr(self._node_class, attribute_name, NO_DEFAULT)
                         if form == "field"
                         else NO_DEFAULT
+                    ),
+                    bundle_class=dataclass_a_bundle_pin_is_written_as(
+                        annotation if pin_form is None else pin_type_annotation
                     ),
                 )
             )

@@ -7,7 +7,7 @@ Each pin resolves its port and how it reads or writes once, when it is bound. A 
 Audio, Tensor or encoded pin reads and writes through its port's family, as `ctx.inputs` and
 `ctx.outputs` do; a Trigger's fire reads as `True` and is written as the empty record every
 Trigger message is. A Boolean, Integer or Float travels as a control message, a Color, Vector,
-Rectangle or Transform as one on each channel of its parts, a String, Menu, Asset or List as the
+Rectangle or Transform as one on each channel of its parts, a String, Menu, Asset, List or bundle as the
 record `{"value": <stored JSON form>}`, and a named type as the bytes its class packs, each read
 and written as a function node run as a standalone node reads and writes it.
 """
@@ -103,10 +103,12 @@ def the_reader_of_a_value_at_an_input_port(
     inputs: LinkInputDataReader,
     node_id: str,
     input_port: str,
+    bundle_class: Optional[type] = None,
 ) -> Optional[ValueReadAtAnInputPort]:
     """What reads the newest value of `pin_type` `input_port` holds, in its Python form, resolved once.
 
-    A Texture or a Tensor read as a value is its newest frame. `None` for a pin type whose value
+    A bundle, or each bundle element of a List, is built as `bundle_class`, the dataclass it is
+    written as. A Texture or a Tensor read as a value is its newest frame. `None` for a pin type whose value
     no wire carries, a node reference or a choice of pin type, and for Audio, encoded media and
     a Trigger, which travel only as a stream.
     """
@@ -153,7 +155,9 @@ def the_reader_of_a_value_at_an_input_port(
             )
             if record is None:
                 return None
-            return the_value_a_body_takes(pin_type, record[STORED_VALUE_RECORD_KEY], what_it_is)
+            return the_value_a_body_takes(
+                pin_type, record[STORED_VALUE_RECORD_KEY], what_it_is, bundle_class
+            )
 
         return read_a_stored_value
     if pin_type_name == "named":
@@ -196,6 +200,7 @@ class BoundInputPin:
                 inputs=inputs,
                 node_id=node_id,
                 input_port=member.port,
+                bundle_class=member.bundle_class,
             )
             if self._read_a_value is None:
                 raise TypeError(

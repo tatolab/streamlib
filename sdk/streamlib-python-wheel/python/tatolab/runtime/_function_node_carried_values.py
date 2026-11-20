@@ -290,6 +290,36 @@ def _exactly_as_f64(value: Any, what_it_is: str) -> float:
     return float(value)
 
 
+def the_dataclass_a_signature_entry_writes_its_bundle_as(
+    signature_entry: "dict[str, Any]", what_it_is: str
+) -> Optional[type]:
+    """The dataclass a signature entry's bundle, or its List's bundle elements, is written as,
+    found by the import path it names; `None` for an entry that names none.
+
+    Refused as `FunctionNodeDoesNotCompile`, naming `what_it_is`, when the path finds no
+    dataclass.
+    """
+    import_path = signature_entry.get("bundle_class")
+    if import_path is None:
+        return None
+    module_name, _, qualified_name = import_path.partition(":")
+    try:
+        found: Any = importlib.import_module(module_name)
+        for attribute in qualified_name.split("."):
+            found = getattr(found, attribute)
+    except (ImportError, AttributeError, ValueError) as not_found:
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is a bundle written as `{import_path}`, and its import path finds no "
+            f"class: {not_found}. To fix: keep the dataclass at that path."
+        ) from not_found
+    if not (isinstance(found, type) and dataclasses.is_dataclass(found)):
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is a bundle written as `{import_path}`, whose path names {found!r}, "
+            f"not a dataclass. To fix: keep the dataclass at that path."
+        )
+    return found
+
+
 def the_class_a_named_pin_type_names(named_pin_type: str, what_it_is: str) -> type:
     """The class whose import path, `module:QualifiedClassName`, is the name of `named_pin_type`.
 

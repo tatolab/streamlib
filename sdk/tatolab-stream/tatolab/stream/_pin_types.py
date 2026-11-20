@@ -508,7 +508,6 @@ class PinTypeSpelling:
     carries it and no field or function parameter does."""
 
 
-_BUNDLE_NOT_CARRIED = "a bundle pin is not carried yet"
 _SETTING_TYPE_NOT_TAKEN = "a function node takes no setting yet"
 _A_CHOICE_ONLY_THE_RUNTIME_DECLARES = (
     "only the runtime's own nodes declare a setting that chooses a pin's type yet"
@@ -544,7 +543,7 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("Asset", "asset"),
     PinTypeSpelling("Trigger", "trigger", only_a_pin_carries=True),
     PinTypeSpelling("list", "list_of"),
-    PinTypeSpelling("dataclass", "bundle", _BUNDLE_NOT_CARRIED),
+    PinTypeSpelling("dataclass", "bundle"),
     PinTypeSpelling("named_pin_type", "named"),
     PinTypeSpelling("NodeReference", "node_reference", _SETTING_TYPE_NOT_TAKEN),
     PinTypeSpelling("NodeReferenceToNodeType", "node_reference", _SETTING_TYPE_NOT_TAKEN),
