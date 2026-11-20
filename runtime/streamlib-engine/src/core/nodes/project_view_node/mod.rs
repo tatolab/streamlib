@@ -280,11 +280,9 @@ impl ValueSourceNode {
         let settings = JsonValue::Object(node.input_values());
         let mut descriptor = the_node_type_of_a_graph_input()?;
         let chosen =
-            the_pin_type_an_interface_node_chooses(settings.as_object()).map_err(&refused)?;
+            the_pin_type_an_interface_node_chooses(settings.as_object()).map_err(refused)?;
         let family = match &chosen {
-            Some(pin_type) => {
-                the_family_a_chosen_pin_type_travels_on(pin_type).map_err(&refused)?
-            }
+            Some(pin_type) => the_family_a_chosen_pin_type_travels_on(pin_type).map_err(refused)?,
             None => {
                 let mut declared =
                     PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
@@ -294,7 +292,7 @@ impl ValueSourceNode {
                     &declared,
                     Some(&settings),
                 )
-                .map_err(&refused)?
+                .map_err(refused)?
             }
         };
         for port in descriptor
