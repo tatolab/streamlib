@@ -98,7 +98,7 @@ impl ControlOperation for CheckLink {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_LINK);
 }
 
@@ -118,7 +118,7 @@ impl ControlOperation for CheckLinkCandidates {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_LINK_CANDIDATES);
 }
 

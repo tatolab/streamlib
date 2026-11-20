@@ -515,13 +515,11 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
     }
     assert called[2:] == [
         "list_streams", "list_node_types", "transact", "describe_node_types",
-        CALL_OPERATION_TOOL_NAME, "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
-        "transact", "graph", CALL_OPERATION_TOOL_NAME, "transact", "graph", "undo", "graph",
+        "check_link_candidates", "transact", "check_link", "check_link",
+        "transact", "graph", "check_link", "transact", "graph", "undo", "graph",
         "undo", "undo", "undo", "graph",
     ]
-    checked = [arguments["operation"] for name, arguments in session.tool_calls
-               if name == CALL_OPERATION_TOOL_NAME]
-    assert checked == ["check_link_candidates", "check_link", "check_link", "check_link"]
+    assert CALL_OPERATION_TOOL_NAME not in called
 
 
 def test_an_operation_that_is_not_a_listed_tool_is_called_through_call_operation() -> None:
