@@ -212,6 +212,30 @@ fn refuse_an_input_set_twice(
     Ok(())
 }
 
+/// The live value each input `sets` set holds once every one of them is made, by node and input:
+/// the members several sets of one bundle input set, together, so each set is checked against
+/// the bundle the whole transaction leaves. A fire sets no value and is left out.
+fn the_live_value_each_input_holds_after_the_sets<'set>(
+    graph: &Graph,
+    sets: &'set [InputValueToSetLive],
+) -> HashMap<(Uuid, &'set str), Option<serde_json::Value>> {
+    let mut live_after_the_sets: HashMap<(Uuid, &str), Option<serde_json::Value>> = HashMap::new();
+    for set in sets.iter().filter(|set| !is_a_fire(graph, set)) {
+        let held = live_after_the_sets
+            .remove(&(set.node, set.input.as_str()))
+            .unwrap_or_else(|| graph.live_input_values().value_of(set.node, &set.input));
+        live_after_the_sets.insert(
+            (set.node, set.input.as_str()),
+            streamlib_project_repository::the_input_value_after_the_set(
+                held,
+                set.member.as_deref(),
+                set.value.as_ref(),
+            ),
+        );
+    }
+    live_after_the_sets
+}
+
 /// Set each of `sets` live in `graph`'s live values and answer how each node set on takes its
 /// values and each node fired its fires; `None`, with nothing set, when one is held on the graph.
 /// A value its input does not take, a second value on one input of one node, a value on a
@@ -232,6 +256,7 @@ fn set_the_input_values_live(
     let mut value_sets: Vec<(usize, &InputValueToSetLive)> = Vec::with_capacity(sets.len());
     let mut set_on_each: Vec<&GraphNode> = Vec::with_capacity(sets.len());
     let mut fires: Vec<(usize, &InputValueToSetLive)> = Vec::new();
+    let live_after_the_sets = the_live_value_each_input_holds_after_the_sets(graph, sets);
     for (set_index, set) in sets.iter().enumerate() {
         let Some(set_on) = graph.node_by_uuid(set.node) else {
             return Ok(None);
@@ -250,11 +275,10 @@ fn set_the_input_values_live(
         if is_held_on_the_graph(graph, set_on, &set.input) {
             return Ok(None);
         }
-        let live_after_the_set = streamlib_project_repository::the_input_value_after_the_set(
-            graph.live_input_values().value_of(set.node, &set.input),
-            set.member.as_deref(),
-            set.value.as_ref(),
-        );
+        let live_after_the_set = live_after_the_sets
+            .get(&(set.node, set.input.as_str()))
+            .cloned()
+            .flatten();
         refuse_an_input_value_its_input_does_not_take(
             graph.node_types_this_stream_resolves(),
             &NodeAnInputValueIsSetOn {

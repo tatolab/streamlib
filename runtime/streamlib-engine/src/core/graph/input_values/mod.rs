@@ -20,7 +20,7 @@ mod live_input_values;
 mod live_input_values_kept_in_the_project_store;
 
 pub(crate) use bundle_input_read::{
-    the_bundle_members_of, the_input_values_a_live_set_is_checked_against,
+    ValuesABundleInputHolds, the_bundle_members_of, the_input_values_a_live_set_is_checked_against,
 };
 pub use live_input_values::{
     InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
@@ -182,8 +182,8 @@ pub fn refuse_an_input_value_its_input_does_not_take(
 /// Refuse `value`, set on member `member` of input `input` of `node`, `port` when the input is a
 /// port, with `None` taking it off: refused on an input that is no bundle, for a member the
 /// bundle does not declare, for a value the member's type does not take, and when the bundle the
-/// input holds after the set leaves out a member that declares no default, or is not one the
-/// input takes.
+/// input reads after the set, its held members over the input's default and each member's own,
+/// leaves out a member, or is not one the input takes.
 fn refuse_a_member_value_its_bundle_input_does_not_take(
     node: &NodeAnInputValueIsSetOn<'_>,
     node_kind: Option<NodeKind>,
@@ -198,7 +198,8 @@ fn refuse_a_member_value_its_bundle_input_does_not_take(
         return Err(InputValueRefusal::of(
             InputValueRefusalCode::InputValueNotValid,
             format!(
-                "input `{input}` of `{node_name}` is no bundle, so it has no member `{member}` to                  set. To fix: leave `member` out to set the whole input"
+                "input `{input}` of `{node_name}` is no bundle, so it has no member `{member}` to \
+                 set. To fix: leave `member` out to set the whole input"
             ),
         ));
     };
@@ -206,7 +207,8 @@ fn refuse_a_member_value_its_bundle_input_does_not_take(
         return Err(InputValueRefusal::of(
             InputValueRefusalCode::PortNotFound,
             format!(
-                "input `{input}` of `{node_name}` is a bundle with no member `{member}`; its                  members are {}. To fix: name one of them",
+                "input `{input}` of `{node_name}` is a bundle with no member `{member}`; its \
+                 members are {}. To fix: name one of them",
                 names_in_backticks(
                     &members
                         .iter()
@@ -216,33 +218,47 @@ fn refuse_a_member_value_its_bundle_input_does_not_take(
             ),
         ));
     };
-    let held_after_the_set = node.input_values_after_the_set.get(input);
+    let read_after_the_set = node.input_values_after_the_set.get(input).map(|held| {
+        ValuesABundleInputHolds {
+            live: None,
+            saved: Some(held),
+            input_default: port.pin_default.as_ref(),
+        }
+        .the_bundle_read(members)
+        .unwrap_or_else(|| Value::Object(Map::new()))
+    });
     match value {
-        Some(value) => declared.member_type.check_value(value).map_err(|not_taken| {
-            InputValueRefusal::of(
-                InputValueRefusalCode::InputValueNotValid,
-                format!(
-                    "the value of member `{member}` of input `{input}` of `{node_name}` is                      {value}, and `{member}` takes {}. To fix: send {}",
-                    not_taken.takes, not_taken.example
-                ),
-            )
-        })?,
-        None if declared.default_value.is_none()
-            && held_after_the_set
-                .and_then(Value::as_object)
-                .is_some_and(|held| !held.contains_key(member)) =>
+        Some(value) => declared
+            .member_type
+            .check_value(value)
+            .map_err(|not_taken| {
+                InputValueRefusal::of(
+                    InputValueRefusalCode::InputValueNotValid,
+                    format!(
+                        "the value of member `{member}` of input `{input}` of `{node_name}` is \
+                     {value}, and `{member}` takes {}. To fix: send {}",
+                        not_taken.takes, not_taken.example
+                    ),
+                )
+            })?,
+        None if read_after_the_set
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|read| !read.contains_key(member)) =>
         {
             return Err(InputValueRefusal::of(
                 InputValueRefusalCode::InputValueNotValid,
                 format!(
-                    "member `{member}` of input `{input}` of `{node_name}` declares no default,                      so the bundle the input holds may not leave it out. To fix: set `{member}`                      to a value, or set the whole input"
+                    "member `{member}` of input `{input}` of `{node_name}` declares no default, \
+                     nor does the input's default hold it, so the bundle the input holds may not \
+                     leave it out. To fix: set `{member}` to a value, or set the whole input"
                 ),
             ));
         }
         None => {}
     }
-    match held_after_the_set {
-        Some(held) => refuse_a_value_the_input_port_does_not_take(node_name, node_kind, port, held),
+    match &read_after_the_set {
+        Some(read) => refuse_a_value_the_input_port_does_not_take(node_name, node_kind, port, read),
         None => Ok(()),
     }
 }
