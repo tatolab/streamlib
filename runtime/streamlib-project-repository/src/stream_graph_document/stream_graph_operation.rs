@@ -18,8 +18,8 @@ use super::StreamGraphDocumentLinkEnd;
 use super::{
     STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentGroup, StreamGraphDocumentLink,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
-    push_the_input_values_of_each_node_at_every_level,
-    push_the_input_values_of_each_of_the_nodes_at_every_level,
+    input_values_after_the_set, push_the_input_values_of_each_node_at_every_level,
+    push_the_input_values_of_each_of_the_nodes_at_every_level, the_input_value_held_on,
 };
 
 /// One change to a stream's graph, recorded with everything its inverse needs.
@@ -120,10 +120,13 @@ pub enum StreamGraphOperation {
         port_links_put_back: Vec<StreamGraphDocumentValueAtItsPosition>,
     },
     /// The value the node's input holds while no link feeds it was set, `None` being no value,
-    /// so the input reads its declared default.
+    /// so the input reads its declared default; with `member`, the value of that member of a
+    /// bundle input alone, every other member left as it was.
     SetNodeInputValue {
         node: Uuid,
         input: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        member: Option<String>,
         from: Option<Value>,
         to: Option<Value>,
     },
@@ -156,11 +159,13 @@ impl StreamGraphOperation {
             Self::SetNodeInputValue {
                 node,
                 input,
+                member,
                 from,
                 to,
             } => Self::SetNodeInputValue {
                 node,
                 input,
+                member,
                 from: to,
                 to: from,
             },
@@ -227,6 +232,12 @@ impl StreamGraphOperation {
             }
             Self::SetNodeConfig { node, .. } => format!("set_node_config {node}"),
             Self::SetPinValue { node, input, .. } => format!("set_pin_value {node}/{input}"),
+            Self::SetNodeInputValue {
+                node,
+                input,
+                member: Some(member),
+                ..
+            } => format!("set_node_input_value {node}/{input}.{member}"),
             Self::SetNodeInputValue { node, input, .. } => {
                 format!("set_node_input_value {node}/{input}")
             }
@@ -327,17 +338,19 @@ impl StreamGraphOperation {
         }
     }
 
-    /// The set of `node`'s input `input` to `to`, `None` or `null` taking the value off, with
-    /// the value it held as `from`.
+    /// The set of `node`'s input `input`, or of its member `member` when one is named, to `to`,
+    /// `None` or `null` taking the value off, with the value it held as `from`.
     pub fn set_node_input_value_of(
         node: &StreamGraphDocumentNode,
         input: String,
+        member: Option<String>,
         to: Option<Value>,
     ) -> Self {
         Self::SetNodeInputValue {
             node: node.id,
-            from: node.input_values.get(&input).cloned(),
+            from: the_input_value_held_on(&node.input_values, &input, member.as_deref()).cloned(),
             input,
+            member,
             to: to.filter(|value| !value.is_null()),
         }
     }
@@ -359,7 +372,7 @@ impl StreamGraphOperation {
                 node.id, node.name
             ));
         }
-        Ok(Self::set_node_input_value_of(node, input, to))
+        Ok(Self::set_node_input_value_of(node, input, None, to))
     }
 
     /// Each node's input values the operation leaves it with, by that node's UUID: its own
@@ -386,13 +399,17 @@ impl StreamGraphOperation {
                 input,
                 to: Some(value),
                 ..
-            }
-            | Self::SetNodeInputValue {
+            } => input_values.push((*node, Map::from_iter([(input.clone(), value.clone())]))),
+            Self::SetNodeInputValue {
                 node,
                 input,
+                member,
                 to: Some(value),
                 ..
-            } => input_values.push((*node, Map::from_iter([(input.clone(), value.clone())]))),
+            } => input_values.push((
+                *node,
+                input_values_after_the_set(&Map::new(), input, member.as_deref(), Some(value)),
+            )),
             Self::RefreshFragment { node, to, .. } => {
                 input_values.push((*node, to.input_values.clone()));
                 fragments_it_places.push(to.fragment.clone());

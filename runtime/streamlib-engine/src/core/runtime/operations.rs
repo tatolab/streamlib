@@ -289,17 +289,18 @@ pub trait RuntimeOperations: Send + Sync {
         node_type: &str,
     ) -> Option<crate::core::GraphNodePorts>;
 
-    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`
-    /// and held on the graph, with `None` taking it off, when the input does not take it, as this
-    /// stream resolves the type: among them a value on the input of an output a panel writes,
-    /// which holds no saved value; `input_values_after_the_set` are every input value the node
-    /// holds once it is made.
+    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
+    /// or on its member `member` when one is named, and held on the graph, with `None` taking it
+    /// off, when the input does not take it, as this stream resolves the type: among them a value
+    /// on the input of an output a panel writes, which holds no saved value;
+    /// `input_values_after_the_set` are every input value the node holds once it is made.
     fn refuse_an_input_value_its_input_does_not_take(
         &self,
         node_type: &NodeClassImportPath,
         node_name: &str,
         input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
         input: &str,
+        member: Option<&str>,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
 

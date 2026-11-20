@@ -309,8 +309,8 @@ pub struct GraphNodePortOnTheWire {
     #[serde(flatten)]
     pub pin: Option<ResolvedPin>,
     /// On an input, the value it reads while unlinked, as `value`, and where that value comes
-    /// from, as `value_comes_from`. Both are absent on an input that takes no stored value and
-    /// no link feeds, and on an output.
+    /// from, as `value_comes_from`; on a bundle input, each member's, as `member_values`. All
+    /// are absent on an input that takes no stored value and no link feeds, and on an output.
     #[serde(flatten, deserialize_with = "a_read_only_when_either_key_is_present")]
     pub value_read: Option<InputValueReadOnTheWire>,
 }
@@ -331,10 +331,35 @@ pub enum PortKindOnTheWire {
 
 /// The value one input reads while no link feeds it, and where it comes from: no `value` and
 /// `value_comes_from` `wire` when a link feeds it, `value` null and no `value_comes_from` when it
-/// reads nothing.
+/// reads nothing. A bundle input reads each member alone, as `member_values`, in place of both.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct InputValueReadOnTheWire {
+    /// The value it reads, null when it reads nothing; absent when a link feeds it, and on a
+    /// bundle input.
+    #[serde(
+        default,
+        deserialize_with = "a_value_that_may_be_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub value: Option<Value>,
+    /// Where the value comes from; absent when it reads nothing, and on a bundle input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_comes_from: Option<InputValueComesFromOnTheWire>,
+    /// On a bundle input, the value each member reads and where it comes from, in the order the
+    /// bundle declares its members; absent on every other input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_values: Option<Vec<BundleMemberValueReadOnTheWire>>,
+}
+
+/// The value one member of a bundle input reads, resolved alone: `wire`, with no `value`, when a
+/// link ends at the member or at the whole input; else its live value, else its saved one, else
+/// its default; `value` null and no `value_comes_from` when it reads nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct BundleMemberValueReadOnTheWire {
+    /// The member, by the name the bundle declares.
+    pub member: String,
     /// The value it reads, null when it reads nothing; absent when a link feeds it.
     #[serde(
         default,
@@ -364,7 +389,10 @@ where
     D: serde::Deserializer<'de>,
 {
     let read = InputValueReadOnTheWire::deserialize(deserializer)?;
-    Ok((read.value.is_some() || read.value_comes_from.is_some()).then_some(read))
+    Ok(
+        (read.value.is_some() || read.value_comes_from.is_some() || read.member_values.is_some())
+            .then_some(read),
+    )
 }
 
 /// Where the value an input reads comes from, as `graph` renders it.

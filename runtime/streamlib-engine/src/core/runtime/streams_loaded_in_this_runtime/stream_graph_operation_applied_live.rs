@@ -161,7 +161,7 @@ impl LoadedStreamInThisRuntime {
                 from,
                 to,
             } => {
-                self.set_pin_value(&self.the_node_of_the_node(node)?, &input, to.clone())?;
+                self.set_pin_value(&self.the_node_of_the_node(node)?, &input, None, to.clone())?;
                 Ok(StreamGraphOperation::SetPinValue {
                     node,
                     input,
@@ -172,14 +172,16 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::SetNodeInputValue {
                 node,
                 input,
+                member,
                 from,
                 to,
             } => {
-                self.set_one_input_value_of_the_node(node, &input, to.clone())
+                self.set_one_input_value_of_the_node(node, &input, member.as_deref(), to.clone())
                     .await?;
                 Ok(StreamGraphOperation::SetNodeInputValue {
                     node,
                     input,
+                    member,
                     from,
                     to,
                 })
@@ -409,21 +411,23 @@ impl LoadedStreamInThisRuntime {
         self.update_node_config_compiled_right_away(&node_run_id, &config)
             .await?;
         for input in pin_values_cleared {
-            self.set_pin_value(&node_run_id, &input, None)?;
+            self.set_pin_value(&node_run_id, &input, None, None)?;
         }
         for (input, value) in pin_values {
-            self.set_pin_value(&node_run_id, &input, Some(value))?;
+            self.set_pin_value(&node_run_id, &input, None, Some(value))?;
         }
         Ok(())
     }
 
-    /// Set the input value `input` of `node` to `value`, `None` taking it off: a setting its
-    /// type holds in its config is set in the config the node holds once each config update
-    /// already logged for it is applied, any other on its input.
+    /// Set the input value `input` of `node`, or its member `member` when one is named, to
+    /// `value`, `None` taking it off: a setting its type holds in its config is set in the config
+    /// the node holds once each config update already logged for it is applied, any other on its
+    /// input.
     async fn set_one_input_value_of_the_node(
         &self,
         node: Uuid,
         input: &str,
+        member: Option<&str>,
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         let node_run_id = self.the_node_of_the_node(node)?;
@@ -438,7 +442,7 @@ impl LoadedStreamInThisRuntime {
         let legacy_config =
             LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
         if !legacy_config.is_a_config_field(input) {
-            return self.set_pin_value(&node_run_id, input, value);
+            return self.set_pin_value(&node_run_id, input, member, value);
         }
         self.update_node_config_built_from_the_one_it_holds(&node_run_id, |config_held| {
             let mut config = match config_held.unwrap_or_default() {
@@ -451,10 +455,14 @@ impl LoadedStreamInThisRuntime {
                     )));
                 }
             };
-            match value {
-                Some(value) => config.insert(input.to_owned(), value),
-                None => config.remove(input),
-            };
+            let held = config.remove(input);
+            if let Some(after_the_set) = streamlib_project_repository::the_input_value_after_the_set(
+                held,
+                member,
+                value.as_ref(),
+            ) {
+                config.insert(input.to_owned(), after_the_set);
+            }
             Ok(serde_json::Value::Object(config))
         })
         .await

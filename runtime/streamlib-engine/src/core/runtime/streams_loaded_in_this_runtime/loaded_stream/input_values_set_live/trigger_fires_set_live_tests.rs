@@ -139,6 +139,7 @@ fn the_uuid_of(graph: &Graph, node_run_id: &NodeRunId) -> Uuid {
 
 fn a_fire(node: Uuid) -> InputValueToSetLive {
     InputValueToSetLive {
+        member: None,
         node,
         input: "go".to_owned(),
         value: None,
@@ -174,6 +175,7 @@ fn each_fire_of_a_node_in_this_process_queues_one_message_and_holds_no_value() {
     sets.insert(
         3,
         InputValueToSetLive {
+            member: None,
             node,
             input: "level".to_owned(),
             value: Some(json!(0.25)),

@@ -13,10 +13,10 @@ use super::LoadedStreamInThisRuntime;
 use super::input_values_set_live::is_held_on_the_graph;
 use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME;
 use crate::core::graph::input_values::{
-    NodeAnInputValueIsSetOn, refuse_an_input_value_its_input_does_not_take, the_input_value_change,
+    NodeAnInputValueIsSetOn, refuse_an_input_value_its_input_does_not_take, the_bundle_members_of,
+    the_input_value_change, the_input_values_a_live_set_is_checked_against,
     the_lifetime_of_the_input,
 };
-use crate::core::graph::legacy_config_of_a_node::input_values_of_a_config_and_pin_values;
 use crate::core::graph::{Graph, GraphNode, NodeRunId};
 
 impl LoadedStreamInThisRuntime {
@@ -123,9 +123,8 @@ impl LoadedStreamInThisRuntime {
         let changes = self.compiler.scope_reading(|graph| {
             inputs_reset
                 .iter()
-                .filter_map(|(node, input)| {
-                    the_input_value_change(graph, graph.node_by_uuid(*node)?, input)
-                })
+                .filter_map(|(node, input)| graph.node_by_uuid(*node).map(|node| (node, input)))
+                .flat_map(|(node, input)| the_input_value_change(graph, node, input, None))
                 .collect::<Vec<_>>()
         });
         for change in changes {
@@ -135,28 +134,47 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// Whether input `input` of `kept_for` keeps a live value across Stop, takes one apart from the
-/// graph and takes `value`, so a value the project's store keeps for it is its live value.
+/// graph and takes `value`, so a value the project's store keeps for it is its live value. On a
+/// bundle input `value` holds the members set live, and each is checked as a member set.
 fn its_input_keeps_and_takes_the_live_value(
     graph: &Graph,
     kept_for: &GraphNode,
     input: &str,
     value: &serde_json::Value,
 ) -> bool {
-    kept_for.has_input(input)
-        && the_lifetime_of_the_input(kept_for, input).is_kept()
-        && !is_held_on_the_graph(graph, kept_for, input)
-        && refuse_an_input_value_its_input_does_not_take(
-            graph.node_types_this_stream_resolves(),
-            &NodeAnInputValueIsSetOn {
-                name: &kept_for.display_name,
-                node_type: &kept_for.node_type,
-                input_values_after_the_set: &input_values_of_a_config_and_pin_values(
-                    kept_for.config.as_ref(),
-                    &kept_for.pins,
-                ),
-            },
+    if !kept_for.has_input(input)
+        || !the_lifetime_of_the_input(kept_for, input).is_kept()
+        || is_held_on_the_graph(graph, kept_for, input)
+    {
+        return false;
+    }
+    let node = NodeAnInputValueIsSetOn {
+        name: &kept_for.display_name,
+        node_type: &kept_for.node_type,
+        input_values_after_the_set: &the_input_values_a_live_set_is_checked_against(
+            kept_for,
             input,
+            Some(value),
+        ),
+    };
+    let takes = |member: Option<&str>, value: &serde_json::Value| {
+        refuse_an_input_value_its_input_does_not_take(
+            graph.node_types_this_stream_resolves(),
+            &node,
+            input,
+            member,
             Some(value),
         )
         .is_ok()
+    };
+    let is_a_bundle = kept_for
+        .input_port(input)
+        .and_then(the_bundle_members_of)
+        .is_some();
+    match value.as_object() {
+        Some(members_set) if is_a_bundle => members_set
+            .iter()
+            .all(|(member, member_value)| takes(Some(member), member_value)),
+        _ => takes(None, value),
+    }
 }

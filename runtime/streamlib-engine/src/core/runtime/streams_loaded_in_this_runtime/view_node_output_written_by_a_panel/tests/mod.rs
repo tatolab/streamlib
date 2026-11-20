@@ -210,6 +210,7 @@ impl AStreamOfAProjectBringingViews {
                         value.clone(),
                     ))?;
             sets.push(InputValueToSetLive {
+                member: None,
                 node,
                 input: port.to_string(),
                 value: Some(value.clone()),

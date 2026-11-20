@@ -713,6 +713,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         node_name: &str,
         input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
         input: &str,
+        member: Option<&str>,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
         self.refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
@@ -727,6 +728,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             self.node_types_this_stream_resolves(),
             &node,
             input,
+            member,
             value,
         )
     }

@@ -117,12 +117,14 @@ pub(super) fn the_request_under_the_current_port_names(
             level,
             node,
             input,
+            member,
             value,
         } => StreamGraphAction::SetNodeInputValue {
             input: current_name(&node, input, PortDirection::Input),
             stream,
             level,
             node,
+            member,
             value,
         },
         StreamGraphAction::Connect {
@@ -208,6 +210,7 @@ fn the_operations_moving_each_former_port_name(
                 moves.push(StreamGraphOperation::SetNodeInputValue {
                     node: node.id,
                     input: name.clone(),
+                    member: None,
                     from: node.input_values.get(name).cloned(),
                     to: None,
                 });
@@ -215,6 +218,7 @@ fn the_operations_moving_each_former_port_name(
             moves.push(StreamGraphOperation::SetNodeInputValue {
                 node: node.id,
                 input: moved.current_name,
+                member: None,
                 from: None,
                 to: node.input_values.get(&moved.name_read).cloned(),
             });
