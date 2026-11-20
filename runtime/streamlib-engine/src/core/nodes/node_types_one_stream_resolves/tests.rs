@@ -44,31 +44,6 @@ fn a_node_of(node_type: &NodeClassImportPath) -> GraphNode {
     GraphNode::new(node_type.clone(), None, "a-node", None, vec![], vec![])
 }
 
-/// A project's node type may not state a conversion yet.
-#[test]
-fn a_projects_node_type_stating_a_conversion_is_refused() {
-    use crate::core::descriptors::{PinDeclaration, PinType};
-    let path = "node_types_one_stream_resolves_tests.filters:StatesAConversion";
-    let texture = PinDeclaration::exactly(PinType::Texture {
-        pixel_formats: vec![],
-    });
-    let typed = |name| port_named(name).with_pin_declaration(texture.clone());
-    let descriptor = descriptor_for(path)
-        .with_input(typed("video"))
-        .with_output(typed("out"));
-    let Err(Error::Configuration(refusal)) = NodeTypesOneStreamResolves::new()
-        .register_a_type_described_in_this_streams_node_interpreter(
-            descriptor.stating_a_conversion(),
-            HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(a_constructor_refusing_with(
-                "a describe that must be refused",
-            )),
-        )
-    else {
-        panic!("a project's node type cannot state a conversion");
-    };
-    assert!(refusal.contains("a project's node type cannot state a conversion yet"));
-}
-
 /// A described type stating a Texture-to-Texture conversion, at `path`.
 fn a_described_conversion(path: &str) -> NodeDescriptor {
     use crate::core::descriptors::{PinDeclaration, PinType};
@@ -100,9 +75,6 @@ fn the_conversions_of(node_types: &NodeTypesOneStreamResolves) -> Vec<NodeClassI
 
 /// A conversion an installed module declares is registered and offered to the verdict, and
 /// kept when a load of a graph naming the type describes it again.
-///
-/// Mental-revert: registering it through the project's check refuses it as a project's
-/// node type stating a conversion.
 #[test]
 fn a_conversion_an_installed_module_declares_is_registered_and_offered() {
     let node_types = NodeTypesOneStreamResolves::new();
@@ -134,9 +106,13 @@ fn a_conversion_an_installed_module_declares_is_registered_and_offered() {
     assert!(the_conversions_of(&node_types).contains(&class_import_path(path)));
 }
 
-/// A project's refused conversion is never offered to the verdict.
+/// A conversion a project's own node type states is registered and offered to the verdict, as
+/// an installed module's is.
+///
+/// Mental-revert: refusing a conversion no installed module is recorded as declaring refuses
+/// the project's node type, and the verdict never names it.
 #[test]
-fn a_projects_refused_conversion_is_never_offered() {
+fn a_conversion_a_projects_node_type_states_is_registered_and_offered() {
     let node_types = NodeTypesOneStreamResolves::new();
     let path = "node_types_one_stream_resolves_tests.project:ConvertsATexture";
     node_types
@@ -146,9 +122,36 @@ fn a_projects_refused_conversion_is_never_offered() {
                 "a project's conversion",
             )),
         )
-        .expect_err("a project's node type cannot state a conversion");
+        .expect("a project's node type may state a conversion");
+    assert!(the_conversions_of(&node_types).contains(&class_import_path(path)));
+    assert!(node_types.was_described_in_this_streams_node_interpreter(&class_import_path(path)));
+}
+
+/// A described conversion whose name a view of the project also has is never offered: the
+/// stream resolves that name as the view, which converts nothing.
+///
+/// Mental-revert: listing every described type's conversion offers the verdict one the view the
+/// stream resolves does not perform.
+#[test]
+fn a_conversion_a_view_of_the_same_name_shadows_is_never_offered() {
+    let node_types = NodeTypesOneStreamResolves::new();
+    let path = "a-project-bringing-a-view:program";
+    node_types
+        .register_a_type_described_in_this_streams_node_interpreter(
+            a_described_conversion(path),
+            HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(a_constructor_refusing_with(
+                "a conversion the view shadows",
+            )),
+        )
+        .expect("the described type registers");
+    assert!(the_conversions_of(&node_types).contains(&class_import_path(path)));
+
+    node_types.replace_the_view_types_this_streams_project_brings(&[
+        crate::core::test_support::a_view_of_a_project_reading_records(path),
+    ]);
+
+    assert!(node_types.is_a_view_type_of_this_streams_project(&class_import_path(path)));
     assert!(!the_conversions_of(&node_types).contains(&class_import_path(path)));
-    assert!(!node_types.was_described_in_this_streams_node_interpreter(&class_import_path(path)));
 }
 
 /// A later describe of a type into one stream replaces what the earlier

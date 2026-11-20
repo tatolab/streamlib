@@ -547,66 +547,19 @@ async fn a_link_only_a_module_conversion_bridges_is_refused_with_the_call_that_p
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let module_conversion = ConvertNodeTestModuleGateToAudio::node_class_import_path();
 
-    let refusal = engine
-        .the_answer_or_the_refusal_of(
-            "connect",
-            connected_by_alice(&camera_into_model(
-                project.stream_asset_of("main"),
-                "gate",
-                "audio",
-            )),
+    let params = engine
+        .the_call_placing_the_conversion_a_refused_link_names(
+            &stream_id,
+            &camera_into_model(project.stream_asset_of("main"), "gate", "audio"),
+            ConversionToPlace {
+                node_type: module_conversion.as_str(),
+                input_port: "gate",
+                output_port: "audio",
+            },
         )
-        .await
-        .expect_err("connect never places a module's conversion");
+        .await;
 
-    assert_eq!(
-        refusal.refusal_code,
-        ControlOperationRefusalCode::LinkNeedsAModuleConversion,
-        "{refusal:?}"
-    );
-    assert!(
-        refusal
-            .runtime_words
-            .contains(&format!("`{module_conversion}`")),
-        "{refusal:?}"
-    );
-    let Some(SuggestedOperationCall { operation, params }) = refusal.suggested_call.clone() else {
-        panic!("the refusal suggests the call that places the conversion: {refusal:?}");
-    };
-    assert_eq!(operation, "transact");
-    assert_eq!(
-        Value::Object(params.clone()),
-        json!({ "operations": [
-            { "operation": "add_node", "stream": stream_id,
-              "type": module_conversion.as_str(), "as": "conversion" },
-            { "operation": "connect", "stream": stream_id,
-              "source": { "node": CAMERA_NODE_UUID, "port": "gate" },
-              "target": { "node": "conversion", "port": "gate" } },
-            { "operation": "connect", "stream": stream_id,
-              "source": { "node": "conversion", "port": "audio" },
-              "target": { "node": MODEL_NODE_UUID, "port": "audio" } },
-        ]})
-    );
-
-    let checked = engine
-        .the_answer_or_the_refusal_of(
-            "check_link",
-            camera_into_model(project.stream_asset_of("main"), "gate", "audio"),
-        )
-        .await
-        .unwrap_or_else(|refusal| panic!("check_link answers: {refusal:?}"));
-    assert_eq!(checked["outcome"], "refused", "{checked}");
-    assert_eq!(
-        checked["refusal"]["refusal_code"], "link_needs_a_module_conversion",
-        "{checked}"
-    );
-    assert_eq!(
-        checked["refusal"]["suggested_call"],
-        serde_json::to_value(&refusal.suggested_call).unwrap(),
-        "check_link suggests the call connect suggests"
-    );
-
-    let mut suggested = Value::Object(params);
+    let mut suggested = params;
     suggested["author"] = an_agent_named("alice");
     let placed = engine
         .the_answer_or_the_refusal_of("transact", suggested)
@@ -870,30 +823,11 @@ const TENSOR_ISLAND_UUID: &str = "f7f7f7f7-f7f7-4f7f-8f7f-f7f7f7f7f7f7";
 fn register_a_function_node_giving_a_tensor_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
-        use streamlib::sdk::descriptors::{
-            FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeKind,
-            PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-        };
-        let tensor = PinType::Tensor {};
-        let mut descriptor = NodeDescriptor::new(
-            NodeClassShortName::new("TensorIsland").expect("a short name"),
-            NodeClassImportPath::new(TENSOR_ISLAND_TYPE).expect("a node type"),
-            "a function node giving a Tensor",
-        )
-        .with_output(
-            PortDescriptor::new(
-                "array",
-                "",
-                true,
-                PortFamilyDeclaration::of_family(
-                    PortFamily::carrying(&tensor).unwrap_or(PortFamily::Records),
-                ),
-            )
-            .with_pin_declaration(PinDeclaration::exactly(tensor)),
+        let descriptor = a_python_function_node_type(
+            TENSOR_ISLAND_TYPE,
+            vec![],
+            vec![a_typed_port("array", PinType::Tensor {})],
         );
-        descriptor.node_kind = NodeKind::Function {
-            language: FunctionNodeLanguage::Python,
-        };
         NODE_REGISTRY
             .register_descriptor_only(descriptor)
             .expect("the function node type is registered here alone");

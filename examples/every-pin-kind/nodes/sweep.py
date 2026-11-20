@@ -5,7 +5,9 @@
 path `nodes.sweep:Sweep`.
 
 `SweepAt` writes a `Sweep` and `SweepPosition` reads it, so a named type links between two
-nodes, to a pin of the same name or to an input of any type. A `Sweep` travels as the bytes
+nodes, to a pin of the same name or to an input of any type. `SweepPosition` states that it
+converts a `Sweep` to a Float, so a link from a `Sweep` into a Float input is refused naming it,
+with the call that places it between the two. A `Sweep` travels as the bytes
 `to_bytes` packs and is built back with `from_bytes`. The sample's `node_ui/` registers the type's default control,
 which only the module that declares the type may register.
 """
@@ -66,6 +68,7 @@ def SweepAt(
 @node.meta(
     category="Every pin kind",
     description="Where a band is across the picture, read from the sample's own named type.",
+    conversion=True,
 )
 @node
 def SweepPosition(sweep: Sweep) -> float:
