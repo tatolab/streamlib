@@ -21,6 +21,9 @@ pub mod project_log_records;
 pub mod runtime_log_event;
 pub mod runtime_log_event_pretty_rendering;
 pub mod runtime_log_file_paths;
+pub mod shared_native_service_command_line;
+#[cfg(test)]
+mod shared_native_service_command_line_tests;
 pub mod streamlib_home;
 pub mod streamlib_runtime_directory;
 pub mod tatolab_state_directory;

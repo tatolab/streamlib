@@ -3,8 +3,9 @@
 
 //! The video codec node bodies `tatolab-h264` and `tatolab-h265` run in their
 //! helpers: a thread reads its node's ports through the module host table and
-//! codes, with no Python attached, on a Vulkan Video device the helper owns on
-//! Linux and on Apple's media engine through VideoToolbox on macOS.
+//! codes, with no Python attached: with Vulkan Video on Linux, an encoder in
+//! the machine's encode host and a decoder on a device its helper owns, and
+//! on Apple's media engine through VideoToolbox on macOS.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -22,12 +23,26 @@ pub mod encoded_video_publication;
 pub mod image_frame_on_the_video_port;
 #[cfg(target_os = "linux")]
 pub mod owned_device_video_decoder;
-#[cfg(target_os = "linux")]
-pub mod owned_device_video_encoder;
 pub mod video_decoder_settings;
+#[cfg(target_os = "linux")]
+pub mod video_encode_host;
+#[cfg(target_os = "linux")]
+pub mod video_encode_host_protocol;
+#[cfg(all(test, target_os = "linux"))]
+mod video_encode_host_protocol_tests;
+#[cfg(target_os = "linux")]
+pub mod video_encode_host_session_of_the_node;
+#[cfg(all(test, target_os = "linux"))]
+mod video_encode_host_session_of_the_node_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod video_encode_host_tests;
+#[cfg(target_os = "linux")]
+pub mod video_encode_on_a_device;
 pub mod video_encoder_settings;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
+#[cfg(target_os = "linux")]
+pub mod vulkan_video_encoder;
 
 use crate::encoded_video_publication::EncodedVideoOutputPort;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
@@ -237,15 +252,15 @@ impl EncodedVideoOutputPort for EncodedVideoLentByTheModuleHost<'_> {
 }
 
 #[cfg(target_os = "linux")]
-type VideoEncoderOnThisPlatform = owned_device_video_encoder::OwnedDeviceVideoEncoder;
+type VideoEncoderOnThisPlatform = vulkan_video_encoder::VulkanVideoEncoder;
 
 #[cfg(target_os = "linux")]
 fn open_the_encoder(
     node: VideoCodecNodeIdentity,
-    _module_host: &ModuleHost,
+    module_host: &ModuleHost,
     settings: VideoEncoderSettings,
 ) -> Result<VideoEncoderOnThisPlatform, String> {
-    VideoEncoderOnThisPlatform::open(node, settings)
+    VideoEncoderOnThisPlatform::open(node, module_host, settings)
 }
 
 #[cfg(target_os = "macos")]
