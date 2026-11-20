@@ -3,6 +3,7 @@
 
 mod channel_service_naming_and_sizing;
 mod link_destination_side;
+mod link_into_a_setting_read_by_the_engine;
 mod link_source_side;
 
 pub(crate) use channel_service_naming_and_sizing::refuse_a_link_a_channel_cannot_carry;
@@ -39,6 +40,8 @@ use link_destination_side::{
     DestinationOfALinkAsItsWiringReadsIt, open_the_destination_side_of_a_link,
     read_the_destination_of_a_link, release_the_destination_side_of_a_link,
 };
+pub(crate) use link_into_a_setting_read_by_the_engine::ReaderOfALinkIntoASettingComponent;
+use link_into_a_setting_read_by_the_engine::open_a_link_into_a_setting_read_by_the_engine;
 use link_source_side::{
     OpenedSourceSideOfALink, open_the_source_side_of_a_link, release_the_source_side_of_a_link,
 };
@@ -68,13 +71,21 @@ pub(crate) fn open_iceoryx2_service(
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    let to_port = graph
+    let (from_port, to_port) = graph
         .traversal()
         .e(link_id)
         .first()
-        .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found in graph", link_id)))?
-        .to_port()
-        .clone();
+        .map(|link| (link.source().clone(), link.to_port().clone()))
+        .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found in graph", link_id)))?;
+    if graph.is_a_setting_read_at_setup(to_port.node_run_id(), to_port.port_name()) {
+        return open_a_link_into_a_setting_read_by_the_engine(
+            graph,
+            link_id,
+            &from_port,
+            &to_port,
+            iceoryx2_node,
+        );
+    }
     open_iceoryx2_service_read_at(graph, link_id, &to_port, iceoryx2_node)
 }
 
@@ -401,11 +412,22 @@ pub(crate) fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) 
         return Ok(());
     };
 
+    // A link the engine reads into a setting holds its reader where a destination's side would
+    // be: its thread is stopped before the source's side is released.
+    let read_by_the_engine = graph
+        .traversal_mut()
+        .e(link_id)
+        .first_mut()
+        .and_then(|link| link.remove::<ReaderOfALinkIntoASettingComponent>())
+        .is_some();
+
     // Source side: drop this link's destination notifier (and the channel
     // publisher when this was the source port's last outbound link).
     release_the_source_side_of_a_link(graph, &source_proc_id, &source_port, link_id);
 
-    release_the_destination_side_of_a_link(graph, &dest_proc_id, &dest_port, link_id);
+    if !read_by_the_engine {
+        release_the_destination_side_of_a_link(graph, &dest_proc_id, &dest_port, link_id);
+    }
 
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
         link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();

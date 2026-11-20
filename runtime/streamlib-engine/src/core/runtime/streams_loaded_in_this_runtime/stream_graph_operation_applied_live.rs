@@ -625,14 +625,21 @@ impl LoadedStreamInThisRuntime {
         to: crate::core::runtime::PortOfANodeOfAType<'_>,
     ) -> Option<crate::core::descriptors::PinLinkVerdict> {
         let node_types = self.node_types_this_stream_resolves();
-        let ports_of = |node_type: &str| {
-            node_types
-                .port_info(&crate::core::descriptors::NodeClassImportPath::new(node_type).ok()?)
-        };
-        let (output_ports, input_ports) = (ports_of(from.node_type)?, ports_of(to.node_type)?);
+        let output_node_type =
+            crate::core::descriptors::NodeClassImportPath::new(from.node_type).ok()?;
+        let input_node_type =
+            crate::core::descriptors::NodeClassImportPath::new(to.node_type).ok()?;
+        let (output_ports, input_ports) = (
+            node_types.port_info(&output_node_type)?,
+            node_types.port_info(&input_node_type)?,
+        );
         crate::core::graph::the_verdict_of_a_link_between_declared_ports(
             (from.node_name, output_ports.output_named(from.port)?),
-            (to.node_name, input_ports.input_named(to.port)?),
+            (
+                to.node_name,
+                &input_node_type,
+                input_ports.input_named(to.port)?,
+            ),
             &node_types.pin_conversions(),
         )
     }

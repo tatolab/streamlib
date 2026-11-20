@@ -38,6 +38,7 @@ use crate::core::{NodeDescriptor, RuntimeContextFullAccess, RuntimeContextLimite
 use crate::iceoryx2::MessageGroupBoundary;
 
 mod channel_service_naming_and_sizing_tests;
+mod link_into_a_setting_read_by_the_engine_tests;
 mod link_state_and_channel_depth_tests;
 mod native_link_loss_count_tests;
 mod out_of_process_link_tests;

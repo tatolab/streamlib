@@ -51,7 +51,6 @@ use interface_node_config::{
 pub use streamlib_project_repository::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, is_a_graph_interface_node_type,
-    is_the_graph_input_type,
 };
 
 /// The name a top-level `GraphInput`'s `value` input had: a stream saved before it was an input
@@ -311,7 +310,7 @@ pub(crate) fn the_config_a_graph_interface_node_renders(
     input_values: &serde_json::Map<String, serde_json::Value>,
     mut config: serde_json::Value,
 ) -> serde_json::Value {
-    if is_the_graph_input_type(node_type)
+    if node_type.is_the_graph_input_type()
         && let Some(config) = config.as_object_mut()
     {
         let saved_value = [

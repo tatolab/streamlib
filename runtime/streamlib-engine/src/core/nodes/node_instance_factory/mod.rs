@@ -739,7 +739,7 @@ fn refuse_port_names_not_cast_or_declared_twice(descriptor: &NodeDescriptor) -> 
     }
     for output in &descriptor.outputs {
         let publishes_the_setting_of_its_name = |input: &&PortDescriptor| {
-            input.input_mode.is_some_and(|mode| !mode.takes_a_wire())
+            input.input_mode.is_some_and(|mode| mode.is_a_setting())
                 && input.flows_as_a_value()
                 && output.flows_as_a_value()
         };

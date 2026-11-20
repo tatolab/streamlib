@@ -273,6 +273,9 @@ fn the_verdict_between(
     input_pin_type: &PinType,
     conversions: &[PinConversion],
 ) -> PinLinkVerdict {
+    let downstreams_type =
+        streamlib::sdk::descriptors::NodeClassImportPath::new("nodes.downstream:Downstream")
+            .unwrap();
     pin_link_verdict(
         PinLinkEnd {
             node_name: "upstream",
@@ -280,6 +283,7 @@ fn the_verdict_between(
             member_name: None,
             pin_type: output_pin_type,
             meaning: None,
+            flow: None,
         },
         PinLinkInputEnd {
             end: PinLinkEnd {
@@ -288,7 +292,9 @@ fn the_verdict_between(
                 member_name: None,
                 pin_type: input_pin_type,
                 meaning: None,
+                flow: None,
             },
+            node_type: &downstreams_type,
             input_mode: None,
         },
         conversions,

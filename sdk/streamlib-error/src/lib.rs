@@ -62,8 +62,8 @@ pub enum Error {
     #[error("Invalid link: {0}")]
     InvalidLink(String),
 
-    /// A link the verdict on its two pins refuses: into a setting, which takes no wire, or
-    /// between two typed pins no rule connects, in the verdict's words.
+    /// A link the verdict on its two pins refuses: into a setting that takes no wire, a stream
+    /// into a setting, or between two typed pins no rule connects, in the verdict's words.
     #[error("{0}")]
     PinLinkRefused(Box<PinLinkRefusal>),
 

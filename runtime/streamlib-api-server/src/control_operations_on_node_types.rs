@@ -572,6 +572,7 @@ fn an_input_read_from_source(port: &NodeTypePortReadFromSource) -> NodeTypeInput
     NodeTypeInputDescribed {
         port: a_port_read_from_source(port),
         mode: None,
+        takes_a_wire: true,
         read: None,
         default_value: port.pin_default.clone(),
         lifetime: None,

@@ -215,6 +215,7 @@ impl GraphVariablesAsDrawn {
                 pin_default: None,
                 pin: None,
                 annotations: crate::core::descriptors::PinAnnotations::default(),
+                takes_a_wire: None,
                 value_read: None,
                 pin_group_slot: None,
             };

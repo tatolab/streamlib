@@ -161,6 +161,10 @@ pub struct LoadedStreamInThisRuntime {
     /// Each running node a value set on one of its settings read at setup has left to rebuild,
     /// once, in the order first set; taken by the next rebuild of them.
     pub(in crate::core::runtime) nodes_a_setting_read_at_setup_rebuilds: Mutex<Vec<NodeRunId>>,
+    /// The task that rebuilds each node a Value wire into one of its settings read at setup
+    /// carries a new value into, while the stream is started.
+    pub(in crate::core::runtime) rebuilds_wires_into_settings_ask_for:
+        Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// What a loaded stream is keyed by and shown as: its id, its display name,
@@ -346,6 +350,7 @@ impl LoadedStreamInThisRuntime {
             is_held_stopped: AtomicBool::new(false),
             edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             nodes_a_setting_read_at_setup_rebuilds: Mutex::new(Vec::new()),
+            rebuilds_wires_into_settings_ask_for: Mutex::new(None),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
