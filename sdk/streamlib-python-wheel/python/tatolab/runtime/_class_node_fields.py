@@ -16,7 +16,7 @@ from collections.abc import Collection
 from typing import Any, Optional
 
 from tatolab.stream._class_node_construction import assign_live_field_values
-from tatolab.stream._class_node_declaration import ClassNodeMember
+from tatolab.stream._class_node_declaration import NO_DEFAULT, ClassNodeMember
 from tatolab.stream._node_context_protocols import LinkInputDataReader, NodeLinkDataAccess
 
 from tatolab.runtime._class_node_bound_pins import (
@@ -65,9 +65,24 @@ class ClassNodeFields:
         return dict(self._set_values)
 
     def take_set_values(self, node_instance: object, stored_input_values: "dict[str, Any]") -> None:
-        """Hold each of `stored_input_values` a field takes as its set value, and assign it to each field no wire feeds."""
+        """Hold each of `stored_input_values` a field takes as its set value, and assign it to each field no wire feeds.
+
+        `stored_input_values` is every value the node's unlinked inputs read, so a field it
+        leaves out had its value taken off, and holds its default again.
+        """
         taken = self._python_forms_of(stored_input_values)
-        self._set_values.update(taken)
+        for port, member in self._fields.items():
+            if (
+                port not in stored_input_values
+                and port in self._set_values
+                and not member.a_setting
+                and member.default is not NO_DEFAULT
+            ):
+                del self._set_values[port]
+                taken[port] = member.default
+        self._set_values.update(
+            {port: value for port, value in taken.items() if port in stored_input_values}
+        )
         assign_live_field_values(
             node_instance,
             {port: value for port, value in taken.items() if port not in self._each_held_from_its_wire},

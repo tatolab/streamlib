@@ -263,6 +263,18 @@ def test_a_field_an_island_of_function_nodes_feeds_holds_the_value_the_island_ev
     assert tinter.node.gain == 5.0
 
 
+def test_a_field_whose_value_was_taken_off_holds_its_default_again():
+    """The engine hands every value the node's unlinked inputs read, so a field left out had its
+    value taken off: keep the set value instead and an Image File whose asset was cleared keeps
+    showing it, as it did on the rig."""
+    tinter = LevelTinterOnARealDataPlane({"gain": 2.0})
+
+    tinter.fields.take_set_values(tinter.node, {})
+
+    assert tinter.node.gain == 1.0, "`gain`'s default"
+    assert tinter.fields.values_to_build_with() == {}
+
+
 def test_a_field_set_live_holds_its_value_in_its_python_form():
     tinter = LevelTinterOnARealDataPlane({})
     assert tinter.node.tint == Color(1.0, 0.5, 0.25), "a field with no set value holds its default"
