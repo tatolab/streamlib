@@ -19,6 +19,15 @@ pub enum VideoCodecRefusal {
     ForGood(String),
 }
 
+impl VideoCodecRefusal {
+    /// The refusal's message, whichever kind it is.
+    pub fn into_message(self) -> String {
+        match self {
+            Self::ForNow(message) | Self::ForGood(message) => message,
+        }
+    }
+}
+
 /// How long after a refusal for now the next try is made.
 pub(crate) const VIDEO_CODEC_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 

@@ -12,10 +12,13 @@ use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{EncodedVideoOutputPort, EncodedVideoPublication};
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_codec_host_protocol::{
-    VIDEO_CODEC_HOST_PROTOCOL_VERSION, VideoEncodeSessionRequest,
+    VIDEO_CODEC_HOST_PROTOCOL_VERSION, VideoCodecHostRequest, VideoEncodeSessionRequest,
 };
+use crate::video_codec_host_session_of_the_node::{
+    VideoCodecHostSessionConnection, VideoCodecHostSessionOfTheNode, VideoCodecHostSessionOpening,
+};
+use crate::video_codec_retry_gate::VideoCodecRefusal;
 use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
-use crate::video_encode_session_of_the_node::VideoEncodeSessionOfTheNode;
 use crate::video_encoder_settings::VideoEncoderSettings;
 
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
@@ -26,7 +29,7 @@ const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 /// publication of their access units on its `encoded_video` port.
 pub struct VulkanVideoEncoder {
     node: VideoCodecNodeIdentity,
-    session: VideoEncodeSessionOfTheNode,
+    session: VideoCodecHostSessionOfTheNode,
     next_frame_must_be_a_sync_point: bool,
     publication: EncodedVideoPublication,
     frames_encoded: u64,
@@ -61,17 +64,18 @@ impl VulkanVideoEncoder {
                 ));
             }
         };
-        let session = VideoEncodeSessionOfTheNode::open(
+        let session = VideoCodecHostSessionOfTheNode::open(
             node,
             module_host,
-            VideoEncodeSessionRequest {
+            VideoCodecHostSessionOpening::Encode(VideoEncodeSessionRequest {
                 protocol_version: VIDEO_CODEC_HOST_PROTOCOL_VERSION,
                 elementary_stream: node.elementary_stream.into(),
                 settings,
                 vulkan_device_uuid,
                 surface_share_socket_path,
-            },
-        )?;
+            }),
+        )
+        .map_err(VideoCodecRefusal::into_message)?;
         Ok(Self {
             node,
             session,
@@ -91,10 +95,14 @@ impl VulkanVideoEncoder {
         encoded_video: &dyn EncodedVideoOutputPort,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
-        let outcome = self.session.encode(
-            VideoFrameToEncode::of_the_frame_read(frame),
-            self.next_frame_must_be_a_sync_point,
-        )?;
+        let opened_again =
+            self.session.connected()? == VideoCodecHostSessionConnection::OpenedAgain;
+        let request = VideoCodecHostRequest::EncodeFrame {
+            frame: VideoFrameToEncode::of_the_frame_read(frame),
+            as_a_sync_point: self.next_frame_must_be_a_sync_point || opened_again,
+        };
+        let (reply, _) = self.session.ask(&request, 0)?;
+        let outcome = reply.into_the_encode()?;
         let encoded = match outcome {
             VideoFrameEncodeOutcome::Encoded(encoded) => encoded,
             VideoFrameEncodeOutcome::NotCheckedOut
