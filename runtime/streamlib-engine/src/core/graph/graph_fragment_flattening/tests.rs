@@ -625,20 +625,24 @@ fn a_camera_into_look_feeding_blur_and_tint() -> serde_json::Value {
 
 #[test]
 fn a_drawn_link_into_a_fragment_says_what_any_running_link_it_stands_for_converts_and_warns_of() {
+    use streamlib_node_schema::pin_type::PinLinkWarning;
     use streamlib_runtime_client_contract::local_api_wire_contract::PinLinkWarningOnTheWire;
+    let vector_read_as_a_color = PinLinkWarningOnTheWire::of(&PinLinkWarning::VectorReadAsAColor);
+    let texture_output_states_no_format =
+        PinLinkWarningOnTheWire::of(&PinLinkWarning::TextureOutputStatesNoFormat);
     let flattening = flattened(a_camera_into_look_feeding_blur_and_tint()).expect("flattens");
     let mut render = a_render_of(&flattening.graph_the_runtime_runs);
     assert_eq!(render.links.len(), 2, "{:?}", render.links);
     for link in &mut render.links {
         match link.id.as_str() {
             "camera->look/blur" => {
-                link.marks.warnings = vec![PinLinkWarningOnTheWire::VectorReadAsAColor];
+                link.marks.warnings = vec![vector_read_as_a_color.clone()];
             }
             "camera->look/tint" => {
                 link.marks.free_conversion = true;
                 link.marks.warnings = vec![
-                    PinLinkWarningOnTheWire::VectorReadAsAColor,
-                    PinLinkWarningOnTheWire::TextureOutputStatesNoFormat,
+                    vector_read_as_a_color.clone(),
+                    texture_output_states_no_format.clone(),
                 ];
             }
             other => panic!("no running link {other} in this graph"),
@@ -662,10 +666,7 @@ fn a_drawn_link_into_a_fragment_says_what_any_running_link_it_stands_for_convert
     );
     assert_eq!(
         camera_into_look.marks.warnings,
-        [
-            PinLinkWarningOnTheWire::VectorReadAsAColor,
-            PinLinkWarningOnTheWire::TextureOutputStatesNoFormat,
-        ],
+        [vector_read_as_a_color, texture_output_states_no_format],
         "each warning of either running link, once: {camera_into_look:?}"
     );
 }
