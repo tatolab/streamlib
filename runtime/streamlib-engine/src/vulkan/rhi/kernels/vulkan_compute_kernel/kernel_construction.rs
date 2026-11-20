@@ -12,6 +12,9 @@ use vulkanalia::vk;
 use crate::core::rhi::{ComputeBindingKind, ComputeKernelDescriptor};
 use crate::core::{Error, Result};
 use crate::vulkan::rhi::HostVulkanDevice;
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::{
+    SamplerOfABinding, VulkanKernelSamplers, refuse_samplers_the_kernel_cannot_take,
+};
 
 use super::pipeline_creation::{
     allocate_command_buffer, allocate_descriptor_set, create_command_pool,
@@ -110,6 +113,15 @@ impl VulkanComputeKernelInner {
 
         let reconciled_bindings =
             validate_against_spirv(descriptor, vulkan_device.subgroup_operation_support())?;
+        refuse_samplers_the_kernel_cannot_take(
+            &format!("Compute kernel '{}'", descriptor.label),
+            reconciled_bindings.iter().map(|spec| SamplerOfABinding {
+                binding: spec.binding,
+                samples_a_texture: spec.kind == ComputeBindingKind::SampledTexture,
+                sampler: spec.sampler,
+            }),
+            vulkan_device.sampler_anisotropy_limit(),
+        )?;
 
         let spirv: Vec<u32> = descriptor
             .spv
@@ -272,7 +284,7 @@ impl VulkanComputeKernelInner {
             command_pool,
             command_buffer,
             fence,
-            default_sampler: Mutex::new(None),
+            samplers: VulkanKernelSamplers::new(),
             immutable_sampler_bindings: immutable_samplers.iter().map(|(b, _)| *b).collect(),
             pending: Mutex::new(PendingState {
                 bindings: HashMap::new(),

@@ -117,6 +117,50 @@ fn constructs_offscreen_blit_kernel() {
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
+fn a_sampled_texture_with_an_anisotropic_repeating_sampler_constructs() {
+    let device = match try_vulkan_device() {
+        Some(d) => d,
+        None => return,
+    };
+    let anisotropy = if device.sampler_anisotropy_limit() >= 4 {
+        crate::core::rhi::SamplerAnisotropy::X4
+    } else {
+        crate::core::rhi::SamplerAnisotropy::Off
+    };
+    let bindings = [
+        GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT).with_sampler(
+            crate::core::rhi::SamplerDescriptor {
+                address_modes: [crate::core::rhi::SamplerAddressMode::Repeat; 3],
+                mipmap_mode: crate::core::rhi::SamplerMipmapMode::Linear,
+                anisotropy,
+                ..crate::core::rhi::SamplerDescriptor::LINEAR_CLAMP
+            },
+        ),
+    ];
+    let stages = [
+        GraphicsStage::vertex(vert_spv()),
+        GraphicsStage::fragment(frag_spv()),
+    ];
+    let pipeline_state = default_pipeline_state();
+    let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
+    let kernel =
+        VulkanGraphicsKernel::new(&device, &descriptor).expect("the kernel must construct");
+    let texture_descriptor =
+        crate::core::rhi::TextureDescriptor::new(16, 16, TextureFormat::Bgra8Unorm)
+            .with_usage(crate::core::rhi::TextureUsages::TEXTURE_BINDING);
+    let texture =
+        crate::vulkan::rhi::HostVulkanTexture::new_device_local(&device, &texture_descriptor)
+            .expect("test texture allocation");
+    kernel
+        .set_sampled_texture(0, 0, &crate::core::rhi::Texture::from_vulkan(texture))
+        .expect("the binding's sampler is created and bound");
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
 fn constructs_kernel_with_depth_stencil_enabled() {
     // Smoke test: pipeline creation succeeds when both
     // `depth_stencil = Enabled` and `attachment_formats.depth =

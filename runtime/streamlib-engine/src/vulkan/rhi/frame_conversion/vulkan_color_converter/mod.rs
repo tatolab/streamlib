@@ -17,7 +17,8 @@ use parking_lot::Mutex;
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::rhi::{
     COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, ComputeBindingSpec,
-    ComputeKernelDescriptor, PixelFormat, SourceLayoutInfo, Texture, TextureFormat,
+    ComputeKernelDescriptor, PixelFormat, SamplerDescriptor, SourceLayoutInfo, Texture,
+    TextureFormat,
 };
 use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt as _;
@@ -35,14 +36,19 @@ const BUFFER_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_image(1),  // RGBA output
 ];
 
+/// The image source is read whole texel by whole texel, so it is sampled
+/// unfiltered.
+const TEXEL_FETCHED_SOURCE: ComputeBindingSpec =
+    ComputeBindingSpec::sampled_texture(0).with_sampler(SamplerDescriptor::NEAREST_CLAMP);
+
 const IMAGE_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
-    ComputeBindingSpec::sampled_texture(0), // RGBA or BGRA input, fetched by texel
-    ComputeBindingSpec::storage_image(1),   // RGBA output
+    TEXEL_FETCHED_SOURCE,                 // RGBA or BGRA input
+    ComputeBindingSpec::storage_image(1), // RGBA output
 ];
 
 const IMAGE_TO_BYTE_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
-    ComputeBindingSpec::sampled_texture(0), // RGBA input, fetched by texel
-    ComputeBindingSpec::storage_buffer(1),  // YUYV or NV12 byte output
+    TEXEL_FETCHED_SOURCE,                  // RGBA input
+    ComputeBindingSpec::storage_buffer(1), // YUYV or NV12 byte output
 ];
 
 /// Pixels one thread of the image→NV12 kernel writes, across and down:

@@ -27,6 +27,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrRayTracingPipelineExtensionDeviceCommands as _;
@@ -69,7 +71,8 @@ pub(crate) struct VulkanRayTracingKernelInner {
     /// SBT buffer + regions for `vkCmdTraceRaysKHR`. Owns its own VMA
     /// allocation; freed in `Drop`.
     sbt: Sbt,
-    default_sampler: Mutex<Option<vk::Sampler>>,
+    /// The linear-clamp sampler its sampled-texture bindings read through.
+    samplers: VulkanKernelSamplers,
     pending: Mutex<PendingState>,
 }
 
@@ -384,7 +387,7 @@ impl VulkanRayTracingKernelInner {
             command_buffer,
             fence,
             sbt,
-            default_sampler: Mutex::new(None),
+            samplers: VulkanKernelSamplers::new(),
             pending: Mutex::new(PendingState {
                 bindings: HashMap::new(),
                 push_constants: Vec::new(),
@@ -399,9 +402,7 @@ impl Drop for VulkanRayTracingKernelInner {
             // Queue-mutex-guarded wait, not raw device_wait_idle (see
             // HostVulkanDevice::wait_idle — concurrent setup races otherwise).
             let _ = self.vulkan_device.wait_idle();
-            if let Some(sampler) = self.default_sampler.lock().take() {
-                self.device.destroy_sampler(sampler, None);
-            }
+            self.samplers.destroy(&self.device);
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device

@@ -20,6 +20,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -56,8 +58,9 @@ pub(crate) struct VulkanGraphicsKernelInner {
     /// Per-slot pending state for staged setters; a draw flushes
     /// for the slot it's targeting.
     pending: Mutex<Vec<PendingState>>,
-    /// Lazy default sampler for [`GraphicsBindingKind::SampledTexture`] bindings.
-    default_sampler: Mutex<Option<vk::Sampler>>,
+    /// The samplers [`GraphicsBindingKind::SampledTexture`] bindings read
+    /// through, created when a binding is first set.
+    samplers: VulkanKernelSamplers,
     /// Lazy offscreen scaffolding (cmd pool/buffer/fence) used by
     /// [`Self::offscreen_render`]; not allocated until first call.
     offscreen: Mutex<Option<OffscreenScaffold>>,
@@ -151,8 +154,8 @@ impl VulkanGraphicsKernelInner {
         self.descriptor_sets_in_flight
     }
 
-    /// Bind a sampled texture at `(frame_index, binding)`. Uses the kernel's
-    /// default linear-clamp sampler.
+    /// Bind a sampled texture at `(frame_index, binding)`, read through the
+    /// binding's sampler.
     pub(crate) fn set_sampled_texture(
         &self,
         frame_index: u32,
@@ -162,7 +165,7 @@ impl VulkanGraphicsKernelInner {
         self.expect_kind(binding, GraphicsBindingKind::SampledTexture)?;
         use crate::host_rhi::HostTextureExt;
         let view = texture.vulkan_inner().image_view()?;
-        let sampler = self.default_sampler()?;
+        let sampler = self.sampler_of(binding)?;
         self.with_slot(frame_index, |slot| {
             slot.bindings
                 .insert(binding, BindingResource::SampledImage { view, sampler });
@@ -353,6 +356,20 @@ impl VulkanGraphicsKernelInner {
         Ok(())
     }
 
+    fn sampler_of(&self, binding: u32) -> Result<vk::Sampler> {
+        let sampler = self
+            .bindings
+            .iter()
+            .find(|spec| spec.binding == binding)
+            .and_then(|spec| spec.sampler)
+            .unwrap_or_default();
+        self.samplers.sampler_for(
+            &self.device,
+            &format!("Graphics kernel '{}'", self.label),
+            sampler,
+        )
+    }
+
     fn with_slot<R>(
         &self,
         frame_index: u32,
@@ -367,29 +384,6 @@ impl VulkanGraphicsKernelInner {
         let mut guard = self.pending.lock();
         f(&mut guard[frame_index as usize])
     }
-
-    fn default_sampler(&self) -> Result<vk::Sampler> {
-        let mut guard = self.default_sampler.lock();
-        if let Some(s) = *guard {
-            return Ok(s);
-        }
-        let info = vk::SamplerCreateInfo::builder()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .min_lod(0.0)
-            .max_lod(0.0)
-            .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
-            .unnormalized_coordinates(false)
-            .build();
-        let sampler = unsafe { self.device.create_sampler(&info, None) }
-            .map_err(|e| Error::GpuError(format!("Failed to create default sampler: {e}")))?;
-        *guard = Some(sampler);
-        Ok(sampler)
-    }
 }
 
 impl Drop for VulkanGraphicsKernelInner {
@@ -403,9 +397,7 @@ impl Drop for VulkanGraphicsKernelInner {
                 self.device
                     .destroy_command_pool(scaffold.command_pool, None);
             }
-            if let Some(sampler) = self.default_sampler.lock().take() {
-                self.device.destroy_sampler(sampler, None);
-            }
+            self.samplers.destroy(&self.device);
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_pipeline(self.pipeline, None);

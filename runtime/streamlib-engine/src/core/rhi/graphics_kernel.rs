@@ -18,12 +18,12 @@ use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::Result;
 
-use super::TextureFormat;
 use super::kernel_binding_names::{
     KernelBindingUnderReconciliation, KernelShaderStageMask, KernelShaderStageSpirvModule,
     derive_staged_kernel_bindings_from_shader_reflection,
     reconcile_staged_kernel_binding_declarations,
 };
+use super::{SamplerDescriptor, TextureFormat};
 
 /// Shader stages that contribute to a graphics pipeline.
 ///
@@ -132,12 +132,17 @@ pub enum GraphicsBindingKind {
 /// and `Some` on every spec the RHI has reconciled against the shader: the
 /// numeric binding is what the descriptor set is built from, the name is what a
 /// by-name draw resolves against.
+///
+/// `sampler` is how a [`GraphicsBindingKind::SampledTexture`] binding samples,
+/// [`SamplerDescriptor::LINEAR_CLAMP`] when `None`; a kernel refuses one on
+/// any other kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphicsBindingSpec {
     pub binding: u32,
     pub kind: GraphicsBindingKind,
     pub stages: GraphicsShaderStageFlags,
     pub name: Option<Cow<'static, str>>,
+    pub sampler: Option<SamplerDescriptor>,
 }
 
 /// What a caller asserts about one graphics binding before reflection has
@@ -227,6 +232,7 @@ impl GraphicsBindingSpec {
             kind: GraphicsBindingKind::SampledTexture,
             stages,
             name: None,
+            sampler: None,
         }
     }
 
@@ -236,6 +242,7 @@ impl GraphicsBindingSpec {
             kind: GraphicsBindingKind::StorageBuffer,
             stages,
             name: None,
+            sampler: None,
         }
     }
 
@@ -245,6 +252,7 @@ impl GraphicsBindingSpec {
             kind: GraphicsBindingKind::UniformBuffer,
             stages,
             name: None,
+            sampler: None,
         }
     }
 
@@ -254,6 +262,7 @@ impl GraphicsBindingSpec {
             kind: GraphicsBindingKind::StorageImage,
             stages,
             name: None,
+            sampler: None,
         }
     }
 
@@ -261,6 +270,13 @@ impl GraphicsBindingSpec {
     #[must_use]
     pub fn with_name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Sample this binding's texture with `sampler`.
+    #[must_use]
+    pub const fn with_sampler(mut self, sampler: SamplerDescriptor) -> Self {
+        self.sampler = Some(sampler);
         self
     }
 }
@@ -722,6 +738,7 @@ pub fn derive_bindings_from_spirv_multistage(
                 kind: binding.kind,
                 stages: binding.stages,
                 name: Some(Cow::Owned(binding.name)),
+                sampler: None,
             })
             .collect(),
         GraphicsPushConstants {

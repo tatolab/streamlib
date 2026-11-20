@@ -18,6 +18,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -53,9 +55,9 @@ pub(crate) struct VulkanComputeKernelInner {
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     fence: vk::Fence,
-    /// Default sampler used for [`ComputeBindingKind::SampledTexture`] bindings.
-    /// Created on-demand when the first sampled-texture binding is set.
-    default_sampler: Mutex<Option<vk::Sampler>>,
+    /// The samplers [`ComputeBindingKind::SampledTexture`] bindings read
+    /// through, created when a binding is first set.
+    samplers: VulkanKernelSamplers,
     /// Binding indices that were declared with `pImmutableSamplers` at
     /// descriptor-set-layout creation time. Callers binding such a slot
     /// must use [`Self::set_combined_image_sampler_view`] (view-only) —
@@ -184,8 +186,8 @@ impl VulkanComputeKernelInner {
         Ok(())
     }
 
-    /// Bind a sampled texture at `binding`, using the kernel's default
-    /// linear-clamp sampler. Errors if the binding was declared with
+    /// Bind a sampled texture at `binding`, read through the binding's
+    /// sampler. Errors if the binding was declared with
     /// an immutable sampler at construction time (in that case use
     /// [`Self::set_combined_image_sampler_view`] — Vulkan would
     /// silently ignore the default sampler in favor of the
@@ -204,7 +206,7 @@ impl VulkanComputeKernelInner {
             )));
         }
         let view = vk_image_view_for(texture)?;
-        let sampler = self.default_sampler()?;
+        let sampler = self.sampler_of(binding)?;
         self.pending
             .lock()
             .bindings
@@ -313,27 +315,18 @@ impl VulkanComputeKernelInner {
         Ok(())
     }
 
-    fn default_sampler(&self) -> Result<vk::Sampler> {
-        let mut guard = self.default_sampler.lock();
-        if let Some(s) = *guard {
-            return Ok(s);
-        }
-        let info = vk::SamplerCreateInfo::builder()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .min_lod(0.0)
-            .max_lod(0.0)
-            .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
-            .unnormalized_coordinates(false)
-            .build();
-        let sampler = unsafe { self.device.create_sampler(&info, None) }
-            .map_err(|e| Error::GpuError(format!("Failed to create default sampler: {e}")))?;
-        *guard = Some(sampler);
-        Ok(sampler)
+    fn sampler_of(&self, binding: u32) -> Result<vk::Sampler> {
+        let sampler = self
+            .bindings
+            .iter()
+            .find(|spec| spec.binding == binding)
+            .and_then(|spec| spec.sampler)
+            .unwrap_or_default();
+        self.samplers.sampler_for(
+            &self.device,
+            &format!("Compute kernel '{}'", self.label),
+            sampler,
+        )
     }
 }
 
@@ -341,9 +334,7 @@ impl Drop for VulkanComputeKernelInner {
     fn drop(&mut self) {
         unsafe {
             let _ = self.vulkan_device.wait_idle();
-            if let Some(sampler) = self.default_sampler.lock().take() {
-                self.device.destroy_sampler(sampler, None);
-            }
+            self.samplers.destroy(&self.device);
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device

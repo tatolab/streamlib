@@ -7,9 +7,12 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use vulkanalia::prelude::v1_4::*;
 
-use crate::core::rhi::{GraphicsKernelDescriptor, GraphicsShaderStage};
+use crate::core::rhi::{GraphicsBindingKind, GraphicsKernelDescriptor, GraphicsShaderStage};
 use crate::core::{Error, Result};
 use crate::vulkan::rhi::HostVulkanDevice;
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::{
+    SamplerOfABinding, VulkanKernelSamplers, refuse_samplers_the_kernel_cannot_take,
+};
 
 use super::{PendingState, VulkanGraphicsKernelInner};
 
@@ -89,6 +92,15 @@ impl VulkanGraphicsKernelInner {
 
         let reconciled_bindings =
             validate_against_spirv(descriptor, vulkan_device.subgroup_operation_support())?;
+        refuse_samplers_the_kernel_cannot_take(
+            &format!("Graphics kernel '{}'", descriptor.label),
+            reconciled_bindings.iter().map(|spec| SamplerOfABinding {
+                binding: spec.binding,
+                samples_a_texture: spec.kind == GraphicsBindingKind::SampledTexture,
+                sampler: spec.sampler,
+            }),
+            vulkan_device.sampler_anisotropy_limit(),
+        )?;
 
         let device = vulkan_device.device();
         let queue = vulkan_device.queue();
@@ -199,7 +211,7 @@ impl VulkanGraphicsKernelInner {
             descriptor_pool,
             descriptor_sets,
             pending: Mutex::new(pending),
-            default_sampler: Mutex::new(None),
+            samplers: VulkanKernelSamplers::new(),
             offscreen: Mutex::new(None),
         })
     }
