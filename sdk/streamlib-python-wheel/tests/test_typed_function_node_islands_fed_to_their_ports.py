@@ -146,8 +146,11 @@ def test_a_vector_of_four_into_a_vector_of_two_keeps_its_first_two_components():
     data_plane.declare_ports(["spot"], [])
     island = an_island_of_two_nodes_feeding("spot", "a_vector_of_four", "a_spot_as_one_number", "spot")
     island["nodes"][0]["pins"] = {"x": 0.25, "y": 0.5, "z": 9.0, "w": 9.0}
-    feed_each_input_port_from_its_function_node_island(
+    fed = feed_each_input_port_from_its_function_node_island(
         data_plane, [island], _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__
+    )
+    assert fed.ran_compiled_by_node_id == {"first-1": True, "second-1": True}, (
+        "a node of Vectors compiles"
     )
     assert the_numbers_read_from(data_plane, "spot", 1) == (5.25,)
 
@@ -156,7 +159,10 @@ def test_one_number_into_a_colour_is_an_opaque_grey():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["dimmed"], [])
     island = an_island_of_two_nodes_feeding("dimmed", "a_level", "dim_a_tint", "tint")
-    feed_each_input_port_from_its_function_node_island(
+    fed = feed_each_input_port_from_its_function_node_island(
         data_plane, [island], _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__
+    )
+    assert fed.ran_compiled_by_node_id == {"first-1": True, "second-1": True}, (
+        "a node of Colours compiles"
     )
     assert the_numbers_read_from(data_plane, "dimmed", 4) == (0.25, 0.25, 0.25, 1.0)

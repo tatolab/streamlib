@@ -27,6 +27,10 @@ pub enum VideoError {
     /// A stream signals an H.273 `matrix_coefficients` no Vulkan sampler
     /// YCbCr model converts.
     MatrixCoefficientsNotConvertible(u8),
+    /// The driver holds as many video sessions as it allows, counted across
+    /// every process on the machine, so the named session was not created;
+    /// one can be once another session ends.
+    VideoSessionLimitReached { session_label: String },
 }
 
 impl std::fmt::Display for VideoError {
@@ -44,6 +48,11 @@ impl std::fmt::Display for VideoError {
                 f,
                 "the stream signals matrix_coefficients {matrix_coefficients}, which no Vulkan \
                  sampler YCbCr model converts"
+            ),
+            Self::VideoSessionLimitReached { session_label } => write!(
+                f,
+                "video session '{session_label}' was not created: the GPU's driver already holds \
+                 as many video sessions as it allows on this machine"
             ),
         }
     }

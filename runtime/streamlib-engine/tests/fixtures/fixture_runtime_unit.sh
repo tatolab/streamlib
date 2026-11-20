@@ -516,6 +516,60 @@ name_of_the_stream_a_rig_serves_once_it_runs() {
     return 1
 }
 
+# Writes the `pyproject.toml` of the fixture project at <project directory>,
+# declaring each package <venv directory> holds: one built from a folder on
+# this machine as a uv path source, and any other at the version installed.
+# The first-party packages the runtime unit carries are left to the runtime,
+# which declares them itself. The runtime's `uv sync` makes the venv hold
+# exactly what the project declares, so a module the fixture put in the venv
+# and the project left out would be uninstalled before its stream runs.
+write_the_fixture_projects_pyproject() {
+    local project_directory="$1" venv_directory="$2"
+    local -a carried_wheels=("$RUNTIME_UNIT_DIRECTORY"/lib/tatolab/imports/*.whl)
+    "$venv_directory/bin/python" -I -c '
+import importlib.metadata, json, pathlib, re, sys
+from urllib.parse import unquote, urlparse
+
+project_directory = pathlib.Path(sys.argv[1])
+
+def normalized(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+carried = {normalized(pathlib.Path(wheel).name.split("-")[0])
+           for wheel in sys.argv[2:] if pathlib.Path(wheel).is_file()}
+requirements = {}
+sources = {}
+for distribution in importlib.metadata.distributions():
+    name = normalized(distribution.metadata["Name"])
+    if name in carried:
+        continue
+    direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
+    url = urlparse(direct_url.get("url", ""))
+    package_folder = pathlib.Path(unquote(url.path))
+    if url.scheme == "file" and (package_folder / "pyproject.toml").is_file():
+        requirements[name] = name
+        editable = direct_url.get("dir_info", {}).get("editable", False)
+        sources[name] = f"{{ path = {json.dumps(str(package_folder))}" + (
+            ", editable = true }" if editable else " }")
+    else:
+        requirements[name] = f"{name}=={distribution.version}"
+
+lines = [
+    "[project]",
+    f"name = {json.dumps(project_directory.name)}",
+    "version = \"0.0.0\"",
+    "requires-python = \">=3.12\"",
+    "dependencies = [",
+    *(f"    {json.dumps(requirement)}," for _, requirement in sorted(requirements.items())),
+    "]",
+    "",
+    "[tool.uv.sources]",
+    *(f"{name} = {source}" for name, source in sorted(sources.items())),
+]
+(project_directory / "pyproject.toml").write_text("\n".join(lines) + "\n")
+' "$project_directory" "${carried_wheels[@]}"
+}
+
 # Writes at <project directory> a project of one stream, the way a user's
 # project is laid out: a `tatolab-project.json` naming the project after its
 # folder; `streams/<stream name>.graph.json`, the graph the `@graph_generator`
@@ -523,9 +577,10 @@ name_of_the_stream_a_rig_serves_once_it_runs() {
 # and in the caller's environment, so a setting the generator reads from the
 # environment must be in it at this call; every module beside <module file>
 # linked in, so a node type the graph names resolves in its node
-# interpreter; a `pyproject.toml`; and `.venv` linked to <venv directory>, the
-# venv the runtime runs the project's Python nodes in. Written owner-only: a
-# generator may put a credential from the environment into a node's config.
+# interpreter; a `pyproject.toml` declaring what <venv directory> holds; and
+# `.venv` linked to <venv directory>, the venv the runtime runs the project's
+# Python nodes in. Written owner-only: a generator may put a credential from
+# the environment into a node's config.
 write_a_one_stream_fixture_project() {
     local project_directory="$1" module_file="$2" graph_function="$3"
     local stream_name="$4" venv_directory="$5"
@@ -538,12 +593,7 @@ write_a_one_stream_fixture_project() {
         ln -sfn "$module_beside" "$project_directory/$(basename "$module_beside")"
     done
     ln -sfn "$venv_directory" "$project_directory/.venv"
-    cat >"$project_directory/pyproject.toml" <<TOML
-[project]
-name = "$(basename "$project_directory")"
-version = "0.0.0"
-requires-python = ">=3.12"
-TOML
+    write_the_fixture_projects_pyproject "$project_directory" "$venv_directory"
     "$venv_directory/bin/python" -I -c '
 import importlib, json, pathlib, sys, uuid
 from tatolab.stream._stream_graph_builder import run_graph_generator

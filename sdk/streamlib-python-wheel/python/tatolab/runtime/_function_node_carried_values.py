@@ -37,6 +37,10 @@ PinValueCarried = typing.Union[float, "tuple[float, ...]", "dict[str, Any]"]
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
 
+# The values of parts an evaluate entry carries, each as one f64 per part in the order its type
+# packs them. A Transform's parts are one tuple, which a compiled body does not build.
+PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = ("color", "vector2", "vector3", "vector4", "rectangle")
+
 # The value types a body run as Python takes and gives: the scalars, a value of parts, a String,
 # a Menu, an Asset, a List, a `dict` as Records, a value of a named type, and a message it hands
 # on unread.
@@ -67,6 +71,8 @@ _NO_VALUES_CARRIED_BEYOND_NUMBERS: "dict[str, list[Any]]" = {
     "outputs_that_may_hand_out_nothing": [],
     "inputs_carrying_a_stored_value": [],
     "outputs_carrying_a_stored_value": [],
+    "inputs_carried_in_parts": [],
+    "outputs_carried_in_parts": [],
 }
 
 
@@ -76,7 +82,9 @@ def _how_the_values_of_a_signature_are_carried(
     """Which inputs and outputs of `function_signature` take `None`, carry an `UnreadMessage`, or may hand out nothing.
 
     Each input and output that carries a String, a Menu, an Asset or a List is listed with its
-    pin type as JSON, which the native side packs and reads it by.
+    pin type as JSON, which the native side packs and reads it by, and each that carries a
+    Color, a Vector, a Rectangle or a Transform with its value type, which a compiled call
+    carries in one slot per part.
     """
     inputs = function_signature["inputs"]
     outputs = function_signature["outputs"]
@@ -101,7 +109,17 @@ def _how_the_values_of_a_signature_are_carried(
         ],
         "inputs_carrying_a_stored_value": _each_carrying_a_stored_value(inputs),
         "outputs_carrying_a_stored_value": _each_carrying_a_stored_value(outputs),
+        "inputs_carried_in_parts": _each_carried_in_parts(inputs),
+        "outputs_carried_in_parts": _each_carried_in_parts(outputs),
     }
+
+
+def _each_carried_in_parts(ports: "list[dict[str, Any]]") -> "list[tuple[int, str]]":
+    return [
+        (index, each_port["value_type"])
+        for index, each_port in enumerate(ports)
+        if each_port["value_type"] in PART_VALUE_TYPES
+    ]
 
 
 def _each_carrying_a_stored_value(ports: "list[dict[str, Any]]") -> "list[tuple[int, str]]":

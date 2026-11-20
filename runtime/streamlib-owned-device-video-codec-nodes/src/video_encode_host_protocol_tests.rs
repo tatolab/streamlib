@@ -106,7 +106,7 @@ fn an_encode_comes_back_as_the_host_coded_it() {
     let outcomes = [
         Ok(encoded),
         Ok(VideoFrameEncodeOutcome::NotCheckedOut),
-        Ok(VideoFrameEncodeOutcome::DiscardedAfterAFailedMint),
+        Ok(VideoFrameEncodeOutcome::DiscardedWithoutASession),
         Err("H264Encoder: encode failed: device lost".to_string()),
     ];
     let replies: Vec<VideoEncodeHostReply> = outcomes
