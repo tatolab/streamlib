@@ -56,13 +56,19 @@ pub(in crate::control_operations) const TRANSACT: ControlOperationExample =
                         "stream": STREAM,
                         "type": SOURCE_NODE_TYPE,
                         "as": "source",
-                        "pins": { "width": 320, "height": 180 },
                     },
                     {
                         "operation": "connect",
                         "stream": STREAM,
                         "source": { "node": "source", "port": "video" },
                         "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
+                    },
+                    {
+                        "operation": "set_node_input_value",
+                        "stream": STREAM,
+                        "node": "source",
+                        "input": "width",
+                        "value": 320,
                     },
                 ],
                 "author": { "kind": "agent", "name": "Assistant" },
@@ -86,6 +92,13 @@ pub(in crate::control_operations) const TRANSACT: ControlOperationExample =
                         "stream": STREAM,
                         "source": { "node": ADDED_SOURCE_NODE, "port": "video" },
                         "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
+                    },
+                    {
+                        "operation": "set_node_input_value",
+                        "stream": STREAM,
+                        "node": ADDED_SOURCE_NODE,
+                        "input": "width",
+                        "value": 320,
                     },
                 ],
                 "added_nodes": [{
@@ -115,7 +128,6 @@ pub(in crate::control_operations) const ADD_NODE: ControlOperationExample =
             on_the_stream(json!({
                 "type": CLAMP_NODE_TYPE,
                 "name": "clamp",
-                "pins": { "low": 0.0, "high": 1.0 },
             }))
         },
         answer: None,
@@ -202,7 +214,6 @@ pub(in crate::control_operations) const IMPORT_GRAPH_GENERATOR: ControlOperation
             on_the_stream(json!({
                 "generator": "generators.looks:night_look",
                 "name": "night_look",
-                "config": { "warmth": 0.3 },
             }))
         },
         answer: None,
@@ -244,17 +255,6 @@ pub(in crate::control_operations) const SET_STUDIO_FIELDS: ControlOperationExamp
                 "node": CLAMP_NODE,
                 "studio": { "position": [420.0, 160.0], "comment": "Keeps the level under 1" },
             }))
-        },
-        answer: None,
-        refusal: None,
-    };
-
-pub(in crate::control_operations) const SET_EXPOSED_CONFIG_FIELDS: ControlOperationExample =
-    ControlOperationExample {
-        params: || {
-            on_the_stream(
-                json!({ "node": SOURCE_NODE, "exposed_config_fields": ["width", "height"] }),
-            )
         },
         answer: None,
         refusal: None,

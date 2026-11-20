@@ -6,6 +6,8 @@
 //! generated from.
 
 mod agent_surface;
+#[cfg(test)]
+mod agent_vocabulary_tests;
 mod control_contract_document;
 mod control_notification;
 mod control_operation;

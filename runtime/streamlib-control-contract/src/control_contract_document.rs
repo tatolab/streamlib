@@ -430,6 +430,7 @@ mod tests {
         for replaced in [
             "set_node_config",
             "set_pin_value",
+            "set_exposed_config_fields",
             "write_graph_input",
             "write_studio_view_output",
         ] {
@@ -439,9 +440,7 @@ mod tests {
                 "{replaced}"
             );
         }
-        for kept in ["set_node_input_value", "set_exposed_config_fields"] {
-            assert_eq!(replaced_by_of(kept), None, "{kept}");
-        }
+        assert_eq!(replaced_by_of("set_node_input_value"), None);
     }
 
     #[test]
@@ -623,7 +622,7 @@ mod tests {
 
     #[test]
     fn every_component_schema_uses_only_the_keywords_the_contract_uses() {
-        const KEYWORDS: [&str; 17] = [
+        const KEYWORDS: [&str; 18] = [
             "type",
             "properties",
             "required",
@@ -641,6 +640,7 @@ mod tests {
             "description",
             "default",
             "x-may-grow",
+            "x-removed-in",
         ];
         let document = control_contract_document();
         let mut keywords = std::collections::BTreeSet::new();

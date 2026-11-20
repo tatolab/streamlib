@@ -38,7 +38,7 @@ use super::{
 pub struct TransactRequest {
     /// The operations, applied in order and whole or not at all.
     #[schemars(
-        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_input_value`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_input_value`, `rename_node`, `set_studio_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
     pub operations: Vec<StreamGraphAction<GraphEditStream>>,
     /// Whether the edit is kept.
@@ -78,12 +78,15 @@ pub struct AddNodeRequest {
     #[schemars(
         description = "The node's config, as the keys its type's schema declares. Omit for none. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is."
     )]
+    #[schemars(extend("x-removed-in" = 4))]
     pub config: Option<Map<String, Value>>,
     /// The value on each unlinked input.
     #[schemars(description = "The value on each unlinked input, by input name.")]
+    #[schemars(extend("x-removed-in" = 4))]
     pub pins: Option<Map<String, Value>>,
     /// The config fields the node also takes as inputs.
     #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
+    #[schemars(extend("x-removed-in" = 4))]
     pub exposed_config_fields: Option<Vec<String>>,
     /// What Tato Studio draws the node with.
     #[schemars(description = NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION)]
@@ -642,6 +645,7 @@ pub struct ImportGraphGeneratorRequest {
     pub name: Option<String>,
     /// The generator's config.
     #[schemars(description = IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION)]
+    #[schemars(extend("x-removed-in" = 4))]
     pub config: Option<Map<String, Value>>,
     /// Whether the edit is kept.
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "tatolab-video-encode-host"
-description = "The runtime unit's encode host: one Vulkan Video encode device per GPU, shared by every H.264 and H.265 encoder node on it, run once for the machine as a shared native service."
+name = "tatolab-video-codec-host"
+description = "The runtime unit's video codec host: one Vulkan Video encode device and one decode device per GPU, shared by every H.264 and H.265 encoder and decoder node on it, run once for the machine as a shared native service."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 publish = false
 
 [[bin]]
-name = "tatolab-video-encode-host"
+name = "tatolab-video-codec-host"
 path = "src/main.rs"
 
 [features]
