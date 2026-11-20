@@ -198,7 +198,7 @@ const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_LINK_END_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a link end",
-    spec_keys: &["node", "port"],
+    spec_keys: &["node", "port", "member"],
     live_keys: &[],
 };
 

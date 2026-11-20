@@ -47,9 +47,54 @@ pub enum WhatALiveConnectMakesOfALink {
     /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
     /// graph judges it only as it is reconciled to a document holding it.
     JudgesItOnlyAsItIsMade,
+    /// The link, at a level of a placed stream, reaches a node of that level that is not built
+    /// to judge it, such as one whose type is not described.
+    ReachesANodeNotBuilt(ANodeNotBuilt),
     /// The link reaches a port of a node type the stream has not described yet, which only an
     /// add of a node of the type describes, so it is judged only once one is placed.
     JudgesItOnlyOnceItsNodeTypeIsDescribed,
+}
+
+impl WhatALiveConnectMakesOfALink {
+    /// The verdict the connect judges the link by: that of two typed ends, `None` for ends their
+    /// families judge; refused with why, in the runtime's words, when it makes the link without
+    /// judging it.
+    pub fn the_verdict_it_judges_by(
+        self,
+    ) -> std::result::Result<Option<Box<crate::core::descriptors::PinLinkVerdict>>, String> {
+        match self {
+            Self::Makes(verdict) => Ok(verdict),
+            Self::JudgesItOnlyAsItIsMade => Err(
+                "the link reaches a node that runs as no node of its own, such as a fragment"
+                    .to_owned(),
+            ),
+            Self::ReachesANodeNotBuilt(not_built) => Err(not_built.to_string()),
+            Self::JudgesItOnlyOnceItsNodeTypeIsDescribed => Err(
+                "the node type is not described yet; place a node of it first, with `add_node`, \
+                 and check the link to that node"
+                    .to_owned(),
+            ),
+        }
+    }
+}
+
+/// A node of a placed stream's level that is not built to judge a link reaching it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ANodeNotBuilt {
+    /// The node's name, as the level names it.
+    pub node_name: String,
+    /// Why it is not built, in the runtime's words.
+    pub why: String,
+}
+
+impl std::fmt::Display for ANodeNotBuilt {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the link reaches node `{}`, which is not built to judge it: {}",
+            self.node_name, self.why
+        )
+    }
 }
 
 /// A port of a node type, by the type's import path and the port's name.
@@ -59,6 +104,8 @@ pub struct ANodeTypesPort<'a> {
     pub node_type: &'a str,
     /// The port's name, as the node type declares it.
     pub port: &'a str,
+    /// The member of the bundle the port carries that the end is; `None` for the whole port.
+    pub member: Option<&'a str>,
 }
 
 /// One writer's batch of graph edits on one stream, from
@@ -195,6 +242,18 @@ pub trait RuntimeOperations: Send + Sync {
         node_types_ports: &'a [ANodeTypesPort<'a>],
     ) -> BoxFuture<'a, Result<Vec<Result<WhatALiveConnectMakesOfALink>>>>;
 
+    /// What a connect made now would make of each of `links`, in their order, at `level`, a
+    /// level of a placed stream as its graph document holds it, each node by its UUID there,
+    /// made nowhere: judged among that level's nodes, by their types as this stream resolves
+    /// them and the conversions it registers, as [`Self::what_a_live_connect_makes_of_the_link`]
+    /// judges a link of the live graph, each link among the ones before it that connect made;
+    /// each refused as its connect is refused.
+    fn what_a_connect_makes_of_each_link_at_a_placed_level(
+        &self,
+        level: &streamlib_project_repository::StreamGraphDocument,
+        links: &[streamlib_project_repository::StreamGraphDocumentLink],
+    ) -> Vec<Result<WhatALiveConnectMakesOfALink>>;
+
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.
     fn the_name_a_node_added_with_none_takes(
@@ -229,17 +288,18 @@ pub trait RuntimeOperations: Send + Sync {
         node_type: &str,
     ) -> Option<crate::core::GraphNodePorts>;
 
-    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`
-    /// and held on the graph, with `None` taking it off, when the input does not take it, as this
-    /// stream resolves the type: among them a value on the input of an output a panel writes,
-    /// which holds no saved value; `input_values_after_the_set` are every input value the node
-    /// holds once it is made.
+    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
+    /// or on its member `member` when one is named, and held on the graph, with `None` taking it
+    /// off, when the input does not take it, as this stream resolves the type: among them a value
+    /// on the input of an output a panel writes, which holds no saved value;
+    /// `input_values_after_the_set` are every input value the node holds once it is made.
     fn refuse_an_input_value_its_input_does_not_take(
         &self,
         node_type: &NodeClassImportPath,
         node_name: &str,
         input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
         input: &str,
+        member: Option<&str>,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
 

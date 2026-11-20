@@ -133,7 +133,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "extension_sdk_not_found" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -150,7 +150,8 @@ export interface RefusedGraphLinkOnTheWire {
 }
 
 /**
- * One end of a link a graph tool names: a node by its UUID and one of its ports.
+ * One end of a link a graph tool names: a node by its UUID, one of its ports, and the member of
+ * a bundle port it starts at, if any.
  */
 export interface GraphLinkEndOnTheWire {
   /**
@@ -161,6 +162,10 @@ export interface GraphLinkEndOnTheWire {
    * The port's name.
    */
   port: string;
+  /**
+   * The member of a bundle port the link starts or ends at; absent for the whole port.
+   */
+  member?: string | null;
 }
 
 /**
@@ -902,13 +907,19 @@ export interface GraphNodePortOnTheWire {
    */
   flow?: PinFlow;
   /**
-   * The value it reads, null when it reads nothing; absent when a link feeds it.
+   * The value it reads, null when it reads nothing; absent when a link feeds it, and on a
+   * bundle input.
    */
   value?: unknown;
   /**
-   * Where the value comes from; absent when it reads nothing.
+   * Where the value comes from; absent when it reads nothing, and on a bundle input.
    */
   value_comes_from?: InputValueComesFromOnTheWire | null;
+  /**
+   * On a bundle input, the value each member reads and where it comes from, in the order the
+   * bundle declares its members; absent on every other input.
+   */
+  member_values?: Array<BundleMemberValueReadOnTheWire> | null;
 }
 
 /**
@@ -920,6 +931,26 @@ export type PortKindOnTheWire = "data" | "event" | "control";
  * Where the value an input reads comes from, as `graph` renders it.
  */
 export type InputValueComesFromOnTheWire = "live" | "saved" | "default" | "wire";
+
+/**
+ * The value one member of a bundle input reads, resolved alone: `wire`, with no `value`, when a
+ * link ends at the member or at the whole input; else its live value, else its saved one, else
+ * its default; `value` null and no `value_comes_from` when it reads nothing.
+ */
+export interface BundleMemberValueReadOnTheWire {
+  /**
+   * The member, by the name the bundle declares.
+   */
+  member: string;
+  /**
+   * The value it reads, null when it reads nothing; absent when a link feeds it.
+   */
+  value?: unknown;
+  /**
+   * Where the value comes from; absent when it reads nothing.
+   */
+  value_comes_from?: InputValueComesFromOnTheWire | null;
+}
 
 /**
  * What the runtime keeps on a node, each under its own key. `failed_because`,
@@ -1293,7 +1324,8 @@ export interface GraphLinkOnTheWire {
 }
 
 /**
- * One end of a link of a stream's graph: a node by its name, and one of its ports.
+ * One end of a link of a stream's graph: a node by its name, one of its ports, and the member
+ * of a bundle port the link starts or ends at, if any.
  */
 export interface GraphLinkPortRefOnTheWire {
   /**
@@ -1304,6 +1336,11 @@ export interface GraphLinkPortRefOnTheWire {
    * The port's own name on that node.
    */
   port: string;
+  /**
+   * The member of a bundle port the link starts or ends at, which it carries alone; absent
+   * for the whole port.
+   */
+  member?: string | null;
 }
 
 /**
@@ -1312,7 +1349,8 @@ export interface GraphLinkPortRefOnTheWire {
 export type GraphLinkStateOnTheWire = "pending" | "wired" | "disconnecting" | "disconnected" | "error";
 
 /**
- * What a link does that a person may not expect, tagged by its `warning`.
+ * What a link does that a person may not expect, tagged by its `warning`, with the runtime's
+ * sentence for it in `words`.
  */
 export type PinLinkWarningOnTheWire = {
   /**
@@ -1323,6 +1361,10 @@ export type PinLinkWarningOnTheWire = {
    * The input's meaning.
    */
   input_meaning: string;
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "meanings_differ";
 } | {
   /**
@@ -1337,18 +1379,38 @@ export type PinLinkWarningOnTheWire = {
    * The input member's meaning.
    */
   input_meaning: string;
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "member_meanings_differ";
 } | {
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "vector_read_as_a_color";
 } | {
   /**
    * Each such option, as the output names it.
    */
   option_names: Array<string>;
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "menu_options_the_input_does_not_list";
 } | {
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "texture_output_states_no_format";
 } | {
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "type_found_only_once_placed";
 };
 
@@ -1864,7 +1926,7 @@ export type StreamGraphAction = ({
    */
   group: string;
   operation: "remove_group";
-} | {
+} | ({
   /**
    * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
@@ -1882,14 +1944,19 @@ export type StreamGraphAction = ({
    */
   input: string;
   /**
+   * The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off.
+   */
+  member?: string | null;
+  /**
    * The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped.
    */
   value?: unknown;
   operation: "set_node_input_value";
-};
+});
 
 /**
- * One end of a link a graph action names: a node and one of its ports.
+ * One end of a link a graph action names: a node, one of its ports, and the member of a bundle
+ * port it starts or ends at, if any.
  */
 export interface StreamGraphActionLinkEnd {
   /**
@@ -1900,6 +1967,10 @@ export interface StreamGraphActionLinkEnd {
    * The port's name, as `graph` lists it under the node's `ports`.
    */
   port: string;
+  /**
+   * The member of a bundle port the link starts or ends at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. A bundle input is fed either whole or member by member, and the node reads one bundle built from the newest value of each member.
+   */
+  member?: string | null;
 }
 
 /**
@@ -2045,6 +2116,12 @@ export interface GraphTransactionConnectedLink {
    * types says; none of these blocks it. Absent when it warns of nothing.
    */
   warnings?: Array<PinLinkWarningOnTheWire>;
+  /**
+   * Why the link was saved without its two ends being judged, when it was: inside a placed
+   * stream, it reaches a node that runs as no node of its own, or one that is not built to
+   * judge it, such as one whose type is not described.
+   */
+  not_judged_because?: string | null;
 }
 
 /**
@@ -2214,7 +2291,7 @@ export interface CheckLinkRequest {
    */
   stream: string;
   /**
-   * The subgraph the link would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused.
+   * The subgraph the link would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level.
    */
   level?: Array<string> | null;
   /**
@@ -2336,7 +2413,7 @@ export type LinkCandidatesAmong = "placed_ports" | "node_type_ports" | {
 /**
  * One end `check_link_candidates` judges its placed end against, of the other direction.
  */
-export type LinkCandidateEnd = {
+export type LinkCandidateEnd = ({
   /**
    * The node, by the UUID `graph` lists as its `id`.
    */
@@ -2345,8 +2422,13 @@ export type LinkCandidateEnd = {
    * The port's name, as `graph` lists it under the node's `ports`.
    */
   port: string;
+  /**
+   * The member of the bundle the port carries that the end is, by name; absent for
+   * the whole port.
+   */
+  member?: string | null;
   kind: "placed_port";
-} | {
+}) | ({
   /**
    * The node type, by the import path `add_node` takes as its `type`.
    */
@@ -2355,8 +2437,13 @@ export type LinkCandidateEnd = {
    * The port's name, as the node type declares it.
    */
   port: string;
+  /**
+   * The member of the bundle the port carries that the end is, by name; absent for
+   * the whole port.
+   */
+  member?: string | null;
   kind: "node_type_port";
-};
+});
 
 /**
  * `check_link_candidates`'s answer: for each candidate end, in the order judged, what
@@ -2559,6 +2646,10 @@ export interface SetNodeInputValueRequest {
    * The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`.
    */
   input: string;
+  /**
+   * The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off.
+   */
+  member?: string | null;
   /**
    * The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped.
    */
@@ -4415,6 +4506,88 @@ export interface CreateNodeFileToolResult {
 }
 
 /**
+ * `create_node_ui_element`'s params.
+ */
+export interface CreateNodeUiElementRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows, a built-in type's name or a named type's import path, and its `control` name, which a pin's `control` annotation picks it by and which a built-in type's control must have, since a built-in type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`.
+   */
+  element: ProjectNodeUiElement;
+  /**
+   * The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, for the manifest's own name, or through a symbolic link.
+   */
+  script: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * What a node UI element is, under `kind`.
+ */
+export type ProjectNodeUiElement = ({
+  /**
+   * The pin type whose inputs it edits or shows.
+   */
+  pin_type: NodeUiControlPinType;
+  /**
+   * Its name, which a pin's `control` annotation picks it by; `null` for its pin type's
+   * default.
+   */
+  control?: string | null;
+  kind: "control";
+}) | {
+  /**
+   * The node type whose node it draws.
+   */
+  node_type: string;
+  kind: "node_body";
+};
+
+/**
+ * The pin type a control is registered for: a built-in type by its name, as `float`, or a
+ * module's named type by the import path of the class that declares it, as
+ * `nodes.sensor:SensorReading`.
+ */
+export type NodeUiControlPinType = BuiltInPinTypeName | NamedPinTypeImportPath;
+
+/**
+ * The `create_node_ui_element` tool's result.
+ */
+export interface CreateNodeUiElementToolResult {
+  /**
+   * The script created, relative to the project, as `node_ui/knob.ts`.
+   */
+  script_path: string;
+  /**
+   * The manifest that registers it, relative to the project.
+   */
+  manifest_path: string;
+  /**
+   * The kit the template was read from, with its version and where it was found; `null` when
+   * the call was sent again under the key of one already applied, which reads no kit.
+   */
+  template_from?: string | null;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
+
+/**
  * `write_project_file`'s params.
  */
 export interface WriteProjectFileRequest {
@@ -4503,8 +4676,8 @@ export interface ProjectCodeCheckResult {
    */
   findings: Array<ProjectCodeCheckFinding>;
   /**
-   * Each file a check finished, with the hash of the bytes it checked. A file a check did
-   * not finish is not listed.
+   * Each file a check finished, once, with the hash of the bytes it checked. A file no check
+   * finished is not listed.
    */
   files_checked: Array<ProjectFileChecked>;
 }
@@ -4541,7 +4714,7 @@ export interface ProjectCodeCheckRun {
  * One check of a project's code. The set grows: a check a client does not know is still
  * answered with its state and its findings.
  */
-export type ProjectCodeCheckKind = "python_node_declarations" | "extension_manifest";
+export type ProjectCodeCheckKind = "python_node_declarations" | "extension_manifest" | "extension_types" | "extension_lint";
 
 /**
  * How one check ended. The set grows: a state a client does not know reads as `not_checked`.
@@ -4659,6 +4832,10 @@ export type NodeTypeSourceReadWithoutRunningIt = {
    * Each `@graph_generator` declared, by import path.
    */
   graph_generators: Array<GraphGeneratorReadFromSource>;
+  /**
+   * Each `@named_pin_type` class declared, by import path.
+   */
+  named_pin_types?: Array<NamedPinTypeReadFromSource>;
   /**
    * Each module that does not parse, with why and where; the rest of the source still lists.
    */
@@ -4822,6 +4999,28 @@ export interface GraphGeneratorPromotedSettingReadFromSource {
 }
 
 /**
+ * One named type as its `@named_pin_type` declaration states it in source.
+ */
+export interface NamedPinTypeReadFromSource {
+  /**
+   * Its name: the class's import path, `<module>:<qualname>`.
+   */
+  named_pin_type: NamedPinTypeImportPath;
+  /**
+   * What a value of it is; empty where its `description` is no string in source.
+   */
+  description: string;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line of its `class`.
+   */
+  line: number;
+}
+
+/**
  * A module of a source that could not be read, and why.
  */
 export interface NodeModuleNotReadable {
@@ -4858,13 +5057,25 @@ export interface ListPinTypesRequest {
 }
 
 /**
- * `list_pin_types`' answer: every built-in pin type.
+ * `list_pin_types`' answer: every built-in pin type, and each named type the project's node
+ * code brings.
  */
 export interface ListPinTypesToolResult {
   /**
    * Each built-in pin type, in the order the contract's `x-pin-types` lists them.
    */
   pin_types: Array<PinTypeListed>;
+  /**
+   * Each named type a module of the project, an import or an installed distribution
+   * declares, by its import path, read from source; empty while the project's node code
+   * does not list, as `named_pin_types_not_listed_because` then says.
+   */
+  named_pin_types?: Array<NamedPinTypeListed>;
+  /**
+   * Why the project's node code did not list, so no named type of it is answered; absent
+   * when it listed.
+   */
+  named_pin_types_not_listed_because?: string | null;
 }
 
 /**
@@ -4934,6 +5145,63 @@ export interface PinTypeConversionListed {
    */
   node_type: string;
 }
+
+/**
+ * One named type a module declares with `@named_pin_type`, which a pin typed with it carries
+ * as the bytes its class packs and links only to a pin of the same name or an input of any
+ * type.
+ */
+export type NamedPinTypeListed = {
+  /**
+   * The pin type a pin of it states: `{"type": "named", "named_pin_type": …}`.
+   */
+  pin_type: PinType;
+  /**
+   * What a value of it is, as its declaration describes it.
+   */
+  documentation: string;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line of its `class`.
+   */
+  line: number;
+} & ({
+  source: "project";
+} | ({
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * Its folder under `imports/`.
+   */
+  folder: string;
+  /**
+   * The version its copy carried.
+   */
+  version: string;
+  /**
+   * The imported project's name as the project file in its folder holds it; `null` when
+   * that file does not read.
+   */
+  project_name?: string | null;
+  source: "dependency";
+}) | {
+  /**
+   * The distribution's name.
+   */
+  distribution: string;
+  /**
+   * The distribution's version.
+   */
+  distribution_version: string;
+  source: "installed_distribution";
+} | {
+  source: "built_in";
+});
 
 /**
  * `list_node_types`' params.
@@ -5623,28 +5891,6 @@ export interface ProjectNodeUiModule {
 }
 
 /**
- * What a node UI element is, under `kind`.
- */
-export type ProjectNodeUiElement = ({
-  /**
-   * The pin type whose inputs it edits or shows.
-   */
-  pin_type: BuiltInPinTypeName;
-  /**
-   * Its name, which a pin's `control` annotation picks it by; `null` for its pin type's
-   * default.
-   */
-  control?: string | null;
-  kind: "control";
-}) | {
-  /**
-   * The node type whose node it draws.
-   */
-  node_type: string;
-  kind: "node_body";
-};
-
-/**
  * One module's manifest that reads.
  */
 export interface ProjectNodeUiManifestListed {
@@ -5688,7 +5934,7 @@ export interface NodeUiManifestControl {
   /**
    * The pin type whose inputs the control edits or shows.
    */
-  type: BuiltInPinTypeName;
+  type: NodeUiControlPinType;
   /**
    * The control's name, which a pin's `control` annotation picks it by. Left out, the control
    * is its pin type's default.
@@ -6294,13 +6540,19 @@ export interface InputValueChangedNotificationParams {
    */
   input: string;
   /**
-   * The value the input reads now, as `graph` renders it: null when a link feeds it or it
-   * reads nothing.
+   * The member of a bundle input whose value changed, by name, as each row of `graph`'s
+   * `member_values` names it; named for every change of a bundle input, absent for any other
+   * input.
+   */
+  member?: string | null;
+  /**
+   * The value the input, or its member `member`, reads now, as `graph` renders it: null when
+   * a link feeds it or it reads nothing.
    */
   value?: unknown;
   /**
-   * Where `value` comes from; `wire` when a link feeds the input, absent when it reads
-   * nothing.
+   * Where `value` comes from; `wire` when a link feeds the input or the member, absent when
+   * it reads nothing.
    */
   value_comes_from?: InputValueComesFromOnTheWire | null;
 }
@@ -6470,6 +6722,10 @@ export interface AgentOperationDescribed {
    * The JSON Schema of what it answers.
    */
   result_schema: unknown;
+  /**
+   * A worked example of a call; absent on an operation another replaces.
+   */
+  example?: AgentOperationExample | null;
 }
 
 /**
@@ -6481,6 +6737,25 @@ export type ControlOperationStability = "stable" | "experimental";
  * What an operation does to what the runtime holds.
  */
 export type ControlOperationEffect = "reads_only" | "changes" | "destroys";
+
+/**
+ * A worked example of calling one operation.
+ */
+export interface AgentOperationExample {
+  /**
+   * The `params` a call sends.
+   */
+  params: unknown;
+  /**
+   * What that call answers; given for an operation the three agent loops call.
+   */
+  answer?: unknown;
+  /**
+   * A refusal of a call of it, in the one refusal shape; given for an operation the three
+   * agent loops call.
+   */
+  refusal?: unknown;
+}
 
 /**
  * `call_operation`'s params.
@@ -6571,6 +6846,7 @@ export interface ControlContractComponents {
   NamedPinTypeImportPath: NamedPinTypeImportPath;
   PinFlow: PinFlow;
   InputValueComesFromOnTheWire: InputValueComesFromOnTheWire;
+  BundleMemberValueReadOnTheWire: BundleMemberValueReadOnTheWire;
   GraphNodeComponentsOnTheWire: GraphNodeComponentsOnTheWire;
   NodeStateOnTheWire: NodeStateOnTheWire;
   NodeHealthOnTheWire: NodeHealthOnTheWire;
@@ -6710,6 +6986,11 @@ export interface ControlContractComponents {
   ReadProjectFileToolResult: ReadProjectFileToolResult;
   CreateNodeFileRequest: CreateNodeFileRequest;
   CreateNodeFileToolResult: CreateNodeFileToolResult;
+  CreateNodeUiElementRequest: CreateNodeUiElementRequest;
+  ProjectNodeUiElement: ProjectNodeUiElement;
+  NodeUiControlPinType: NodeUiControlPinType;
+  BuiltInPinTypeName: BuiltInPinTypeName;
+  CreateNodeUiElementToolResult: CreateNodeUiElementToolResult;
   WriteProjectFileRequest: WriteProjectFileRequest;
   ProjectFileTransactionToolResult: ProjectFileTransactionToolResult;
   CheckProjectCodeRequest: CheckProjectCodeRequest;
@@ -6729,13 +7010,14 @@ export interface ControlContractComponents {
   NodeTypePortReadFromSource: NodeTypePortReadFromSource;
   GraphGeneratorReadFromSource: GraphGeneratorReadFromSource;
   GraphGeneratorPromotedSettingReadFromSource: GraphGeneratorPromotedSettingReadFromSource;
+  NamedPinTypeReadFromSource: NamedPinTypeReadFromSource;
   NodeModuleNotReadable: NodeModuleNotReadable;
   ListPinTypesRequest: ListPinTypesRequest;
   ListPinTypesToolResult: ListPinTypesToolResult;
   PinTypeListed: PinTypeListed;
-  BuiltInPinTypeName: BuiltInPinTypeName;
   PinAnnotationName: PinAnnotationName;
   PinTypeConversionListed: PinTypeConversionListed;
+  NamedPinTypeListed: NamedPinTypeListed;
   ListNodeTypesRequest: ListNodeTypesRequest;
   ListNodeTypesToolResult: ListNodeTypesToolResult;
   NodeTypeSourceListed: NodeTypeSourceListed;
@@ -6772,7 +7054,6 @@ export interface ControlContractComponents {
   ListProjectNodeUiElementsToolResult: ListProjectNodeUiElementsToolResult;
   ProjectNodeUiElementListed: ProjectNodeUiElementListed;
   ProjectNodeUiModule: ProjectNodeUiModule;
-  ProjectNodeUiElement: ProjectNodeUiElement;
   ProjectNodeUiManifestListed: ProjectNodeUiManifestListed;
   NodeUiManifest: NodeUiManifest;
   NodeUiManifestControl: NodeUiManifestControl;
@@ -6819,6 +7100,7 @@ export interface ControlContractComponents {
   AgentOperationDescribed: AgentOperationDescribed;
   ControlOperationStability: ControlOperationStability;
   ControlOperationEffect: ControlOperationEffect;
+  AgentOperationExample: AgentOperationExample;
   CallOperationRequest: CallOperationRequest;
   BooleanPinValue: BooleanPinValue;
   IntegerPinValue: IntegerPinValue;
@@ -6878,7 +7160,7 @@ export interface ControlOperations {
   /**
    * Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.
    *
-   * Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
+   * Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. A bundle input's change is sent for each member it changes, naming the `member`, with the `value` and `value_comes_from` of that member's row of `member_values`. Changes are sent at most once each 33 ms for one input, or one member of a bundle input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
    *
    * Since contract version 3, experimental.
    */
@@ -6966,7 +7248,7 @@ export interface ControlOperations {
   /**
    * Link an output port to an input port in one loaded stream, as one transaction.
    *
-   * Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends, only when both ends are UUID-named nodes the edited level holds. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. A link inside a placed stream, under a non-empty `level`, is judged by the node types that level draws and refused before anything is written, as at the stream's own level; `connect` places no convert node there, so a link that needs one is refused naming it.
+   * Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends, only when both ends are UUID-named nodes the edited level holds. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These rules judge a link inside a placed stream, under a non-empty `level`, the same way, among the nodes of that level alone, by the settings each holds and the links the level holds, and judge each link a `PreviousValue` node closing a loop there is linked by; `connect` places no convert node there, so a link that needs one is refused naming it. A link there reaching a fragment node, a `GraphInput` or `GraphOutput` that names no family, or a node whose type is not described is saved unjudged, and its entry under `connected_links` says why under `not_judged_because`.
    *
    * Since contract version 1, stable.
    */
@@ -6977,7 +7259,7 @@ export interface ControlOperations {
   /**
    * Answer what `connect` would answer for one link in a loaded stream, changing nothing.
    *
-   * Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.
+   * Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. A link inside a placed stream, under a non-empty `level`, is judged among the nodes of that level as `connect` judges it there. Some links are not checked yet, and `check_link` itself fails on them, saying why: one reaching a fragment node or a `GraphInput` or `GraphOutput` that names no family; inside a placed stream, one reaching a node whose type is not described; and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.
    *
    * Since contract version 3, experimental.
    */
@@ -6988,7 +7270,7 @@ export interface ControlOperations {
   /**
    * Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.
    *
-   * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, as `check_link` refuses it, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
+   * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`, with `member` naming one member of a bundle the port carries. Among placed or node type ports, each port carrying a bundle is followed by each of its members as an end of its own. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, so check a link inside a placed stream with `check_link`, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
    *
    * Since contract version 3, experimental.
    */
@@ -7567,6 +7849,17 @@ export interface ControlOperations {
     result: CreateNodeFileToolResult;
   };
   /**
+   * Create a control or a node body in a project from the kit's template and register it, as one transaction.
+   *
+   * Create a new control for one pin type, or a node body for one node type, in the project's own `node_ui/` folder, as one transaction an undo reverses: the script at `node_ui/<script>`, written from the extension SDK kit's template for its kind (`templates/control.ts` or `templates/node_body.ts`) with the pin type or node type written in, and its entry in `node_ui/tatolab_node_ui.json`, which is created when missing. The script default-exports its element class and never defines a custom element itself. What it writes passes `check_project_code` unchanged, so start from it: edit the script with `write_project_file`, then run `check_project_code` again and read each finding's code and place. The kit is found as `check_project_code` finds it: the runtime unit's, the one its starter names, then the project's installed SDK; the runtime holds no template of its own. Answers the `script_path` and `manifest_path` it wrote, `template_from`, the kit with its version and where it was found (null when sent again under the key of a call already applied, which answers that call's transaction without reading the kit), and the `transaction` and `commit`. Refused when no kit is found or the kit holds no template for the kind, naming why; for a control of a built-in type with no `control` name, as a built-in type's default control is the Studio's own to register (a named type's default, a control of its import path with no name, is written, and `check_project_code` refuses it unless the project's own code declares the type); where a file already is at the script's path, or for the manifest's own name; when the manifest does not read against the view contract; and when it already registers a control of the same pin type and name, or a node body for the same node type.
+   *
+   * Since contract version 3, experimental.
+   */
+  create_node_ui_element: {
+    params: CreateNodeUiElementRequest;
+    result: CreateNodeUiElementToolResult;
+  };
+  /**
    * Write one file of a project, as one transaction.
    *
    * Write one of the project's files whole, as one transaction: a new file is created with its folders, an existing one overwritten. An undo puts back what the file held, or takes a new file out. Answers the `path`, the `content_sha256` of the bytes written, and the `transaction` and `commit`. With `expected_sha256`, refused when the file changed or was taken out since it was read, so a save never overwrites another change. Content the file already holds is refused, as it changes nothing. Refused for what another tool changes — a stream's graph document, an asset's sidecar or bytes (`replace_asset`), `tatolab-project.json`, a file under `imports/` — and for a file inside a hidden folder or a Python virtual environment, which history does not record.
@@ -7580,7 +7873,7 @@ export interface ControlOperations {
   /**
    * Check a project's code on disk without running a stream, answering each finding as data.
    *
-   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Two checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers a built-in type's default control, which only the Studio's own module may register, an `error` coded `default_control_not_the_modules_to_register`, and a `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`; when that listing is refused, the node bodies are not judged and the check answers `not_checked` with the listing's refusal. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
+   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` a `warning` coded `not_written_in_ts`. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
    *
    * Since contract version 3, experimental.
    */
@@ -7600,9 +7893,9 @@ export interface ControlOperations {
     result: ListProjectNodeTypesToolResult;
   };
   /**
-   * List every built-in pin type, how each is written, and what converts it.
+   * List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.
    *
-   * List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.
+   * List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. `named_pin_types` lists each named type a module of the project, an import or an installed distribution declares with `@named_pin_type`, read from source without running it: the source it comes from as `list_node_types` names one, the `pin_type` a pin of it states (`{"type": "named", "named_pin_type": "<module>:<class>"}`, its class's import path), its `documentation`, and the `path` and `line` declaring it. A pin of a named type carries the bytes its class packs and links only to a pin of the same name or an input of any type, never to a port that states no pin type. When the project's node code does not list, `named_pin_types` is empty and `named_pin_types_not_listed_because` says why; the built-in types are listed regardless.
    *
    * Since contract version 3, experimental.
    */
@@ -7843,7 +8136,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 17;
+export declare const CONTROL_CONTRACT_REVISION: 28;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

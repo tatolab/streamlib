@@ -301,6 +301,7 @@ fn end_on_this_level(
     LinkPortRefOutput {
         node: name_on_this_level(&end.node),
         port: end.port.clone(),
+        member: end.member.clone(),
     }
 }
 
@@ -467,10 +468,12 @@ impl GraphFragmentAsDrawn {
                         source: LinkPortRefOutput {
                             node: self.name_of_a_node_it_holds(&link.source.node),
                             port: link.source.port.clone(),
+                            member: link.source.member.clone(),
                         },
                         target: LinkPortRefOutput {
                             node: self.name_of_a_node_it_holds(&link.target.node),
                             port: link.target.port.clone(),
+                            member: link.target.member.clone(),
                         },
                     }],
                 };
@@ -835,10 +838,12 @@ fn rendered_as_drawn(link: &GraphSnapshotLink) -> LinkOutput {
         source: LinkPortRefOutput {
             node: cast_or_as_written(&link.source.node),
             port: link.source.port.clone(),
+            member: link.source.member.clone(),
         },
         target: LinkPortRefOutput {
             node: cast_or_as_written(&link.target.node),
             port: link.target.port.clone(),
+            member: link.target.member.clone(),
         },
         ..LinkOutput::default()
     }

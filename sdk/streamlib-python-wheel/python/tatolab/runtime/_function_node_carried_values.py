@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import json
 import typing
 from typing import Any, Callable, Optional
@@ -23,6 +24,11 @@ UNREAD_MESSAGE_VALUE_TYPE = "unread_message"
 #: contract both sides hold.
 PART_VALUE_TYPES = ("color", "vector2", "vector3", "vector4", "rectangle", "transform")
 
+#: The value type a function node signature gives an input or output of a module's named pin
+#: type, carried as the bytes its class packs. Spelled here for the reason
+#: `UNREAD_MESSAGE_VALUE_TYPE` is.
+NAMED_VALUE_TYPE = "named"
+
 #: A value an input reads while nothing links into it, as the island carries it: a number as an
 #: f64, a value of parts as the `tuple` of its parts, and a String, a Menu, an Asset or a List
 #: as the record `{"value": <stored JSON form>}` it travels as.
@@ -32,7 +38,8 @@ PinValueCarried = typing.Union[float, "tuple[float, ...]", "dict[str, Any]"]
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
 
 # The value types a body run as Python takes and gives: the scalars, a value of parts, a String,
-# a Menu, an Asset, a List, a `dict` as Records, and a message it hands on unread.
+# a Menu, an Asset, a List, a `dict` as Records, a value of a named type, and a message it hands
+# on unread.
 _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = (
     "float",
     "int",
@@ -40,6 +47,7 @@ _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = (
     *PART_VALUE_TYPES,
     *STORED_VALUE_TYPES,
     "records",
+    NAMED_VALUE_TYPE,
     UNREAD_MESSAGE_VALUE_TYPE,
 )
 
@@ -262,3 +270,30 @@ def _exactly_as_f64(value: Any, what_it_is: str) -> float:
             f"which holds an integer exactly only up to 2**53"
         )
     return float(value)
+
+
+def the_class_a_named_pin_type_names(named_pin_type: str, what_it_is: str) -> type:
+    """The class whose import path, `module:QualifiedClassName`, is the name of `named_pin_type`.
+
+    Refused as `FunctionNodeDoesNotCompile`, naming `what_it_is`, when the path finds no class
+    with the `from_bytes` and `to_bytes` a value of the type travels by.
+    """
+    module_name, _, qualified_name = named_pin_type.partition(":")
+    try:
+        found: Any = importlib.import_module(module_name)
+        for attribute in qualified_name.split("."):
+            found = getattr(found, attribute)
+    except (ImportError, AttributeError, ValueError) as not_found:
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is the named type `{named_pin_type}`, and its import path finds no "
+            f"class: {not_found}. To fix: keep the class at that path, or retype the pin."
+        ) from not_found
+    if not isinstance(found, type) or not callable(getattr(found, "from_bytes", None)) or not callable(
+        getattr(found, "to_bytes", None)
+    ):
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is the named type `{named_pin_type}`, whose path names {found!r}, "
+            f"not a class with `from_bytes` and `to_bytes`. To fix: put `@named_pin_type` on "
+            f"the class at that path."
+        )
+    return found

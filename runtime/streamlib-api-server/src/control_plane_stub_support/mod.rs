@@ -147,6 +147,13 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'a, ::streamlib::sdk::error::Result<::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>>>> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn what_a_connect_makes_of_each_link_at_a_placed_level(
+            &self,
+            _level: &::streamlib_project_repository::StreamGraphDocument,
+            _links: &[::streamlib_project_repository::StreamGraphDocumentLink],
+        ) -> ::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             _node_type: &str,
@@ -181,6 +188,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
             _node_name: &str,
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
+            _member: ::std::option::Option<&str>,
             _value: ::std::option::Option<&::serde_json::Value>,
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
@@ -697,6 +705,22 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     dyn ::streamlib::sdk::runtime::ProjectHistoryRecordingFirstPartyPackageMoves,
                 >,
             ) {
+            }
+            fn check_a_projects_extension_code(
+                &self,
+                project_directory: &::std::path::Path,
+                paths: ::std::option::Option<&[String]>,
+            ) -> ::streamlib::sdk::runtime::ExtensionCodeCheck {
+                ::streamlib::sdk::runtime::ExtensionCodeCheckersHeld::default()
+                    .check_a_projects_extension_code(project_directory, paths, None)
+            }
+            fn a_template_from_the_extension_sdk_kit(
+                &self,
+                project_directory: &::std::path::Path,
+                template_file: &str,
+            ) -> ::std::result::Result<::streamlib::sdk::runtime::ExtensionSdkKitTemplate, String> {
+                ::streamlib::sdk::runtime::ExtensionCodeCheckersHeld::default()
+                    .a_template_from_the_kit(project_directory, template_file, None)
             }
         }
     };

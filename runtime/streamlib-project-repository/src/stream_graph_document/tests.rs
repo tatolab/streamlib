@@ -43,10 +43,12 @@ fn a_link(
         source: StreamGraphDocumentLinkEnd {
             node: source.id,
             port: "video".to_owned(),
+            member: None,
         },
         target: StreamGraphDocumentLinkEnd {
             node: target.id,
             port: "video_in".to_owned(),
+            member: None,
         },
     }
 }
@@ -701,6 +703,7 @@ fn a_clear_of_an_exposed_config_fields_input_is_refused_and_any_other_set() {
     assert_eq!(
         StreamGraphOperation::set_pin_value_of(&tone, "pitch".to_owned(), Some(Value::Null)),
         Ok(StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: tone.id,
             input: "pitch".to_owned(),
             from: Some(json!(220)),
@@ -783,4 +786,32 @@ fn an_add_node_recorded_before_input_values_places_its_node_in_the_current_shape
                "type": "imports/core-nodes/core_nodes.animation:Lfo",
                "input_values": {"rate_hz": 2}})
     );
+}
+
+/// Mental-revert: a link end read without its `member` reopens as a link from the whole port.
+#[test]
+fn a_link_from_one_member_of_a_bundle_reopens_from_that_member() {
+    let mut document = an_empty_document();
+    let source = a_node("sensor");
+    let sink = a_node("meter");
+    for node in [&source, &sink] {
+        document
+            .apply(&StreamGraphOperation::AddNode {
+                node: node.clone(),
+                links: Vec::new(),
+            })
+            .unwrap();
+    }
+    let mut link = a_link(&source, &sink);
+    link.source.member = Some("level".to_owned());
+    document
+        .apply(&StreamGraphOperation::Connect { link: link.clone() })
+        .unwrap();
+
+    let saved = document.to_value();
+    assert_eq!(saved["links"][0]["source"]["member"], json!("level"));
+    assert!(saved["links"][0]["target"].get("member").is_none());
+    let reopened = StreamGraphDocument::from_value(saved).unwrap();
+
+    assert_eq!(reopened.links(), [link]);
 }

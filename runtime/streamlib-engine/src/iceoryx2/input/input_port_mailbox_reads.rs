@@ -65,7 +65,7 @@ impl InputMailboxesInner {
                         break;
                     }
                 };
-                let channel_user_header = *sample.user_header();
+                let mut channel_user_header = *sample.user_header();
                 let bags_the_ring_overwrote =
                     bound.bags_the_ring_overwrote.how_many_were_lost_before(
                         sample.origin(),
@@ -73,9 +73,10 @@ impl InputMailboxesInner {
                     );
                 let borrowed =
                     BorrowedChannelSample::holding(sample, &bound.samples_this_link_holds);
-                let ports = self.ports.lock();
-                let port_config = ports.get(&bound.local_port);
+                let mut ports = self.ports.lock();
+                let port_config = ports.get_mut(&bound.local_port);
                 if port_config
+                    .as_ref()
                     .is_some_and(|port| port.mailbox.read_mode().a_bag_passed_over_is_lost())
                 {
                     if bags_the_ring_overwrote > 0 {
@@ -101,7 +102,55 @@ impl InputMailboxesInner {
                     );
                     continue;
                 };
-                let payload = if port_config.audio_windowing.is_windowed() {
+                let members_at_the_read = &bound.bundle_members_at_the_read;
+                let payload = if members_at_the_read.reads_a_member() {
+                    let whole_payload = match channel_user_header
+                        .payload_within(borrowed.sample_payload_area_bytes())
+                    {
+                        Ok(whole_payload) => whole_payload,
+                        Err(refusal) => {
+                            bound.dropped_bag_counter.record_one_dropped_bag();
+                            tracing::warn!(
+                                port = %bound.local_port,
+                                link = %bound.inbound_link_name,
+                                "InputMailboxes: the link reads members of a bundle, and this \
+                                 message stamps more payload than its sample carries, so it is \
+                                 dropped and counted: {refusal}"
+                            );
+                            continue;
+                        }
+                    };
+                    match members_at_the_read.the_message_the_port_reads(
+                        &channel_user_header,
+                        whole_payload,
+                        &mut port_config.newest_value_of_each_member_put_at_the_read,
+                    ) {
+                        Ok(Some((member_header, member_payload))) => {
+                            channel_user_header = member_header;
+                            InputPortMessagePayload::OwnedBytes(member_payload)
+                        }
+                        Ok(None) => {
+                            tracing::trace!(
+                                port = %bound.local_port,
+                                link = %bound.inbound_link_name,
+                                "InputMailboxes: the bundle this port reads still lacks a member \
+                                 that declares no default, so it hands its reader nothing yet"
+                            );
+                            continue;
+                        }
+                        Err(refusal) => {
+                            bound.dropped_bag_counter.record_one_dropped_bag();
+                            tracing::warn!(
+                                port = %bound.local_port,
+                                link = %bound.inbound_link_name,
+                                "InputMailboxes: the link reads members of a bundle, and this \
+                                 message gives none it reads, so it is dropped and counted: \
+                                 {refusal}"
+                            );
+                            continue;
+                        }
+                    }
+                } else if port_config.audio_windowing.is_windowed() {
                     let area = borrowed.sample_payload_area_bytes();
                     InputPortMessagePayload::OwnedBytes(
                         channel_user_header

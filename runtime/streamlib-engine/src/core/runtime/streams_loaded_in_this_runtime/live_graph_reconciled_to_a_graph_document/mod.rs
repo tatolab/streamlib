@@ -44,24 +44,27 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 pub(in crate::core::runtime) struct RunningLinkBetweenTwoNodesByUuid {
     pub(in crate::core::runtime) source_node: Uuid,
     pub(in crate::core::runtime) source_port: String,
+    pub(in crate::core::runtime) source_member: Option<String>,
     pub(in crate::core::runtime) target_node: Uuid,
     pub(in crate::core::runtime) target_port: String,
+    pub(in crate::core::runtime) target_member: Option<String>,
 }
 
 impl RunningLinkBetweenTwoNodesByUuid {
-    /// The link from `source_port` of `source_node` to `target_port` of `target_node`, each
-    /// port as drawn, under its cast name; refused when a name does not cast.
+    /// The link from `source_port` of `source_node`, or its member `source_member`, to
+    /// `target_port` of `target_node`, or its member `target_member`, each port as drawn, under
+    /// its cast name; refused when a name does not cast.
     pub(in crate::core::runtime) fn of_drawn_link(
-        source_node: Uuid,
-        source_port: &str,
-        target_node: Uuid,
-        target_port: &str,
+        (source_node, source_port, source_member): (Uuid, &str, Option<&str>),
+        (target_node, target_port, target_member): (Uuid, &str, Option<&str>),
     ) -> Result<Self> {
         Ok(Self {
             source_node,
             source_port: cast_name(source_port)?,
+            source_member: source_member.map(str::to_owned),
             target_node,
             target_port: cast_name(target_port)?,
+            target_member: target_member.map(str::to_owned),
         })
     }
 }
@@ -427,11 +430,13 @@ impl LoadedStreamInThisRuntime {
             let from = OutputLinkPortRef::new(
                 node_of(&document_link.source_node)?,
                 &document_link.source_port,
-            );
+            )
+            .at_member(document_link.source_member.clone());
             let to = InputLinkPortRef::new(
                 node_of(&document_link.target_node)?,
                 &document_link.target_port,
-            );
+            )
+            .at_member(document_link.target_member.clone());
             let ends_now = self
                 .compiler
                 .scope_reading(|graph| the_ends_a_link_is_judged_by(graph, &from, &to));
@@ -534,10 +539,16 @@ impl LoadedStreamInThisRuntime {
         };
         let by_node_uuid = |link: &GraphSnapshotLink| -> Result<RunningLinkBetweenTwoNodesByUuid> {
             RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
-                document_node_uuid_named(&link.source.node)?,
-                &link.source.port,
-                document_node_uuid_named(&link.target.node)?,
-                &link.target.port,
+                (
+                    document_node_uuid_named(&link.source.node)?,
+                    &link.source.port,
+                    link.source.member.as_deref(),
+                ),
+                (
+                    document_node_uuid_named(&link.target.node)?,
+                    &link.target.port,
+                    link.target.member.as_deref(),
+                ),
             )
         };
         let document_links = graph
@@ -720,10 +731,16 @@ impl LoadedStreamInThisRuntime {
                     .and_then(|cast| node_uuid_of_each_name.get(&cast).copied())
             };
             RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
-                node_uuid_named(&set_aside.link.source.node)?,
-                &set_aside.link.source.port,
-                node_uuid_named(&set_aside.link.target.node)?,
-                &set_aside.link.target.port,
+                (
+                    node_uuid_named(&set_aside.link.source.node)?,
+                    &set_aside.link.source.port,
+                    set_aside.link.source.member.as_deref(),
+                ),
+                (
+                    node_uuid_named(&set_aside.link.target.node)?,
+                    &set_aside.link.target.port,
+                    set_aside.link.target.member.as_deref(),
+                ),
             )
             .ok()
         }
@@ -758,13 +775,15 @@ impl LoadedStreamInThisRuntime {
                             .get(&link.source_node)?
                             .clone(),
                         &link.source_port,
-                    );
+                    )
+                    .at_member(link.source_member.clone());
                     let to = InputLinkPortRef::new(
                         node_run_id_of_each_node_uuid
                             .get(&link.target_node)?
                             .clone(),
                         &link.target_port,
-                    );
+                    )
+                    .at_member(link.target_member.clone());
                     if !a_link_made_now_would_be_refused(graph, &from, &to) {
                         return None;
                     }
@@ -825,8 +844,10 @@ fn the_live_links_by_node_uuid_of(
                 RunningLinkBetweenTwoNodesByUuid {
                     source_node: *node_uuid_of_each_node.get(link.source.node_run_id())?,
                     source_port: link.source.port_name().to_owned(),
+                    source_member: link.source.member().map(str::to_owned),
                     target_node: *node_uuid_of_each_node.get(link.target.node_run_id())?,
                     target_port: link.target.port_name().to_owned(),
+                    target_member: link.target.member().map(str::to_owned),
                 },
             ))
         })
@@ -874,8 +895,10 @@ pub(in crate::core::runtime) fn the_live_links_as_given_by_node_uuid_of(
             link_as_given: RunningLinkBetweenTwoNodesByUuid {
                 source_node: into_the_pool.source_node,
                 source_port: into_the_pool.source_port.clone(),
+                source_member: into_the_pool.source_member.clone(),
                 target_node: out_of_the_pool.target_node,
                 target_port: out_of_the_pool.target_port.clone(),
+                target_member: out_of_the_pool.target_member.clone(),
             },
             wired_as: vec![
                 carried.into_the_function_node_pool.id.clone(),

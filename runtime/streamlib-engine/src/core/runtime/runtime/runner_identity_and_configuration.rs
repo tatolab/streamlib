@@ -15,6 +15,9 @@ use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
 use super::{CreatedProjectFirstCommit, Runner};
+use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::{
+    ExtensionCodeCheck, ExtensionCodeCheckers, ExtensionSdkKitTemplate,
+};
 
 impl Runner {
     /// Unique identifier for this runtime instance.
@@ -100,6 +103,51 @@ impl Runner {
         self.engine_resources_shared_by_every_stream
             .runtime_unit_uv_executable
             .set(runtime_unit_uv)
+    }
+
+    /// Hand this runtime the programs and the kit it checks a project's views and controls
+    /// with, as the host found them. The host calls it once, before any check; a second call is
+    /// refused. A runtime never handed them answers each such check not checked.
+    pub fn set_extension_code_checkers(&self, checkers: ExtensionCodeCheckers) -> Result<()> {
+        self.engine_resources_shared_by_every_stream
+            .extension_code_checkers
+            .set(checkers)
+            .map_err(Error::Configuration)
+    }
+
+    /// Check the own views and `node_ui` folder of the project at `project_directory` that
+    /// `paths` reach, each a path in the project, or every one when `paths` is `None`, against
+    /// the first extension SDK kit found: the runtime unit's, its starter's, then the
+    /// project's installed one. Blocks while the programs run.
+    pub fn check_a_projects_extension_code(
+        &self,
+        project_directory: &Path,
+        paths: Option<&[String]>,
+    ) -> ExtensionCodeCheck {
+        let resources = &self.engine_resources_shared_by_every_stream;
+        resources
+            .extension_code_checkers
+            .check_a_projects_extension_code(
+                project_directory,
+                paths,
+                resources.node_interpreter_lend_directory.get(),
+            )
+    }
+
+    /// The template `template_file` in the first extension SDK kit found for the project at
+    /// `project_directory`, looked for as [`Runner::check_a_projects_extension_code`] looks, or
+    /// why there is none.
+    pub fn a_template_from_the_extension_sdk_kit(
+        &self,
+        project_directory: &Path,
+        template_file: &str,
+    ) -> std::result::Result<ExtensionSdkKitTemplate, String> {
+        let resources = &self.engine_resources_shared_by_every_stream;
+        resources.extension_code_checkers.a_template_from_the_kit(
+            project_directory,
+            template_file,
+            resources.node_interpreter_lend_directory.get(),
+        )
     }
 
     /// Hand this runtime what commits a project [`Runner::create_project`] wrote as the first

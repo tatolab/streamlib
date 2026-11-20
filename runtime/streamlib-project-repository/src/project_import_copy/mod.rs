@@ -6,10 +6,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::content_sha256::content_sha256_of;
 use crate::core_project_import::is_at_or_inside_a_core_project_import_folder;
 use crate::project_asset::{DIRECTORIES_A_PROJECT_SCAN_SKIPS, PROJECT_IMPORTS_DIRECTORY};
 use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
@@ -50,7 +50,7 @@ impl StagedProjectImportCopy {
 pub(crate) fn version_of_the_copied_files(
     copied_files: &BTreeMap<String, String>,
 ) -> Result<String, ProjectRepositoryRefusal> {
-    Ok(lowercase_hex_sha256(&canonical_project_json_bytes(
+    Ok(content_sha256_of(&canonical_project_json_bytes(
         copied_files,
     )?))
 }
@@ -181,7 +181,7 @@ pub(crate) fn sha256_of_each_file_under(
     for relative in files_an_import_carries(directory)? {
         hashes.insert(
             relative.clone(),
-            lowercase_hex_sha256(&std::fs::read(directory.join(&relative))?),
+            content_sha256_of(&std::fs::read(directory.join(&relative))?),
         );
     }
     Ok(hashes)
@@ -465,13 +465,6 @@ fn the_project_a_staged_copy_holds(
         .unwrap_or_default()
         .to_owned();
     Ok((project, name))
-}
-
-fn lowercase_hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

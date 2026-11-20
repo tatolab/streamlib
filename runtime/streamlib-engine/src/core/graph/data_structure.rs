@@ -157,10 +157,22 @@ impl Graph {
             && the_node_stands(link.to_port().node_run_id())
     }
 
-    /// The link feeding input `input` of the node `node_run_id`.
+    /// The link feeding the whole of input `input` of the node `node_run_id`.
     pub fn link_into(&self, node_run_id: &NodeRunId, input: &str) -> Option<&Link> {
+        self.link_into_the_input_or_its_member(node_run_id, input, None)
+    }
+
+    /// The link feeding input `input` of the node `node_run_id` at `member`, or the whole input
+    /// when `member` is `None`.
+    pub fn link_into_the_input_or_its_member(
+        &self,
+        node_run_id: &NodeRunId,
+        input: &str,
+        member: Option<&str>,
+    ) -> Option<&Link> {
         self.digraph.edge_weights().find(|link| {
-            link.to_port().node_run_id() == node_run_id && link.to_port().port_name() == input
+            let to = link.to_port();
+            to.node_run_id() == node_run_id && to.port_name() == input && to.member() == member
         })
     }
 
@@ -170,8 +182,10 @@ impl Graph {
         &self,
         from: super::OutputLinkPortRef,
     ) -> super::OutputLinkPortRef {
+        let member = from.member().map(str::to_owned);
         self.node_of_the_run_id(from.node_run_id())
             .and_then(|node| node.try_output(from.port_name()))
+            .map(|current| current.at_member(member))
             .unwrap_or(from)
     }
 
@@ -181,8 +195,10 @@ impl Graph {
         &self,
         to: super::InputLinkPortRef,
     ) -> super::InputLinkPortRef {
+        let member = to.member().map(str::to_owned);
         self.node_of_the_run_id(to.node_run_id())
             .and_then(|node| node.try_input(to.port_name()))
+            .map(|current| current.at_member(member))
             .unwrap_or(to)
     }
 
@@ -370,11 +386,8 @@ impl Graph {
     /// it carries renders once, as the link it was given.
     pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
         let node_names = NodeNamesByNodeRunId::of(self.digraph.node_weights());
-        let linked_inputs: HashSet<(&NodeRunId, &str)> = self
-            .digraph
-            .edge_weights()
-            .map(|link| (link.to_port().node_run_id(), link.to_port().port_name()))
-            .collect();
+        let fed_by_input = super::WhatTheLinksIntoAnInputFeed::of_each_input_of(self);
+        let unfed = super::WhatTheLinksIntoAnInputFeed::default();
         let render_a_node = |node: &GraphNode| {
             let mut rendered = GraphNodeOutput {
                 inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
@@ -385,7 +398,9 @@ impl Graph {
                     self,
                     node,
                     port,
-                    linked_inputs.contains(&(&node.id, port.name.as_str())),
+                    fed_by_input
+                        .get(&(node.id.clone(), port.name.clone()))
+                        .unwrap_or(&unfed),
                 );
                 rendered_input.pin =
                     the_pin_a_port_resolves_to(self, node, port, PortDirection::Input);

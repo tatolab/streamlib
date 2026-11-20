@@ -41,10 +41,12 @@ pub(super) fn the_link_named(
         source: StreamGraphDocumentLinkEnd {
             node: the_node_named(&source.node, node_by_label)?,
             port: source.port.clone(),
+            member: source.member.clone(),
         },
         target: StreamGraphDocumentLinkEnd {
             node: the_node_named(&target.node, node_by_label)?,
             port: target.port.clone(),
+            member: target.member.clone(),
         },
     })
 }
@@ -315,12 +317,17 @@ pub(super) fn graph_operation_for_the_request(
             )?)
         }
         StreamGraphAction::SetNodeInputValue {
-            node, input, value, ..
+            node,
+            input,
+            member,
+            value,
+            ..
         } => {
             let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::set_node_input_value_of(
                 &the_node_the_document_holds(staged_graph, node)?,
                 input,
+                member,
                 value,
             ))
         }
@@ -713,12 +720,14 @@ fn a_node_added_on_the_link(
                 target: StreamGraphDocumentLinkEnd {
                     node: added_node,
                     port: carrying.input_port.to_owned(),
+                    member: None,
                 },
             },
             StreamGraphDocumentLink {
                 source: StreamGraphDocumentLinkEnd {
                     node: added_node,
                     port: carrying.output_port.to_owned(),
+                    member: None,
                 },
                 target: link.target.clone(),
             },

@@ -116,7 +116,7 @@ fn a_class_node_linked_into_an_island_is_read_at_a_hidden_input_of_its_reader() 
     assert_eq!(
         read_at.port_name(),
         the_reader_input_port_a_link_into_a_function_node_is_read_at(
-            &into_the_island,
+            link_in(&graph, &into_the_island).expect("the link into the island"),
             &into_the_reader
         )
     );
@@ -236,14 +236,14 @@ fn an_island_reading_a_class_node_that_feeds_two_readers_is_read_at_each_of_them
             InputLinkPortRef::new(
                 reader.clone(),
                 the_reader_input_port_a_link_into_a_function_node_is_read_at(
-                    &into_the_island,
+                    link_in(&graph, &into_the_island).expect("the link into the island"),
                     &into_the_reader
                 )
             ),
             InputLinkPortRef::new(
                 second_reader.clone(),
                 the_reader_input_port_a_link_into_a_function_node_is_read_at(
-                    &into_the_island,
+                    link_in(&graph, &into_the_island).expect("the link into the island"),
                     &into_the_second_reader
                 )
             ),

@@ -17,7 +17,7 @@ use crate::stream_graph_document::{
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
-    is_a_graph_interface_node_type, node_name_of, node_uuid_of,
+    is_a_graph_interface_node_type, member_named_by, node_name_of, node_uuid_of,
 };
 
 /// A node or a link as the stream's own level of a graph document holds it, at its position
@@ -190,6 +190,7 @@ impl StreamGraphDocument {
                 StreamGraphDocumentLinkEnd {
                     node: graph_input,
                     port: GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
+                    member: None,
                 },
                 target,
             )?);
@@ -199,6 +200,7 @@ impl StreamGraphDocument {
                     StreamGraphDocumentLinkEnd {
                         node: fragment,
                         port: port.clone(),
+                        member: None,
                     },
                 )?);
             }
@@ -220,6 +222,7 @@ impl StreamGraphDocument {
                 StreamGraphDocumentLinkEnd {
                     node: graph_output,
                     port: GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
+                    member: None,
                 },
             )?);
             for target in targets {
@@ -227,6 +230,7 @@ impl StreamGraphDocument {
                     StreamGraphDocumentLinkEnd {
                         node: fragment,
                         port: port.clone(),
+                        member: None,
                     },
                     target,
                 )?);
@@ -332,6 +336,7 @@ impl StreamGraphDocument {
             Some(StreamGraphDocumentLinkEnd {
                 node: inner_uuid_of_the_name(end.get("node")?.as_str()?)?,
                 port: end.get("port")?.as_str()?.to_owned(),
+                member: member_named_by(end),
             })
         };
 

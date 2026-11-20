@@ -329,10 +329,12 @@ async fn tools_call_connect_and_disconnect_name_each_end_by_its_nodes_uuid() {
         source: streamlib_project_repository::StreamGraphDocumentLinkEnd {
             node: STUB_CAMERA_NODE_UUID.parse().unwrap(),
             port: "video".to_owned(),
+            member: None,
         },
         target: streamlib_project_repository::StreamGraphDocumentLinkEnd {
             node: STUB_EFFECT_NODE_UUID.parse().unwrap(),
             port: target_port.to_owned(),
+            member: None,
         },
     };
     assert_eq!(
@@ -445,6 +447,7 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
     assert_eq!(
         recorded[0],
         StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: camera,
             input: "fps".to_owned(),
             from: Some(json!(30)),
@@ -454,6 +457,7 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
     assert_eq!(
         recorded[1],
         StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: effect,
             input: "strength".to_owned(),
             from: Some(json!(0.5)),

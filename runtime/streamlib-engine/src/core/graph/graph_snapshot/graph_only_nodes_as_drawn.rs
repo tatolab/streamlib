@@ -187,10 +187,12 @@ impl GraphOnlyNodesAsDrawn {
                     source: LinkPortRefOutput {
                         node: cast(&set_aside.link.source.node),
                         port: set_aside.link.source.port.clone(),
+                        member: set_aside.link.source.member.clone(),
                     },
                     target: LinkPortRefOutput {
                         node: cast(&set_aside.link.target.node),
                         port: set_aside.link.target.port.clone(),
+                        member: set_aside.link.target.member.clone(),
                     },
                     state: crate::core::json_schema::LinkStateOutput::Error,
                     error_reason: Some(set_aside.why_it_is_set_aside.clone()),

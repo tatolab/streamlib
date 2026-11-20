@@ -116,6 +116,8 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
+        let mut why_each_link_was_made_unjudged = BTreeMap::new();
+        let mut links_made_unjudged_as_kept = Vec::new();
         let mut project_operations: Vec<ProjectOperation> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
             Vec::new();
@@ -145,6 +147,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
             };
             for applied in applied {
+                why_each_link_was_made_unjudged.extend(
+                    applied
+                        .links_made_unjudged
+                        .into_iter()
+                        .map(|(link, why)| ((stream_id.clone(), link), why)),
+                );
+                links_made_unjudged_as_kept.extend(applied.links_made_unjudged_as_kept);
                 operations_answered.push((stream_id.clone(), applied.operation_answered));
                 project_operations.extend(applied.project_operations);
                 made_live_once_the_documents_hold_them
@@ -181,6 +190,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         nodes_inserted_on_links: the_nodes_inserted_on_links(
                             &what_the_answer_names_of_each_added_node,
                         ),
+                        links_made_unjudged: links_made_unjudged_as_kept,
                     },
                     project_operations,
                     ProjectTransactionLineage::NewEdit,
@@ -223,6 +233,7 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links,
+                why_each_link_was_made_unjudged,
             },
         ))
     }
@@ -269,27 +280,22 @@ impl StreamGraphTransactionExecutor<'_> {
         let stream = streams
             .get(stream_id)
             .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
-        let kept = std::cell::RefCell::new(None);
-        stream
-            .staged_graph
-            .clone()
-            .the_level_a_path_of_placed_streams_reaches(
-                stream.stream_location.stream_asset,
-                level,
-                &mut |placed_stream| {
-                    let project_repository = project_repository.ok_or_else(|| {
-                        format!("an edit inside a placed stream is refused live: {DOCUMENTS_FIRST}")
-                    })?;
-                    the_staged_graph_of_the_stream(
-                        placed_stream,
-                        streams,
-                        staged_graph_of_each_stream_not_running,
-                        project_repository,
-                    )
-                    .map_err(|refusal| refusal.words_kept_in(&kept))
-                },
-            )
-            .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))
+        the_level_reached(
+            stream.staged_graph.clone(),
+            stream.stream_location.stream_asset,
+            level,
+            &|placed_stream| {
+                let project_repository = project_repository.ok_or_else(|| {
+                    format!("an edit inside a placed stream is refused live: {DOCUMENTS_FIRST}")
+                })?;
+                the_staged_graph_of_the_stream(
+                    placed_stream,
+                    streams,
+                    staged_graph_of_each_stream_not_running,
+                    project_repository,
+                )
+            },
+        )
     }
 
     /// Apply `request`, an action on the loaded stream `stream_id`: an edit of its own level
@@ -395,15 +401,15 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let the_stream_takes_its_edits_once_the_documents_hold_them =
             streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
-        let judged_before_commit_because = if !reached.is_the_streams_own_level() {
-            Some(WhyALinkIsJudgedByNodeTypes::TheLinkIsAtAPlacedLevel)
+        let judged_by_node_types_before_commit = if !reached.is_the_streams_own_level() {
+            Some(WhyConnectPlacesNoConvertNode::TheLinkIsAtAPlacedLevel)
         } else if the_stream_takes_its_edits_once_the_documents_hold_them {
-            Some(WhyALinkIsJudgedByNodeTypes::TheStreamTakesItsEditsLater)
+            Some(WhyConnectPlacesNoConvertNode::TheStreamTakesItsEditsLater)
         } else {
             None
         };
         let refuse_a_link_judged_before_commit = |link: &StreamGraphDocumentLink| {
-            judged_before_commit_because.map_or(Ok(()), |because| {
+            judged_by_node_types_before_commit.map_or(Ok(()), |because| {
                 refuse_a_link_judged_by_the_node_types_of_its_level(
                     stream_operations.as_ref(),
                     &level_as_drawn,
@@ -413,7 +419,12 @@ impl StreamGraphTransactionExecutor<'_> {
             })
         };
         let convert_node_a_link_needs = |link: &StreamGraphDocumentLink| {
-            if judged_before_commit_because.is_some() {
+            if !reached.is_the_streams_own_level() {
+                // Judged once the edit is made on the level's document, which refuses a link
+                // only a convert node bridges there.
+                return Ok(None);
+            }
+            if judged_by_node_types_before_commit.is_some() {
                 refuse_a_link_judged_before_commit(link)?;
                 return Ok(None);
             }
@@ -448,7 +459,11 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let overridden_by_a_link = match &edit_as_drawn {
             StreamGraphOperation::SetNodeInputValue {
-                node, input, to, ..
+                node,
+                input,
+                member,
+                to,
+                ..
             } => {
                 let set_on = level_as_drawn.node(*node)?;
                 if input_value_check == InputValueCheck::MadeOnApply
@@ -457,8 +472,14 @@ impl StreamGraphTransactionExecutor<'_> {
                     refuse_a_value_the_input_does_not_take(
                         stream_operations.as_ref(),
                         &set_on,
-                        &input_values_after_the_set(&set_on.input_values, input, to.as_ref()),
+                        &input_values_after_the_set(
+                            &set_on.input_values,
+                            input,
+                            member.as_deref(),
+                            to.as_ref(),
+                        ),
                         input,
+                        member.as_deref(),
                         to.as_ref(),
                         Some("/value"),
                     )?;
@@ -511,19 +532,29 @@ impl StreamGraphTransactionExecutor<'_> {
             let applied_on_the_running_stream = match (&applied, value_the_running_input_held) {
                 (
                     StreamGraphOperation::SetNodeInputValue {
-                        node, input, to, ..
+                        node,
+                        input,
+                        member,
+                        to,
+                        ..
                     },
                     Some(held),
                 ) => OneOperationAppliedLive {
                     operation: StreamGraphOperation::SetNodeInputValue {
                         node: *node,
                         input: input.clone(),
-                        from: held.saved,
+                        member: member.clone(),
+                        from: the_value_held_on_the_input_or_its_member(
+                            held.saved.as_ref(),
+                            member.as_deref(),
+                        )
+                        .cloned(),
                         to: to.clone(),
                     },
                     live_value_it_replaced: held.live.map(|value| InputValueToSetLive {
                         node: *node,
                         input: input.clone(),
+                        member: None,
                         value: Some(value),
                     }),
                 },
@@ -566,6 +597,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 project_operations,
                 made_live_once_the_documents_hold_them: Vec::new(),
                 overridden_by_a_link,
+                links_made_unjudged: Vec::new(),
+                links_made_unjudged_as_kept: Vec::new(),
             });
         }
 
@@ -590,8 +623,32 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let mut placed_document_after_the_edit = reached.document.clone();
         placed_document_after_the_edit.apply(&edit)?;
+        let why_each_link_goes_unjudged = if reached.is_the_streams_own_level() {
+            Vec::new()
+        } else {
+            why_each_link_an_edit_makes_at_a_placed_level_goes_unjudged(
+                stream_operations.as_ref(),
+                &reached.document,
+                &edit,
+            )?
+        };
         let operation_answered =
             reached.the_operation_as_drawn(&edit, &placed_document_after_the_edit)?;
+        let mut links_made_unjudged = Vec::new();
+        let mut links_made_unjudged_as_kept = Vec::new();
+        for ((drawn, kept), why) in the_links_an_operation_makes(&operation_answered)
+            .iter()
+            .zip(the_links_an_operation_makes(&edit))
+            .zip(why_each_link_goes_unjudged)
+        {
+            let Some(why) = why else { continue };
+            links_made_unjudged.push((drawn.clone(), why.clone()));
+            links_made_unjudged_as_kept.push(ProjectTransactionLinkMadeUnjudged {
+                stream: reached.stream,
+                link: kept.clone(),
+                why,
+            });
+        }
         record_what_the_answer_names_of_the_node_the_operation_adds(
             label,
             node_inserted_because,
@@ -656,6 +713,8 @@ impl StreamGraphTransactionExecutor<'_> {
             project_operations,
             made_live_once_the_documents_hold_them,
             overridden_by_a_link,
+            links_made_unjudged,
+            links_made_unjudged_as_kept,
         })
     }
 
@@ -716,4 +775,21 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         Ok(carried)
     }
+}
+
+/// The level `level` of placed streams reaches from `document`, the graph document of the
+/// stream asset `stream`, each placed stream's document as `document_of_the_stream` reads it;
+/// refused as that read refuses, or as the path refuses.
+pub(super) fn the_level_reached(
+    document: StreamGraphDocument,
+    stream: Uuid,
+    level: &[Uuid],
+    document_of_the_stream: &dyn Fn(Uuid) -> Result<StreamGraphDocument, GraphRequestRefusal>,
+) -> Result<StreamGraphLevelOfAPlacedStream, GraphRequestRefusal> {
+    let kept = std::cell::RefCell::new(None);
+    document
+        .the_level_a_path_of_placed_streams_reaches(stream, level, &mut |placed_stream| {
+            document_of_the_stream(placed_stream).map_err(|refusal| refusal.words_kept_in(&kept))
+        })
+        .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))
 }

@@ -280,6 +280,7 @@ fn an_unlinked_input_port_reads_its_pin_value_until_a_link_feeds_it() {
         "L-lfo",
         &InboundLinkName::from("plfo/result"),
         subscriber,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     assert!(
         mailboxes.read_raw("level").unwrap().is_none(),

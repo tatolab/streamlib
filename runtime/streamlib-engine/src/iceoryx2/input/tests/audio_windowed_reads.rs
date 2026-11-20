@@ -18,6 +18,7 @@ fn a_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     // A third of a window is not a window.
@@ -69,6 +70,7 @@ fn one_1024_sample_quantum_reads_out_of_a_512_512_port_exactly_twice() {
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     publish_one_mono_channels_block(&publisher, 1024, 16_000, 0);
 
@@ -100,6 +102,7 @@ fn a_contract_less_port_still_reads_the_bag_the_producer_published_byte_for_byte
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     let published = TestChannelSample::of_a_mono_channels_block(1024, 16_000, 77);
@@ -135,6 +138,7 @@ fn a_declared_upstream_loss_reaches_the_window_cut_from_the_block_carrying_it() 
         "L-declared",
         &InboundLinkName::from("pmic/audio"),
         channel.create_subscriber(16).unwrap(),
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     let output_writer = output_writer_publishing_onto(&channel, "audio");
     let write_block_at = |first_sample_timestamp_ns: i64| {
@@ -191,6 +195,7 @@ fn a_windowed_ports_per_link_drop_counts_match_an_unwindowed_ports_under_the_sam
             "L-only",
             &InboundLinkName::from("ponly/out"),
             subscriber,
+            crate::iceoryx2::BundleMembersAtTheRead::default(),
         );
 
         for block in 0..published_bags {
@@ -242,6 +247,7 @@ fn a_long_windows_mailbox_is_sized_from_its_contract_rather_than_the_profiles_de
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     // Deeper than ORDERED_DEPTH: publishing that many must lose nothing.
@@ -278,6 +284,7 @@ fn a_bag_the_stage_cannot_read_is_refused_at_the_read_naming_the_port() {
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     let not_an_audio_block =
@@ -312,12 +319,14 @@ fn a_port_that_keeps_up_reports_a_zero_for_every_wired_link() {
         "L-first",
         &InboundLinkName::from("pfirst/out"),
         subscriber_a,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     mailboxes.add_channel_subscriber(
         "in",
         "L-second",
         &InboundLinkName::from("psecond/out"),
         subscriber_b,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     for _ in 0..2 {

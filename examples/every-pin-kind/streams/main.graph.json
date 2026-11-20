@@ -70,6 +70,16 @@
         "node": "f511b25f-7028-4320-b538-a152f38695f8",
         "port": "picture"
       }
+    },
+    {
+      "source": {
+        "node": "3e8b1c47-9d2a-4f60-b5e8-1a7c4d9f2e36",
+        "port": "result"
+      },
+      "target": {
+        "node": "7b5d2e91-4c3f-4a8e-9b1d-6f0e2c8a5d47",
+        "port": "sweep"
+      }
     }
   ],
   "nodes": [
@@ -126,6 +136,26 @@
       "id": "c4f7a2d0-5b1e-4c3a-9f86-2e7d1b0a9c53",
       "name": "caption",
       "type": "nodes.caption:Caption"
+    },
+    {
+      "id": "6a3e9f12-8b4c-4d71-a5e0-3c9b2f7d1e84",
+      "name": "bars",
+      "type": "nodes.colour_bars:BgraColourBars"
+    },
+    {
+      "id": "9d2c5b70-1f8e-4a36-b4c9-7e0a6d3f2b15",
+      "name": "bars_check",
+      "type": "nodes.colour_bars:ColourBarsCheck"
+    },
+    {
+      "id": "3e8b1c47-9d2a-4f60-b5e8-1a7c4d9f2e36",
+      "name": "sweep",
+      "type": "nodes.sweep:SweepAt"
+    },
+    {
+      "id": "7b5d2e91-4c3f-4a8e-9b1d-6f0e2c8a5d47",
+      "name": "sweep_position",
+      "type": "nodes.sweep:SweepPosition"
     }
   ]
 }

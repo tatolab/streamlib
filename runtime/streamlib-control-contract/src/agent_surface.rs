@@ -14,8 +14,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::control_operation::{
-    ControlOperationDeclaration, ControlOperationEffect, ControlOperationGroup,
-    ControlOperationStability,
+    ControlOperationDeclaration, ControlOperationEffect, ControlOperationExample,
+    ControlOperationGroup, ControlOperationStability,
 };
 use crate::control_operation_refusals::the_refusal_of_an_unknown_operation;
 use crate::control_operations::CONTROL_OPERATIONS;
@@ -28,6 +28,25 @@ pub const DESCRIBE_OPERATIONS_TOOL_NAME: &str = "describe_operations";
 
 /// The name of the discovery tool that calls any operation the agent surface serves.
 pub const CALL_OPERATION_TOOL_NAME: &str = "call_operation";
+
+/// The guidance `server/discover` hands an agent before its first call: how the runtime is laid
+/// out, the three loops by the tools each uses, then where everything else is found. Every name
+/// in backticks is an operation the agent surface serves, or one of its discovery tools.
+pub const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = concat!(
+    "This is the control plane of this machine's one StreamLib runtime.\n",
+    "A project is a folder on this machine, named by its absolute path as the project directory; it holds streams, its node code and its assets.\n",
+    "A stream is a graph of nodes and the links between their ports, named by the stream id `list_streams` answers; a node is named by the UUID `graph` lists.\n",
+    "A project plays and stops as a whole, and its graphs read and edit whether it plays or not.\n",
+    "Every change is one transaction by its author on the project's history, applied whole or refused whole in the runtime's own words, and `undo` takes the author's latest back.\n",
+    "\n",
+    "Reading: `list_streams` lists every stream with its project; `graph` answers a stream's nodes, ports, links and each node's state; `list_node_types` lists the node types a project offers and `describe_node_types` answers their typed inputs and outputs; `logs` reads what the project's streams wrote.\n",
+    "Building a graph: `check_link_candidates` finds the inputs an output fits, `check_link` answers what a link would do without making it, `transact` adds nodes, sets values and makes links as one edit, and `graph` confirms each link: pending until a node in a helper process opens its port, then wired, or reading error with the reason in error_reason. Both ends of a link are ports in the one stream it names; a stream reads another stream's port at a MoQ relay through a MoqTrackReceive node.\n",
+    "Writing a Python node: `create_node_file` starts one from the template, `read_project_file` and `write_project_file` read and write it, `check_project_code` checks it without running a stream and says what to fix and where, and `transact` places it.\n",
+    "Writing a control or a node body: `create_node_ui_element` starts one from the extension SDK kit's template and registers it, then the same file tools and `check_project_code`.\n",
+    "Playback: `start_playback` and `stop_playback`.\n",
+    "\n",
+    "Everything else, such as `list_pin_types`, the project's assets, files, imports and views, and every single graph edit: `list_operation_groups` lists every operation by group, `describe_operations` states one's params and result with a worked example, and `call_operation` calls it by name.",
+);
 
 /// `list_operation_groups`' params: none.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -103,6 +122,34 @@ pub struct AgentOperationDescribed {
     pub params_schema: Value,
     /// The JSON Schema of what it answers.
     pub result_schema: Value,
+    /// A worked example of a call; absent on an operation another replaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example: Option<AgentOperationExample>,
+}
+
+/// A worked example of calling one operation.
+#[derive(Debug, PartialEq, Serialize, JsonSchema)]
+pub struct AgentOperationExample {
+    /// The `params` a call sends.
+    pub params: Value,
+    /// What that call answers; given for an operation the three agent loops call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Value>,
+    /// A refusal of a call of it, in the one refusal shape; given for an operation the three
+    /// agent loops call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Value>,
+}
+
+impl AgentOperationExample {
+    /// `example` as the values it renders.
+    pub fn of(example: &ControlOperationExample) -> Self {
+        Self {
+            params: (example.params)(),
+            answer: example.answer.map(|answer| answer()),
+            refusal: example.refusal.map(|refusal| refusal()),
+        }
+    }
 }
 
 /// `call_operation`'s params.
@@ -141,7 +188,7 @@ pub const AGENT_DISCOVERY_TOOLS: &[AgentDiscoveryToolDeclaration] = &[
     AgentDiscoveryToolDeclaration {
         tool_name: LIST_OPERATION_GROUPS_TOOL_NAME,
         one_line_doc: "List every operation the runtime serves, by group.",
-        agent_usage_note: "List every operation this runtime serves, by group, each with its name and one sentence saying what it does. The tools in this tool list are the ones used most; every other operation — a project's assets, files, dependencies, node types and views, each single graph edit, redo, viewers — is reached through `call_operation`. Start here when no listed tool does what you need, then read the operation's params with `describe_operations`.",
+        agent_usage_note: "List every operation this runtime serves, by group, each with its name and one sentence saying what it does. The tools in this tool list are the ones used most; every other operation — `list_pin_types`, a project's assets, its other files, imports and views, each single graph edit, `redo`, viewers, pausing and resuming playback, `describe_runtime` — is reached through `call_operation`. Start here when no listed tool does what you need, then read the operation's params with `describe_operations`.",
         effect: ControlOperationEffect::ReadsOnly,
         request_json_schema: the_json_schema_of::<ListOperationGroupsRequest>,
         result_json_schema: Some(the_json_schema_of::<ListOperationGroupsResult>),
@@ -149,7 +196,7 @@ pub const AGENT_DISCOVERY_TOOLS: &[AgentDiscoveryToolDeclaration] = &[
     AgentDiscoveryToolDeclaration {
         tool_name: DESCRIBE_OPERATIONS_TOOL_NAME,
         one_line_doc: "Describe operations: what each does, the params it takes and what it answers.",
-        agent_usage_note: "Describe operations by name, or every operation of one group: what each reads, changes and answers, the JSON Schema of its params and of its result, whether it only reads, and the contract version it arrived in. Call it before the first `call_operation` of an operation, and send the params exactly as its `params_schema` states them.",
+        agent_usage_note: "Describe operations by name, or every operation of one group: what each reads, changes and answers, the JSON Schema of its params and of its result, whether it only reads, the contract version it arrived in, and an `example` of the params a call sends; an operation of the three loops (building a graph, writing a Python node, writing a control) also shows what that call answers and a refusal of it. Call it before the first `call_operation` of an operation, and send the params exactly as its `params_schema` states them.",
         effect: ControlOperationEffect::ReadsOnly,
         request_json_schema: the_json_schema_of::<DescribeOperationsRequest>,
         result_json_schema: Some(the_json_schema_of::<DescribeOperationsResult>),
@@ -264,6 +311,7 @@ pub fn the_operations_described_for(
                 result_schema: a_json_schema_carrying_its_own_definitions(
                     declaration.result_json_schema,
                 ),
+                example: declaration.example.as_ref().map(AgentOperationExample::of),
             })
             .collect(),
     })
@@ -439,20 +487,65 @@ mod tests {
     }
 
     #[test]
+    fn an_operation_is_described_with_its_worked_example_and_a_loop_operation_with_its_answer_and_refusal()
+     {
+        let described = the_operations_described_for(DescribeOperationsRequest {
+            operations: Some(vec![
+                "add_node".to_owned(),
+                "check_link".to_owned(),
+                "set_node_config".to_owned(),
+            ]),
+            group: None,
+        })
+        .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
+        let [add_node, check_link, set_node_config] = described.operations.as_slice() else {
+            panic!("three operations were asked for");
+        };
+        let Some(add_node_example) = &add_node.example else {
+            panic!("add_node shows an example");
+        };
+        assert!(add_node_example.params["stream"].is_string());
+        assert_eq!(
+            (&add_node_example.answer, &add_node_example.refusal),
+            (&None, &None)
+        );
+        let Some(check_link_example) = &check_link.example else {
+            panic!("check_link shows an example");
+        };
+        assert!(
+            check_link_example
+                .answer
+                .as_ref()
+                .is_some_and(|answer| answer["outcome"] == "refused")
+        );
+        assert!(
+            check_link_example
+                .refusal
+                .as_ref()
+                .is_some_and(|refusal| refusal["refusal_code"].is_string())
+        );
+        assert_eq!(set_node_config.example, None);
+    }
+
+    #[test]
     fn the_tool_list_is_the_core_set_then_the_discovery_tools_each_with_an_object_schema() {
         let listed = the_agent_tools_listed();
         let listed_names: Vec<&str> = listed.iter().map(|tool| tool.tool_name).collect();
         assert_eq!(
             listed_names,
             [
-                "describe_runtime",
                 "list_streams",
                 "graph",
                 "transact",
+                "check_link",
+                "check_link_candidates",
                 "start_playback",
                 "stop_playback",
-                "pause_playback",
-                "resume_playback",
+                "read_project_file",
+                "create_node_file",
+                "create_node_ui_element",
+                "write_project_file",
+                "check_project_code",
                 "list_node_types",
                 "describe_node_types",
                 "logs",
@@ -475,6 +568,60 @@ mod tests {
             panic!("list_streams answers one JSON object shape");
         };
         assert_eq!(list_streams_output_schema["type"], "object");
+    }
+
+    /// The most characters the instructions may hold: short enough to read before a first call.
+    const INSTRUCTIONS_LENGTH_BOUND: usize = 3_000;
+
+    #[test]
+    fn every_name_in_backticks_in_the_instructions_is_served_to_agents_and_the_text_is_short() {
+        let served: Vec<&str> = the_operations_served_to_agents()
+            .filter(|declaration| declaration.replaced_by.is_none())
+            .map(|declaration| declaration.method_name)
+            .chain(AGENT_DISCOVERY_TOOLS.iter().map(|tool| tool.tool_name))
+            .collect();
+        let named: Vec<&str> = LOCAL_API_MCP_SERVER_INSTRUCTIONS
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .collect();
+        assert!(named.contains(&"list_pin_types"), "{named:?}");
+        for name in &named {
+            assert!(
+                served.contains(name),
+                "the instructions name `{name}`, which agents are not served"
+            );
+        }
+        assert_eq!(
+            LOCAL_API_MCP_SERVER_INSTRUCTIONS.matches('`').count() % 2,
+            0
+        );
+        assert!(
+            LOCAL_API_MCP_SERVER_INSTRUCTIONS.chars().count() <= INSTRUCTIONS_LENGTH_BOUND,
+            "the instructions hold {} characters",
+            LOCAL_API_MCP_SERVER_INSTRUCTIONS.chars().count()
+        );
+        for tool in the_agent_tools_listed() {
+            assert!(
+                named.contains(&tool.tool_name),
+                "the instructions do not name the listed tool `{}`",
+                tool.tool_name
+            );
+        }
+    }
+
+    #[test]
+    fn the_tool_list_holds_nineteen_tools_and_no_replaced_operation() {
+        let listed = the_agent_tools_listed();
+        assert_eq!(listed.len(), 19);
+        for tool in &listed {
+            assert!(
+                the_operation_served_to_agents_as(tool.tool_name)
+                    .is_none_or(|declaration| declaration.replaced_by.is_none()),
+                "{} is replaced",
+                tool.tool_name
+            );
+        }
     }
 
     #[test]

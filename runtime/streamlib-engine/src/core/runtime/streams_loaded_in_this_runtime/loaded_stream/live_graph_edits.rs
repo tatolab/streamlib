@@ -120,6 +120,7 @@ impl LoadedStreamInThisRuntime {
         &self,
         node_run_id: &NodeRunId,
         input: &str,
+        member: Option<&str>,
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         self.with_no_other_input_value_change(|| {
@@ -127,6 +128,7 @@ impl LoadedStreamInThisRuntime {
                 self.compiler.graph_lock(),
                 node_run_id,
                 input,
+                member,
                 value,
             )?;
             for change in changes_announced {
@@ -519,8 +521,10 @@ impl LoadedStreamInThisRuntime {
             let made = self
                 .block_on_the_engines_tokio_runtime(connect_impl(
                     self.live_graph_change(),
-                    OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port),
-                    InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
+                    OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port)
+                        .at_member(link.source.member.clone()),
+                    InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port)
+                        .at_member(link.target.member.clone()),
                     ALinkConnected::OfASavedGraph,
                     WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,
                 ))
@@ -557,8 +561,8 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// Set the saved value `value` on input `input` of the node `node_run_id` in the graph `graph`
-/// locks, under the input's current name, `None` taking it off, dropping any value set live on
-/// the input first, then hand that node what the input reads now: its islands under the write
+/// locks, or on its member `member` when one is named, under the input's current name, `None`
+/// taking it off, dropping any value set live on the input, or on that member, first, then hand that node what the input reads now: its islands under the write
 /// lock, its helper or itself with the lock released. Answers the changes to announce: the
 /// input's, and the graph's for an input held on the graph. Whole or not at all: a node or island
 /// not handed the value puts the saved and live values back.
@@ -566,12 +570,14 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
     graph: &RwLock<Graph>,
     node_run_id: &NodeRunId,
     input: &str,
+    member: Option<&str>,
     value: Option<serde_json::Value>,
 ) -> Result<Vec<RuntimeEvent>> {
     let (put_back, delivery, changes_announced) = set_the_saved_value_and_hand_it_to_each_island(
         &mut graph.write(),
         node_run_id,
         input,
+        member,
         value,
     )?;
     let Err(not_handed_over) = delivery.hand_over() else {
@@ -697,20 +703,21 @@ fn set_the_saved_value_and_hand_it_to_each_island(
     graph: &mut Graph,
     node_run_id: &NodeRunId,
     input: &str,
+    member: Option<&str>,
     value: Option<serde_json::Value>,
 ) -> Result<(
     SavedSetToPutBack,
     UnlinkedInputValuesDelivery,
     Vec<RuntimeEvent>,
 )> {
-    let put_back = set_the_saved_value(graph, node_run_id, input, value)?;
+    let put_back = set_the_saved_value(graph, node_run_id, input, member, value)?;
     let node = graph
         .traversal()
         .v(node_run_id)
         .first()
         .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
     let delivery = UnlinkedInputValuesDelivery::of_the_node(graph, node);
-    let changes_announced: Vec<RuntimeEvent> = the_input_value_change(graph, node, input)
+    let changes_announced: Vec<RuntimeEvent> = the_input_value_change(graph, node, input, member)
         .into_iter()
         .chain(
             is_held_on_the_graph(graph, node, &put_back.input)
@@ -757,12 +764,14 @@ impl SavedSetToPutBack {
     }
 }
 
-/// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, `None`
-/// taking it off, and drop any value set live on the input; answers what it replaced.
+/// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, or on its
+/// member `member` when one is named, `None` taking it off, and drop any value set live on the
+/// input, or on that member; answers what it replaced.
 fn set_the_saved_value(
     graph: &mut Graph,
     node_run_id: &NodeRunId,
     input: &str,
+    member: Option<&str>,
     value: Option<serde_json::Value>,
 ) -> Result<SavedSetToPutBack> {
     let node = graph
@@ -779,6 +788,11 @@ fn set_the_saved_value(
         });
     };
     let input = input.as_str();
+    let value = streamlib_project_repository::the_input_value_after_the_set(
+        node.pins.get(input).cloned(),
+        member,
+        value.as_ref(),
+    );
     let lifetime = the_lifetime_of_the_input(node, input);
     if value.is_some() && node.is_an_exposed_config_field_input(input) {
         return Err(Error::Configuration(format!(
@@ -806,7 +820,7 @@ fn set_the_saved_value(
     }
     let live_value_before = graph
         .live_input_values()
-        .set(node_uuid, input, None, lifetime);
+        .set_on_the_input_or_its_member(node_uuid, input, member, None, lifetime);
     Ok(SavedSetToPutBack {
         node_run_id: node_run_id.clone(),
         node_uuid,

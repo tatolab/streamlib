@@ -7,6 +7,7 @@
 use schemars::{JsonSchema, SchemaGenerator};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// One operation of the control plane: the request it takes, the result it answers, and what the
 /// contract file says about it.
@@ -14,7 +15,7 @@ pub trait ControlOperation {
     /// The params a caller sends.
     type Request: DeserializeOwned + JsonSchema;
     /// What the operation answers when it is not refused.
-    type Result: Serialize + JsonSchema;
+    type Result: Serialize + DeserializeOwned + JsonSchema;
 
     /// The method name every adapter serves it under.
     const METHOD_NAME: &'static str;
@@ -37,6 +38,22 @@ pub trait ControlOperation {
     /// The method name of the operation that replaces it, for one an agent no longer finds
     /// listed though it still answers.
     const REPLACED_BY: Option<&'static str> = None;
+    /// A worked example of a call, which the discovery tools and the reference docs show; one
+    /// the discovery tools list carries one.
+    const EXAMPLE: Option<ControlOperationExample> = None;
+}
+
+/// A worked example of calling one operation, rendered into the contract file, `describe_operations`
+/// and the reference docs from this one source.
+#[derive(Clone, Copy)]
+pub struct ControlOperationExample {
+    /// The params a call sends.
+    pub params: fn() -> Value,
+    /// What that call answers; given for an operation the three agent loops call.
+    pub answer: Option<fn() -> Value>,
+    /// A refusal of a call of it, in the one refusal shape; given for an operation the three
+    /// agent loops call.
+    pub refusal: Option<fn() -> Value>,
 }
 
 /// What an operation does to what the runtime holds.
@@ -133,6 +150,10 @@ pub struct ControlOperationDeclaration {
     pub agent_tool_listing: ControlOperationAgentToolListing,
     /// The method name of the operation that replaces it.
     pub replaced_by: Option<&'static str>,
+    /// Its worked example.
+    pub example: Option<ControlOperationExample>,
+    /// Whether a value reads back as its result, and serializes again to the same value.
+    pub reads_back_as_its_result: fn(&Value) -> Result<(), String>,
     /// The schema of its request, its named types added to the generator's definitions.
     pub request_json_schema: fn(&mut SchemaGenerator) -> schemars::Schema,
     /// The schema of its result, its named types added to the generator's definitions.
@@ -170,6 +191,8 @@ impl ControlOperationDeclaration {
             effect: Operation::EFFECT,
             agent_tool_listing: Operation::AGENT_TOOL_LISTING,
             replaced_by: Operation::REPLACED_BY,
+            example: Operation::EXAMPLE,
+            reads_back_as_its_result: the_value_reads_back_as::<Operation::Result>,
             request_json_schema: the_json_schema_of::<Operation::Request>,
             result_json_schema: the_json_schema_of::<Operation::Result>,
         }
@@ -180,4 +203,38 @@ fn the_json_schema_of<Described: JsonSchema>(
     schema_generator: &mut SchemaGenerator,
 ) -> schemars::Schema {
     schema_generator.subschema_for::<Described>()
+}
+
+fn the_value_reads_back_as<Read: Serialize + DeserializeOwned>(
+    value: &Value,
+) -> Result<(), String> {
+    let read: Read = serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+    let written = serde_json::to_value(&read).map_err(|error| error.to_string())?;
+    if every_field_is_written_back(value, &written) {
+        Ok(())
+    } else {
+        Err(format!("it reads back as {written}"))
+    }
+}
+
+/// Whether `written` holds each field of `value` as `value` states it: a field `value` leaves
+/// out may be written with its default, and one it states that the type does not read is lost.
+pub(crate) fn every_field_is_written_back(value: &Value, written: &Value) -> bool {
+    match (value, written) {
+        (Value::Object(fields), Value::Object(written_fields)) => {
+            fields.iter().all(|(key, field)| {
+                written_fields
+                    .get(key)
+                    .is_some_and(|written_field| every_field_is_written_back(field, written_field))
+            })
+        }
+        (Value::Array(items), Value::Array(written_items)) => {
+            items.len() == written_items.len()
+                && items
+                    .iter()
+                    .zip(written_items)
+                    .all(|(item, written_item)| every_field_is_written_back(item, written_item))
+        }
+        _ => value == written,
+    }
 }

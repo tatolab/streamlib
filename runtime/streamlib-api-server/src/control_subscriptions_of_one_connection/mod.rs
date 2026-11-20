@@ -448,6 +448,7 @@ impl EventListener for StreamChangesForwardedToOneConnection {
             RuntimeEvent::InputValueDidChange {
                 node,
                 input,
+                member,
                 value_read,
             } => {
                 let (value, value_comes_from) = value_read
@@ -459,6 +460,7 @@ impl EventListener for StreamChangesForwardedToOneConnection {
                         stream: self.stream_id.clone(),
                         node: node.to_string(),
                         input: input.clone(),
+                        member: member.clone(),
                         value: value.filter(|value| !value.is_null()).cloned(),
                         value_comes_from,
                     },

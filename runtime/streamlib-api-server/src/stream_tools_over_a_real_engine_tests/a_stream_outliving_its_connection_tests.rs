@@ -290,6 +290,28 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             history,
         )
     }
+    fn check_a_projects_extension_code(
+        &self,
+        project_directory: &Path,
+        paths: Option<&[String]>,
+    ) -> streamlib::sdk::runtime::ExtensionCodeCheck {
+        OperationsOnTheStreamsLoadedInThisRuntime::check_a_projects_extension_code(
+            self.engine.as_ref(),
+            project_directory,
+            paths,
+        )
+    }
+    fn a_template_from_the_extension_sdk_kit(
+        &self,
+        project_directory: &Path,
+        template_file: &str,
+    ) -> std::result::Result<streamlib::sdk::runtime::ExtensionSdkKitTemplate, String> {
+        OperationsOnTheStreamsLoadedInThisRuntime::a_template_from_the_extension_sdk_kit(
+            self.engine.as_ref(),
+            project_directory,
+            template_file,
+        )
+    }
 }
 
 /// A run of the project in the folder `project_folder_name`, which

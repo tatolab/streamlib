@@ -162,6 +162,16 @@ fn in_backticks<Name: fmt::Display>(names: impl IntoIterator<Item = Name>) -> St
         .join(", ")
 }
 
+/// `phrases`, each of which may hold a comma, as a sentence lists them: `a`, `a; and b`,
+/// `a; b; and c`.
+fn in_words_listed(phrases: &[String]) -> String {
+    match phrases {
+        [] => String::new(),
+        [only] => only.clone(),
+        [listed @ .., last] => format!("{}; and {last}", listed.join("; ")),
+    }
+}
+
 impl fmt::Display for PinLinkRefusal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -184,7 +194,17 @@ impl fmt::Display for PinLinkRefusal {
                      input",
                     output.pin_type, input.pin_type
                 )?;
+                let members_not_held =
+                    members_the_output_does_not_hold(&output.pin_type, &input.pin_type, "");
+                if !members_not_held.is_empty() {
+                    write!(
+                        formatter,
+                        ": the input asks for {}",
+                        in_words_listed(&members_not_held)
+                    )?;
+                }
                 match conversions_that_bridge.as_slice() {
+                    [] if !members_not_held.is_empty() => Ok(()),
                     [] => match node_placed_between(&output.pin_type, &input.pin_type) {
                         Some(placement) => write!(formatter, "; {placement}"),
                         None => formatter.write_str("; no node type converts between them"),
@@ -521,7 +541,7 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
                 ))
             }
         }
-        _ if the_same_but_for_member_meanings(output, input) => {
+        _ if holds_what_the_input_asks_for(output, input) => {
             let mut warnings = Vec::new();
             warn_of_member_meanings_that_differ(output, input, "", &mut warnings);
             Some(DirectPinLink {
@@ -573,8 +593,9 @@ fn warn_of_member_meanings_that_differ(
 ) {
     match (output, input) {
         (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => {
-            for (output_member, input_member) in
-                members_paired_by_name(output, input).into_iter().flatten()
+            for (output_member, input_member) in members_the_input_asks_for_paired(output, input)
+                .into_iter()
+                .flatten()
             {
                 let member_name = format!("{path}{}", output_member.name);
                 if let Some((output_meaning, input_meaning)) = differing_meanings(
@@ -609,51 +630,117 @@ fn warn_of_member_meanings_that_differ(
     }
 }
 
-/// Each member of `output` beside the member of `input` of its name, in `output`'s order; `None`
-/// unless the two hold the same names, each held once by each.
-fn members_paired_by_name<'members>(
+/// Each member `input` asks for beside the member of `output` of its name, in `input`'s order;
+/// `None` unless each name `input` asks for is named once by `input` and once by `output`.
+fn members_the_input_asks_for_paired<'members>(
     output: &'members [BundleMember],
     input: &'members [BundleMember],
 ) -> Option<Vec<(&'members BundleMember, &'members BundleMember)>> {
-    if output.len() != input.len() {
-        return None;
-    }
-    output
+    input
         .iter()
-        .map(|output_member| {
-            let held_once_by = |members: &'members [BundleMember]| {
+        .map(|input_member| {
+            let named_once_by = |members: &'members [BundleMember]| {
                 let mut named = members
                     .iter()
-                    .filter(|member| member.name == output_member.name);
+                    .filter(|member| member.name == input_member.name);
                 match (named.next(), named.next()) {
                     (Some(member), None) => Some(member),
                     _ => None,
                 }
             };
-            held_once_by(output)?;
-            Some((output_member, held_once_by(input)?))
+            named_once_by(input)?;
+            Some((named_once_by(output)?, input_member))
         })
         .collect()
 }
 
-/// Whether `one` and `other` are one type, their bundle members matched by name and compared by
-/// type only, in any order.
-fn the_same_but_for_member_meanings(one: &PinType, other: &PinType) -> bool {
-    match (one, other) {
-        (PinType::Bundle { members: one }, PinType::Bundle { members: other }) => {
-            members_paired_by_name(one, other).is_some_and(|pairs| {
-                pairs.into_iter().all(|(one, other)| {
-                    the_same_but_for_member_meanings(&one.member_type, &other.member_type)
+/// Whether an output of `output` holds what an input of `input` asks for, at any depth, as it
+/// is: the same type, but that a bundle output may hold members the input does not ask for, and
+/// that a member's meaning is not compared. Each member the input asks for is matched by name
+/// and compared by type.
+fn holds_what_the_input_asks_for(output: &PinType, input: &PinType) -> bool {
+    match (output, input) {
+        (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => {
+            members_the_input_asks_for_paired(output, input).is_some_and(|pairs| {
+                pairs.into_iter().all(|(output, input)| {
+                    holds_what_the_input_asks_for(&output.member_type, &input.member_type)
                 })
             })
         }
         (
-            PinType::ListOf { element_type: one },
             PinType::ListOf {
-                element_type: other,
+                element_type: output,
             },
-        ) => the_same_but_for_member_meanings(one, other),
-        _ => one == other,
+            PinType::ListOf {
+                element_type: input,
+            },
+        ) => holds_what_the_input_asks_for(output, input),
+        _ => output == input,
+    }
+}
+
+/// Why a bundle output of `output` does not hold what a bundle input of `input` asks for, member
+/// by member: each member the input asks for that the output does not hold, or holds under
+/// another type. Empty for two types that are no bundles, nor Lists of them.
+fn members_the_output_does_not_hold(output: &PinType, input: &PinType, path: &str) -> Vec<String> {
+    match (output, input) {
+        (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => input
+            .iter()
+            .enumerate()
+            .flat_map(|(place, input_member)| {
+                let member_name = format!("{path}{}", input_member.name);
+                let named_earlier = input[..place]
+                    .iter()
+                    .any(|member| member.name == input_member.name);
+                let named_later = input[place + 1..]
+                    .iter()
+                    .any(|member| member.name == input_member.name);
+                let mut output_named = output
+                    .iter()
+                    .filter(|member| member.name == input_member.name);
+                match (output_named.next(), output_named.next()) {
+                    _ if named_earlier => Vec::new(),
+                    _ if named_later => vec![format!(
+                        "member `{member_name}`, which the input names more than once"
+                    )],
+                    (None, _) => vec![format!(
+                        "member `{member_name}`, which the output does not hold"
+                    )],
+                    (Some(_), Some(_)) => vec![format!(
+                        "member `{member_name}`, which the output names more than once"
+                    )],
+                    (Some(output_member), None) => {
+                        let inner = members_the_output_does_not_hold(
+                            &output_member.member_type,
+                            &input_member.member_type,
+                            &format!("{member_name}."),
+                        );
+                        if !inner.is_empty() {
+                            inner
+                        } else if holds_what_the_input_asks_for(
+                            &output_member.member_type,
+                            &input_member.member_type,
+                        ) {
+                            Vec::new()
+                        } else {
+                            vec![format!(
+                                "member `{member_name}` as {}, which the output holds as {}",
+                                input_member.member_type, output_member.member_type
+                            )]
+                        }
+                    }
+                }
+            })
+            .collect(),
+        (
+            PinType::ListOf {
+                element_type: output,
+            },
+            PinType::ListOf {
+                element_type: input,
+            },
+        ) => members_the_output_does_not_hold(output, input, path),
+        _ => Vec::new(),
     }
 }
 

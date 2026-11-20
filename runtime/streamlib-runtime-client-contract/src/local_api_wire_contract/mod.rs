@@ -33,9 +33,10 @@ pub use graph_answer_node_component_wire_types::{
     NodeThreadHandleOnTheWire, ShaderNodeFusedGroupOnTheWire,
 };
 pub use graph_answer_wire_types::{
-    ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
-    GraphNodeKindOnTheWire, GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
-    GraphToolResult, InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
+    BundleMemberValueReadOnTheWire, ConfigNodeReferenceEdgeOnTheWire,
+    FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire, GraphNodeKindOnTheWire,
+    GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphToolResult,
+    InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
     MachineWideGraphOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
 };
 pub use graph_wire_types::{
@@ -53,15 +54,17 @@ pub use link_check_wire_types::{
 pub use log_wire_types::LogsToolResult;
 pub use node_type_wire_types::{
     DescribeNodeTypesToolResult, GraphGeneratorListed, ListNodeTypesToolResult,
-    ListPinTypesToolResult, NodeTypeCategoryFrom, NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot,
-    NodeTypeDescription, NodeTypeInputDescribed, NodeTypeInputMode, NodeTypeKind, NodeTypeListed,
-    NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortPin, NodeTypeSourceListed,
-    NodeTypeSourceListedOrigin, PinTypeConversionListed, PinTypeListed, SetNodeTypeGroupToolResult,
+    ListPinTypesToolResult, NamedPinTypeListed, NamedPinTypeReadFromSource, NodeTypeCategoryFrom,
+    NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed,
+    NodeTypeInputMode, NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed,
+    NodeTypePortPin, NodeTypeSourceListed, NodeTypeSourceListedOrigin, PinTypeConversionListed,
+    PinTypeListed, SetNodeTypeGroupToolResult,
 };
 pub use node_ui_wire_types::{
-    ListProjectNodeUiElementsToolResult, NodeUiManifest, NodeUiManifestControl,
-    NodeUiManifestNodeBody, ProjectNodeUiElement, ProjectNodeUiElementListed,
-    ProjectNodeUiManifestListed, ProjectNodeUiManifestNotRead, ProjectNodeUiModule,
+    ListProjectNodeUiElementsToolResult, NodeUiControlPinType, NodeUiManifest,
+    NodeUiManifestControl, NodeUiManifestNodeBody, ProjectNodeUiElement,
+    ProjectNodeUiElementListed, ProjectNodeUiManifestListed, ProjectNodeUiManifestNotRead,
+    ProjectNodeUiModule,
 };
 pub use project_code_check_wire_types::{
     ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,
@@ -71,16 +74,17 @@ pub use project_wire_types::{
     AssetAudioFactsOnTheWire, AssetImageFactsOnTheWire, AssetLutFactsOnTheWire,
     AssetMediaFactsOnTheWire, AssetMediaFactsReadOnTheWire, AssetPreviewOnTheWire,
     AssetSceneFactsOnTheWire, AssetTransactionToolResult, AssetVideoFactsOnTheWire,
-    ControlOperationRefusalCode, CreateNodeFileToolResult, CreateProjectToolResult,
-    DeleteProjectToolResult, DependencyTransactionToolResult, DescribeAssetToolResult,
-    DuplicateProjectToolResult, GraphGeneratorPromotedSettingReadFromSource,
-    GraphGeneratorReadFromSource, ImportProjectToolResult, ListAssetsToolResult,
-    ListDependenciesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
-    ListProjectViewsToolResult, ListSamplesToolResult, ListSamplesToolResultSample,
-    ListedProjectDependencyOnTheWire, NodeModuleNotReadable, NodeNotRunningBecauseOnTheWire,
-    NodeTypeOfOneProjectSource, NodeTypePortReadFromSource, NodeTypeReadFromSource,
-    NodeTypeSourceOrigin, NodeTypeSourceReadWithoutRunningIt, ProjectActionRefusalOnTheWire,
-    ProjectAssetOnTheWire, ProjectAssetWithItsMediaFactsOnTheWire, ProjectChangeFeedEntryOnTheWire,
+    ControlOperationRefusalCode, CreateNodeFileToolResult, CreateNodeUiElementToolResult,
+    CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
+    DescribeAssetToolResult, DuplicateProjectToolResult,
+    GraphGeneratorPromotedSettingReadFromSource, GraphGeneratorReadFromSource,
+    ImportProjectToolResult, ListAssetsToolResult, ListDependenciesToolResult,
+    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
+    ListSamplesToolResult, ListSamplesToolResultSample, ListedProjectDependencyOnTheWire,
+    NodeModuleNotReadable, NodeNotRunningBecauseOnTheWire, NodeTypeOfOneProjectSource,
+    NodeTypePortReadFromSource, NodeTypeReadFromSource, NodeTypeSourceOrigin,
+    NodeTypeSourceReadWithoutRunningIt, ProjectActionRefusalOnTheWire, ProjectAssetOnTheWire,
+    ProjectAssetWithItsMediaFactsOnTheWire, ProjectChangeFeedEntryOnTheWire,
     ProjectDependencyOnTheWire, ProjectFileOnTheWire, ProjectFilePlaceOnTheWire,
     ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
     ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ProjectViewDeclaredPort,

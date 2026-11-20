@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+use streamlib::sdk::runtime::{EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE, ExtensionCodeCheckers};
+
 /// The executable `executable_file_name` beside this one, canonical, or why it
 /// is not there.
 pub(crate) fn runtime_unit_executable_beside_this_one(
@@ -19,20 +21,21 @@ pub(crate) fn runtime_unit_executable_beside_this_one(
     runtime_unit_executable_beside(&this_executable, executable_file_name)
 }
 
-/// The programs a project's views and controls are checked with, each relative
-/// to the directory `tatolabd` sits in.
-const RUNTIME_UNIT_CODE_CHECKERS: [&str; 2] = [
-    streamlib::sdk::node_interpreter::RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY,
-    streamlib::sdk::node_interpreter::RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME,
-];
-
-/// Why each program a project's views and controls are checked with is not
-/// beside this executable, naming the program.
-pub(crate) fn code_checkers_the_runtime_unit_does_not_carry() -> Vec<String> {
-    RUNTIME_UNIT_CODE_CHECKERS
-        .into_iter()
-        .filter_map(|code_checker| runtime_unit_executable_beside_this_one(code_checker).err())
-        .collect()
+/// The programs a project's views and controls are checked with, as the runtime
+/// unit carries them beside this executable, and the kit this runtime's starter
+/// names in its environment, read once here.
+pub(crate) fn extension_code_checkers_beside_this_one() -> ExtensionCodeCheckers {
+    ExtensionCodeCheckers {
+        typescript_compiler: runtime_unit_executable_beside_this_one(
+            streamlib::sdk::node_interpreter::RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY,
+        ),
+        linter: runtime_unit_executable_beside_this_one(
+            streamlib::sdk::node_interpreter::RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME,
+        ),
+        kit_its_starter_names: std::env::var_os(EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE)
+            .filter(|named| !named.is_empty())
+            .map(PathBuf::from),
+    }
 }
 
 /// The executable `executable_file_name` beside `canonical_executable`, or why
@@ -83,11 +86,14 @@ mod tests {
         std::fs::write(runtime_unit_bin.path().join("typescript/tsc"), "tsc").unwrap();
 
         assert_eq!(
-            runtime_unit_executable_beside(&tatolabd, RUNTIME_UNIT_CODE_CHECKERS[0]),
+            runtime_unit_executable_beside(&tatolabd, streamlib::sdk::node_interpreter::RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY),
             Ok(runtime_unit_bin.path().join("typescript/tsc"))
         );
-        let refusal = runtime_unit_executable_beside(&tatolabd, RUNTIME_UNIT_CODE_CHECKERS[1])
-            .expect_err("no linter sits beside it");
+        let refusal = runtime_unit_executable_beside(
+            &tatolabd,
+            streamlib::sdk::node_interpreter::RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME,
+        )
+        .expect_err("no linter sits beside it");
         assert!(refusal.contains("oxlint"), "{refusal}");
     }
 

@@ -74,6 +74,38 @@ def the_node_class_the_function_node_pool_runs_as(
     return node.process(execution="continuous")(pool_class)
 
 
+def take_the_carries_a_running_pool_is_handed(
+    pool_class: type, pool_config: "Mapping[str, Any]", link_data_access: NodeLinkDataAccess
+) -> None:
+    """Take each carry `pool_config["carries"]` names that the running pool does not carry yet.
+
+    Its two ports are declared before the engine wires the links into and out of them, and
+    the pool reads and writes them from its next `process` on, so a carry joins a running
+    pool without a restart. A carry the pool already holds is left as it is.
+    """
+    carried_input_ports = {input_port for input_port, _, _ in pool_class._carries}
+    new_carries = [
+        carry
+        for carry in (pool_config.get("carries") or [])
+        if carry["input_port"] not in carried_input_ports
+    ]
+    for carry in new_carries:
+        family = _the_port_family_a_carry_declares(carry)
+        for port_name, port in (
+            (carry["input_port"], Input(family, delivery="newest")),
+            (carry["output_port"], Output(family)),
+        ):
+            setattr(pool_class, port_name, port)
+            port.__set_name__(pool_class, port_name)
+    link_data_access.declare_ports(
+        [carry["input_port"] for carry in new_carries],
+        [carry["output_port"] for carry in new_carries],
+    )
+    pool_class._carries = pool_class._carries + tuple(
+        (carry["input_port"], carry["output_port"], carry["family"]) for carry in new_carries
+    )
+
+
 def _the_port_family_a_carry_declares(carry: "Mapping[str, Any]") -> "PortFamily[Any]":
     if carry["family"] == _CARRIES_A_MESSAGE_HANDED_ON_UNREAD:
         return _PORT_FAMILIES_BY_WIRE_NAME[carry["message_family"]]

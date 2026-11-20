@@ -11,7 +11,8 @@
 //! message: a Channels block of one f64 sample on each of 1, 4, n, 4 and 16 channels at rate 0,
 //! which states no regular rate, its parts in the order their stored form lists them. A
 //! String, a Menu, an Asset and a List of them pack as a Records message `{"value": ...}`, and
-//! a List of numbers or values of parts as an Array frame of one attribute.
+//! a List of numbers or values of parts as an Array frame of one attribute. A bundle packs as
+//! one message holding each member by name, as `bundle_packing` says.
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -28,8 +29,19 @@ use streamlib_project_repository::FAMILIES_A_PANEL_WRITES;
 
 use crate::core::descriptors::{PinType, PortFamily};
 
+mod bundle_packing;
 #[cfg(test)]
 mod tests;
+
+pub use bundle_packing::{
+    the_member_a_bundle_message_carries, the_members_of_a_bundle_a_records_message_carries,
+    the_records_message_of_members_of_a_bundle,
+};
+
+use bundle_packing::{
+    is_a_bundle_of_tensors, the_array_frame_of_a_bundle_of_tensors,
+    the_bundle_a_records_message_carries, the_records_message_of_a_bundle, the_value_read_as,
+};
 
 /// The Array attribute a Tensor a client writes as a number or a list of numbers is carried as,
 /// and the one attribute a List of numbers or values of parts travels as.
@@ -97,12 +109,7 @@ pub fn message_kind_of(pin_type: &PinType) -> Option<DataChannelPayloadDescripto
         PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
             DataChannelPayloadDescriptorKind::ArrayFrame
         }
-        PinType::Bundle { members }
-            if !members.is_empty()
-                && members
-                    .iter()
-                    .all(|member| matches!(member.member_type, PinType::Tensor {})) =>
-        {
+        PinType::Bundle { members } if is_a_bundle_of_tensors(members) => {
             DataChannelPayloadDescriptorKind::ArrayFrame
         }
         PinType::String {}
@@ -162,6 +169,10 @@ pub fn pack_pin_value(
         PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
             the_array_frame_of_a_list_of_parts(pin_type, element_type, value)
         }
+        PinType::Bundle { members } if is_a_bundle_of_tensors(members) => {
+            the_array_frame_of_a_bundle_of_tensors(pin_type, members, value)
+        }
+        PinType::Bundle { .. } => the_records_message_of_a_bundle(pin_type, value),
         PinType::String {}
         | PinType::Menu { .. }
         | PinType::Asset { .. }
@@ -190,6 +201,9 @@ pub fn unpack_pin_value(
         PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
             the_list_of_parts_an_array_frame_carries(element_type, message)
         }
+        PinType::Bundle { members } if !is_a_bundle_of_tensors(members) => {
+            the_bundle_a_records_message_carries(pin_type, message)
+        }
         PinType::String {}
         | PinType::Menu { .. }
         | PinType::Asset { .. }
@@ -200,7 +214,7 @@ pub fn unpack_pin_value(
 
 /// `value`, a stored value of `pin_type`, as the Records message `{"value": value}`, which a
 /// String, a Menu, an Asset and a List of them travel as, and a helper's island carries any List
-/// as; or why `pin_type` does not take it.
+/// as, each bundle element made whole; or why `pin_type` does not take it.
 pub fn the_records_message_of_a_stored_value(
     pin_type: &PinType,
     value: &Value,
@@ -208,7 +222,14 @@ pub fn the_records_message_of_a_stored_value(
     pin_type
         .check_value(value)
         .map_err(|not_taken| format!("`{value}` is not {}", not_taken.takes))?;
-    let payload = rmp_serde::to_vec_named(&serde_json::json!({ RECORDS_MESSAGE_VALUE_KEY: value }))
+    the_records_message_of_a_record(
+        &serde_json::json!({ RECORDS_MESSAGE_VALUE_KEY: the_value_read_as(pin_type, value)? }),
+    )
+}
+
+/// `record` as the Records message of its msgpack map, or why it is too large for one.
+fn the_records_message_of_a_record(record: &Value) -> Result<PackedPinValue, String> {
+    let payload = rmp_serde::to_vec_named(record)
         .map_err(|why| format!("the value does not encode: {why}"))?;
     if payload.len() > RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES {
         return Err(format!(
@@ -223,8 +244,8 @@ pub fn the_records_message_of_a_stored_value(
     })
 }
 
-/// The stored value of `pin_type` the Records message `message` carries under `value`, checked
-/// as a set value is; or why it carries none.
+/// The stored value of `pin_type` the Records message `message` carries under `value`, each
+/// bundle element read as `pin_type`'s own, checked as a set value is; or why it carries none.
 pub fn the_stored_value_a_records_message_carries(
     pin_type: &PinType,
     message: PackedPinValueRef<'_>,
@@ -241,9 +262,10 @@ pub fn the_stored_value_a_records_message_carries(
     let Value::Object(mut record) = record else {
         return Err("the Records message holds no map".to_owned());
     };
-    let value = record.remove(RECORDS_MESSAGE_VALUE_KEY).ok_or_else(|| {
+    let carried = record.remove(RECORDS_MESSAGE_VALUE_KEY).ok_or_else(|| {
         format!("a {pin_type} travels as `{{\"{RECORDS_MESSAGE_VALUE_KEY}\": ...}}`, and the message holds no `{RECORDS_MESSAGE_VALUE_KEY}`")
     })?;
+    let value = the_value_read_as(pin_type, &carried)?;
     pin_type
         .check_value(&value)
         .map_err(|not_taken| format!("`{value}` is not {}", not_taken.takes))?;

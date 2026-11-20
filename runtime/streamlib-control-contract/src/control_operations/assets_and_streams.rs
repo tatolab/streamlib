@@ -7,9 +7,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::EVERY_SURFACE;
+use super::worked_examples;
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest, DescribeAssetRequest,
@@ -33,6 +35,7 @@ impl ControlOperation for ListAssets {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_ASSETS);
 }
 
 /// `describe_asset`: describe one asset of a project.
@@ -51,6 +54,7 @@ impl ControlOperation for DescribeAsset {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_ASSET);
 }
 
 /// `read_asset_preview`: read an asset's preview picture.
@@ -69,6 +73,7 @@ impl ControlOperation for ReadAssetPreview {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::READ_ASSET_PREVIEW);
 }
 
 /// `import_asset`: import a file as a new asset of a project, as one transaction.
@@ -88,6 +93,7 @@ impl ControlOperation for ImportAsset {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::IMPORT_ASSET);
 }
 
 /// `relocate_asset`: move or rename an asset inside its project, as one transaction.
@@ -107,6 +113,7 @@ impl ControlOperation for RelocateAsset {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::RELOCATE_ASSET);
 }
 
 /// `delete_asset`: delete an asset from a project, as one transaction.
@@ -125,6 +132,7 @@ impl ControlOperation for DeleteAsset {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DELETE_ASSET);
 }
 
 /// `set_asset_settings`: replace an asset's import settings, as one transaction.
@@ -143,6 +151,7 @@ impl ControlOperation for SetAssetSettings {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_ASSET_SETTINGS);
 }
 
 /// `replace_asset`: replace an asset's bytes, as one transaction.
@@ -161,6 +170,7 @@ impl ControlOperation for ReplaceAsset {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REPLACE_ASSET);
 }
 
 /// `create_stream`: create a stream in a project, as one transaction.
@@ -179,6 +189,7 @@ impl ControlOperation for CreateStream {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CREATE_STREAM);
 }
 
 /// `delete_stream`: delete a stream from a project, as one transaction.
@@ -197,6 +208,7 @@ impl ControlOperation for DeleteStream {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DELETE_STREAM);
 }
 
 /// `set_stream_display_name`: set the name a stream is shown under, as one transaction.
@@ -215,4 +227,5 @@ impl ControlOperation for SetStreamDisplayName {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_STREAM_DISPLAY_NAME);
 }

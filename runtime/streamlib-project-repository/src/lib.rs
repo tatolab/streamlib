@@ -4,6 +4,7 @@
 //! A project as a versioned repository of assets, which the runtime alone writes.
 
 mod canonical_project_json;
+mod content_sha256;
 mod core_project_import;
 mod manifest_fields;
 mod node_ui_manifest;
@@ -47,6 +48,7 @@ mod tatolab_view_manifest;
 mod view_manifest_check;
 
 pub use canonical_project_json::canonical_project_json_bytes;
+pub use content_sha256::content_sha256_of;
 pub use core_project_import::{
     CORE_PROJECT_IMPORT_FOLDER, every_import_a_project_resolves, link_the_core_project_into,
     link_the_core_project_into_each_import_of, the_core_project_link_in,
@@ -59,8 +61,9 @@ pub use node_ui_manifest::{
 };
 #[cfg(feature = "history")]
 pub use node_ui_manifest_check::{
-    NodeUiManifestToCheck, is_a_projects_own_node_ui_manifest, the_findings_of_a_node_ui_manifest,
-    the_node_ui_manifest_a_check_reads, the_path_of_a_projects_own_node_ui_manifest,
+    ModuleNotRead, ModuleThatDeclares, NodeUiManifestToCheck, WhatTheProjectsModulesDeclare,
+    the_findings_of_a_node_ui_manifest, the_node_ui_manifest_a_check_reads,
+    the_path_of_a_projects_own_node_ui_manifest,
 };
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,
@@ -68,9 +71,7 @@ pub use project_asset::{
     every_asset_uuid_the_project_holds, the_file_of_an_asset,
 };
 #[cfg(feature = "history")]
-pub use project_asset_file_bytes::{
-    PROJECT_UPLOADS_DIRECTORY, content_sha256_of, the_upload_file_of,
-};
+pub use project_asset_file_bytes::{PROJECT_UPLOADS_DIRECTORY, the_upload_file_of};
 pub use project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
@@ -84,8 +85,8 @@ pub use project_history_repository::{
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
 pub use project_node_ui_elements::{
-    ProjectNodeUiElementsListed, ProjectNodeUiManifestRead,
-    every_node_ui_element_a_project_and_its_imports_bring,
+    NodeUiManifestFileRead, ProjectNodeUiElementsListed, ProjectNodeUiManifestRead,
+    every_node_ui_element_a_project_and_its_imports_bring, the_node_ui_manifest_file_read,
 };
 pub use project_pyproject_import_sources::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
@@ -122,8 +123,9 @@ pub use project_transaction::{
     ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
     ProjectSettingsAction, ProjectSettingsOperation, ProjectStreamDocumentOperation,
     ProjectTransaction, ProjectTransactionAsSentAndAnswered, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionNodeInsertedOnALink,
-    ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionLinkMadeUnjudged,
+    ProjectTransactionNodeInsertedOnALink, ProjectTransactionReversal, ProjectTransactionUndoState,
+    StreamGraphOperationOnAStream,
 };
 pub use project_views::{
     PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,
@@ -154,8 +156,9 @@ pub use stream_graph_action::{
     IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
-    NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
-    NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
+    NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION, NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION,
+    NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION, NOTE_ARGUMENT_DESCRIPTION,
+    NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
 };
 pub use stream_graph_default_port_and_variable_names::{
@@ -171,7 +174,9 @@ pub use stream_graph_document::{
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, asset_references_made_references_into_the_import,
     assets_a_nodes_input_values_reference, fragment_with_each_node_uuid_kept_by_its_name,
-    is_a_graph_interface_node_type, is_the_graph_input_type,
+    input_values_after_the_set, is_a_graph_interface_node_type, is_the_graph_input_type,
+    the_input_value_after_the_set, the_input_value_held_on,
+    the_value_held_on_the_input_or_its_member,
 };
 pub use stream_graph_fragment_fold::{
     StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,
@@ -192,6 +197,4 @@ pub use tatolab_view_manifest::{
     VIEW_CONTRACT_READ_MINOR, a_panel_writes, read_tatolab_view_manifest,
 };
 #[cfg(feature = "history")]
-pub use view_manifest_check::{
-    ViewManifestsChecked, check_a_projects_view_manifests, is_the_manifest_of_a_projects_own_view,
-};
+pub use view_manifest_check::{ViewManifestsChecked, check_a_projects_view_manifests};

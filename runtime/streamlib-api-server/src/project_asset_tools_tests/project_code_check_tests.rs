@@ -49,6 +49,8 @@ async fn a_declaration_error_is_answered_with_its_check_place_and_code() {
                 "checked_with": ["tatolab-stream 1.0"],
             },
             { "check": "extension_manifest", "state": "passed" },
+            { "check": "extension_types", "state": "passed" },
+            { "check": "extension_lint", "state": "passed" },
         ])
     );
     assert_eq!(
@@ -318,5 +320,90 @@ esac
             .unwrap()
             .contains("`node_bodies[1]`"),
         "{finding}"
+    );
+}
+
+/// The `every-pin-kind` sample's node UI folder, which registers the default control of the
+/// named type `nodes.sweep:Sweep` its own code declares.
+fn the_every_pin_kind_samples_node_ui_folder_in(project_directory: &Path) {
+    let sample_node_ui_folder =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/every-pin-kind/node_ui");
+    let node_ui_folder = project_directory.join("node_ui");
+    std::fs::create_dir_all(&node_ui_folder).unwrap();
+    for script in ["tatolab_node_ui.json", "sweep_on_its_wire.ts"] {
+        std::fs::copy(
+            sample_node_ui_folder.join(script),
+            node_ui_folder.join(script),
+        )
+        .unwrap();
+    }
+}
+
+/// Stand the project's interpreter in with one answering the node type listing with
+/// `listed_source`, a source declaring `nodes.sweep:Sweep`, and the check entry with no findings.
+fn the_projects_listing_declares_the_sweep_in(project_directory: &Path, listed_source: &str) {
+    let interpreter = project_directory.join(".venv/bin/python");
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    let named_pin_types = r#""named_pin_types":[{"named_pin_type":"nodes.sweep:Sweep","description":"A band sweeping across the picture.","path":"nodes/sweep.py","line":20}]"#;
+    std::fs::write(
+        &interpreter,
+        format!(
+            r#"#!/bin/sh
+cat > /dev/null
+case "$*" in
+  *_project_node_type_listing_entry*) printf '%s\n' '{{"sources":[{{{listed_source},"node_types":[],"graph_generators":[],{named_pin_types},"unreadable_modules":[]}}]}}' ;;
+  *) printf '%s\n' '{{"modules":[],"checked_with":["tatolab-stream 1.0"]}}' ;;
+esac
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[tokio::test]
+async fn the_samples_default_control_of_a_named_type_its_own_code_declares_passes_the_check() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    the_projects_listing_declares_the_sweep_in(
+        &served.project_directory(),
+        r#""source":"project""#,
+    );
+    the_every_pin_kind_samples_node_ui_folder_in(&served.project_directory());
+
+    let checked = served.answered("check_project_code", json!({})).await;
+
+    assert_eq!(
+        checked["checks"][1],
+        json!({ "check": "extension_manifest", "state": "passed" }),
+        "{checked}"
+    );
+    assert_eq!(checked["findings"], json!([]), "{checked}");
+}
+
+#[tokio::test]
+async fn a_default_control_of_a_named_type_an_import_declares_fails_the_check_naming_the_import() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    the_projects_listing_declares_the_sweep_in(
+        &served.project_directory(),
+        r#""source":"dependency","project":"6f1c2a8e-0000-4000-8000-000000000001","folder":"sweeps","version":"v1","project_name":"sweeps""#,
+    );
+    the_every_pin_kind_samples_node_ui_folder_in(&served.project_directory());
+
+    let checked = served.answered("check_project_code", json!({})).await;
+
+    assert_eq!(checked["verdict"], "failed", "{checked}");
+    let [finding] = checked["findings"].as_array().unwrap().as_slice() else {
+        panic!("one finding: {checked}");
+    };
+    assert_eq!(
+        finding["finding_code"],
+        "default_control_not_the_modules_to_register"
+    );
+    let words = finding["words"].as_str().unwrap();
+    assert!(
+        words.contains("`controls[0]`")
+            && words.contains("`nodes.sweep:Sweep`")
+            && words.contains("register it in the import `sweeps` (`imports/sweeps`)"),
+        "{words}"
     );
 }

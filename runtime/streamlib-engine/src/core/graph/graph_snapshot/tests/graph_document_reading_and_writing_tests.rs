@@ -36,7 +36,8 @@ fn a_graph_document_parses_with_its_live_keys_ignored() {
         graph.links[0].source,
         LinkPortRefOutput {
             node: "camera".into(),
-            port: "video".into()
+            port: "video".into(),
+            member: None,
         }
     );
 }
@@ -416,7 +417,7 @@ fn a_key_this_runtime_does_not_read_is_refused_naming_it_and_where_it_sits() {
                 "target": {"node": "display", "port": "video"}}]}),
             [
                 "the source end of the link `camera/video` → `display/video` carries the key `prot`",
-                "`node` and `port`",
+                "`node`, `port` and `member`",
             ],
         ),
     ] {

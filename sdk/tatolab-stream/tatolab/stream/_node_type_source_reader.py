@@ -4,9 +4,10 @@
 """Read the node types and graph generators a module declares from its source, never running it.
 
 A module is parsed with `ast` and its decorators are matched against the names it imports
-from `tatolab.stream`: `@node.process` classes, `@node.function`, bare `@node` and
+from `tatolab.stream`: `@node.process` and bare `@node` classes, `@node.function`, bare `@node` and
 `@node.shader` functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
-node's `@node.meta` beside its kind decorator. A
+node's `@node.meta` beside its kind decorator, and `@named_pin_type` classes, each a pin type
+of the module named by its import path. A
 port is listed where the declaration states it in source; one whose family is computed at
 import is listed with no family, and a node whose ports only its native half knows is listed
 with none. The answer is a JSON-ready dict the runtime's node-type listing passes on.
@@ -39,6 +40,7 @@ SHADER_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.shader"
 NODE_META_DECORATOR = f"{SDK_MODULE_NAME}.node.meta"
 RUST_FUNCTION_NODE_DECLARATION = f"{SDK_MODULE_NAME}.node.rust_function"
 GRAPH_GENERATOR_DECORATOR = f"{SDK_MODULE_NAME}.graph_generator"
+NAMED_PIN_TYPE_DECORATOR = f"{SDK_MODULE_NAME}.named_pin_type"
 DESCRIPTION_DECLARATION = f"{SDK_MODULE_NAME}.Description"
 INPUT_PORT_DECLARATION = f"{SDK_MODULE_NAME}.Input"
 OUTPUT_PORT_DECLARATION = f"{SDK_MODULE_NAME}.Output"
@@ -69,6 +71,21 @@ _PORT_FAMILY_BY_ANNOTATED_TYPE = {
     "ArrayFrame": "array",
     "ChannelsBlock": "channels",
     "PacketsUnit": "packets",
+    "Texture": "image",
+    "Audio": "channels",
+    "Tensor": "array",
+    "EncodedVideo": "packets",
+    "EncodedAudio": "packets",
+    "Trigger": "records",
+    "str": "records",
+    "Asset": "records",
+    "Literal": "records",
+    "Color": "channels",
+    "Vector2": "channels",
+    "Vector3": "channels",
+    "Vector4": "channels",
+    "Rectangle": "channels",
+    "Transform": "channels",
 }
 
 _NODE_META_KEYS = ("category", "description")
@@ -82,6 +99,9 @@ _FUNCTION_NODE_NON_PIN_ANNOTATIONS = ("Time", "State")
 _FUNCTION_NODE_CONFIG_PARAMETER = "config"
 _STATEFUL_RETURN = "Stateful"
 _OPTIONAL_ANNOTATION = "Optional"
+_INPUT_PIN_ANNOTATION = "InputPin"
+_OUTPUT_PIN_ANNOTATION = "OutputPin"
+_CLASS_VARIABLE_ANNOTATION = "ClassVar"
 _ANNOTATED_ANNOTATION = "Annotated"
 _UNREAD_MESSAGE_ANNOTATION = "UnreadMessage"
 _SINGLE_OUTPUT_PORT_NAME = "result"
@@ -105,11 +125,12 @@ def read_node_types_and_graph_generators_from_module_sources(
 ) -> dict[str, Any]:
     """Read each `(module name, path as listed, source text or why it could not be read)` that imports the SDK.
 
-    Answers `{"node_types", "graph_generators", "unreadable_modules"}`, each sorted, a module
-    that does not parse listed with why and where and the rest read regardless.
+    Answers `{"node_types", "graph_generators", "named_pin_types", "unreadable_modules"}`, each
+    sorted, a module that does not parse listed with why and where and the rest read regardless.
     """
     node_types: list[dict[str, Any]] = []
     graph_generators: list[dict[str, Any]] = []
+    named_pin_types: list[dict[str, Any]] = []
     unreadable_modules: list[dict[str, Any]] = []
     for module_name, listed_path, source_text in module_sources:
         if isinstance(source_text, OSError):
@@ -152,12 +173,15 @@ def read_node_types_and_graph_generators_from_module_sources(
         module_reading = _ModuleDeclarationReading(module_name, listed_path, module_tree)
         node_types.extend(module_reading.node_types)
         graph_generators.extend(module_reading.graph_generators)
+        named_pin_types.extend(module_reading.named_pin_types)
     node_types.sort(key=lambda node_type: node_type["type"])
     graph_generators.sort(key=lambda graph_generator: graph_generator["generator"])
+    named_pin_types.sort(key=lambda named_pin_type: named_pin_type["named_pin_type"])
     unreadable_modules.sort(key=lambda unreadable_module: unreadable_module["path"])
     return {
         "node_types": node_types,
         "graph_generators": graph_generators,
+        "named_pin_types": named_pin_types,
         "unreadable_modules": unreadable_modules,
     }
 
@@ -194,6 +218,7 @@ class _ModuleDeclarationReading:
         }
         self.node_types: list[dict[str, Any]] = []
         self.graph_generators: list[dict[str, Any]] = []
+        self.named_pin_types: list[dict[str, Any]] = []
         self.retired_declarations: list[dict[str, Any]] = []
         self._read_statements(module_tree.body, qualname_prefix="", at_module_scope=True)
 
@@ -207,6 +232,18 @@ class _ModuleDeclarationReading:
                 if decorator is not None:
                     self.node_types.append(self._process_node_type(statement, qualname))
                     self._note_a_retired_form(decorator, PROCESS_NODE_DECORATOR, qualname)
+                elif self._decorated_with(statement, TYPED_NODE_DECORATOR) is not None:
+                    self.node_types.append(self._typed_class_node_type(statement, qualname))
+                named_pin_type = self._decorated_with(statement, NAMED_PIN_TYPE_DECORATOR)
+                if named_pin_type is not None:
+                    self.named_pin_types.append(
+                        {
+                            "named_pin_type": f"{self._module_name}:{qualname}",
+                            "description": self._keyword_string(named_pin_type, "description"),
+                            "path": self._listed_path,
+                            "line": statement.lineno,
+                        }
+                    )
                 self._read_statements(
                     statement.body, qualname_prefix=f"{qualname}.", at_module_scope=False
                 )
@@ -295,6 +332,35 @@ class _ModuleDeclarationReading:
             declaration=node_class,
             inputs=inputs,
             outputs=outputs,
+        )
+
+    def _typed_class_node_type(self, node_class: ast.ClassDef, qualname: str) -> dict[str, Any]:
+        """A class under bare `@node`: each public annotated attribute a field, an `InputPin`
+        or an `OutputPin`, in the order written; `_private` and `ClassVar` ones are state."""
+        inputs: list[dict[str, Any]] = []
+        outputs: list[dict[str, Any]] = []
+        for statement in node_class.body:
+            if not isinstance(statement, ast.AnnAssign) or not isinstance(statement.target, ast.Name):
+                continue
+            attribute_name = statement.target.id
+            pin_form, type_annotation = _class_node_pin_form_and_its_type(statement.annotation)
+            if attribute_name.startswith("_") or pin_form == _CLASS_VARIABLE_ANNOTATION:
+                continue
+            port: dict[str, Any] = {
+                "name": _port_name_as_cast(attribute_name),
+                "family": _function_port_family(type_annotation),
+                "description": self._described_text_of(statement.annotation)
+                or self._described_text_of(type_annotation),
+                "annotation": ast.unparse(statement.annotation),
+            }
+            if pin_form == _OUTPUT_PIN_ANNOTATION:
+                outputs.append(port)
+                continue
+            if pin_form is None and statement.value is not None:
+                port.update(_default_as_listed(statement.value, literal_key="pin_default"))
+            inputs.append(port)
+        return self._node_type(
+            qualname, "process", declaration=node_class, inputs=inputs, outputs=outputs
         )
 
     def _declared_port(self, attribute_name: str, port_declaration: ast.Call) -> dict[str, Any]:
@@ -639,3 +705,23 @@ def _function_port_family(annotation: Optional[ast.expr]) -> Optional[str]:
     if type_name is None:
         return None
     return _PORT_FAMILY_BY_ANNOTATED_TYPE.get(type_name)
+
+
+def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:
+    """The form a class node's attribute annotation writes, `InputPin`, `OutputPin` or `ClassVar`,
+    and the type inside it; `None` and the annotation itself for a field."""
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            return _class_node_pin_form_and_its_type(ast.parse(annotation.value, mode="eval").body)
+        except SyntaxError:
+            return None, annotation
+    written = annotation
+    if isinstance(written, ast.Subscript) and _annotated_type_name(written) == _ANNOTATED_ANNOTATION:
+        arguments = _subscript_arguments(written)
+        if arguments:
+            written = arguments[0]
+    form = _annotated_type_name(written)
+    if form in (_INPUT_PIN_ANNOTATION, _OUTPUT_PIN_ANNOTATION, _CLASS_VARIABLE_ANNOTATION):
+        arguments = _subscript_arguments(written) if isinstance(written, ast.Subscript) else []
+        return form, arguments[0] if arguments else written
+    return None, annotation

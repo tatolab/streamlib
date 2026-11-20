@@ -23,10 +23,11 @@ use super::{
 /// Wire contract with the helper bootstrap: `{"input_port", "link_id",
 /// "output": {"node", "port"}, "nodes": [{"node", "name", "import_path",
 /// "config", "pins": {input: value}, "links_into": [{"port", "from": {"node",
-/// "port"} or {"reader_input_port"}}]}]}`, a stateful node's `"node_uuid"` and `"state_fields"`
-/// beside its `"node"`, and
-/// the `"exposed_config_fields"` of a node that takes config fields as inputs,
-/// each a port a link of `"links_into"` may name.
+/// "port"} or {"reader_input_port"}}]}]}`, where `"reads_members_over_its_pin": true` beside
+/// `"reader_input_port"` marks a bundle input fed member by member, whose reader port carries the
+/// members its links have carried, each newest, to put over the input's pin; a stateful node's
+/// `"node_uuid"` and `"state_fields"` beside its `"node"`, and the `"exposed_config_fields"` of a
+/// node that takes config fields as inputs, each a port a link of `"links_into"` may name.
 pub(crate) fn the_island_feeding_a_link(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -110,16 +111,23 @@ fn place_a_function_node_after_what_it_reads(
     for link_into in links_into_this_node {
         let upstream_id = link_into.source().node_run_id();
         if !runs_inside_the_read_of_each_node_it_feeds(graph, upstream_id) {
-            links_into.push(serde_json::json!({
-                "port": link_into.to_port().port_name(),
-                "from": {
-                    "reader_input_port":
-                        the_reader_input_port_a_link_into_a_function_node_is_read_at(
-                            &link_into.id,
-                            island_link_id,
-                        ),
-                },
-            }));
+            let port = link_into.to_port().port_name();
+            let reader_input_port = the_reader_input_port_a_link_into_a_function_node_is_read_at(
+                link_into,
+                island_link_id,
+            );
+            let reads_members_over_its_pin = link_into.to_port().member().is_some();
+            let read_at_that_port_already = links_into.iter().any(|placed_link| {
+                placed_link["from"]["reader_input_port"].as_str()
+                    == Some(reader_input_port.as_str())
+            });
+            if !read_at_that_port_already {
+                let mut from = serde_json::json!({ "reader_input_port": reader_input_port });
+                if reads_members_over_its_pin {
+                    from["reads_members_over_its_pin"] = JsonValue::Bool(true);
+                }
+                links_into.push(serde_json::json!({ "port": port, "from": from }));
+            }
             continue;
         }
         if is_a_previous_value_node(graph, node_id) {

@@ -1,5 +1,5 @@
 {
-  "contract": "1.0",
+  "contract": "1.1",
   "title": "Program",
   "description": "The show as the audience gets it: wire in the final picture and the final sound.",
   "entry": "index.html",
@@ -7,12 +7,12 @@
   "inputs": [
     {
       "name": "video",
-      "family": "image",
+      "pin_type": { "type": "texture" },
       "description": "The picture to show, full frame."
     },
     {
       "name": "audio",
-      "family": "channels",
+      "pin_type": { "type": "audio" },
       "description": "The sound of the show, played on the default output device and drawn as one level meter per channel."
     }
   ]

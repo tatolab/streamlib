@@ -87,6 +87,7 @@ fn two_settings_set_one_at_a_time_while_paused_are_both_held_once_resumed() {
         tokio_runtime
             .block_on(stream.apply_a_stream_graph_operation_live(
                 StreamGraphOperation::SetNodeInputValue {
+                    member: None,
                     node,
                     input: input.to_owned(),
                     from: Some(serde_json::json!(from)),

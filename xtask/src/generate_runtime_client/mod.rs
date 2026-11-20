@@ -281,6 +281,9 @@ pub(crate) struct ControlContractEntryRead<'contract> {
     stability: &'contract str,
     group: &'contract str,
     subscribed_by: &'contract str,
+    example_params: Option<&'contract Value>,
+    example_answer: Option<&'contract Value>,
+    example_refusal: Option<&'contract Value>,
 }
 
 /// The parts of the contract file the generator writes from.
@@ -620,6 +623,20 @@ impl<'contract> ControlContractRead<'contract> {
                         .collect::<Vec<_>>()
                         .join(", "),
                 );
+                for (heading, example) in [
+                    ("Example params", method.example_params),
+                    ("Example answer", method.example_answer),
+                    ("Example refusal", method.example_refusal),
+                ] {
+                    if let Some(example) = example {
+                        let _ = write!(
+                            reference,
+                            "\n{heading}:\n\n```json\n{}\n```\n",
+                            serde_json::to_string_pretty(example)
+                                .unwrap_or_else(|_| unreachable!("a JSON value always serializes"))
+                        );
+                    }
+                }
             }
         }
         if !self.notifications.is_empty() {
@@ -667,6 +684,9 @@ impl<'contract> ControlContractEntryRead<'contract> {
             stability: entry["x-stability"].as_str().unwrap_or_default(),
             group: entry["x-group"].as_str().unwrap_or_default(),
             subscribed_by: entry["x-subscribed-by"].as_str().unwrap_or_default(),
+            example_params: entry.pointer("/examples/0/params/0/value"),
+            example_answer: entry.pointer("/examples/0/result/value"),
+            example_refusal: entry.get("x-refusal-example"),
         })
     }
 

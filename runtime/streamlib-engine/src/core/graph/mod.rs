@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod bundle_member_link_ends;
 mod components;
 mod config_node_reference_edges;
 mod config_schema_value_checks;
@@ -30,6 +31,10 @@ mod graph_tests;
 mod renamed_port_tests;
 
 // top level
+pub(crate) use bundle_member_link_ends::{
+    WhatTheLinksIntoAnInputFeed, the_bundle_member_a_link_ends_at,
+    the_bundle_member_a_link_starts_at,
+};
 pub(crate) use config_node_reference_edges::{
     config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
     refuse_a_live_config_naming_a_node_the_graph_does_not_hold,
