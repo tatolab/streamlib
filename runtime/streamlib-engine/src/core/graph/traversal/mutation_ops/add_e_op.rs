@@ -20,6 +20,18 @@ impl<'a> TraversalSourceMut<'a> {
             return self.no_link();
         };
 
+        crate::core::graph::grow_a_pin_group_to_hold_the_port(
+            self.graph,
+            from_idx,
+            crate::core::PortDirection::Output,
+            from.port_name(),
+        );
+        crate::core::graph::grow_a_pin_group_to_hold_the_port(
+            self.graph,
+            to_idx,
+            crate::core::PortDirection::Input,
+            to.port_name(),
+        );
         let Some(from) = self.graph[from_idx]
             .try_output(from.port_name())
             .map(|current| current.at_member(from.member().map(str::to_owned)))
@@ -36,6 +48,9 @@ impl<'a> TraversalSourceMut<'a> {
         let edge_idx = self
             .graph
             .add_edge(from_idx, to_idx, Link::between(from, to));
+        for node_index in [from_idx, to_idx] {
+            crate::core::graph::reshape_the_pin_group_slots_of(self.graph, node_index);
+        }
 
         LinkTraversalMut {
             graph: self.graph,

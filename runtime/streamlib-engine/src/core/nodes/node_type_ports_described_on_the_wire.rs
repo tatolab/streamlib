@@ -7,12 +7,13 @@
 //! its value.
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    NodeTypeInputDescribed, NodeTypeInputMode, NodeTypePortDescribed, NodeTypePortPin,
+    NodeTypeInputDescribed, NodeTypeInputMode, NodeTypePinGroupDescribed, NodeTypePinGroupSlots,
+    NodeTypePortDescribed, NodeTypePortPin,
 };
 
 use crate::core::descriptors::{
-    NodeDescriptor, NodeInputMode, NodeKind, NodeValueLifetime, PinDeclaration, PortDescriptor,
-    SettingReadTime,
+    NodeDescriptor, NodeInputMode, NodeKind, NodeValueLifetime, PinDeclaration, PinGroupSlotCount,
+    PortDescriptor, SettingReadTime,
 };
 use crate::core::graph::PortInfo;
 use crate::core::graph::input_values::the_input_port_takes_a_value;
@@ -31,6 +32,8 @@ pub struct NodeTypePortsDescribedOnTheWire {
     pub outputs: Vec<NodeTypePortDescribed>,
     /// The settings of a node type not yet typed that `set_exposed_config_fields` takes.
     pub exposable_config_fields: Vec<String>,
+    /// Each pin group, its slot's ports each named as its pin.
+    pub pin_groups: Vec<NodeTypePinGroupDescribed>,
 }
 
 impl NodeTypePortsDescribedOnTheWire {
@@ -38,7 +41,7 @@ impl NodeTypePortsDescribedOnTheWire {
     pub fn of(descriptor: &NodeDescriptor) -> Self {
         Self {
             inputs: descriptor
-                .inputs
+                .the_inputs_with_slots(&vec![0; descriptor.pin_groups.len()])
                 .iter()
                 .map(|port| an_input_port_described(descriptor, port))
                 .chain(
@@ -55,6 +58,28 @@ impl NodeTypePortsDescribedOnTheWire {
             .into_iter()
             .map(|(field, _)| field)
             .collect(),
+            pin_groups: descriptor
+                .pin_groups
+                .iter()
+                .map(|group| NodeTypePinGroupDescribed {
+                    name: group.name.clone(),
+                    documentation: group.description.clone(),
+                    slots: match group.slot_count() {
+                        PinGroupSlotCount::FollowsItsWires => {
+                            NodeTypePinGroupSlots::FollowTheirWires
+                        }
+                        PinGroupSlotCount::SetByItsInput => {
+                            NodeTypePinGroupSlots::SetByTheInputOfTheGroupsName
+                        }
+                    },
+                    inputs: group
+                        .inputs
+                        .iter()
+                        .map(|port| an_input_port_described(descriptor, port))
+                        .collect(),
+                    outputs: group.outputs.iter().map(a_port_described).collect(),
+                })
+                .collect(),
         }
     }
 }

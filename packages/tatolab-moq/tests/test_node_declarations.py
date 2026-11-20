@@ -42,10 +42,10 @@ def a_track_sent_through_a_variable_and_read_back(stream_builder: StreamBuilder)
     )
     camera_track = stream_builder.add(MoqTrack, config={"gateway": gateway, "track": "camera"})
     stream_builder.add(
-        SetVariable, name="set-camera-track", config={"variable": "camera", "node_reference": camera_track}
+        SetVariable, name="set-camera-track", input_values={"variable": "camera", "node_reference": camera_track}
     )
     get_camera_track = stream_builder.add(
-        GetVariable, name="get-camera-track", config={"variable": "camera"}
+        GetVariable, name="get-camera-track", input_values={"variable": "camera"}
     )
     stream_builder.add(MoqTrackSend, config={"track": get_camera_track})
     stream_builder.add(

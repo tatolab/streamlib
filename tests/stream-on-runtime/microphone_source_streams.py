@@ -36,4 +36,4 @@ def microphone_into_an_audio_block_probe_in_slow_motion(stream_builder: StreamBu
 
 @graph_generator
 def microphone_source_naming_an_unopenable_device(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(MicrophoneSource, config={"device_id": UNOPENABLE_DEVICE_ID})
+    stream_builder.add(MicrophoneSource, input_values={"device_id": UNOPENABLE_DEVICE_ID})

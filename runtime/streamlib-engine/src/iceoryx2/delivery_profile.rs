@@ -102,7 +102,7 @@ pub(crate) fn delivery_profile_for_input_port(
     let Some(ports) = node_types.port_info(node_type) else {
         return Ok(DeliveryProfile::Newest);
     };
-    let Some(port) = ports.input_named(port_name) else {
+    let Some(port) = ports.the_input_of_the_type_a_name_finds(port_name) else {
         return Ok(DeliveryProfile::Newest);
     };
 

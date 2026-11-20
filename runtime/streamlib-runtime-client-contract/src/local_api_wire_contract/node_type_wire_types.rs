@@ -328,6 +328,39 @@ pub struct NodeTypeDescription {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub exposable_config_fields: Vec<String>,
+    /// Each pin group: a slot of inputs and outputs that repeats on each node, each slot's ports
+    /// named `<group>.<index>.<pin>` among the node's ports in `graph`; absent when it declares
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pin_groups: Vec<NodeTypePinGroupDescribed>,
+}
+
+/// A pin group of a node type: a slot of inputs and outputs that repeats on each node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct NodeTypePinGroupDescribed {
+    /// The group's name, the first part of each of its slots' port names.
+    pub name: String,
+    /// What the group is for.
+    pub documentation: String,
+    /// How many slots a node holds.
+    pub slots: NodeTypePinGroupSlots,
+    /// The inputs each slot holds, each named as its pin; a slot's port is named
+    /// `<group>.<index>.<pin>`.
+    pub inputs: Vec<NodeTypeInputDescribed>,
+    /// The outputs each slot holds, each named as its pin.
+    pub outputs: Vec<NodeTypePortDescribed>,
+}
+
+/// How many slots a node holds in a pin group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum NodeTypePinGroupSlots {
+    /// One empty slot after the last a link reaches: wiring the empty slot adds the next.
+    FollowTheirWires,
+    /// As many as the node's input named after the group says, a setting read at setup.
+    SetByTheInputOfTheGroupsName,
 }
 
 /// A node type named that the runtime could not describe.

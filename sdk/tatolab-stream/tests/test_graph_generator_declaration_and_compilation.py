@@ -506,10 +506,10 @@ def test_a_variable_set_from_a_port_and_read_twice_compiles_to_its_drawn_nodes_a
 
     stream_builder = StreamBuilder("rig")
     inverter = stream_builder.add(FrameInverter)
-    setter = stream_builder.add(SetVariable, config={"variable": "inverted"})
+    setter = stream_builder.add(SetVariable, input_values={"variable": "inverted"})
     stream_builder.connect(inverter.output("video_to_downstream"), setter.input("value"))
     for reader_name in ("front", "back"):
-        getter = stream_builder.add(GetVariable, config={"variable": "inverted"})
+        getter = stream_builder.add(GetVariable, input_values={"variable": "inverted"})
         reader = stream_builder.add(BrightnessReader, name=reader_name)
         stream_builder.connect(getter.output("value"), reader.input("video_from_upstream"))
 
@@ -544,9 +544,9 @@ def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_on
     stream_builder = StreamBuilder("rig")
     inverter = stream_builder.add(FrameInverter)
     stream_builder.add(
-        SetVariable, config={"variable": "connection", "node_reference": inverter}
+        SetVariable, input_values={"variable": "connection", "node_reference": inverter}
     )
-    getter = stream_builder.add(GetVariable, config={"variable": "connection"})
+    getter = stream_builder.add(GetVariable, input_values={"variable": "connection"})
     stream_builder.add(BrightnessReader, config={"source": getter})
 
     nodes = stream_builder._compiled_graph()["nodes"]

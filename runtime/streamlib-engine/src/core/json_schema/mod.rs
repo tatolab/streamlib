@@ -32,7 +32,7 @@ pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
     LinkCarriedThroughTheFunctionNodePoolOnTheWire, MachineWideGraphOnTheWire,
-    PinLinkMarksOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+    PinGroupSlotOnTheWire, PinLinkMarksOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
 };
 
 // =============================================================================
@@ -569,12 +569,23 @@ fn ports_rendered_over_their_settled_contracts(
     let settled = node
         .get::<crate::core::graph::DeviceMatchedAudioWindowContractsComponent>()
         .map(|component| &*component.0);
+    let pin_group_slot = |port_name: &str| {
+        node.the_pin_group_slot_of(port_name)
+            .map(|(group, slot_port)| PinGroupSlotOnTheWire {
+                group: group.name.clone(),
+                slot: slot_port.slot,
+                pin: slot_port.pin.to_owned(),
+            })
+    };
     GraphNodePortsOnTheWire {
         inputs: node
             .ports
             .inputs
             .iter()
-            .map(|port| input_port_rendered_over_any_settled_contract(node, port, settled))
+            .map(|port| GraphNodePortOnTheWire {
+                pin_group_slot: pin_group_slot(&port.name),
+                ..input_port_rendered_over_any_settled_contract(node, port, settled)
+            })
             .collect(),
         outputs: node
             .ports
@@ -584,6 +595,7 @@ fn ports_rendered_over_their_settled_contracts(
                 stream_facts: node
                     .stream_facts_of_output_ports()
                     .current_facts_of(&port.name),
+                pin_group_slot: pin_group_slot(&port.name),
                 ..GraphNodePortOnTheWire::from(port)
             })
             .collect(),
@@ -640,6 +652,7 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             annotations: port.annotations.0.clone(),
             takes_a_wire: None,
             value_read: None,
+            pin_group_slot: None,
         }
     }
 }

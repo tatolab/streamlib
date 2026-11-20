@@ -97,6 +97,66 @@ impl Default for Graph {
 }
 
 impl Graph {
+    /// Give the node `node_run_id` the slots its pin groups hold by its links and its values;
+    /// answers whether a port came or went.
+    pub(crate) fn reshape_the_pin_group_slots_of_the_node(
+        &mut self,
+        node_run_id: &NodeRunId,
+    ) -> bool {
+        self.digraph
+            .node_indices()
+            .find(|node_index| self.digraph[*node_index].id == *node_run_id)
+            .is_some_and(|node_index| {
+                super::nodes::reshape_the_pin_group_slots_of(&mut self.digraph, node_index)
+            })
+    }
+
+    /// Grow the pin group of the node `node_run_id` holding port `port_name` of `direction` to
+    /// hold it, when the slot it names is past the group's last: a link into it is judged with
+    /// the port there.
+    pub(crate) fn grow_the_pin_group_holding_the_port(
+        &mut self,
+        node_run_id: &NodeRunId,
+        direction: PortDirection,
+        port_name: &str,
+    ) {
+        if let Some(node_index) = self
+            .digraph
+            .node_indices()
+            .find(|node_index| self.digraph[*node_index].id == *node_run_id)
+        {
+            super::nodes::grow_a_pin_group_to_hold_the_port(
+                &mut self.digraph,
+                node_index,
+                direction,
+                port_name,
+            );
+        }
+    }
+
+    /// Refuse `value` as the count of the node `node_run_id`'s pin group named `input` when it
+    /// leaves out a slot a link reaches.
+    pub(crate) fn refuse_a_slot_count_leaving_out_a_linked_slot(
+        &self,
+        node_run_id: &NodeRunId,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> crate::core::Result<()> {
+        match self
+            .digraph
+            .node_indices()
+            .find(|node_index| self.digraph[*node_index].id == *node_run_id)
+        {
+            Some(node_index) => super::nodes::refuse_a_slot_count_leaving_out_a_linked_slot(
+                &self.digraph,
+                node_index,
+                input,
+                value,
+            ),
+            None => Ok(()),
+        }
+    }
+
     /// Create a new empty Graph that resolves the natively compiled node types alone.
     pub fn new() -> Self {
         Self::new_resolving_node_types_through(Arc::new(NodeTypesOneStreamResolves::new()))

@@ -137,6 +137,17 @@ pub enum PinLinkRefusal {
         /// Each conversion that bridges the two ends, none of which `connect` places.
         conversions_that_bridge: Vec<PinConversion>,
     },
+    /// The output carries a bundle or a List holding a Texture, Audio or an encoded unit, which
+    /// travels as one Bundle frame, and the input states no pin type, so it reads each message
+    /// as it arrives and cannot take the frame apart.
+    BundleFrameIntoAnUntypedInput {
+        /// The output end.
+        output: PinLinkEndNamed,
+        /// The node of the input.
+        input_node_name: String,
+        /// The input.
+        input_name: String,
+    },
 }
 
 impl PinLinkRefusal {
@@ -279,6 +290,22 @@ impl fmt::Display for PinLinkRefusal {
                     ),
                 }
             }
+            Self::BundleFrameIntoAnUntypedInput {
+                output,
+                input_node_name,
+                input_name,
+            } => write!(
+                formatter,
+                "cannot link {output} to `{input_node_name}.{input_name}`, which states no pin \
+                 type and reads each message as it arrives: {}, so the output's messages travel \
+                 as Bundle frames, which only an input typed as the bundle takes apart. To fix: \
+                 link it to an input of a bundle type, or send each heavy member on a port of \
+                 its own",
+                output
+                    .pin_type
+                    .its_heavy_members_in_words()
+                    .unwrap_or_else(|| "it holds a heavy member".to_owned())
+            ),
         }
     }
 }

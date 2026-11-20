@@ -24,8 +24,8 @@ and the links between their ports — and the runtime is its one writer:
   document under `streams/` and loads each as its own stream.
 - `CameraSource` comes from the **`tatolab-camera` module**, a dependency in
   `pyproject.toml`. It runs in its own child process, and its per-frame path is
-  the module's Rust, never Python. Its config keys are the fields of
-  `CameraSourceConfig` in `tatolab.camera`.
+  the module's Rust, never Python. Its settings are the fields of
+  `CameraSource` in `tatolab.camera`.
 - **The runtime opens no windows.** Any port of a running stream is seen in
   Tato Studio's viewer; a stream that sends its picture off the machine adds
   gateway nodes.

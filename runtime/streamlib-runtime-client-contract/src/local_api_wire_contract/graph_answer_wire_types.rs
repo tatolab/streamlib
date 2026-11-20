@@ -329,6 +329,22 @@ pub struct GraphNodePortOnTheWire {
     /// are absent on an input that takes no stored value and no link feeds, and on an output.
     #[serde(flatten, deserialize_with = "a_read_only_when_either_key_is_present")]
     pub value_read: Option<InputValueReadOnTheWire>,
+    /// The slot of the node type's pin group this port belongs to; absent on a port of no
+    /// group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_group_slot: Option<PinGroupSlotOnTheWire>,
+}
+
+/// The slot of a pin group a port belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct PinGroupSlotOnTheWire {
+    /// The group's name, as `describe_node_types` lists it.
+    pub group: String,
+    /// The slot's index, from 0.
+    pub slot: usize,
+    /// The pin's name in the slot.
+    pub pin: String,
 }
 
 /// The kind a port was once declared as; every port is `data`.

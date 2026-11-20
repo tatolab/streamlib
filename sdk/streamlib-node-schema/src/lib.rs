@@ -21,6 +21,7 @@ pub mod node_reference_in_config;
 pub mod node_schema;
 pub mod node_settings;
 pub mod node_value_lifetime;
+pub mod pin_group;
 pub mod pin_type;
 pub mod port_family;
 pub mod port_stream_facts;
@@ -52,7 +53,7 @@ pub use node_reference_in_config::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, NODE_REFERENCE_SCHEMA_KEYWORD,
     NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY, NodeReferenceInConfig,
     NodeReferenceToNodeType, NodeTypeANodeReferenceNames, config_keys_holding_a_node_reference,
-    node_name_a_config_value_references,
+    inputs_holding_a_node_reference, node_name_a_config_value_references,
 };
 pub use node_schema::{
     DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES,
@@ -65,6 +66,10 @@ pub use node_settings::{
     the_input_of_a_setting, the_menu_of_a_setting,
 };
 pub use node_value_lifetime::NodeValueLifetime;
+pub use pin_group::{
+    PIN_GROUP_MOST_SLOTS, PIN_GROUP_SLOT_PORT_NAME_SEPARATOR, PinGroupDescriptor,
+    PinGroupSlotCount, PinGroupSlotPort,
+};
 pub use port_family::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     IMAGE_TEXTURE_FORMAT_WIRE_NAMES, ImageOutputPortFrameRate, OutputPortDeclaredNames, PortFamily,

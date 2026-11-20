@@ -18,10 +18,11 @@ use super::bundle_input_read::{
     ValuesABundleInputHolds, the_bundle_members_of, the_live_members_over_the_held_ones,
 };
 use super::live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
-use crate::core::descriptors::{NodeKind, NodeValueLifetime};
+use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortDescriptor};
 use crate::core::graph::{
     Graph, GraphNode, PortInfo, WhatTheLinksIntoAnInputFeed, WhyTheNodeLeaves,
 };
+use crate::core::json_schema::GraphNodePortOnTheWire;
 use crate::core::pubsub::RuntimeEvent;
 
 /// The values set live on one stream's inputs, by node UUID and then input, each with the
@@ -326,6 +327,33 @@ pub(crate) fn the_read_of_an_unfed_input(
             member_values: None,
         },
     }
+}
+
+/// Each of `settings`, the settings a node type the runtime owns declares, as `graph` renders it
+/// on a node holding `input_values`: reading the value the node holds, else the default the
+/// setting declares.
+pub(crate) fn the_settings_rendered_reading_the_values_held(
+    settings: &[PortDescriptor],
+    input_values: &Map<String, Value>,
+) -> Vec<GraphNodePortOnTheWire> {
+    settings
+        .iter()
+        .map(|setting| {
+            let mut rendered = GraphNodePortOnTheWire::from(&PortInfo::from(setting));
+            let read = input_values
+                .get(&setting.name)
+                .filter(|held| !held.is_null())
+                .map(|held| (held.clone(), InputValueComesFromOnTheWire::Saved))
+                .or_else(|| {
+                    setting
+                        .pin_default
+                        .clone()
+                        .map(|default| (default, InputValueComesFromOnTheWire::Default))
+                });
+            rendered.value_read = Some(the_read_of_an_unfed_input(read));
+            rendered
+        })
+        .collect()
 }
 
 /// The value input `port` of `node` in `graph` reads, `fed` saying what the links into it feed:

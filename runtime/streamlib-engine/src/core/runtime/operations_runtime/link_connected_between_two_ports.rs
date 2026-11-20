@@ -110,7 +110,20 @@ pub(in crate::core::runtime) async fn connect_impl(
         held_for_one_commit,
         one_input_value_change_at_a_time,
     } = live_graph_change;
-    let (from, to) = compiler.scope(|graph, _tx| the_ends_connect_links(graph, from, to))?;
+    let (from, to) = compiler.scope(|graph, _tx| {
+        let (from, to) = the_ends_connect_links(graph, from, to)?;
+        graph.grow_the_pin_group_holding_the_port(
+            from.node_run_id(),
+            PortDirection::Output,
+            from.port_name(),
+        );
+        graph.grow_the_pin_group_holding_the_port(
+            to.node_run_id(),
+            PortDirection::Input,
+            to.port_name(),
+        );
+        Ok::<_, Error>((from, to))
+    })?;
 
     let applied = {
         let _no_input_value_changing = one_input_value_change_at_a_time.held_while_a_link_is_made();
@@ -120,8 +133,16 @@ pub(in crate::core::runtime) async fn connect_impl(
             to.clone(),
             a_link_connected,
             when_the_engine_cannot_wire_it,
-        )?
+        )
     };
+    // A slot grown for a link refused, or set aside, is given back.
+    if !matches!(applied, Ok(ALinkConnectedOrSetAside::Connected(_))) {
+        compiler.scope(|graph, _tx| {
+            graph.reshape_the_pin_group_slots_of_the_node(from.node_run_id());
+            graph.reshape_the_pin_group_slots_of_the_node(to.node_run_id());
+        });
+    }
+    let applied = applied?;
     let link_id = match applied {
         ALinkConnectedOrSetAside::Connected(link_id) => link_id,
         set_aside @ ALinkConnectedOrSetAside::SetAside(_) => return Ok(set_aside),

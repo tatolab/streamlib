@@ -236,6 +236,69 @@ fn a_viewers_wake_is_woken_by_a_write_and_hears_nothing_from_a_silent_port() {
     );
 }
 
+/// A port carrying a bundle that holds a Texture writes Bundle frames, which a viewer does not
+/// read, so its viewer is refused naming the Texture member, and no channel is opened for it.
+///
+/// Mental-revert: without the refusal, the viewer opens and reads the frame as one message of
+/// unknown kind.
+#[test]
+#[serial]
+fn a_viewer_of_a_bundle_holding_a_texture_is_refused_naming_the_member() {
+    use crate::core::descriptors::{BundleMember, PinType, ResolvedPin};
+
+    let camera = ARunningCameraWithNoLinks::load();
+    let framed = PinType::Bundle {
+        members: vec![
+            BundleMember {
+                name: "picture".to_owned(),
+                member_type: PinType::Texture {
+                    pixel_formats: Vec::new(),
+                },
+                meaning: None,
+                default_value: None,
+            },
+            BundleMember {
+                name: "region".to_owned(),
+                member_type: PinType::Rectangle {},
+                meaning: None,
+                default_value: None,
+            },
+        ],
+    };
+    camera.stream.compiler.scope(|graph, _tx| {
+        let node = graph
+            .traversal_mut()
+            .v(&camera.camera_id)
+            .first_mut()
+            .expect("the node is in the stream");
+        let port = node
+            .ports
+            .outputs
+            .iter_mut()
+            .find(|port| port.name == "out1")
+            .expect("the camera has `out1`");
+        port.declared_pin_type = None;
+        port.pin = Some(ResolvedPin {
+            flow: framed.default_flow(),
+            pin_type: framed,
+        });
+    });
+
+    let refusal = camera
+        .open_a_viewer("out1")
+        .expect_err("a viewer does not read a Bundle frame")
+        .to_string();
+    assert!(
+        refusal.contains("member `picture` is a Texture"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("port `out1`"), "{refusal}");
+    assert!(
+        !camera.camera_output.has_channel_publisher("out1"),
+        "a refused viewer holds no channel open"
+    );
+}
+
 /// A viewer names its node by id, so a name or an id the stream does not
 /// hold is refused, listing each node's id beside its name, and a port the
 /// node lacks is refused listing the ports it has.

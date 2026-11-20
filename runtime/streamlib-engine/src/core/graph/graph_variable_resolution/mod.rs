@@ -19,6 +19,7 @@ use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
+use crate::core::graph::input_values::the_settings_rendered_reading_the_values_held;
 use crate::core::graph::legacy_config_of_a_node::{
     LegacyConfigOfANodeType, config_of_a_node_as_drawn,
 };
@@ -28,7 +29,7 @@ use crate::core::json_schema::{
     GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
     redraw_a_node_over_its_pins,
 };
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{NodeTypesOneStreamResolves, the_settings_of_a_graph_variable_node};
 use crate::core::{Error, Result};
 use streamlib_runtime_client_contract::local_api_wire_contract::GraphVariableOnTheWire;
 
@@ -216,8 +217,14 @@ impl GraphVariablesAsDrawn {
                 annotations: crate::core::descriptors::PinAnnotations::default(),
                 takes_a_wire: None,
                 value_read: None,
+                pin_group_slot: None,
             };
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
+            let settings = the_settings_rendered_reading_the_values_held(
+                the_settings_of_a_graph_variable_node(&variable_node.node_type).unwrap_or(&[]),
+                &variable_node.input_values,
+            )
+            .into_iter();
             let values =
                 InputValuesRendered::of_a_node_holding_no_pin_value(&variable_node.input_values);
             let position = (*drawn_position).min(graph_response.nodes.len());
@@ -236,9 +243,9 @@ impl GraphVariablesAsDrawn {
                     config_checksum: values.config_checksum,
                     ports: GraphNodePortsOnTheWire {
                         inputs: if is_a_setter {
-                            vec![value_port.clone()]
+                            settings.chain([value_port.clone()]).collect()
                         } else {
-                            Vec::new()
+                            settings.collect()
                         },
                         outputs: if is_a_setter {
                             Vec::new()

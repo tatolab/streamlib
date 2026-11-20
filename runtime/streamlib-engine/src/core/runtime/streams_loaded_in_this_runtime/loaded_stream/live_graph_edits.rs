@@ -757,6 +757,7 @@ impl SavedSetToPutBack {
     fn put_back(&self, graph: &mut Graph) -> Option<UnlinkedInputValuesDelivery> {
         let node = graph.traversal_mut().v(&self.node_run_id).first_mut()?;
         node.set_pin(&self.input, self.saved_value_before.clone());
+        graph.reshape_the_pin_group_slots_of_the_node(&self.node_run_id);
         graph.live_input_values().set(
             self.node_uuid,
             &self.input,
@@ -823,6 +824,12 @@ fn set_the_saved_value(
     if let Some(value) = &value {
         refuse_a_pin_value_a_process_node_cannot_read(node, input, value)?;
     }
+    graph.refuse_a_slot_count_leaving_out_a_linked_slot(node_run_id, input, value.as_ref())?;
+    let node = graph
+        .traversal_mut()
+        .v(node_run_id)
+        .first_mut()
+        .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
     let saved_value_before = node.set_pin(input, value);
     if let Err(refused) =
         crate::core::graph::refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
@@ -836,6 +843,7 @@ fn set_the_saved_value(
         }
         return Err(refused);
     }
+    graph.reshape_the_pin_group_slots_of_the_node(node_run_id);
     let live_value_before = graph
         .live_input_values()
         .set_on_the_input_or_its_member(node_uuid, input, member, None, lifetime);

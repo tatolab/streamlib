@@ -34,7 +34,7 @@ def camera_into_the_lagged_consumer_probe(stream_builder: StreamBuilder) -> None
     """The camera's ring re-registers a different texture under one surface id
     every frame, and its pool recycles a slot every few frames — the two ways
     the pixels under a published id used to change underneath a reader."""
-    camera = stream_builder.add(CameraSource, config=camera_source_config())
+    camera = stream_builder.add(CameraSource, input_values=camera_source_config())
     probe = stream_builder.add(device_exchange_probes.LaggedConsumerHoldsItsFrameProbe)
     stream_builder.connect(camera.output("video"), probe.input("video_from_upstream"))
 

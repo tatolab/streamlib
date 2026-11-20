@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`VirtualCameraSink`'s declaration, config, door rule, naming, colour fields and kernel ABI, with no GPU and no module.
+"""`VirtualCameraSink`'s declaration, settings, door rule, naming, colour fields and kernel ABI, with no GPU and no module.
 
 The camera itself is proven on a runtime with the module loaded, by the
 integration suite's `tests/stream-on-runtime/test_virtual_camera_sink.py`.
@@ -13,7 +13,7 @@ import importlib.metadata
 
 import pytest
 from tatolab.stream import ColorInfo, StreamBuilder, run_graph_generator, graph_generator
-from tatolab.stream._node_config_schema import derive_config_class_json_schema
+from tatolab.stream._class_node_construction import class_node_members
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -21,7 +21,6 @@ from tatolab.stream._node_declaration import (
 )
 from tatolab.virtualcamera import (
     VirtualCameraSink,
-    VirtualCameraSinkConfig,
     copy_rows_between,
     loopback_door_refusal_or_none,
     neither_door_opens_refusal,
@@ -54,13 +53,17 @@ from tatolab.virtualcamera.virtual_camera_naming import (
 )
 
 
-def test_the_only_port_is_one_newest_image_input_and_the_node_is_reactive():
+def test_the_only_pin_is_one_newest_texture_input_showing_a_preview_and_the_node_is_reactive():
     input_ports = getattr(VirtualCameraSink, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    video = next(port for port in input_ports if port["name"] == "video")
 
-    assert [(port["name"], port["delivery_profile"]) for port in input_ports] == [
-        ("video", "newest")
-    ]
-    assert input_ports[0]["family"] == {"family": "image"}
+    assert video["delivery_profile"] == "newest"
+    assert video["family"] == {"family": "image"}
+    assert video["pin_declaration"] == {
+        "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
+        "flow": "stream",
+        "annotations": {"control": "preview"},
+    }
     assert getattr(VirtualCameraSink, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == []
     assert (
         getattr(VirtualCameraSink, NODE_DECLARATION_EXECUTION_STAMP)["mode"]
@@ -70,7 +73,7 @@ def test_the_only_port_is_one_newest_image_input_and_the_node_is_reactive():
 
 @graph_generator
 def a_virtual_camera(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(VirtualCameraSink, config={"name": "Desk cam"})
+    stream_builder.add(VirtualCameraSink, input_values={"name": "Desk cam"})
 
 
 def test_a_stream_names_the_sink_by_the_type_the_module_publishes():
@@ -87,18 +90,22 @@ def test_a_stream_names_the_sink_by_the_type_the_module_publishes():
     ]
 
 
-def test_the_config_names_the_camera_and_the_door_and_nothing_else():
-    config_schema = derive_config_class_json_schema(VirtualCameraSinkConfig)
+def test_its_settings_are_the_camera_name_and_the_door_each_read_at_setup():
+    settings = {
+        member.port: member
+        for member in class_node_members(VirtualCameraSink) or ()
+        if member.form == "field"
+    }
 
-    assert set(config_schema["properties"]) == {"name", "door"}
-    assert config_schema["properties"]["door"]["default"] == "auto"
-    assert VirtualCameraSinkConfig() == VirtualCameraSinkConfig(name=None, door="auto")
-    with pytest.raises(ValueError, match="door"):
-        VirtualCameraSinkConfig(door="both")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="name"):
-        VirtualCameraSinkConfig(name=7)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="fps"):
-        VirtualCameraSinkConfig(fps=60)  # type: ignore[call-arg]
+    assert set(settings) == {"name", "door"}
+    assert all(member.a_setting for member in settings.values())
+    assert settings["name"].default is None
+    assert settings["name"].pin_declaration["may_be_unset"] is True
+    assert settings["door"].default == "auto"
+    assert settings["door"].pin_declaration["pin_type"] == {
+        "kind": "is",
+        "pin_type": {"type": "menu", "option_names": ["auto", "v4l2loopback", "pipewire"]},
+    }
 
 
 def test_a_writable_control_node_opens_the_loopback_door():

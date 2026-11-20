@@ -3,9 +3,9 @@
 
 //! The video codec node bodies `tatolab-h264` and `tatolab-h265` run in their
 //! helpers: a thread reads its node's ports through the module host table and
-//! codes, with no Python attached: with Vulkan Video on Linux, an encoder in
-//! the machine's video codec host and a decoder on a device its helper owns, and
-//! on Apple's media engine through VideoToolbox on macOS.
+//! codes, with no Python attached: with Vulkan Video on Linux, each node's
+//! session in the machine's video codec host, and on Apple's media engine
+//! through VideoToolbox on macOS.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -22,13 +22,15 @@ pub mod encoded_video_group_entry_gate;
 pub mod encoded_video_publication;
 pub mod image_frame_on_the_video_port;
 #[cfg(target_os = "linux")]
-pub mod owned_device_video_decoder;
-#[cfg(target_os = "linux")]
 pub mod video_codec_host;
 #[cfg(target_os = "linux")]
 pub mod video_codec_host_protocol;
 #[cfg(all(test, target_os = "linux"))]
 mod video_codec_host_protocol_tests;
+#[cfg(target_os = "linux")]
+pub mod video_codec_host_session_of_the_node;
+#[cfg(all(test, target_os = "linux"))]
+mod video_codec_host_session_of_the_node_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod video_codec_host_tests;
 pub mod video_codec_retry_gate;
@@ -46,13 +48,11 @@ pub mod video_decoder_settings;
 pub mod video_encode_on_a_device;
 #[cfg(all(test, target_os = "linux"))]
 mod video_encode_on_a_device_tests;
-#[cfg(target_os = "linux")]
-pub mod video_encode_session_of_the_node;
-#[cfg(all(test, target_os = "linux"))]
-mod video_encode_session_of_the_node_tests;
 pub mod video_encoder_settings;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
+#[cfg(target_os = "linux")]
+pub mod vulkan_video_decoder;
 #[cfg(target_os = "linux")]
 pub mod vulkan_video_encoder;
 
@@ -377,7 +377,7 @@ fn encode_until_stopped(
 }
 
 #[cfg(target_os = "linux")]
-type VideoDecoderOnThisPlatform = owned_device_video_decoder::OwnedDeviceVideoDecoder;
+type VideoDecoderOnThisPlatform = vulkan_video_decoder::VulkanVideoDecoder;
 
 #[cfg(target_os = "macos")]
 type VideoDecoderOnThisPlatform =

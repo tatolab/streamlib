@@ -508,6 +508,7 @@ pub(crate) fn the_project_node_type_described(
         inputs: inputs.iter().map(an_input_read_from_source).collect(),
         outputs: outputs.iter().map(a_port_read_from_source).collect(),
         exposable_config_fields: Vec::new(),
+        pin_groups: Vec::new(),
     }))
 }
 
@@ -523,6 +524,7 @@ fn a_registered_node_type_described(
         inputs,
         outputs,
         exposable_config_fields,
+        pin_groups,
     } = NodeTypePortsDescribedOnTheWire::of(descriptor);
     NodeTypeDescription {
         node_type: descriptor.node_class_import_path.to_string(),
@@ -536,6 +538,7 @@ fn a_registered_node_type_described(
         inputs,
         outputs,
         exposable_config_fields,
+        pin_groups,
     }
 }
 
