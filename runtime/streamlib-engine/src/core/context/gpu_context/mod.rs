@@ -241,19 +241,19 @@ pub struct GpuContext {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     idle_compute_dispatch_recorders:
         Arc<parking_lot::Mutex<Vec<crate::vulkan::rhi::RhiCommandRecorder>>>,
-    /// The latest queue submission that dispatched each compute kernel, keyed
-    /// by the kernel's handle.
+    /// The latest queue submission that recorded through each batch
+    /// descriptor set of each compute kernel, keyed by the kernel's handle and
+    /// the set's index.
     ///
     /// Held by a dispatch from its first recorded command through publishing
     /// the layouts its bindings land in, and released before it waits on its
     /// work: so recordings see each other's layouts in submission order, while
     /// one stream's dispatch never waits for another's GPU work to finish. A
-    /// kernel owns one descriptor set, which its next dispatch rewrites only
-    /// once the submission named here has retired.
+    /// dispatch records only through a set whose submission named here has
+    /// retired, since Vulkan disallows rewriting a set still in use.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    latest_submission_per_compute_kernel: Arc<
-        parking_lot::Mutex<HashMap<usize, crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot>>,
-    >,
+    latest_submission_per_compute_kernel_batch_descriptor_set:
+        Arc<parking_lot::Mutex<compute_dispatch_batches::LatestSubmissionPerBatchDescriptorSet>>,
     /// The recorder every surface-to-surface copy reuses, built on first use;
     /// its lock is what serializes two copies.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -346,7 +346,9 @@ impl GpuContext {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             idle_compute_dispatch_recorders: Arc::new(parking_lot::Mutex::new(Vec::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            latest_submission_per_compute_kernel: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            latest_submission_per_compute_kernel_batch_descriptor_set: Arc::new(
+                parking_lot::Mutex::new(HashMap::new()),
+            ),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             surface_to_surface_copy_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
