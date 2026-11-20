@@ -9,10 +9,12 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     WriteStudioViewOutputToolResult,
 };
 
+use super::worked_examples;
 use super::{EVERY_SURFACE, ListNodeTypes, SetNodeInputValue};
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     CheckProjectCodeRequest, CloseViewerRequest, CreateNodeFileRequest, CreateNodeUiElementRequest,
@@ -37,6 +39,7 @@ impl ControlOperation for ListProjectFiles {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_PROJECT_FILES);
 }
 
 /// `read_project_file`: read one file of a project.
@@ -55,6 +58,7 @@ impl ControlOperation for ReadProjectFile {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::READ_PROJECT_FILE);
 }
 
 /// `create_node_file`: create a node file in a project from the template, as one transaction.
@@ -74,6 +78,7 @@ impl ControlOperation for CreateNodeFile {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CREATE_NODE_FILE);
 }
 
 /// `create_node_ui_element`: create a control or a node body in a project from the kit's
@@ -93,6 +98,7 @@ impl ControlOperation for CreateNodeUiElement {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CREATE_NODE_UI_ELEMENT);
 }
 
 /// `write_project_file`: write one file of a project, as one transaction.
@@ -111,6 +117,7 @@ impl ControlOperation for WriteProjectFile {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::WRITE_PROJECT_FILE);
 }
 
 /// `check_project_code`: check a project's code on disk without running a stream, answering each
@@ -131,6 +138,7 @@ impl ControlOperation for CheckProjectCode {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_PROJECT_CODE);
 }
 
 /// `list_project_node_types`: list the node types a project offers, from its own node files and the
@@ -169,6 +177,7 @@ impl ControlOperation for ListProjectViews {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_PROJECT_VIEWS);
 }
 
 /// `list_project_node_ui_elements`: list the controls and node bodies a project and its imports
@@ -189,6 +198,8 @@ impl ControlOperation for ListProjectNodeUiElements {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> =
+        Some(worked_examples::LIST_PROJECT_NODE_UI_ELEMENTS);
 }
 
 /// `write_studio_view_output`: write a value a Tato Studio view produced onto its node's output
@@ -229,6 +240,7 @@ impl ControlOperation for OpenViewer {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::OPEN_VIEWER);
 }
 
 /// `close_viewer`: close a viewer this connection opened.
@@ -248,4 +260,5 @@ impl ControlOperation for CloseViewer {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CLOSE_VIEWER);
 }

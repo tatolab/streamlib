@@ -7,9 +7,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::EVERY_SURFACE;
+use super::worked_examples;
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     AddDependencyRequest, ListDependenciesRequest, RefreshFragmentsRequest,
@@ -32,6 +34,7 @@ impl ControlOperation for AddDependency {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::ADD_DEPENDENCY);
 }
 
 /// `update_dependency`: bring an imported project up to date with its source, as one transaction.
@@ -51,6 +54,7 @@ impl ControlOperation for UpdateDependency {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::UPDATE_DEPENDENCY);
 }
 
 /// `list_dependencies`: list the projects a project imports.
@@ -69,6 +73,7 @@ impl ControlOperation for ListDependencies {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_DEPENDENCIES);
 }
 
 /// `remove_dependency`: take an imported project out of a project, as one transaction.
@@ -88,6 +93,7 @@ impl ControlOperation for RemoveDependency {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REMOVE_DEPENDENCY);
 }
 
 /// `use_dependency_stream`: place an imported project's stream in a loaded stream's graph as a
@@ -107,6 +113,7 @@ impl ControlOperation for UseDependencyStream {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::USE_DEPENDENCY_STREAM);
 }
 
 /// `refresh_fragments`: refresh, as one transaction, every fragment whose graph generator a changed
@@ -126,4 +133,5 @@ impl ControlOperation for RefreshFragments {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REFRESH_FRAGMENTS);
 }
