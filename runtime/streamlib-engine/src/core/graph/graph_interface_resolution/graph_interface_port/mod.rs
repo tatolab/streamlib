@@ -5,8 +5,9 @@
 //! chosen type or family, and the interface node rendered with its settings and its `value`.
 
 use crate::core::descriptors::{
-    PinAnnotations, PinLinkEnd, PinLinkInputEnd, PinType, PortFamilyDeclaration,
-    PortFamilyLinkEndpoint, ResolvedPin, pin_link_verdict, refusal_of_a_link_between_port_families,
+    NodeClassImportPath, PinAnnotations, PinLinkEnd, PinLinkInputEnd, PinType,
+    PortFamilyDeclaration, PortFamilyLinkEndpoint, ResolvedPin, pin_link_verdict,
+    refusal_of_a_link_between_port_families,
 };
 use crate::core::graph::PortInfo;
 use crate::core::graph::graph_snapshot::{
@@ -58,9 +59,11 @@ impl GraphInterfacePort {
         else {
             return Ok(());
         };
-        if let Some((chosen, refusal)) =
-            self.refusal_of_a_linked_port_by_the_chosen_type(linked, linked_port)
-        {
+        if let Some((chosen, refusal)) = self.refusal_of_a_linked_port_by_the_chosen_type(
+            linked,
+            &linked_node.node_type,
+            linked_port,
+        ) {
             return Err(Error::GraphError(format!(
                 "`{}` node `{}` chooses {chosen} for `{}`, and the link rules refuse it: \
                  {refusal}",
@@ -122,11 +125,12 @@ impl GraphInterfacePort {
     }
 
     /// The type this port chooses, and why the link rules refuse `linked_port`, whose port is
-    /// `linked`, against it; `None` when it chooses none, the linked port states no one type
-    /// exactly, or the link connects as it is.
+    /// `linked` on a node of `linked_node_type`, against it; `None` when it chooses none, the
+    /// linked port states no one type exactly, or the link connects as it is.
     pub(super) fn refusal_of_a_linked_port_by_the_chosen_type<'port>(
         &'port self,
         linked: &PortInfo,
+        linked_node_type: &NodeClassImportPath,
         linked_port: &LinkPortRefOutput,
     ) -> Option<(&'port PinType, String)> {
         let chosen = self.pin_type.as_ref()?;
@@ -140,6 +144,7 @@ impl GraphInterfacePort {
             member_name: linked_port.member.as_deref(),
             pin_type: &linked_pin.pin_type,
             meaning: linked.meaning(),
+            flow: Some(linked_pin.flow),
         };
         let interface_end = PinLinkEnd {
             node_name: &self.interface_node,
@@ -147,12 +152,14 @@ impl GraphInterfacePort {
             member_name: None,
             pin_type: chosen,
             meaning: None,
+            flow: None,
         };
         let verdict = match self.direction {
             GraphInterfacePortDirection::Output => pin_link_verdict(
                 linked_end,
                 PinLinkInputEnd {
                     end: interface_end,
+                    node_type: &NodeClassImportPath::graph_output(),
                     input_mode: None,
                 },
                 &[],
@@ -161,6 +168,7 @@ impl GraphInterfacePort {
                 interface_end,
                 PinLinkInputEnd {
                     end: linked_end,
+                    node_type: linked_node_type,
                     input_mode: linked.input_mode,
                 },
                 &[],
@@ -214,6 +222,7 @@ impl GraphInterfacePort {
             pin_default: None,
             pin,
             annotations: PinAnnotations::default(),
+            takes_a_wire: None,
             value_read: None,
             pin_group_slot: None,
         }

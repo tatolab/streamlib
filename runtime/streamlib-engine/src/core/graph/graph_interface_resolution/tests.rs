@@ -800,8 +800,15 @@ fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to(
             },
         )),
     );
+    let the_cameras_type =
+        crate::core::descriptors::NodeClassImportPath::new("nodes.camera:Camera")
+            .expect("an import path");
     let (chosen, refusal) = declared[0]
-        .refusal_of_a_linked_port_by_the_chosen_type(&camera_video, &declared[0].linked_ports[0])
+        .refusal_of_a_linked_port_by_the_chosen_type(
+            &camera_video,
+            &the_cameras_type,
+            &declared[0].linked_ports[0],
+        )
         .expect("a Texture does not connect to a Float");
     assert_eq!(chosen, &PinType::Float { exact_size: None });
     assert!(refusal.contains("camera"), "{refusal}");
@@ -820,6 +827,7 @@ fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to(
     assert_eq!(
         declared[0].refusal_of_a_linked_port_by_the_chosen_type(
             &float_source,
+            &the_cameras_type,
             &declared[0].linked_ports[0]
         ),
         None

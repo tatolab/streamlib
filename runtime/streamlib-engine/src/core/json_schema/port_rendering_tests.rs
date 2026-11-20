@@ -161,6 +161,78 @@ fn a_node_renders_its_kind_and_a_function_node_its_language_beside_it() {
     assert_eq!(function["language"], "python");
 }
 
+/// A node of `node_type` whose one input, `port`, is a String setting `read` at `read`.
+fn a_node_whose_one_setting_is_read(
+    node_type: &str,
+    read: crate::core::descriptors::SettingReadTime,
+) -> crate::core::graph::GraphNode {
+    let setting = crate::core::graph::PortInfo::from(
+        &crate::core::descriptors::PortDescriptor::new(
+            "port",
+            "",
+            false,
+            crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Records,
+            ),
+        )
+        .with_pin_declaration(crate::core::descriptors::PinDeclaration::exactly(
+            crate::core::descriptors::PinType::String {},
+        ))
+        .with_input_mode(crate::core::descriptors::NodeInputMode::SettingOnly { read }),
+    );
+    crate::core::graph::GraphNode::new(
+        streamlib_node_schema::NodeClassImportPath::new(node_type).expect("a legal import path"),
+        Some(crate::core::descriptors::NodeKind::Process),
+        "Labeller",
+        None,
+        vec![setting],
+        Vec::new(),
+    )
+}
+
+/// Each input `graph` serves says whether it takes a wire as the link check rules: a setting
+/// read at setup takes one, a setting read each run takes none, and neither does any setting of
+/// a `GraphInput`; an output says nothing of it.
+///
+/// Mental-revert: reading the mark from the mode alone says the `GraphInput`'s `port` takes one.
+#[test]
+fn each_input_the_graph_serves_says_whether_it_takes_a_wire() {
+    use crate::core::descriptors::SettingReadTime;
+    let takes_a_wire = |node_type: &str, read| {
+        serde_json::to_value(GraphNodeOutput::from(&a_node_whose_one_setting_is_read(
+            node_type, read,
+        )))
+        .unwrap()["ports"]["inputs"][0]["takes_a_wire"]
+            .clone()
+    };
+
+    assert_eq!(
+        takes_a_wire("tests:Labeller", SettingReadTime::AtSetup),
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        takes_a_wire("tests:Labeller", SettingReadTime::EachRun),
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        takes_a_wire(
+            streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
+            SettingReadTime::AtSetup
+        ),
+        serde_json::json!(false)
+    );
+    let output = serde_json::to_value(GraphNodeOutput::from(&a_node_whose_output_is(
+        crate::core::descriptors::PortFamily::Records,
+        None,
+        None,
+    )))
+    .unwrap();
+    assert!(
+        output["ports"]["outputs"][0].get("takes_a_wire").is_none(),
+        "{output}"
+    );
+}
+
 #[test]
 fn a_node_whose_type_nothing_registers_renders_no_kind() {
     let unregistered = serde_json::to_value(GraphNodeOutput::from(&a_node_of_kind(None))).unwrap();

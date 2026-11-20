@@ -10,7 +10,7 @@ use crate::descriptors::{NodeDescriptor, PortDescriptor};
 pub struct PinConversion {
     /// The node type that converts.
     pub node_type: NodeClassImportPath,
-    /// Its one input that takes a wire.
+    /// Its one input that is no setting.
     pub input_port_name: String,
     /// The type that input takes.
     pub input_pin_type: PinType,
@@ -104,11 +104,11 @@ impl NodeDescriptor {
         let wired_inputs: Vec<&PortDescriptor> = self
             .inputs
             .iter()
-            .filter(|input| input.input_mode.is_none_or(|mode| mode.takes_a_wire()))
+            .filter(|input| input.input_mode.is_none_or(|mode| !mode.is_a_setting()))
             .collect();
         let ([wired_input], [output]) = (wired_inputs.as_slice(), self.outputs.as_slice()) else {
             return refused(format!(
-                "it has {} inputs that take a wire and {} outputs",
+                "it has {} inputs besides its settings and {} outputs",
                 wired_inputs.len(),
                 self.outputs.len()
             ));
@@ -166,7 +166,7 @@ impl std::fmt::Display for PinConversionRefusal {
         write!(
             formatter,
             "`{}` states that it is a conversion, and {}; a conversion has exactly one input \
-             that takes a wire, exactly one output and any number of setting inputs, each wired \
+             besides its settings, exactly one output and any number of setting inputs, each wired \
              pin stating one pin type",
             self.node_type, self.why
         )

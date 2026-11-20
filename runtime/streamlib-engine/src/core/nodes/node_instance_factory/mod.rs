@@ -671,8 +671,9 @@ pub(crate) fn the_node_type_as_registered(
 }
 
 /// Refuse a pin group the node type may not declare, naming it: one
-/// [`crate::core::descriptors::PinGroupDescriptor::refusal_of_its_declaration`] refuses, and one
-/// named as another group or as a port the type declares.
+/// [`crate::core::descriptors::PinGroupDescriptor::refusal_of_its_declaration`] refuses, one
+/// named as another group or as a port the type declares, and one a port of the type is named
+/// as a port of a slot of.
 fn refuse_a_pin_group_no_node_type_may_declare(descriptor: &NodeDescriptor) -> Result<()> {
     let refused = |why: String| {
         Err(Error::Configuration(format!(
@@ -690,10 +691,11 @@ fn refuse_a_pin_group_no_node_type_may_declare(descriptor: &NodeDescriptor) -> R
                 .inputs
                 .iter()
                 .chain(&descriptor.outputs)
-                .any(|port| port.name == group.name)
+                .any(|port| port.name == group.name || group.holds_the_slot_port(&port.name))
         {
             return refused(format!(
-                "pin group `{}` is named as another pin group or a port of the type",
+                "pin group `{}` is named as another pin group or a port of the type, or a port \
+                 of the type is named as a port of one of its slots",
                 group.name
             ));
         }
@@ -737,7 +739,7 @@ fn refuse_port_names_not_cast_or_declared_twice(descriptor: &NodeDescriptor) -> 
     }
     for output in &descriptor.outputs {
         let publishes_the_setting_of_its_name = |input: &&PortDescriptor| {
-            input.input_mode.is_some_and(|mode| !mode.takes_a_wire())
+            input.input_mode.is_some_and(|mode| mode.is_a_setting())
                 && input.flows_as_a_value()
                 && output.flows_as_a_value()
         };

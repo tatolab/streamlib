@@ -107,7 +107,11 @@ fn a_graph_output_declares_its_settings_and_a_value_that_takes_a_wire() {
         .iter()
         .find(|port| port.name == "value")
         .expect("a GraphOutput has a `value` input");
-    assert!(value.input_mode.is_none_or(NodeInputMode::takes_a_wire));
+    assert!(
+        !value
+            .input_mode
+            .is_some_and(NodeInputMode::is_a_setting_read_each_run)
+    );
     assert!(descriptor.outputs.is_empty());
     assert_eq!(
         descriptor.refusal_of_a_port_whose_type_no_input_finds(),

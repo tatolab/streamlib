@@ -32,11 +32,13 @@ pub(crate) mod unlinked_input_values_delivery;
 
 pub(crate) use apply_node_config_update_op::{NodeConfigUpdateOutcome, apply_node_config_update};
 pub(crate) use open_iceoryx2_service_op::{
+    ReaderOfALinkIntoASettingComponent, close_iceoryx2_service, open_iceoryx2_service,
+};
+pub(crate) use open_iceoryx2_service_op::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     close_iceoryx2_service_into_the_host_of_a_shader_node_island,
     open_iceoryx2_service_into_the_host_of_a_shader_node_island,
     open_the_source_side_for_a_reader_on_the_reserved_slot, refuse_a_link_a_channel_cannot_carry,
 };
-pub(crate) use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_node_op::prepare_node;
 pub(crate) use spawn_node_op::spawn_node;

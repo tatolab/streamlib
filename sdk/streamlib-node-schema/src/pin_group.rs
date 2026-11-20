@@ -61,6 +61,15 @@ pub struct PinGroupSlotPort<'name> {
 }
 
 impl<'name> PinGroupSlotPort<'name> {
+    /// The name of this pin of the group's first slot, as `layers.0.layer`, which declares what
+    /// every slot's does.
+    pub fn named_in_the_first_slot(&self) -> String {
+        format!(
+            "{}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}0{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{}",
+            self.group, self.pin
+        )
+    }
+
     /// The slot port `port_name` names, as `layers.0.layer`; `None` for any other name.
     pub fn named(port_name: &'name str) -> Option<Self> {
         let mut parts = port_name.splitn(3, PIN_GROUP_SLOT_PORT_NAME_SEPARATOR);
@@ -95,11 +104,11 @@ impl PinGroupDescriptor {
     /// How many slots the group has on a node: following its wires when a slot holds an input
     /// that takes a wire, else set by the node's input named after the group.
     pub fn slot_count(&self) -> PinGroupSlotCount {
-        if self
-            .inputs
-            .iter()
-            .any(|input| input.input_mode.is_none_or(NodeInputMode::takes_a_wire))
-        {
+        if self.inputs.iter().any(|input| {
+            !input
+                .input_mode
+                .is_some_and(NodeInputMode::is_a_setting_read_each_run)
+        }) {
             PinGroupSlotCount::FollowsItsWires
         } else {
             PinGroupSlotCount::SetByItsInput
@@ -127,7 +136,8 @@ impl PinGroupDescriptor {
     }
 
     /// The inputs and the outputs of slot `slot`, each named `<group>.<slot>.<pin>`, a pin
-    /// following the type of an input of its own slot following that slot's input.
+    /// following the type or the family of an input of its own slot following that slot's
+    /// input.
     pub fn the_ports_of_slot(&self, slot: usize) -> (Vec<PortDescriptor>, Vec<PortDescriptor>) {
         let of_this_slot = |port: &PortDescriptor| {
             let mut port = port.clone();
@@ -142,6 +152,11 @@ impl PinGroupDescriptor {
                     .any(|input| input.name == *input_port_name)
             {
                 *input_port_name = self.slot_port_name(slot, input_port_name);
+            }
+            if let Some(followed) = port.family.family_follows_input_port.as_mut()
+                && self.inputs.iter().any(|input| input.name == *followed)
+            {
+                *followed = self.slot_port_name(slot, followed);
             }
             port
         };
@@ -185,8 +200,8 @@ impl PinGroupDescriptor {
     }
 
     /// Why the group is not one a node type may declare, naming it: no pin, a pin named twice
-    /// or holding the separator, an output following an input another slot holds; `None` when
-    /// it may.
+    /// or holding the separator, a pin following an input of one slot by its slot's name;
+    /// `None` when it may.
     pub fn refusal_of_its_declaration(&self) -> Option<String> {
         let group = &self.name;
         if group.is_empty() || group.contains(PIN_GROUP_SLOT_PORT_NAME_SEPARATOR) {
@@ -204,6 +219,26 @@ impl PinGroupDescriptor {
                 return Some(format!(
                     "pin `{}` of pin group `{group}` holds \
                      `{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}`, which separates a slot's index",
+                    pin.name
+                ));
+            }
+            let followed = match &pin.pin_declaration {
+                Some(PinDeclaration {
+                    pin_type: DeclaredPinType::SameAsInput { input_port_name },
+                    ..
+                }) => Some(input_port_name),
+                _ => None,
+            };
+            if let Some(followed) = followed
+                .into_iter()
+                .chain(pin.family.family_follows_input_port.as_ref())
+                .find(|followed| {
+                    PinGroupSlotPort::named(followed).is_some_and(|slot| slot.group == group)
+                })
+            {
+                return Some(format!(
+                    "pin `{}` of pin group `{group}` follows `{followed}`, an input of one slot; \
+                     a pin follows an input of its own slot by that input's name alone",
                     pin.name
                 ));
             }

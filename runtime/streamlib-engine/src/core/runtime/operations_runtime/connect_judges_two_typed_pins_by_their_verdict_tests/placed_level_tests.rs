@@ -15,10 +15,10 @@ use uuid::Uuid;
 
 use super::super::what_a_connect_makes_of_each_link_at_a_placed_level;
 use super::{
-    CELSIUS_SOURCE, FAHRENHEIT_SINK, FLOAT_SOURCE, NAMED_RECORDS_SOURCE, NUMBER_SINK,
-    RECORDS_NEEDING_X, RECORDS_NEEDING_Z, RECORDS_PASSTHROUGH, UNTYPED_RGBA_PICTURE_SINK,
-    a_node_of, a_node_type, class_path, connect_on_this_thread, register,
-    register_the_verdict_fixture_node_types,
+    CELSIUS_SOURCE, FAHRENHEIT_SINK, FLOAT_SOURCE, FLOAT_STREAM_SOURCE, NAMED_RECORDS_SOURCE,
+    NUMBER_SINK, RECORDS_NEEDING_X, RECORDS_NEEDING_Z, RECORDS_PASSTHROUGH,
+    UNTYPED_RGBA_PICTURE_SINK, a_node_of, a_node_type, class_path, connect_on_this_thread,
+    register, register_the_verdict_fixture_node_types,
 };
 use crate::core::Error;
 use crate::core::compiler::Compiler;
@@ -35,8 +35,9 @@ const NUMBER_SINK_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0
 const CELSIUS_SOURCE_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0003);
 const FAHRENHEIT_SINK_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0004);
 const FRAGMENT_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0005);
+const FLOAT_STREAM_SOURCE_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0006);
 
-/// A placed stream's level holding a Float source, a number sink, a Celsius source, a
+/// A placed stream's level holding a Float source, a source of a stream of Floats, a number sink, a Celsius source, a
 /// Fahrenheit sink and a fragment, with `links`.
 fn a_placed_level(links: serde_json::Value) -> StreamGraphDocument {
     let node = |id: Uuid, name: &str, class_name: &str| {
@@ -47,6 +48,7 @@ fn a_placed_level(links: serde_json::Value) -> StreamGraphDocument {
         "nodes": [
             node(FLOAT_SOURCE_NODE, "float-source", FLOAT_SOURCE),
             node(NUMBER_SINK_NODE, "number-sink", NUMBER_SINK),
+            node(FLOAT_STREAM_SOURCE_NODE, "float-stream-source", FLOAT_STREAM_SOURCE),
             node(CELSIUS_SOURCE_NODE, "celsius-source", CELSIUS_SOURCE),
             node(FAHRENHEIT_SINK_NODE, "fahrenheit-sink", FAHRENHEIT_SINK),
             { "id": FRAGMENT_NODE, "name": "inner", "type": STREAM_FRAGMENT_NODE_TYPE,
@@ -131,11 +133,14 @@ fn a_link_at_a_placed_level_takes_the_verdict_connect_takes() {
         the_verdicts_refusal(
             what_a_connect_makes_of(
                 &level,
-                a_link((FLOAT_SOURCE_NODE, "value"), (NUMBER_SINK_NODE, "gain")),
+                a_link(
+                    (FLOAT_STREAM_SOURCE_NODE, "value"),
+                    (NUMBER_SINK_NODE, "gain")
+                ),
             )
-            .expect_err("a setting takes no wire"),
+            .expect_err("a setting takes no stream"),
         ),
-        PinLinkRefusal::InputTakesNoWire { .. }
+        PinLinkRefusal::StreamIntoASetting { .. }
     ));
     let through_a_convert_node = what_a_connect_makes_of(
         &level,
