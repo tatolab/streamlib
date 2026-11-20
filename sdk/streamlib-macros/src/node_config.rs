@@ -131,7 +131,9 @@ fn description_marker(sdk_root: &TokenStream, marker: &Ident, description: &Expr
 
 /// Removes the field's `#[description = …]` and returns its value, refusing
 /// any spelling but a string literal or the path of a `const`.
-fn take_the_declared_description(attributes: &mut Vec<Attribute>) -> syn::Result<Option<Expr>> {
+pub(crate) fn take_the_declared_description(
+    attributes: &mut Vec<Attribute>,
+) -> syn::Result<Option<Expr>> {
     let mut description = None;
     let mut kept_attributes = Vec::with_capacity(attributes.len());
     for attribute in attributes.drain(..) {
@@ -142,7 +144,7 @@ fn take_the_declared_description(attributes: &mut Vec<Attribute>) -> syn::Result
         if description.is_some() {
             return Err(syn::Error::new(
                 attribute.span(),
-                "a config key declares one `#[description = …]`",
+                "a field declares one `#[description = …]`",
             ));
         }
         let Meta::NameValue(name_value) = &attribute.meta else {

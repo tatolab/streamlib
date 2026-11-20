@@ -19,8 +19,8 @@ pub mod video_frame;
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use pin_type_conversion::{
     AudioToTensor, ChannelsToRecords, ChannelsToRecordsConfig, RecordsToChannels,
-    RecordsToChannelsConfig, TensorToAudio, TensorToAudioConfig, TensorToTexture,
-    TensorToTextureConfig, TextureToTensor,
+    RecordsToChannelsConfig, TensorToAudio, TensorToAudioSettings, TensorToTexture,
+    TensorToTextureSettings, TextureToTensor,
 };
 pub use video_frame::VideoFrame;
 

@@ -27,7 +27,7 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{
     GraphNodePorts, InputNumberRange, cast_exposed_name_to_url_safe,
-    the_refusal_of_a_link_into_a_setting,
+    the_refusal_of_a_link_into_a_setting, the_values_port_facts_read,
 };
 use crate::core::json_schema::{
     GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire, GraphNodeOutput,
@@ -619,7 +619,13 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
         let output = outputs.into_iter().find(|port| port.name == port_cast)?;
         let Some(followed_input) = output.family.family_follows_input_port.clone() else {
             let config = config_of_a_node(node_types, &node.node_type, &node.input_values);
-            return output_port_family_resolved_against_config(&output.family, Some(&config)).ok();
+            let values_read =
+                the_values_port_facts_read(Some(&config), &inputs, &node.input_values);
+            return output_port_family_resolved_against_config(
+                &output.family,
+                values_read.as_ref(),
+            )
+            .ok();
         };
         let followed_input_cast = cast_of(&followed_input).ok()?;
         port_to_read = graph

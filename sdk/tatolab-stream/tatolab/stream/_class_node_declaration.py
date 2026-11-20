@@ -53,13 +53,17 @@ _DIRECTION_OF_EACH_PIN_FORM: Final[dict[type, PinDirection]] = {
 }
 
 
-def read_class_node_ports(node_class: type) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
+def read_class_node_ports(
+    node_class: type, *, constructed_in_python: bool = True
+) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
     """The input and output ports `node_class`'s fields and pins declare, as the engine reads them.
 
     Refuses, as a `NodeDeclarationRefusal`, a port declared with `Input(...)` or `Output(...)`,
-    an `__init__` that takes a parameter, and each field or pin `read_pin_declaration` refuses.
+    an `__init__` that takes a parameter when the class is `constructed_in_python`, and each field
+    or pin `read_pin_declaration` refuses. A built-in node, which the runtime implements, is never
+    constructed in Python, so its `__init__` is not read.
     """
-    return _ClassNodeReading(node_class).ports()
+    return _ClassNodeReading(node_class).ports(constructed_in_python=constructed_in_python)
 
 
 class _ClassNodeReading:
@@ -70,9 +74,10 @@ class _ClassNodeReading:
         self._node = node_class.__name__
         self._port_spelling_by_cast_name: dict[str, str] = {}
 
-    def ports(self) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
+    def ports(self, *, constructed_in_python: bool) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
         self._refuse_a_port_declared_in_the_retired_form()
-        self._refuse_an_init_taking_parameters()
+        if constructed_in_python:
+            self._refuse_an_init_taking_parameters()
         input_ports: list[DeclaredPort] = []
         output_ports: list[DeclaredPort] = []
         typed_pins: list[tuple[str, str, PinDeclarationOnTheWire]] = []

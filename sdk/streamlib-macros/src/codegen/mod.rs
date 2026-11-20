@@ -13,6 +13,7 @@ use syn::ItemStruct;
 use syn::spanned::Spanned;
 
 mod author_visibility;
+mod node_settings_emit;
 mod pin_declaration_tokens;
 mod port_marker_module;
 
@@ -20,6 +21,7 @@ use author_visibility::{
     GENERATED_MODULE_MEMBER_DEPTH, GENERATED_PORT_MARKER_DEPTH,
     author_visibility_written_from_a_nested_module,
 };
+use node_settings_emit::NodeSettingsEmitted;
 use pin_declaration_tokens::pin_declaration_tokens;
 use port_marker_module::generate_port_marker_module;
 
@@ -35,6 +37,7 @@ pub(crate) fn generate_from_parsed_node_attr(
     let port_marker_visibility =
         author_visibility_written_from_a_nested_module(&item.vis, GENERATED_PORT_MARKER_DEPTH);
     let schema = &parsed.to_node_schema();
+    let settings = NodeSettingsEmitted::of(parsed.settings_type.as_ref());
 
     let config_type = match &parsed.config_type {
         Some(path) => quote! { #path },
@@ -53,6 +56,7 @@ pub(crate) fn generate_from_parsed_node_attr(
     let node_struct = generate_node_struct_from_schema(
         schema,
         &config_field_name,
+        &settings,
         &custom_fields,
         &member_visibility,
     );
@@ -75,6 +79,7 @@ pub(crate) fn generate_from_parsed_node_attr(
         &node_type_minted(parsed.built_in_node, &schema.name),
         &config_type,
         &config_field_name,
+        &settings,
         &custom_fields,
     );
 
@@ -88,6 +93,9 @@ pub(crate) fn generate_from_parsed_node_attr(
             Node::node_class_import_path()
         }
     };
+
+    let module_alias_and_constructor =
+        settings.module_alias_and_constructor(&member_visibility, &config_type);
 
     // Generate unsafe Send impl if required (for !Send types like AVFoundation)
     let unsafe_send_impl = if schema.runtime.options.unsafe_send {
@@ -114,13 +122,9 @@ pub(crate) fn generate_from_parsed_node_attr(
 
             #refused_field_attribute_diagnostics
 
-            #member_visibility type Config = #config_type;
+            #module_alias_and_constructor
 
             #node_class_import_path_accessor
-
-            #member_visibility fn node(config: Config) -> __streamlib_sdk::nodes::NodeSpec {
-                Node::node(config)
-            }
 
             #node_struct
 
@@ -216,12 +220,14 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
 fn generate_node_struct_from_schema(
     schema: &NodeSchema,
     config_field_name: &Option<Ident>,
+    settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
     member_visibility: &TokenStream,
 ) -> TokenStream {
     let config_field = config_field_name.as_ref().map(|name| {
         quote! { #member_visibility #name: Config, }
     });
+    let settings_fields = settings.struct_fields(member_visibility);
 
     let ipc_input_field = if !schema.inputs.is_empty() {
         quote! { #member_visibility inputs: __streamlib_sdk::iceoryx2::InputMailboxes, }
@@ -254,6 +260,7 @@ fn generate_node_struct_from_schema(
             #ipc_input_field
             #ipc_output_field
             #config_field
+            #settings_fields
             #(#custom_field_defs)*
         }
     }
@@ -283,6 +290,7 @@ fn generate_node_impl_from_schema(
     node_type_minted: &TokenStream,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
+    settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
     use streamlib_node_schema::NodeSchemaExecution;
@@ -351,9 +359,16 @@ fn generate_node_impl_from_schema(
         };
 
     let from_config_body =
-        generate_from_config_from_schema(schema, config_field_name, custom_fields);
-    let descriptor_impl =
-        generate_descriptor_from_schema(schema, declared_meta_and_port_descriptions, config_type);
+        generate_from_config_from_schema(schema, config_field_name, settings, custom_fields);
+    let descriptor_impl = generate_descriptor_from_schema(
+        schema,
+        declared_meta_and_port_descriptions,
+        config_type,
+        settings,
+    );
+    let node_spec_constructor = settings.node_spec_constructor(member_visibility, config_type);
+    let settings_taken_from_the_input_values = settings.settings_taken_from_the_input_values();
+    let setup_marked = settings.setup_marked();
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -377,13 +392,7 @@ fn generate_node_impl_from_schema(
                 #node_type_minted
             }
 
-            #member_visibility fn node(config: #config_type) -> __streamlib_sdk::nodes::NodeSpec {
-                __streamlib_sdk::nodes::NodeSpec::new(
-                    Self::node_class_import_path(),
-                    __streamlib_sdk::serde_json::to_value(&config)
-                        .expect("Config serialization failed"),
-                )
-            }
+            #node_spec_constructor
 
             #member_visibility fn execution_mode(&self) -> __streamlib_sdk::execution::ProcessExecution {
                 #execution_variant
@@ -420,6 +429,8 @@ fn generate_node_impl_from_schema(
 
             #update_config
 
+            #settings_taken_from_the_input_values
+
             fn execution_config(&self) -> __streamlib_sdk::execution::ExecutionConfig {
                 __streamlib_sdk::execution::ExecutionConfig {
                     execution: #execution_variant,
@@ -433,6 +444,7 @@ fn generate_node_impl_from_schema(
                 &mut self,
                 ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
             ) -> __streamlib_sdk::error::Result<()> {
+                #setup_marked
                 <Self as #node_trait>::setup(self, ctx)
             }
 
@@ -464,6 +476,7 @@ fn generate_node_impl_from_schema(
 fn generate_from_config_from_schema(
     schema: &NodeSchema,
     config_field_name: &Option<Ident>,
+    settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
     let ipc_input_init = if !schema.inputs.is_empty() {
@@ -482,6 +495,7 @@ fn generate_from_config_from_schema(
         .as_ref()
         .map(|name| quote! { #name: config, })
         .unwrap_or_default();
+    let settings_init = settings.struct_field_initializers();
 
     // Initialize custom fields with Default::default()
     let custom_field_inits: Vec<TokenStream> = custom_fields
@@ -502,6 +516,7 @@ fn generate_from_config_from_schema(
                 #ipc_input_init
                 #ipc_output_init
                 #config_init
+                #settings_init
                 #(#custom_field_inits)*
             })
         }
@@ -539,6 +554,7 @@ fn generate_descriptor_from_schema(
     schema: &NodeSchema,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
     config_type: &TokenStream,
+    settings: &NodeSettingsEmitted<'_>,
 ) -> TokenStream {
     let description =
         declared_description_str_expression(declared_meta_and_port_descriptions.node_description);
@@ -621,15 +637,8 @@ fn generate_descriptor_from_schema(
         })
         .collect();
 
-    // The config type's JSON Schema. Reached through the bound-carrying
-    // trait rather than `schemars` directly, so a config type missing the
-    // derive fails on a diagnostic that names the fix.
-    let config_schema = quote! {
-        .with_config_schema(
-            <#config_type as __streamlib_sdk::descriptors::NodeConfigJsonSchema>
-                ::node_config_schema_document()
-        )
-    };
+    let config_schema = settings.descriptor_config_schema(config_type);
+    let setting_inputs = settings.descriptor_setting_inputs();
 
     let scheduling = schema.scheduling.as_ref().map(|s| {
         let priority_tokens = thread_priority_tokens(s.priority);
@@ -672,6 +681,7 @@ fn generate_descriptor_from_schema(
                     #category
                     #conversion
                     #(#ipc_input_ports)*
+                    #setting_inputs
                     #(#ipc_output_ports)*
             )
         }
