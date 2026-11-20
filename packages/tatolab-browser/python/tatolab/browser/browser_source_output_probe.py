@@ -29,6 +29,7 @@ from tatolab.stream import (
     NumberRange,
     OutputPin,
     RuntimeContextLimitedAccess,
+    SettingOnly,
     StreamDelivery,
     Texture,
     log,
@@ -50,7 +51,10 @@ class BrowserSourceOutputProbe:
     """A `BrowserSource`'s outputs in, `data` messages to it out, a report every window."""
 
     frames_between_reports: Annotated[
-        int, NumberRange(minimum=2), Description("How many frames one report summarises.")
+        int,
+        SettingOnly(),
+        NumberRange(minimum=2),
+        Description("How many frames one report summarises; a change starts the count again."),
     ] = 600
     frames_between_data_messages: Annotated[
         int,
