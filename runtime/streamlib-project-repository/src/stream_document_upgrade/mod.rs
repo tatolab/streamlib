@@ -11,6 +11,9 @@
 
 use serde_json::{Map, Value};
 
+use merged_inputs::{MERGED_INPUTS, MergedInput};
+
+mod merged_inputs;
 #[cfg(feature = "history")]
 pub(crate) mod recorded_transaction;
 
@@ -173,12 +176,36 @@ const RENAMED_NODE_TYPES: &[(&str, &str)] = &[
 ///
 /// At every level of a fragment, each node of a renamed type takes its new type, and its
 /// `config` and `pins` fold into `input_values`: a name `input_values` already holds wins, then
-/// `pins`, then `config`. It never refuses: a node it has nothing to do for is left as written.
+/// `pins`, then `config`. Then the old inputs that became one take it, the merged value or the
+/// combining node a wired part keeps. It never refuses: a node it has nothing to do for is left
+/// as written.
 pub fn upgrade_stream_document_in_place(document: &mut Value) -> bool {
-    match document.get_mut("nodes").and_then(Value::as_array_mut) {
-        Some(nodes) => each_node_of_the_level_upgraded(nodes),
-        None => false,
+    upgrade_the_document_with(document, MERGED_INPUTS)
+}
+
+/// Upgrade `document` in place, merging the inputs `merged_inputs` names.
+fn upgrade_the_document_with(document: &mut Value, merged_inputs: &[MergedInput]) -> bool {
+    let Some(level) = document.as_object_mut() else {
+        return false;
+    };
+    let Some(nodes) = level.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut any_changed = false;
+    for node in nodes.iter_mut() {
+        any_changed |= the_node_reshaped(node, merged_inputs);
     }
+    let held_links = level.get_mut("links").and_then(Value::as_array_mut);
+    let had_links = held_links.is_some();
+    let mut links = held_links.map(std::mem::take).unwrap_or_default();
+    if let Some(nodes) = level.get_mut("nodes").and_then(Value::as_array_mut) {
+        any_changed |=
+            merged_inputs::the_inputs_of_the_level_merged(nodes, &mut links, merged_inputs);
+    }
+    if had_links || !links.is_empty() {
+        level.insert("links".to_owned(), Value::Array(links));
+    }
+    any_changed
 }
 
 /// `document` in the shape this runtime writes, upgraded when it is not.
@@ -253,24 +280,36 @@ fn object_or_empty(recorded: Option<Value>) -> Map<String, Value> {
     }
 }
 
-/// Upgrade each node of one level and of every fragment under it; whether any changed.
-fn each_node_of_the_level_upgraded(nodes: &mut [Value]) -> bool {
-    let mut any_changed = false;
-    for node in nodes {
-        any_changed |= upgrade_a_node_in_place(node);
+/// Upgrade one node, and every node of a fragment it holds, in place; whether any changed. A
+/// node placed on its own carries no link, so its old inputs that became one take the merged
+/// value of what it saved.
+pub(crate) fn upgrade_a_node_in_place(node: &mut Value) -> bool {
+    upgrade_a_node_with(node, MERGED_INPUTS)
+}
+
+fn upgrade_a_node_with(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
+    let mut any_changed = the_node_reshaped(node, merged_inputs);
+    if let Some(node) = node.as_object_mut() {
+        any_changed |= merged_inputs::the_inputs_of_a_node_merged(
+            node,
+            &mut Vec::new(),
+            merged_inputs,
+            &mut Vec::new(),
+        );
     }
     any_changed
 }
 
-/// Upgrade one node, and every node of a fragment it holds, in place; whether any changed.
-pub(crate) fn upgrade_a_node_in_place(node: &mut Value) -> bool {
+/// Rename one node's type and fold its retired fields, and upgrade every level of a fragment it
+/// holds; whether any changed. Its own old inputs are merged with the level's links after.
+fn the_node_reshaped(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
     let Some(node) = node.as_object_mut() else {
         return false;
     };
     let mut any_changed = the_node_type_renamed(node);
     any_changed |= the_nodes_retired_fields_folded(node);
     if let Some(fragment) = node.get_mut("fragment") {
-        any_changed |= upgrade_stream_document_in_place(fragment);
+        any_changed |= upgrade_the_document_with(fragment, merged_inputs);
     }
     any_changed
 }
