@@ -26,12 +26,16 @@ use streamlib_surface_client::{
     release_check_out_on_surface_share,
 };
 use streamlib_vulkan_video::{
-    Preset, RgbaPixelBufferVideoEncoder, SimpleEncoder, SimpleEncoderConfig, VulkanVideoCodecDevice,
+    Preset, RgbaPixelBufferVideoEncoder, SimpleEncoder, SimpleEncoderConfig, VideoError,
+    VulkanVideoCodecDevice,
 };
 
 use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::EncodedVideoAccessUnit;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
+use crate::video_encode_session_limit_wait::{
+    ENCODE_SESSION_LIMIT_MINT_RETRY_INTERVAL, WaitForAVideoSessionUnderTheLimit,
+};
 use crate::video_encoder_settings::{VideoEncodeSessionShape, VideoEncoderSettings};
 
 /// Imports kept, one per producer pool slot; a producer's pool is far smaller.
@@ -84,7 +88,9 @@ pub enum VideoFrameEncodeOutcome {
     /// Its producer recycled the surface before the check-out, so it was
     /// skipped.
     NotCheckedOut,
-    /// A session mint failed earlier, so every frame is discarded.
+    /// No session is minted, because a mint failed earlier or the GPU is at
+    /// its video session limit until the next retry, so the frame is
+    /// discarded.
     DiscardedAfterAFailedMint,
 }
 
@@ -97,6 +103,15 @@ pub struct VideoFrameEncoded {
     /// Whether this frame minted a new session, so its first access unit
     /// opens a new coded sequence.
     pub minted_a_session: bool,
+}
+
+/// Why no encoder session was minted.
+enum EncodeSessionNotMinted {
+    /// The GPU's driver holds as many video sessions as it allows; a mint
+    /// can succeed once another session ends.
+    AtTheVideoSessionLimit(String),
+    /// Any other failure, which a later mint would meet again.
+    Failed(String),
 }
 
 /// The encoder session and the extent it was minted for.
@@ -118,6 +133,7 @@ pub struct VideoEncodeOnADevice {
     imported_textures: HashMap<String, ConsumerVulkanTexture>,
     minted_session: Option<VideoEncodeSessionMintedFromAFrame>,
     session_mint_already_failed: bool,
+    wait_for_a_video_session: WaitForAVideoSessionUnderTheLimit,
     next_frame_must_be_a_sync_point: bool,
     /// Set when a session is minted and cleared once a frame's outcome
     /// reports it, so a mint whose first frame failed is still reported.
@@ -150,6 +166,7 @@ impl VideoEncodeOnADevice {
             imported_textures: HashMap::new(),
             minted_session: None,
             session_mint_already_failed: false,
+            wait_for_a_video_session: WaitForAVideoSessionUnderTheLimit::default(),
             next_frame_must_be_a_sync_point: false,
             session_minted_and_not_yet_reported: false,
             frames_not_checked_out: 0,
@@ -168,7 +185,12 @@ impl VideoEncodeOnADevice {
         as_a_sync_point: bool,
     ) -> Result<VideoFrameEncodeOutcome, String> {
         let node_type_name = self.node.node_type_name;
-        if self.minted_session.is_none() && self.session_mint_already_failed {
+        if self.minted_session.is_none()
+            && (self.session_mint_already_failed
+                || !self
+                    .wait_for_a_video_session
+                    .a_mint_may_be_tried_at(Instant::now()))
+        {
             return Ok(VideoFrameEncodeOutcome::DiscardedAfterAFailedMint);
         }
         self.next_frame_must_be_a_sync_point |= as_a_sync_point;
@@ -526,10 +548,27 @@ impl VideoEncodeOnADevice {
                     .session_shape_for_frame(self.node.node_type_name, width, height);
             match self.mint_session(frame, shape) {
                 Ok(minted) => {
+                    let mints_refused = self.wait_for_a_video_session.mint_succeeded();
+                    if mints_refused > 0 {
+                        tracing::info!(
+                            mints_refused,
+                            "{node_type_name}: a video session freed on the GPU, so the encoder \
+                             session was minted"
+                        );
+                    }
                     self.session_minted_and_not_yet_reported = true;
                     self.minted_session = Some(minted);
                 }
-                Err(mint_failure) => {
+                Err(EncodeSessionNotMinted::AtTheVideoSessionLimit(refusal)) => {
+                    self.wait_for_a_video_session
+                        .mint_refused_at(Instant::now());
+                    return Err(format!(
+                        "{refusal}; frames are discarded and the mint is tried again every {} s \
+                         until another video session on this machine ends",
+                        ENCODE_SESSION_LIMIT_MINT_RETRY_INTERVAL.as_secs()
+                    ));
+                }
+                Err(EncodeSessionNotMinted::Failed(mint_failure)) => {
                     self.session_mint_already_failed = true;
                     return Err(format!("{mint_failure}; every later frame is discarded"));
                 }
@@ -542,7 +581,7 @@ impl VideoEncodeOnADevice {
         &self,
         frame: &VideoFrameToEncode,
         shape: VideoEncodeSessionShape,
-    ) -> Result<VideoEncodeSessionMintedFromAFrame, String> {
+    ) -> Result<VideoEncodeSessionMintedFromAFrame, EncodeSessionNotMinted> {
         let node_type_name = self.node.node_type_name;
         let color_vui =
             Some(frame.color_vui).filter(|color_vui| color_vui.is_video_signal_type_block_needed());
@@ -563,7 +602,15 @@ impl VideoEncodeOnADevice {
         let mint_started = Instant::now();
         let codec_device: Arc<dyn VulkanVideoCodecDevice> = self.device.clone();
         let encoder = SimpleEncoder::new(codec_device, config).map_err(|mint_failure| {
-            format!("{node_type_name}: the encoder session could not be minted: {mint_failure}")
+            let refusal = format!(
+                "{node_type_name}: the encoder session could not be minted: {mint_failure}"
+            );
+            match mint_failure {
+                VideoError::VideoSessionLimitReached { .. } => {
+                    EncodeSessionNotMinted::AtTheVideoSessionLimit(refusal)
+                }
+                _ => EncodeSessionNotMinted::Failed(refusal),
+            }
         })?;
         let (coded_width, coded_height) = encoder.aligned_extent();
         tracing::info!(

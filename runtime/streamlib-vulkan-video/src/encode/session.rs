@@ -248,7 +248,12 @@ impl SimpleEncoder {
             };
             let video_session_arc =
                 crate::VulkanVideoSession::new(self.ctx.codec_device(), &session_descriptor)
-                    .map_err(|e| VideoError::BitstreamError(format!("encoder session: {e}")))?;
+                    .map_err(|refusal| match refusal {
+                        VideoError::VideoSessionLimitReached { .. } => refusal,
+                        refusal => {
+                            VideoError::BitstreamError(format!("encoder session: {refusal}"))
+                        }
+                    })?;
             let video_session = video_session_arc.handle();
 
             // --- Determine H.265 CTB size from capabilities ---
