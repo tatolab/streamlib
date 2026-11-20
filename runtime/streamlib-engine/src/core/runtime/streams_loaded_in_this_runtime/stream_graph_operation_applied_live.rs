@@ -122,14 +122,18 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::RemoveNode { node, links })
             }
             StreamGraphOperation::Connect { link } => {
-                if self.the_link_held_between(&link)?.is_none() {
+                if self.the_links_the_link_is_wired_as(&link)?.is_none() {
                     self.connect_the_link(&link).await?;
                 }
                 Ok(StreamGraphOperation::Connect { link })
             }
             StreamGraphOperation::Disconnect { link } => {
-                match self.the_link_held_between(&link)? {
-                    Some(link_id) => self.disconnect_async(link_id).await?,
+                match self.the_links_the_link_is_wired_as(&link)? {
+                    Some(wired_as) => {
+                        for link_id in wired_as {
+                            self.disconnect_async(link_id).await?;
+                        }
+                    }
                     None if Self::the_link_by_node_uuid(&link)
                         .is_some_and(|link| self.forget_the_link_set_aside(&link)) => {}
                     None if disconnects_a_port_by_a_name_it_had => {}
@@ -137,9 +141,9 @@ impl LoadedStreamInThisRuntime {
                         return Err(Error::GraphError(format!(
                             "stream `{}` holds no link {}/{} -> {}/{}",
                             self.stream_id(),
-                            link.source.node,
+                            self.the_name_of_the_node(link.source.node),
                             link.source.port,
-                            link.target.node,
+                            self.the_name_of_the_node(link.target.node),
                             link.target.port
                         )));
                     }
@@ -469,6 +473,15 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
+    /// The name the node `node` was given, or its UUID when the stream holds no such node.
+    fn the_name_of_the_node(&self, node: Uuid) -> String {
+        self.compiler.scope_reading(|graph| {
+            graph
+                .node_by_uuid(node)
+                .map_or_else(|| node.to_string(), |held| held.display_name.clone())
+        })
+    }
+
     fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {
         self.compiler.scope_reading(|graph| {
             let standing = || graph.traversal().v(()).iter().filter(|held| held.stands());
@@ -705,30 +718,27 @@ impl LoadedStreamInThisRuntime {
         .ok()
     }
 
-    /// The live link `link` names by its ends; `None` when the live graph holds none, and
-    /// refused when either end names a node it does not hold or a name that does not cast.
-    fn the_link_held_between(
+    /// The links the live graph holds `link` as, named by its ends: itself, or the two links
+    /// one the function node pool carries is wired as, which a disconnect of it takes out
+    /// together; `None` when the live graph holds none, and refused when either end names a
+    /// node it does not hold or a name that does not cast.
+    fn the_links_the_link_is_wired_as(
         &self,
         link: &StreamGraphDocumentLink,
-    ) -> Result<Option<LinkUniqueId>> {
-        let source = self.the_node_of_the_node(link.source.node)?;
-        let target = self.the_node_of_the_node(link.target.node)?;
-        let source_port = cast_exposed_name_to_url_safe(&link.source.port)?;
-        let target_port = cast_exposed_name_to_url_safe(&link.target.port)?;
-        Ok(self.compiler.scope(|graph, _tx| {
-            graph
-                .traversal()
-                .v(&source)
-                .out_e()
-                .iter()
-                .find(|held| {
-                    graph.stands(held)
-                        && held.source.port_name() == source_port
-                        && *held.target.node_run_id() == target
-                        && held.target.port_name() == target_port
-                })
-                .map(|held| held.id.clone())
-        }))
+    ) -> Result<Option<Vec<LinkUniqueId>>> {
+        self.the_node_of_the_node(link.source.node)?;
+        self.the_node_of_the_node(link.target.node)?;
+        let link_as_given = RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
+            link.source.node,
+            &link.source.port,
+            link.target.node,
+            &link.target.port,
+        )?;
+        Ok(self
+            .the_live_links_by_node_uuid()
+            .into_iter()
+            .find(|live_link| live_link.link_as_given == link_as_given)
+            .map(|live_link| live_link.wired_as))
     }
 }
 

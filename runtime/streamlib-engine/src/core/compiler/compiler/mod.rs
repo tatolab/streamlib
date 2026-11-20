@@ -25,7 +25,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::function_node_pool::{
     carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool,
-    the_links_a_link_is_wired_as,
+    hand_the_running_function_node_pool_its_carries, the_links_a_link_is_wired_as,
 };
 use crate::core::compiler::compiler_ops::function_node_promotion::{
     FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
@@ -270,18 +270,20 @@ impl Compiler {
             &plan.nodes_to_add,
             &node_ids_to_remove,
         )?;
-        {
+        let carries_handed_to_the_running_pool = {
             let mut graph = graph_arc.write();
-            carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
-                &mut graph,
-                &mut plan.nodes_to_add,
-                &mut plan.links_to_add,
-            )?;
+            let carries_handed_to_the_running_pool =
+                carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+                    &mut graph,
+                    &mut plan.nodes_to_add,
+                    &mut plan.links_to_add,
+                )?;
             plan.links_to_remove = std::mem::take(&mut plan.links_to_remove)
                 .iter()
                 .flat_map(|link_id| the_links_a_link_is_wired_as(&graph, link_id))
                 .collect();
-        }
+            carries_handed_to_the_running_pool
+        };
 
         // Early return if nothing to do
         if plan.is_empty() {
@@ -430,6 +432,11 @@ impl Compiler {
         // =====================================================================
         // 6. Phase 3: WIRE - Create ring buffers and connect ports
         // =====================================================================
+        // A running pool takes the islands it newly carries before the links into and out of
+        // their ports are wired, so its helper has declared those ports by then.
+        if let Some(carries) = &carries_handed_to_the_running_pool {
+            hand_the_running_function_node_pool_its_carries(&graph_arc, carries)?;
+        }
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
             result.links_wired += wire_every_link_a_plan_adds(
