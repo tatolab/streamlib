@@ -296,7 +296,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   list_project_node_types(params: ControlOperations["list_project_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_types"]["result"]>;
   /**
-   * List every built-in pin type, how each is written, and what converts it.
+   * List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.
    */
   list_pin_types(params: ControlOperations["list_pin_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_pin_types"]["result"]>;
   /**

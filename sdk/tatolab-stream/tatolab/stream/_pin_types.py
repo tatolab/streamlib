@@ -435,7 +435,6 @@ _STREAM_TYPE_NOT_SPELLED = (
     "it by its read type"
 )
 _BUNDLE_NOT_CARRIED = "a bundle pin is not carried yet"
-_NAMED_TYPE_NOT_CARRIED = "a named pin type is not carried yet"
 _SETTING_TYPE_NOT_TAKEN = "a function node takes no setting yet"
 _TRIGGER_NOT_CARRIED = "a function under bare `@node` does not take a Trigger yet"
 
@@ -470,7 +469,7 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("Trigger", "trigger", _TRIGGER_NOT_CARRIED),
     PinTypeSpelling("list", "list_of"),
     PinTypeSpelling("dataclass", "bundle", _BUNDLE_NOT_CARRIED),
-    PinTypeSpelling("named_pin_type", "named", _NAMED_TYPE_NOT_CARRIED),
+    PinTypeSpelling("named_pin_type", "named"),
     PinTypeSpelling("NodeReference", "node_reference", _SETTING_TYPE_NOT_TAKEN),
     PinTypeSpelling("NodeReferenceToNodeType", "node_reference", _SETTING_TYPE_NOT_TAKEN),
     PinTypeSpelling(

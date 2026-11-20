@@ -4826,6 +4826,10 @@ export type NodeTypeSourceReadWithoutRunningIt = {
    */
   graph_generators: Array<GraphGeneratorReadFromSource>;
   /**
+   * Each `@named_pin_type` class declared, by import path.
+   */
+  named_pin_types?: Array<NamedPinTypeReadFromSource>;
+  /**
    * Each module that does not parse, with why and where; the rest of the source still lists.
    */
   unreadable_modules: Array<NodeModuleNotReadable>;
@@ -4988,6 +4992,28 @@ export interface GraphGeneratorPromotedSettingReadFromSource {
 }
 
 /**
+ * One named type as its `@named_pin_type` declaration states it in source.
+ */
+export interface NamedPinTypeReadFromSource {
+  /**
+   * Its name: the class's import path, `<module>:<qualname>`.
+   */
+  named_pin_type: NamedPinTypeImportPath;
+  /**
+   * What a value of it is; empty where its `description` is no string in source.
+   */
+  description: string;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line of its `class`.
+   */
+  line: number;
+}
+
+/**
  * A module of a source that could not be read, and why.
  */
 export interface NodeModuleNotReadable {
@@ -5024,13 +5050,25 @@ export interface ListPinTypesRequest {
 }
 
 /**
- * `list_pin_types`' answer: every built-in pin type.
+ * `list_pin_types`' answer: every built-in pin type, and each named type the project's node
+ * code brings.
  */
 export interface ListPinTypesToolResult {
   /**
    * Each built-in pin type, in the order the contract's `x-pin-types` lists them.
    */
   pin_types: Array<PinTypeListed>;
+  /**
+   * Each named type a module of the project, an import or an installed distribution
+   * declares, by its import path, read from source; empty while the project's node code
+   * does not list, as `named_pin_types_not_listed_because` then says.
+   */
+  named_pin_types?: Array<NamedPinTypeListed>;
+  /**
+   * Why the project's node code did not list, so no named type of it is answered; absent
+   * when it listed.
+   */
+  named_pin_types_not_listed_because?: string | null;
 }
 
 /**
@@ -5100,6 +5138,62 @@ export interface PinTypeConversionListed {
    */
   node_type: string;
 }
+
+/**
+ * One named type a module declares with `@named_pin_type`, which a pin typed with it carries
+ * as the bytes its class packs and links only to a pin of the same name.
+ */
+export type NamedPinTypeListed = {
+  /**
+   * The pin type a pin of it states: `{"type": "named", "named_pin_type": …}`.
+   */
+  pin_type: PinType;
+  /**
+   * What a value of it is, as its declaration describes it.
+   */
+  documentation: string;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line of its `class`.
+   */
+  line: number;
+} & ({
+  source: "project";
+} | ({
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * Its folder under `imports/`.
+   */
+  folder: string;
+  /**
+   * The version its copy carried.
+   */
+  version: string;
+  /**
+   * The imported project's name as the project file in its folder holds it; `null` when
+   * that file does not read.
+   */
+  project_name?: string | null;
+  source: "dependency";
+}) | {
+  /**
+   * The distribution's name.
+   */
+  distribution: string;
+  /**
+   * The distribution's version.
+   */
+  distribution_version: string;
+  source: "installed_distribution";
+} | {
+  source: "built_in";
+});
 
 /**
  * `list_node_types`' params.
@@ -6907,12 +7001,14 @@ export interface ControlContractComponents {
   NodeTypePortReadFromSource: NodeTypePortReadFromSource;
   GraphGeneratorReadFromSource: GraphGeneratorReadFromSource;
   GraphGeneratorPromotedSettingReadFromSource: GraphGeneratorPromotedSettingReadFromSource;
+  NamedPinTypeReadFromSource: NamedPinTypeReadFromSource;
   NodeModuleNotReadable: NodeModuleNotReadable;
   ListPinTypesRequest: ListPinTypesRequest;
   ListPinTypesToolResult: ListPinTypesToolResult;
   PinTypeListed: PinTypeListed;
   PinAnnotationName: PinAnnotationName;
   PinTypeConversionListed: PinTypeConversionListed;
+  NamedPinTypeListed: NamedPinTypeListed;
   ListNodeTypesRequest: ListNodeTypesRequest;
   ListNodeTypesToolResult: ListNodeTypesToolResult;
   NodeTypeSourceListed: NodeTypeSourceListed;
@@ -7788,9 +7884,9 @@ export interface ControlOperations {
     result: ListProjectNodeTypesToolResult;
   };
   /**
-   * List every built-in pin type, how each is written, and what converts it.
+   * List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.
    *
-   * List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.
+   * List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. `named_pin_types` lists each named type a module of the project, an import or an installed distribution declares with `@named_pin_type`, read from source without running it: the source it comes from as `list_node_types` names one, the `pin_type` a pin of it states (`{"type": "named", "named_pin_type": "<module>:<class>"}`, its class's import path), its `documentation`, and the `path` and `line` declaring it. A pin of a named type carries the bytes its class packs and links only to a pin of the same name, never to a port that states no pin type. When the project's node code does not list, `named_pin_types` is empty and `named_pin_types_not_listed_because` says why; the built-in types are listed regardless.
    *
    * Since contract version 3, experimental.
    */
@@ -8031,7 +8127,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 25;
+export declare const CONTROL_CONTRACT_REVISION: 26;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

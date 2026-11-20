@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use streamlib_node_schema::pin_type::PinType;
 
-use super::NodeTypeCategoryFrom;
 use super::graph_wire_types::RefusedGraphLinkOnTheWire;
+use super::{NamedPinTypeReadFromSource, NodeTypeCategoryFrom};
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -864,6 +864,9 @@ pub struct NodeTypeSourceReadWithoutRunningIt {
     pub node_types: Vec<NodeTypeReadFromSource>,
     /// Each `@graph_generator` declared, by import path.
     pub graph_generators: Vec<GraphGeneratorReadFromSource>,
+    /// Each `@named_pin_type` class declared, by import path.
+    #[serde(default)]
+    pub named_pin_types: Vec<NamedPinTypeReadFromSource>,
     /// Each module that does not parse, with why and where; the rest of the source still lists.
     pub unreadable_modules: Vec<NodeModuleNotReadable>,
 }

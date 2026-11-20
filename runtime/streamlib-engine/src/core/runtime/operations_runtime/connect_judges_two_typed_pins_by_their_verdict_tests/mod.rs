@@ -29,6 +29,7 @@ use crate::core::{Error, Result};
 
 mod bundle_member_link_tests;
 mod convert_node_held_settings_tests;
+mod named_pin_type_tests;
 mod node_types_port_tests;
 mod placed_level_tests;
 mod texture_formats_tests;

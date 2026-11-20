@@ -313,6 +313,7 @@ fn a_node_type_source_spells_its_origin_flat_and_keeps_a_null_default() {
             "line": 4,
         }],
         "graph_generators": [],
+        "named_pin_types": [],
         "unreadable_modules": [],
     });
 

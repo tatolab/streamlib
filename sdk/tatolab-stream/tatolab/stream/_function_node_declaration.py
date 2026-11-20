@@ -42,6 +42,7 @@ from ._node_config_schema import (
     derive_node_config_json_schema_refusing_a_key_with_no_default,
     json_schema_for_a_node_declaring_no_config,
 )
+from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
 from ._pin_declaration import (
     NO_DEFAULT,
@@ -107,6 +108,7 @@ _SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME: "dict[str, str]" = {
     "menu": "menu",
     "asset": "asset",
     "list_of": "list_of",
+    "named": "named",
 }
 
 
@@ -840,6 +842,8 @@ def _family_a_pin_type_travels_on(pin_type: "dict[str, Any]") -> str:
 
     A number, a Boolean and a value of parts travel as a control message on Channels; a List of
     them as an Array frame; a String, a Menu, an Asset and any other List as a Records message.
+    A named type travels as the bytes its class packs, which belong to no family; its port is
+    declared on Records, and the runtime refuses its link to any pin that states no type.
     """
     if pin_type["type"] == "list_of":
         return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
@@ -941,6 +945,7 @@ def _is_a_record_of_outputs(annotation: Any) -> bool:
         isinstance(annotation, type)
         and dataclasses.is_dataclass(annotation)
         and annotation not in _families_by_read_type()
+        and named_pin_type_declared_by(annotation) is None
     )
 
 

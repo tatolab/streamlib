@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
-use streamlib::sdk::descriptors::{FunctionNodeLanguage, NodeDescriptor, NodeKind};
+use streamlib::sdk::descriptors::{FunctionNodeLanguage, NodeDescriptor, NodeKind, PinType};
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeTypePortsDescribedOnTheWire};
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
@@ -22,12 +22,12 @@ use streamlib_node_schema::pin_type::built_in_pin_types;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, DescribeNodeTypesToolResult, GraphGeneratorListed,
     GraphGeneratorReadFromSource, ListNodeTypesToolResult, ListPinTypesToolResult,
-    ListProjectNodeTypesToolResult, NodeTypeCategoryFrom, NodeTypeDescribedFrom,
-    NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed, NodeTypeKind,
-    NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortReadFromSource,
-    NodeTypeReadFromSource, NodeTypeSourceListed, NodeTypeSourceListedOrigin, NodeTypeSourceOrigin,
-    PinTypeConversionListed, PinTypeListed, ProjectActionRefusalOnTheWire,
-    ProjectFilePlaceOnTheWire,
+    ListProjectNodeTypesToolResult, NamedPinTypeListed, NodeTypeCategoryFrom,
+    NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed,
+    NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed,
+    NodeTypePortReadFromSource, NodeTypeReadFromSource, NodeTypeSourceListed,
+    NodeTypeSourceListedOrigin, NodeTypeSourceOrigin, PinTypeConversionListed, PinTypeListed,
+    ProjectActionRefusalOnTheWire, ProjectFilePlaceOnTheWire,
 };
 use uuid::Uuid;
 
@@ -48,7 +48,7 @@ impl ControlOperationDispatcher {
         ListPinTypesRequest { project_directory }: ListPinTypesRequest,
     ) -> Result<ListPinTypesToolResult, ControlOperationRefusal> {
         let project = self
-            .the_project_in(ListPinTypes::METHOD_NAME, project_directory)
+            .the_project_in(ListPinTypes::METHOD_NAME, project_directory.clone())
             .await?;
         let described = self
             .the_node_types_the_projects_loaded_streams_described(project)
@@ -68,6 +68,16 @@ impl ControlOperationDispatcher {
                 node_type: conversion.node_type.to_string(),
             })
             .collect();
+        let (named_pin_types, named_pin_types_not_listed_because) = match self
+            .the_node_types_the_project_offers_and_its_groups(
+                ListPinTypes::METHOD_NAME,
+                project_directory,
+            )
+            .await
+        {
+            Ok((listing, _)) => (the_named_pin_types_listed_in(listing), None),
+            Err(not_listed) => (Vec::new(), Some(not_listed.to_string())),
+        };
         Ok(ListPinTypesToolResult {
             pin_types: built_in_pin_types()
                 .into_iter()
@@ -92,6 +102,8 @@ impl ControlOperationDispatcher {
                         .collect(),
                 })
                 .collect(),
+            named_pin_types,
+            named_pin_types_not_listed_because,
         })
     }
 
@@ -302,6 +314,32 @@ fn the_project_of(
 }
 
 /// A source as the old listing names it, as `list_node_types` names it.
+/// Each named type a source of `listing` declares, with the source it comes from, in the order
+/// the sources list.
+fn the_named_pin_types_listed_in(
+    listing: ListProjectNodeTypesToolResult,
+) -> Vec<NamedPinTypeListed> {
+    listing
+        .sources
+        .into_iter()
+        .flat_map(|source| {
+            let origin = the_listed_origin_of(source.origin);
+            source
+                .named_pin_types
+                .into_iter()
+                .map(move |read| NamedPinTypeListed {
+                    origin: origin.clone(),
+                    pin_type: PinType::Named {
+                        named_pin_type: read.named_pin_type,
+                    },
+                    documentation: read.description,
+                    path: read.path,
+                    line: read.line,
+                })
+        })
+        .collect()
+}
+
 fn the_listed_origin_of(origin: NodeTypeSourceOrigin) -> NodeTypeSourceListedOrigin {
     match origin {
         NodeTypeSourceOrigin::Project => NodeTypeSourceListedOrigin::Project,

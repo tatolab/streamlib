@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 25
+    "x-contract-revision": 26
   },
   "methods": [
     {
@@ -5631,8 +5631,8 @@
     },
     {
       "name": "list_pin_types",
-      "summary": "List every built-in pin type, how each is written, and what converts it.",
-      "description": "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.",
+      "summary": "List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.",
+      "description": "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. `named_pin_types` lists each named type a module of the project, an import or an installed distribution declares with `@named_pin_type`, read from source without running it: the source it comes from as `list_node_types` names one, the `pin_type` a pin of it states (`{\"type\": \"named\", \"named_pin_type\": \"<module>:<class>\"}`, its class's import path), its `documentation`, and the `path` and `line` declaring it. A pin of a named type carries the bytes its class packs and links only to a pin of the same name, never to a port that states no pin type. When the project's node code does not list, `named_pin_types` is empty and `named_pin_types_not_listed_because` says why; the built-in types are listed regardless.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -17203,6 +17203,14 @@
             },
             "description": "Each `@graph_generator` declared, by import path."
           },
+          "named_pin_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamedPinTypeReadFromSource"
+            },
+            "description": "Each `@named_pin_type` class declared, by import path.",
+            "default": []
+          },
           "unreadable_modules": {
             "type": "array",
             "items": {
@@ -17427,6 +17435,36 @@
         ],
         "description": "One setting a graph generator promotes, as its parameter states it."
       },
+      "NamedPinTypeReadFromSource": {
+        "type": "object",
+        "properties": {
+          "named_pin_type": {
+            "$ref": "#/components/schemas/NamedPinTypeImportPath",
+            "description": "Its name: the class's import path, `<module>:<qualname>`."
+          },
+          "description": {
+            "type": "string",
+            "description": "What a value of it is; empty where its `description` is no string in source."
+          },
+          "path": {
+            "type": "string",
+            "description": "The file declaring it, relative to its source's root."
+          },
+          "line": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The line of its `class`."
+          }
+        },
+        "required": [
+          "named_pin_type",
+          "description",
+          "path",
+          "line"
+        ],
+        "description": "One named type as its `@named_pin_type` declaration states it in source."
+      },
       "NodeModuleNotReadable": {
         "type": "object",
         "properties": {
@@ -17491,12 +17529,27 @@
               "$ref": "#/components/schemas/PinTypeListed"
             },
             "description": "Each built-in pin type, in the order the contract's `x-pin-types` lists them."
+          },
+          "named_pin_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamedPinTypeListed"
+            },
+            "description": "Each named type a module of the project, an import or an installed distribution\ndeclares, by its import path, read from source; empty while the project's node code\ndoes not list, as `named_pin_types_not_listed_because` then says.",
+            "default": []
+          },
+          "named_pin_types_not_listed_because": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the project's node code did not list, so no named type of it is answered; absent\nwhen it listed."
           }
         },
         "required": [
           "pin_types"
         ],
-        "description": "`list_pin_types`' answer: every built-in pin type."
+        "description": "`list_pin_types`' answer: every built-in pin type, and each named type the project's node\ncode brings."
       },
       "PinTypeListed": {
         "type": "object",
@@ -17645,6 +17698,122 @@
           "node_type"
         ],
         "description": "One conversion a node type states: its one wired input's type into its output's."
+      },
+      "NamedPinTypeListed": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "project"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The project's own node code, outside `imports/`."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "The imported project's UUID."
+              },
+              "folder": {
+                "type": "string",
+                "description": "Its folder under `imports/`."
+              },
+              "version": {
+                "type": "string",
+                "description": "The version its copy carried."
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The imported project's name as the project file in its folder holds it; `null` when\nthat file does not read."
+              },
+              "source": {
+                "type": "string",
+                "const": "dependency"
+              }
+            },
+            "required": [
+              "source",
+              "project",
+              "folder",
+              "version"
+            ],
+            "description": "An import's node code as its folder under `imports/` holds it now."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "distribution": {
+                "type": "string",
+                "description": "The distribution's name."
+              },
+              "distribution_version": {
+                "type": "string",
+                "description": "The distribution's version."
+              },
+              "source": {
+                "type": "string",
+                "const": "installed_distribution"
+              }
+            },
+            "required": [
+              "source",
+              "distribution",
+              "distribution_version"
+            ],
+            "description": "An installed distribution that declares `tatolab.nodes` entry points."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "built_in"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The node types the runtime brings itself, which every stream can add."
+          }
+        ],
+        "description": "One named type a module declares with `@named_pin_type`, which a pin typed with it carries\nas the bytes its class packs and links only to a pin of the same name.",
+        "properties": {
+          "pin_type": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The pin type a pin of it states: `{\"type\": \"named\", \"named_pin_type\": …}`."
+          },
+          "documentation": {
+            "type": "string",
+            "description": "What a value of it is, as its declaration describes it."
+          },
+          "path": {
+            "type": "string",
+            "description": "The file declaring it, relative to its source's root."
+          },
+          "line": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The line of its `class`."
+          }
+        },
+        "required": [
+          "pin_type",
+          "documentation",
+          "path",
+          "line"
+        ]
       },
       "ListNodeTypesRequest": {
         "type": "object",

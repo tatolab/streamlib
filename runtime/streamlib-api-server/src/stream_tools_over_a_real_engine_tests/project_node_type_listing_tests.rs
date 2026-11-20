@@ -74,8 +74,10 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     assert_eq!(listed["project"], json!(cell.project), "{listed}");
     assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
     dependency_source["project_name"] = json!(TEST_PROJECT_NAME);
+    dependency_source["named_pin_types"] = json!([]);
     let mut project_source = project_source;
     project_source["node_types"][0]["category_from"] = Value::Null;
+    project_source["named_pin_types"] = json!([]);
     assert_eq!(
         listed["sources"],
         json!([project_source, dependency_source]),
