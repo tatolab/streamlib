@@ -64,6 +64,47 @@ fn offer_the_browser_host_when_the_runtime_unit_carries_it(
     }
 }
 
+/// Offer every encoder node the encode host the runtime unit carries beside
+/// this executable, which encodes every node's frames on one device per GPU;
+/// one built without it offers none, and each encoder opens a device of its
+/// own.
+#[cfg(target_os = "linux")]
+fn offer_the_video_encode_host_when_the_runtime_unit_carries_it(
+    engine: &Runner,
+    tatolab_state_directory: &TatolabStateDirectory,
+) {
+    use streamlib::sdk::node_interpreter::{
+        VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME, VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
+    };
+    let Some(video_encode_host_executable) = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .ok()
+        .and_then(|this_executable| {
+            Some(
+                this_executable
+                    .parent()?
+                    .join(VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME),
+            )
+        })
+        .filter(|executable| executable.is_file())
+    else {
+        tracing::info!(
+            "the runtime unit carries no {VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME} beside this \
+             executable, so each encoder opens a device of its own"
+        );
+        return;
+    };
+    let offer = streamlib::sdk::shared_native_services::SharedNativeServiceOffer {
+        service_name: VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME.to_string(),
+        executable: video_encode_host_executable,
+        state_directory: tatolab_state_directory
+            .shared_native_service_state_directory(VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME),
+    };
+    if let Err(refusal) = engine.offer_shared_native_service(offer) {
+        tracing::warn!("the encode host was not offered: {refusal}");
+    }
+}
+
 /// Host the machine's streams until a machine shutdown is requested and every
 /// stream has ended, tear the engine down, end `runtime_run_in_progress_record`
 /// cleanly, and return the status `tatolabd` exits with. A start refused
@@ -148,6 +189,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         &lend_directory,
         tatolab_state_directory,
     );
+    #[cfg(target_os = "linux")]
+    offer_the_video_encode_host_when_the_runtime_unit_carries_it(&engine, tatolab_state_directory);
     streamlib_media_builtins::register_media_builtin_node_types();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();
