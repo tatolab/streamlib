@@ -50,6 +50,17 @@ pub struct WhatTheProjectsModulesDeclare {
     /// Each named pin type a module the project brings declares, by its import path, with the
     /// module that declares it.
     pub module_declaring_each_named_pin_type: BTreeMap<String, ModuleThatDeclares>,
+    /// Each module the listing could not read, which may declare what no other module does.
+    pub unreadable_modules: Vec<ModuleNotRead>,
+}
+
+/// A module the node type listing could not read, so what it declares is not known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleNotRead {
+    /// The module whose code it is.
+    pub module: ModuleThatDeclares,
+    /// Its file, as the listing names it.
+    pub path: String,
 }
 
 /// The module that declares a named pin type.
@@ -94,8 +105,34 @@ impl WhatTheProjectsModulesDeclare {
                     .entry(named.named_pin_type.as_str().to_owned())
                     .or_insert_with(|| module.clone());
             }
+            declared
+                .unreadable_modules
+                .extend(
+                    source
+                        .unreadable_modules
+                        .iter()
+                        .map(|unread| ModuleNotRead {
+                            module: module.clone(),
+                            path: unread.path.clone(),
+                        }),
+                );
         }
         declared
+    }
+
+    /// The files of the modules among `unreadable_modules` that `may_declare_it` keeps, in
+    /// words, as `` `nodes/broken.py` ``; `None` when there are none.
+    fn the_unreadable_modules_that(
+        &self,
+        may_declare_it: impl Fn(&ModuleThatDeclares) -> bool,
+    ) -> Option<String> {
+        let files: Vec<String> = self
+            .unreadable_modules
+            .iter()
+            .filter(|unread| may_declare_it(&unread.module))
+            .map(|unread| format!("`{}`", unread.path))
+            .collect();
+        (!files.is_empty()).then(|| files.join(", "))
     }
 }
 
@@ -130,26 +167,46 @@ pub fn the_node_ui_manifest_a_check_reads(
 /// Studio's own module's to register, so a project's is always refused. A named type's default
 /// control is the declaring module's, and a node body its node type's module's, each judged
 /// against `declared`, what the project's modules declare, and not judged when that is `None`.
+/// An entry whose type or node type no module declares while a module that may declare it does
+/// not read is a `warning` naming that module's file, since what it declares is not known.
 pub fn the_findings_of_a_node_ui_manifest(
     to_check: &NodeUiManifestToCheck,
     declared: Option<&WhatTheProjectsModulesDeclare>,
 ) -> Vec<ProjectCodeCheckFinding> {
-    let finding =
-        |finding_code: &str, words: String, node_type: Option<&str>| ProjectCodeCheckFinding {
-            check: ProjectCodeCheckKind::ExtensionManifest,
-            finding_code: finding_code.to_owned(),
-            severity: ProjectCodeCheckSeverity::Error,
+    let finding_of = |severity: ProjectCodeCheckSeverity,
+                      finding_code: &str,
+                      words: String,
+                      node_type: Option<&str>| ProjectCodeCheckFinding {
+        check: ProjectCodeCheckKind::ExtensionManifest,
+        finding_code: finding_code.to_owned(),
+        severity,
+        words,
+        path: the_path_of_a_projects_own_node_ui_manifest(),
+        line: None,
+        column: None,
+        node_type: node_type.map(str::to_owned),
+        port: None,
+    };
+    let error = |finding_code: &str, words: String, node_type: Option<&str>| {
+        finding_of(
+            ProjectCodeCheckSeverity::Error,
+            finding_code,
             words,
-            path: the_path_of_a_projects_own_node_ui_manifest(),
-            line: None,
-            column: None,
-            node_type: node_type.map(str::to_owned),
-            port: None,
-        };
+            node_type,
+        )
+    };
+    let not_judged = |finding_code: &str, words: String, node_type: Option<&str>| {
+        finding_of(
+            ProjectCodeCheckSeverity::Warning,
+            finding_code,
+            words,
+            node_type,
+        )
+    };
     let manifest = match &to_check.manifest {
         Ok(manifest) => manifest,
         Err(why) => {
-            return vec![finding(
+            return vec![error(
                 "node_ui_manifest_refused",
                 format!("the project's node UI elements are not offered: {why}"),
                 None,
@@ -162,12 +219,16 @@ pub fn the_findings_of_a_node_ui_manifest(
             continue;
         }
         let type_name = control.pin_type.as_written();
+        let registers = format!("`controls[{index}]` registers the default control of");
+        let otherwise = "Otherwise give it a `\"control\"` name, which a pin's `control` \
+                         annotation picks it by";
         let who_may_register_it = match &control.pin_type {
             NodeUiControlPinType::BuiltIn(_) => Some(format!(
                 "`{type_name}`, a built-in type: only the Studio's own module may register it"
             )),
-            NodeUiControlPinType::Named(_) => declared.and_then(|declared| {
-                match declared
+            NodeUiControlPinType::Named(_) => match declared {
+                None => None,
+                Some(declared) => match declared
                     .module_declaring_each_named_pin_type
                     .get(&type_name)
                 {
@@ -177,30 +238,58 @@ pub fn the_findings_of_a_node_ui_manifest(
                          declares a named type may register its default, so register it in \
                          {module}"
                     )),
-                    None => Some(format!(
-                        "`{type_name}`, a named type no module the project brings declares: only \
-                         the module that declares a named type may register its default, so \
-                         declare the class with `@named_pin_type` in the project's own code"
-                    )),
-                }
-            }),
+                    None => match declared.the_unreadable_modules_that(|_| true) {
+                        Some(unread) => {
+                            findings.push(not_judged(
+                                "default_control_not_judged",
+                                format!(
+                                    "{registers} `{type_name}`, a named type no module the \
+                                     project brings declares as far as they read, but {unread} \
+                                     does not parse and may declare it. Fix that module, then \
+                                     check again"
+                                ),
+                                None,
+                            ));
+                            None
+                        }
+                        None => Some(format!(
+                            "`{type_name}`, a named type no module the project brings declares: \
+                             only the module that declares a named type may register its \
+                             default, so declare the class with `@named_pin_type` in the \
+                             project's own code"
+                        )),
+                    },
+                },
+            },
         };
         if let Some(who_may_register_it) = who_may_register_it {
-            findings.push(finding(
+            findings.push(error(
                 "default_control_not_the_modules_to_register",
-                format!(
-                    "`controls[{index}]` registers the default control of {who_may_register_it}. \
-                     Otherwise give it a `\"control\"` name, which a pin's `control` annotation \
-                     picks it by"
-                ),
+                format!("{registers} {who_may_register_it}. {otherwise}"),
                 None,
             ));
         }
     }
     if let Some(declared) = declared {
+        let unread_own_code = declared.the_unreadable_modules_that(|module| {
+            *module == ModuleThatDeclares::TheProjectsOwnCode
+        });
         for (index, body) in manifest.node_bodies.iter().enumerate() {
-            if !declared.own_node_types.contains(&body.node_type) {
-                findings.push(finding(
+            if declared.own_node_types.contains(&body.node_type) {
+                continue;
+            }
+            findings.push(match &unread_own_code {
+                Some(unread) => not_judged(
+                    "node_body_not_judged",
+                    format!(
+                        "`node_bodies[{index}]` registers a node body for `{}`, which is no node \
+                         type of the project's own code as far as it reads, but {unread} does \
+                         not parse and may declare it. Fix that module, then check again",
+                        body.node_type
+                    ),
+                    Some(&body.node_type),
+                ),
+                None => error(
                     "node_body_not_the_modules_to_register",
                     format!(
                         "`node_bodies[{index}]` registers a node body for `{}`, which is no node \
@@ -210,8 +299,8 @@ pub fn the_findings_of_a_node_ui_manifest(
                         body.node_type
                     ),
                     Some(&body.node_type),
-                ));
-            }
+                ),
+            });
         }
     }
     findings

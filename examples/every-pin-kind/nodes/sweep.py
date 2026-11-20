@@ -5,8 +5,8 @@
 path `nodes.sweep:Sweep`.
 
 `SweepAt` writes a `Sweep` and `SweepPosition` reads it, so a named type links between two
-nodes, and only to a pin of the same name. A `Sweep` travels as the bytes `to_bytes` packs and is
-built back with `from_bytes`. The sample's `node_ui/` registers the type's default control,
+nodes, to a pin of the same name or to an input of any type. A `Sweep` travels as the bytes
+`to_bytes` packs and is built back with `from_bytes`. The sample's `node_ui/` registers the type's default control,
 which only the module that declares the type may register.
 """
 

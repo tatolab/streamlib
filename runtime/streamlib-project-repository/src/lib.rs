@@ -61,7 +61,7 @@ pub use node_ui_manifest::{
 };
 #[cfg(feature = "history")]
 pub use node_ui_manifest_check::{
-    ModuleThatDeclares, NodeUiManifestToCheck, WhatTheProjectsModulesDeclare,
+    ModuleNotRead, ModuleThatDeclares, NodeUiManifestToCheck, WhatTheProjectsModulesDeclare,
     the_findings_of_a_node_ui_manifest, the_node_ui_manifest_a_check_reads,
     the_path_of_a_projects_own_node_ui_manifest,
 };

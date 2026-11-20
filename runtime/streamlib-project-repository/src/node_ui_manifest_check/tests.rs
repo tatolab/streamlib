@@ -105,6 +105,7 @@ fn what_a_project_declaring_a_sensor_reading_and_importing_a_pose_declares()
                 ModuleThatDeclares::AnotherModule("the import `rig` (`imports/rig`)".to_owned()),
             ),
         ]),
+        unreadable_modules: Vec::new(),
     }
 }
 
@@ -188,7 +189,10 @@ fn what_the_modules_declare_is_read_off_the_node_type_listing() {
                     "named_pin_type": "rig.arm:Pose", "description": "A pose.",
                     "path": "imports/rig/rig/arm.py", "line": 12,
                 }],
-                "unreadable_modules": [],
+                "unreadable_modules": [{
+                    "module": "rig.hand", "path": "imports/rig/rig/hand.py", "line": 3,
+                    "column": 1, "why": "invalid syntax",
+                }],
             },
         ],
     }))
@@ -210,7 +214,85 @@ fn what_the_modules_declare_is_read_off_the_node_type_listing() {
                     ),
                 ),
             ]),
+            unreadable_modules: vec![ModuleNotRead {
+                module: ModuleThatDeclares::AnotherModule(
+                    "the import `Rig` (`imports/rig`)".to_owned()
+                ),
+                path: "imports/rig/rig/hand.py".to_owned(),
+            }],
         }
+    );
+}
+
+/// Mental-revert: judging without the modules that do not read refuses `nowhere:Thing` and
+/// `elsewhere:Mixer` as declared nowhere, telling the author to declare what may already be.
+#[test]
+fn an_entry_a_module_that_does_not_read_may_declare_is_a_warning_naming_that_module() {
+    let named = a_project_holding_the_node_ui_manifest(NAMED_TYPE_DEFAULTS);
+    let named = the_node_ui_manifest_a_check_reads(named.path(), None).unwrap();
+    let bodies = a_project_holding_the_node_ui_manifest(MANIFEST);
+    let bodies = the_node_ui_manifest_a_check_reads(bodies.path(), None).unwrap();
+    let an_import_does_not_read = WhatTheProjectsModulesDeclare {
+        own_node_types: BTreeSet::from(["crossfade:Crossfade".to_owned()]),
+        unreadable_modules: vec![ModuleNotRead {
+            module: ModuleThatDeclares::AnotherModule(
+                "the import `rig` (`imports/rig`)".to_owned(),
+            ),
+            path: "imports/rig/rig/hand.py".to_owned(),
+        }],
+        ..what_a_project_declaring_a_sensor_reading_and_importing_a_pose_declares()
+    };
+
+    let findings = the_findings_of_a_node_ui_manifest(&named, Some(&an_import_does_not_read));
+    let [imported, not_judged] = findings.as_slice() else {
+        panic!("two findings: {findings:?}");
+    };
+    assert_eq!(
+        imported.finding_code,
+        "default_control_not_the_modules_to_register"
+    );
+    assert_eq!(not_judged.finding_code, "default_control_not_judged");
+    assert_eq!(not_judged.severity, ProjectCodeCheckSeverity::Warning);
+    assert!(
+        not_judged.words.contains("`controls[2]`")
+            && not_judged.words.contains("`nowhere:Thing`")
+            && not_judged
+                .words
+                .contains("`imports/rig/rig/hand.py` does not parse"),
+        "{}",
+        not_judged.words
+    );
+
+    let body_findings = the_findings_of_a_node_ui_manifest(&bodies, Some(&an_import_does_not_read));
+    assert_eq!(
+        the_codes_and_words(&body_findings)
+            .into_iter()
+            .map(|(code, _)| code)
+            .collect::<Vec<_>>(),
+        [
+            "default_control_not_the_modules_to_register",
+            "node_body_not_the_modules_to_register"
+        ],
+        "a node body is the project's own code's, which an import that does not read cannot declare"
+    );
+
+    let own_code_does_not_read = WhatTheProjectsModulesDeclare {
+        unreadable_modules: vec![ModuleNotRead {
+            module: ModuleThatDeclares::TheProjectsOwnCode,
+            path: "nodes/mixer.py".to_owned(),
+        }],
+        ..an_import_does_not_read
+    };
+    let body_findings = the_findings_of_a_node_ui_manifest(&bodies, Some(&own_code_does_not_read));
+    let [_, body] = body_findings.as_slice() else {
+        panic!("two findings: {body_findings:?}");
+    };
+    assert_eq!(body.finding_code, "node_body_not_judged");
+    assert_eq!(body.severity, ProjectCodeCheckSeverity::Warning);
+    assert!(
+        body.words.contains("`elsewhere:Mixer`") && body.words.contains("`nodes/mixer.py`"),
+        "{}",
+        body.words
     );
 }
 
