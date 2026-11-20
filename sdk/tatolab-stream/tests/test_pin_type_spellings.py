@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import builtins
+from dataclasses import dataclass
 from collections import Counter
 from collections.abc import Buffer
 from typing import Literal, Self
@@ -41,6 +42,12 @@ class ProbeReading:
         return bytes([self.level])
 
 
+@dataclass(frozen=True)
+class ProbeSettings:
+    level: float = 0.0
+    label: str = ""
+
+
 SPELLINGS_THE_TYPED_GRAMMAR_READS = [
     spelling
     for spelling in PIN_TYPE_SPELLINGS
@@ -74,6 +81,7 @@ A_VALUE_OF_EACH_SPELLING: dict[str, object] = {
     "Literal": "sine",
     "Asset": tatolab.stream.Asset("0eaf9ee2-0f73-4154-a3f6-a99c261b850d"),
     "list": [0.25, 0.5],
+    "dataclass": ProbeSettings(),
     "named_pin_type": NO_DEFAULT,
 }
 
@@ -81,6 +89,7 @@ A_VALUE_OF_EACH_SPELLING: dict[str, object] = {
 A_TYPE_OF_EACH_GENERIC_SPELLING: dict[str, object] = {
     "Literal": Literal["sine", "square"],
     "list": list[float],
+    "dataclass": ProbeSettings,
     "named_pin_type": ProbeReading,
 }
 

@@ -547,7 +547,7 @@ impl GraphSnapshot {
         for node in &self.nodes {
             for reference in config_node_reference_edges_of_one_node(
                 &node.name,
-                &config_of_a_node(node_types, &node.node_type, &node.input_values),
+                &serde_json::Value::Object(node.input_values.clone()),
                 config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.node_type),
             )? {
                 let referenced_node_name = &reference.edge.referenced_node;

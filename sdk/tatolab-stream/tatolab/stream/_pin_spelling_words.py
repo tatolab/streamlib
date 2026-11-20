@@ -1,22 +1,29 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Which of the pin type spellings the typed grammar reads, as its refusals name them: the
-spellings a pin of one type is written in today, and those a List element takes."""
+"""How a pin's refusal names what it was typed and the spellings it could be typed instead."""
 
 from __future__ import annotations
 
+import types
+import typing
 from typing import Final
 
-from ._pin_types import INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS, PIN_TYPE_SPELLINGS, ExactNumberSize
+from ._pin_types import (
+    INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS,
+    PIN_TYPE_SPELLINGS,
+    ExactNumberSize,
+)
 
 __all__ = [
     "WRITTEN_FORMS_A_LIST_ELEMENT_TAKES",
+    "is_a_union",
+    "name_of",
     "spellings_read_today",
     "written_forms_a_list_element_takes",
+    "written_name_of",
 ]
 
-# The written forms of the sizes only an element of a List or a Tensor holds.
 _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
     ExactNumberSize(size).written_form for size in INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS
 )
@@ -38,11 +45,11 @@ WRITTEN_FORMS_A_LIST_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
         "asset",
     )
 )
-"""The written forms of the small types, which a List element takes."""
+"""The written forms of the small types, which a List element and a List's bundle member take."""
 
 
 def written_forms_a_list_element_takes() -> str:
-    """Each written form a List element takes, as a refusal lists them."""
+    """The small types a List element takes, each written as a declaration writes it."""
     return ", ".join(
         f"`{spelling.written_form}`"
         for spelling in PIN_TYPE_SPELLINGS
@@ -51,8 +58,7 @@ def written_forms_a_list_element_takes() -> str:
 
 
 def spellings_read_today() -> str:
-    """Each spelling a pin of one type that holds a value is written in today, as a refusal lists
-    them."""
+    """Each spelling the typed grammar reads as a value, written as a declaration writes it."""
     read_today = [
         f"`{spelling.written_form}`"
         for spelling in PIN_TYPE_SPELLINGS
@@ -61,3 +67,22 @@ def spellings_read_today() -> str:
         and spelling.written_form not in _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES
     ]
     return ", ".join(read_today)
+
+
+def written_name_of(annotation: object) -> str:
+    """`annotation` as a declaration writes it, without backticks."""
+    if isinstance(annotation, (type, typing.TypeVar)):
+        return annotation.__name__
+    return repr(annotation)
+
+
+def is_a_union(annotation: object) -> bool:
+    """Whether `annotation` is a union, `A | B` or `Union[A, B]`."""
+    return typing.get_origin(annotation) in (typing.Union, types.UnionType)
+
+
+def name_of(annotation: object) -> str:
+    """`annotation` as a refusal names it, in backticks."""
+    if isinstance(annotation, type):
+        return f"`{annotation.__name__}`"
+    return f"`{annotation!r}`"

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Final, Literal, Optional
 
@@ -147,6 +148,25 @@ def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
                 _stored_form_of_its_type(element, element_type)
                 for element in value  # pyright: ignore[reportUnknownVariableType]
             ]
+        case {"type": "bundle", "members": members}:
+            if not dataclasses.is_dataclass(value) or isinstance(value, type):
+                raise not_of_its_type
+            if {field.name for field in dataclasses.fields(value)} != {
+                member["name"] for member in members
+            }:
+                raise PinValueNotTaken(
+                    value,
+                    f"whose fields are not its members, "
+                    f"{', '.join(repr(member['name']) for member in members)}",
+                    kind="not_of_its_type",
+                    pin_type=pin_type,
+                )
+            return {
+                member["name"]: _stored_form_of_its_type(
+                    getattr(value, member["name"]), member["member_type"]
+                )
+                for member in members
+            }
         case {"type": "pin_type_choice"}:
             if not isinstance(value, PinTypeChoice):
                 raise not_of_its_type

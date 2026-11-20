@@ -9,7 +9,7 @@ import copy
 import dataclasses
 import inspect
 import typing
-from typing import Any
+from typing import Any, Optional
 
 
 from tatolab.runtime._function_node_carried_values import (
@@ -22,6 +22,7 @@ from tatolab.runtime._function_node_carried_values import (
     UNREAD_MESSAGE_VALUE_TYPE,
     parts_a_value_type_reads,
     the_class_a_named_pin_type_names,
+    the_dataclass_a_signature_entry_writes_its_bundle_as,
     value_class_of_a_part_value_type,
 )
 from tatolab.runtime._function_node_stored_values import (
@@ -52,6 +53,12 @@ class FunctionNodeBodyRunAsPython:
             each_input["parameter"]: each_input.get("pin_type") for each_input in signature["inputs"]
         }
         self._input_parameters = list(self._value_type_by_input_parameter)
+        self._bundle_class_by_input_parameter: "dict[str, Optional[type]]" = {
+            each_input["parameter"]: the_dataclass_a_signature_entry_writes_its_bundle_as(
+                each_input, f"function node `{node_id}`'s input `{each_input['parameter']}`"
+            )
+            for each_input in signature["inputs"]
+        }
         self._named_class_by_input_parameter: "dict[str, type]" = {
             each_input["parameter"]: the_class_a_named_pin_type_names(
                 each_input["pin_type"]["named_pin_type"],
@@ -86,7 +93,7 @@ class FunctionNodeBodyRunAsPython:
         """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.
 
         A number or bool output is answered as a `float`, a Color, Vector, Rectangle or
-        Transform as the `tuple` of its parts, a String, Menu, Asset or List as the record
+        Transform as the `tuple` of its parts, a String, Menu, Asset, List or bundle as the record
         `{"value": <stored JSON form>}` it travels as, a value of a named type as the `bytes`
         its class packs, a `dict` as given.
         The new state is kept only once every output is answered.
@@ -201,6 +208,7 @@ class FunctionNodeBodyRunAsPython:
                 self._pin_type_by_input_parameter[parameter_name],
                 input_value[STORED_VALUE_RECORD_KEY],
                 what_it_is,
+                self._bundle_class_by_input_parameter[parameter_name],
             )
         return _python_value_of_an_f64(float(input_value), value_type)
 

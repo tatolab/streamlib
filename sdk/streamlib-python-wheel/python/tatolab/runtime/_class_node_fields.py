@@ -53,6 +53,7 @@ class ClassNodeFields:
                 inputs=inputs,
                 node_id=node_id,
                 input_port=member.port,
+                bundle_class=member.bundle_class,
             )
             if read is not None:
                 self._read_from_its_wire[member.port] = read
@@ -119,4 +120,4 @@ class ClassNodeFields:
             return PinTypeChoice.of_the_chosen_type(chosen)
         if pin_type["type"] == "node_reference":
             return stored_value
-        return the_value_a_body_takes(pin_type, stored_value, what_it_is)
+        return the_value_a_body_takes(pin_type, stored_value, what_it_is, member.bundle_class)
