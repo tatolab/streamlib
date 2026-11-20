@@ -290,9 +290,7 @@ impl ConsumerVulkanDevice {
         let device_create_info = device_create_info_builder.build();
 
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
-            .map_err(|e| {
-                ConsumerRhiError::Gpu(format!("Failed to create consumer logical device: {e}"))
-            })?;
+            .map_err(logical_device_creation_refusal)?;
 
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
         #[cfg(target_os = "linux")]
@@ -361,5 +359,20 @@ impl ConsumerVulkanDevice {
             vulkan_device_uuid_the_runtime_named,
             ConsumerVulkanDeviceQueues::ExternalRenderer,
         )
+    }
+}
+
+/// The error a refused `vkCreateDevice` answers with: for now when the driver
+/// lacked a resource another client of the GPU may free, such as memory or
+/// the BAR1 aperture NVIDIA reports as `VK_ERROR_INITIALIZATION_FAILED` once
+/// it is full.
+pub(super) fn logical_device_creation_refusal(refusal: vk::ErrorCode) -> ConsumerRhiError {
+    let message = format!("Failed to create consumer logical device: {refusal}");
+    match refusal {
+        vk::ErrorCode::INITIALIZATION_FAILED
+        | vk::ErrorCode::OUT_OF_DEVICE_MEMORY
+        | vk::ErrorCode::OUT_OF_HOST_MEMORY
+        | vk::ErrorCode::TOO_MANY_OBJECTS => ConsumerRhiError::GpuOutOfResourcesForNow(message),
+        _ => ConsumerRhiError::Gpu(message),
     }
 }

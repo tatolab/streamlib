@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use streamlib_video_bitstream::VideoCodecElementaryStream;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
@@ -23,6 +23,14 @@ pub mod encoded_video_publication;
 pub mod image_frame_on_the_video_port;
 #[cfg(target_os = "linux")]
 pub mod owned_device_video_decoder;
+#[cfg(all(test, target_os = "linux"))]
+mod owned_device_video_decoder_tests;
+pub mod video_codec_retry_gate;
+#[cfg(test)]
+mod video_codec_retry_gate_tests;
+pub mod video_decoder_opening;
+#[cfg(test)]
+mod video_decoder_opening_tests;
 pub mod video_decoder_settings;
 #[cfg(target_os = "linux")]
 pub mod video_encode_host;
@@ -40,10 +48,6 @@ mod video_encode_host_tests;
 pub mod video_encode_on_a_device;
 #[cfg(all(test, target_os = "linux"))]
 mod video_encode_on_a_device_tests;
-#[cfg(target_os = "linux")]
-mod video_encode_session_mint_gate;
-#[cfg(all(test, target_os = "linux"))]
-mod video_encode_session_mint_gate_tests;
 pub mod video_encoder_settings;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
@@ -52,6 +56,8 @@ pub mod vulkan_video_encoder;
 
 use crate::encoded_video_publication::EncodedVideoOutputPort;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
+use crate::video_codec_retry_gate::VideoCodecRefusal;
+use crate::video_decoder_opening::VideoDecoderOpening;
 use crate::video_decoder_settings::VideoDecoderSettings;
 use crate::video_encoder_settings::VideoEncoderSettings;
 
@@ -380,7 +386,7 @@ fn open_the_decoder(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
     settings: VideoDecoderSettings,
-) -> Result<VideoDecoderOnThisPlatform, String> {
+) -> Result<VideoDecoderOnThisPlatform, VideoCodecRefusal> {
     VideoDecoderOnThisPlatform::open(node, module_host.clone(), settings)
 }
 
@@ -408,15 +414,17 @@ fn open_the_decoder(
     node: VideoCodecNodeIdentity,
     _module_host: &ModuleHost,
     _settings: VideoDecoderSettings,
-) -> Result<VideoDecoderOnThisPlatform, String> {
-    Err(format!(
+) -> Result<VideoDecoderOnThisPlatform, VideoCodecRefusal> {
+    Err(VideoCodecRefusal::ForGood(format!(
         "{} decodes on Linux and macOS only",
         node.node_type_name
-    ))
+    )))
 }
 
-/// Read, decode and publish until the node stops. A decoder that cannot open
-/// keeps draining `encoded_video`, so upstream still sees a live consumer.
+/// Read, decode and publish until the node stops. The decoder opens as the
+/// node starts and, refused for now, again at a later media frame; while it
+/// is not open, `encoded_video` is still drained, so upstream sees a live
+/// consumer.
 fn decode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
@@ -426,13 +434,10 @@ fn decode_until_stopped(
     stop_requested: &AtomicBool,
 ) {
     let node_type_name = node.node_type_name;
-    let mut decoder = match open_the_decoder(node, module_host, settings) {
-        Ok(decoder) => Some(decoder),
-        Err(refusal) => {
-            tracing::error!("{refusal}; every media frame is discarded");
-            None
-        }
-    };
+    let mut decoder_opening = VideoDecoderOpening::not_yet_opened(node_type_name);
+    decoder_opening.the_decoder_at(Instant::now(), || {
+        open_the_decoder(node, module_host, settings)
+    });
     let mut media_frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
@@ -450,7 +455,9 @@ fn decode_until_stopped(
                     return;
                 }
             };
-            let Some(decoder) = decoder.as_mut() else {
+            let Some(decoder) = decoder_opening.the_decoder_at(Instant::now(), || {
+                open_the_decoder(node, module_host, settings)
+            }) else {
                 continue;
             };
             let decoded = refuse_unless_a_packets_unit_of_this_codec(node, &media_frame)
@@ -466,7 +473,7 @@ fn decode_until_stopped(
             }
         }
     }
-    if let Some(decoder) = decoder.as_ref() {
+    if let Some(decoder) = decoder_opening.opened_decoder() {
         decoder.report_at_teardown();
     }
 }
