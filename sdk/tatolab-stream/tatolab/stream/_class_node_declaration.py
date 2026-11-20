@@ -15,10 +15,12 @@ State the node keeps is `_private` or a `ClassVar`, and `__init__` takes no para
 from __future__ import annotations
 
 import inspect
+import types
 import typing
 from typing import Any, ClassVar, Final, Optional
 
 from ._class_node_pins import InputPin, OutputPin
+from ._contract_pin_types import PinDeclarationOnTheWire
 from ._description import description_and_annotation_without_it
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._input_declaration_annotations import (
@@ -34,6 +36,7 @@ from ._pin_declaration import (
     NodeDeclarationRefusal,
     PinDirection,
     read_pin_declaration,
+    refuse_former_names_that_find_no_one_pin,
 )
 from ._pin_family import family_a_pin_travels_on, family_declaration_of_a_typed_output
 from ._port_family_declaration import Input, Output
@@ -72,6 +75,7 @@ class _ClassNodeReading:
         self._refuse_an_init_taking_parameters()
         input_ports: list[DeclaredPort] = []
         output_ports: list[DeclaredPort] = []
+        typed_pins: list[tuple[str, str, PinDeclarationOnTheWire]] = []
         for attribute_name, annotation in self._resolved_annotations().items():
             if attribute_name.startswith("_") or _is_a_class_variable(annotation):
                 continue
@@ -80,11 +84,16 @@ class _ClassNodeReading:
             )
             pin_form, pin_type_annotation = self._pin_form_and_its_type(attribute_name, annotation)
             if pin_form is None:
-                input_ports.append(self._field(attribute_name, annotation, description))
+                port = self._field(attribute_name, annotation, description)
+                input_ports.append(port)
             elif _DIRECTION_OF_EACH_PIN_FORM[pin_form] == "input":
-                input_ports.append(self._input_pin(attribute_name, pin_type_annotation, description))
+                port = self._input_pin(attribute_name, pin_type_annotation, description)
+                input_ports.append(port)
             else:
-                output_ports.append(self._output_pin(attribute_name, pin_type_annotation, description))
+                port = self._output_pin(attribute_name, pin_type_annotation, description)
+                output_ports.append(port)
+            typed_pins.append((attribute_name, port["name"], port["pin_declaration"]))
+        refuse_former_names_that_find_no_one_pin(self._node, typed_pins)
         return input_ports, output_ports
 
     def _refusal(
@@ -347,11 +356,18 @@ class _ClassNodeReading:
 
 
 def _is_a_class_variable(annotation: Any) -> bool:
+    if typing.get_origin(annotation) is typing.Annotated:
+        return _is_a_class_variable(typing.get_args(annotation)[0])
     return annotation is ClassVar or typing.get_origin(annotation) is ClassVar
 
 
 def _taken_off(annotation: Any, annotation_classes: tuple[type, ...]) -> tuple[list[object], Any]:
-    """The entries of `annotation_classes` an `Annotated[...]` carries, and the annotation with them taken off."""
+    """The entries of `annotation_classes` an `Annotated[...]` carries, and the annotation with them taken off;
+    an optional `Annotated[...] | None` keeps its `| None`."""
+    optional_member = _the_member_an_optional_type_makes_optional(annotation)
+    if optional_member is not None:
+        taken, kept = _taken_off(optional_member, annotation_classes)
+        return (taken, Optional[kept]) if taken else ([], annotation)
     if typing.get_origin(annotation) is not typing.Annotated:
         return [], annotation
     annotated, *metadata = typing.get_args(annotation)
@@ -362,3 +378,11 @@ def _taken_off(annotation: Any, annotation_classes: tuple[type, ...]) -> tuple[l
     if not kept:
         return taken, annotated
     return taken, typing.Annotated[annotated, *kept]  # pyright: ignore[reportInvalidTypeArguments]
+
+
+def _the_member_an_optional_type_makes_optional(annotation: Any) -> Any:
+    """`T` for `T | None` or `Optional[T]`; `None` for any other annotation."""
+    if typing.get_origin(annotation) not in (typing.Union, types.UnionType):
+        return None
+    members = [member for member in typing.get_args(annotation) if member is not type(None)]
+    return members[0] if len(members) == 1 else None
