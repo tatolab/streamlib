@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 import type {
-  BuiltInPinTypeName,
+  NodeUiControlPinType,
   NodeUiManifest,
   NodeUiManifestControl,
 } from "@tatolab/runtime-client/node_ui_manifest";
@@ -13,16 +13,17 @@ export const aModulesNodeUiManifest: NodeUiManifest = {
     { type: "float", script: "float_number.ts" },
     { type: "float", control: "slider", script: "float_slider.ts" },
     { type: "vector", control: "xy_pad", script: "vector_xy_pad.ts" },
+    { type: "nodes.sweep:Sweep", script: "sweep_on_its_wire.ts" },
   ],
   node_bodies: [{ node_type: "acme:Crossfade", script: "crossfade_body.ts" }],
 };
 
-export const aControlNamesAPinTypeFromTheContractsList: BuiltInPinTypeName =
-  aModulesNodeUiManifest.controls?.[0]?.type ?? "float";
+export const aControlNamesABuiltInOrANamedPinType: NodeUiControlPinType =
+  aModulesNodeUiManifest.controls?.[3]?.type ?? "float";
 
-export const aControlOfAPinTypeTheContractDoesNotList: NodeUiManifestControl = {
-  // @ts-expect-error `flaot` is not a built-in pin type's name.
-  type: "flaot",
+export const aControlWhosePinTypeIsNotAName: NodeUiManifestControl = {
+  // @ts-expect-error a control's pin type is a built-in type's name or a class's import path.
+  type: 3,
   script: "float_dial.ts",
 };
 
