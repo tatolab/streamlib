@@ -1,0 +1,6 @@
+{
+  "contract": "1.1",
+  "node_bodies": [
+    { "node_type": "nodes.stage_shaders:Kaleidoscope", "script": "kaleidoscope_body.ts" }
+  ]
+}

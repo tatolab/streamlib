@@ -1,0 +1,684 @@
+{
+  "asset": "3a9e5c71-2b4d-4f86-a0c3-9d1e7b5f2a64",
+  "groups": [
+    {
+      "description": "The beat at 120 per minute, eased by a loop of function nodes, shared as the variable pulse beside the clock, and played as a click.",
+      "id": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+      "title": "Beat"
+    },
+    {
+      "description": "Lights circling on black, folded into a kaleidoscope, bloomed and stamped with the clock, in the Program view.",
+      "id": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+      "title": "Picture"
+    }
+  ],
+  "links": [
+    {
+      "source": {
+        "node": "9a655ed8-01f2-5857-992b-d12b551635f2",
+        "port": "result"
+      },
+      "target": {
+        "node": "635540b0-6d21-5d19-9e9f-3d32b88df855",
+        "port": "seconds"
+      }
+    },
+    {
+      "source": {
+        "node": "9a655ed8-01f2-5857-992b-d12b551635f2",
+        "port": "result"
+      },
+      "target": {
+        "node": "cd97112b-52a7-51fc-b1cd-9e7fe606b05b",
+        "port": "value"
+      }
+    },
+    {
+      "source": {
+        "node": "635540b0-6d21-5d19-9e9f-3d32b88df855",
+        "port": "pulse"
+      },
+      "target": {
+        "node": "9b105e11-dd00-5db6-bd58-8f3a853a42f2",
+        "port": "target"
+      }
+    },
+    {
+      "source": {
+        "node": "e1b33500-3e00-5eb1-b09a-57271b472a76",
+        "port": "result"
+      },
+      "target": {
+        "node": "9b105e11-dd00-5db6-bd58-8f3a853a42f2",
+        "port": "previous"
+      }
+    },
+    {
+      "source": {
+        "node": "9b105e11-dd00-5db6-bd58-8f3a853a42f2",
+        "port": "result"
+      },
+      "target": {
+        "node": "e1b33500-3e00-5eb1-b09a-57271b472a76",
+        "port": "value"
+      }
+    },
+    {
+      "source": {
+        "node": "9b105e11-dd00-5db6-bd58-8f3a853a42f2",
+        "port": "result"
+      },
+      "target": {
+        "node": "104b3b9d-0104-5a1c-bd3f-aadb796b2210",
+        "port": "value"
+      }
+    },
+    {
+      "source": {
+        "node": "635540b0-6d21-5d19-9e9f-3d32b88df855",
+        "port": "count"
+      },
+      "target": {
+        "node": "b6dd460b-1f0e-532d-be3e-22700d84e059",
+        "port": "count"
+      }
+    },
+    {
+      "source": {
+        "node": "635540b0-6d21-5d19-9e9f-3d32b88df855",
+        "port": "downbeat"
+      },
+      "target": {
+        "node": "b6dd460b-1f0e-532d-be3e-22700d84e059",
+        "port": "downbeat"
+      }
+    },
+    {
+      "source": {
+        "node": "b6dd460b-1f0e-532d-be3e-22700d84e059",
+        "port": "result"
+      },
+      "target": {
+        "node": "dcece61a-0c46-5d1e-96af-2f45f97ffab6",
+        "port": "cue"
+      }
+    },
+    {
+      "source": {
+        "node": "dcece61a-0c46-5d1e-96af-2f45f97ffab6",
+        "port": "audio"
+      },
+      "target": {
+        "node": "edcd8bf2-b745-54b8-91f1-98ba2f031e80",
+        "port": "audio"
+      }
+    },
+    {
+      "source": {
+        "node": "dcece61a-0c46-5d1e-96af-2f45f97ffab6",
+        "port": "audio"
+      },
+      "target": {
+        "node": "74228f65-fea3-5c7a-b683-492bd6602fe5",
+        "port": "audio"
+      }
+    },
+    {
+      "source": {
+        "node": "1f6bd928-e1f6-552c-8dbf-69cddda4d140",
+        "port": "image"
+      },
+      "target": {
+        "node": "3434b568-ec32-51b4-9a91-766d2c34af93",
+        "port": "size_from"
+      }
+    },
+    {
+      "source": {
+        "node": "3a31e146-2669-5aec-9ced-321c3e4fc041",
+        "port": "value"
+      },
+      "target": {
+        "node": "3434b568-ec32-51b4-9a91-766d2c34af93",
+        "port": "seconds"
+      }
+    },
+    {
+      "source": {
+        "node": "f594735f-060a-55fb-8896-4a9af33fe3ad",
+        "port": "value"
+      },
+      "target": {
+        "node": "3434b568-ec32-51b4-9a91-766d2c34af93",
+        "port": "speed"
+      }
+    },
+    {
+      "source": {
+        "node": "c87ab3e6-cd7a-57fc-946e-421612ae046e",
+        "port": "value"
+      },
+      "target": {
+        "node": "3434b568-ec32-51b4-9a91-766d2c34af93",
+        "port": "pulse"
+      }
+    },
+    {
+      "source": {
+        "node": "3434b568-ec32-51b4-9a91-766d2c34af93",
+        "port": "result"
+      },
+      "target": {
+        "node": "d8315d46-0b4b-5786-9361-d47da011b18e",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "e9655b02-2a64-514e-ae45-16302409591d",
+        "port": "value"
+      },
+      "target": {
+        "node": "d8315d46-0b4b-5786-9361-d47da011b18e",
+        "port": "segments"
+      }
+    },
+    {
+      "source": {
+        "node": "c87ab3e6-cd7a-57fc-946e-421612ae046e",
+        "port": "value"
+      },
+      "target": {
+        "node": "d8315d46-0b4b-5786-9361-d47da011b18e",
+        "port": "pulse"
+      }
+    },
+    {
+      "source": {
+        "node": "d8315d46-0b4b-5786-9361-d47da011b18e",
+        "port": "result"
+      },
+      "target": {
+        "node": "e6baa1a4-5a1b-596d-bba8-75c89c7c3670",
+        "port": "video_in"
+      }
+    },
+    {
+      "source": {
+        "node": "e6baa1a4-5a1b-596d-bba8-75c89c7c3670",
+        "port": "video_out"
+      },
+      "target": {
+        "node": "16ae2834-a12e-5387-987f-36c73db1bb37",
+        "port": "video_in"
+      }
+    },
+    {
+      "source": {
+        "node": "3a31e146-2669-5aec-9ced-321c3e4fc041",
+        "port": "value"
+      },
+      "target": {
+        "node": "16ae2834-a12e-5387-987f-36c73db1bb37",
+        "port": "seconds"
+      }
+    },
+    {
+      "source": {
+        "node": "16ae2834-a12e-5387-987f-36c73db1bb37",
+        "port": "video_out"
+      },
+      "target": {
+        "node": "74228f65-fea3-5c7a-b683-492bd6602fe5",
+        "port": "video"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "9a655ed8-01f2-5857-992b-d12b551635f2",
+      "name": "clock",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          0,
+          0
+        ]
+      },
+      "type": "imports/core-nodes/core_nodes.animation:Timer"
+    },
+    {
+      "id": "635540b0-6d21-5d19-9e9f-3d32b88df855",
+      "input_values": {
+        "beats_per_bar": 4,
+        "beats_per_minute": 120.0
+      },
+      "name": "beat",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          250,
+          0
+        ]
+      },
+      "type": "nodes.beat:Beat"
+    },
+    {
+      "id": "9b105e11-dd00-5db6-bd58-8f3a853a42f2",
+      "input_values": {
+        "rate": 0.35
+      },
+      "name": "follow",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          500,
+          0
+        ]
+      },
+      "type": "nodes.beat:Follow"
+    },
+    {
+      "id": "104b3b9d-0104-5a1c-bd3f-aadb796b2210",
+      "input_values": {
+        "variable": "pulse"
+      },
+      "name": "set_pulse",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          750,
+          0
+        ]
+      },
+      "type": "tatolab.stream:SetVariable"
+    },
+    {
+      "id": "cd97112b-52a7-51fc-b1cd-9e7fe606b05b",
+      "input_values": {
+        "variable": "clock"
+      },
+      "name": "set_clock",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          0,
+          150
+        ]
+      },
+      "type": "tatolab.stream:SetVariable"
+    },
+    {
+      "id": "e1b33500-3e00-5eb1-b09a-57271b472a76",
+      "name": "previous_pulse",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          500,
+          150
+        ]
+      },
+      "type": "tatolab.stream:PreviousValue"
+    },
+    {
+      "id": "b6dd460b-1f0e-532d-be3e-22700d84e059",
+      "name": "cue",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          750,
+          150
+        ]
+      },
+      "type": "nodes.beat:ClickCue"
+    },
+    {
+      "id": "dcece61a-0c46-5d1e-96af-2f45f97ffab6",
+      "input_values": {
+        "volume": 0.4
+      },
+      "name": "click",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          1000,
+          150
+        ]
+      },
+      "type": "nodes.click_track:ClickTrack"
+    },
+    {
+      "id": "edcd8bf2-b745-54b8-91f1-98ba2f031e80",
+      "name": "speaker",
+      "studio": {
+        "contract": 1,
+        "group": "f753fe6a-7117-5c2a-96a4-1636fb730c89",
+        "position": [
+          1250,
+          150
+        ]
+      },
+      "type": "tatolab.speaker:SpeakerSink"
+    },
+    {
+      "id": "1f6bd928-e1f6-552c-8dbf-69cddda4d140",
+      "input_values": {
+        "height": 720,
+        "width": 1280
+      },
+      "name": "canvas",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          0,
+          370
+        ]
+      },
+      "type": "imports/core-nodes/core_nodes.solid_color:SolidColor"
+    },
+    {
+      "id": "f594735f-060a-55fb-8896-4a9af33fe3ad",
+      "input_values": {
+        "default": 1.0,
+        "family": "channels",
+        "port": "speed",
+        "range": [
+          0.0,
+          4.0
+        ]
+      },
+      "name": "speed",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          0,
+          520
+        ]
+      },
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "e9655b02-2a64-514e-ae45-16302409591d",
+      "input_values": {
+        "default": 6.0,
+        "family": "channels",
+        "port": "segments",
+        "range": [
+          2.0,
+          16.0
+        ]
+      },
+      "name": "segments",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          0,
+          670
+        ]
+      },
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "3a31e146-2669-5aec-9ced-321c3e4fc041",
+      "input_values": {
+        "variable": "clock"
+      },
+      "name": "get_clock",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          250,
+          370
+        ]
+      },
+      "type": "tatolab.stream:GetVariable"
+    },
+    {
+      "id": "c87ab3e6-cd7a-57fc-946e-421612ae046e",
+      "input_values": {
+        "variable": "pulse"
+      },
+      "name": "get_pulse",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          250,
+          520
+        ]
+      },
+      "type": "tatolab.stream:GetVariable"
+    },
+    {
+      "id": "3434b568-ec32-51b4-9a91-766d2c34af93",
+      "name": "orbits",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          500,
+          370
+        ]
+      },
+      "type": "nodes.stage_shaders:OrbitLights"
+    },
+    {
+      "id": "d8315d46-0b4b-5786-9361-d47da011b18e",
+      "name": "kaleidoscope",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          750,
+          370
+        ]
+      },
+      "type": "nodes.stage_shaders:Kaleidoscope"
+    },
+    {
+      "fragment": {
+        "links": [
+          {
+            "source": {
+              "node": "b5d446e4-d0cc-5943-9b12-a544a46b38c9",
+              "port": "value"
+            },
+            "target": {
+              "node": "13c7603b-6344-5725-87bf-ae45cf4547f1",
+              "port": "image"
+            }
+          },
+          {
+            "source": {
+              "node": "13c7603b-6344-5725-87bf-ae45cf4547f1",
+              "port": "result"
+            },
+            "target": {
+              "node": "d8579784-6050-59f4-9ff4-be0b13985b2d",
+              "port": "image"
+            }
+          },
+          {
+            "source": {
+              "node": "d8579784-6050-59f4-9ff4-be0b13985b2d",
+              "port": "result"
+            },
+            "target": {
+              "node": "1a8dac3d-8409-5237-8e99-e4d0985f1d08",
+              "port": "image"
+            }
+          },
+          {
+            "source": {
+              "node": "b5d446e4-d0cc-5943-9b12-a544a46b38c9",
+              "port": "value"
+            },
+            "target": {
+              "node": "62aed5bc-54e4-52da-b63f-995325046e1f",
+              "port": "picture"
+            }
+          },
+          {
+            "source": {
+              "node": "1a8dac3d-8409-5237-8e99-e4d0985f1d08",
+              "port": "result"
+            },
+            "target": {
+              "node": "62aed5bc-54e4-52da-b63f-995325046e1f",
+              "port": "light"
+            }
+          },
+          {
+            "source": {
+              "node": "62aed5bc-54e4-52da-b63f-995325046e1f",
+              "port": "result"
+            },
+            "target": {
+              "node": "70c8bd39-b81d-5c6e-8a12-24e4508e64e5",
+              "port": "value"
+            }
+          }
+        ],
+        "nodes": [
+          {
+            "id": "b5d446e4-d0cc-5943-9b12-a544a46b38c9",
+            "input_values": {
+              "family": "image",
+              "port": "video_in"
+            },
+            "name": "video_in",
+            "type": "tatolab.stream:GraphInput"
+          },
+          {
+            "id": "13c7603b-6344-5725-87bf-ae45cf4547f1",
+            "input_values": {
+              "radius": 0.006
+            },
+            "name": "blur_1",
+            "type": "nodes.looks:GlowBlur"
+          },
+          {
+            "id": "d8579784-6050-59f4-9ff4-be0b13985b2d",
+            "input_values": {
+              "radius": 0.012
+            },
+            "name": "blur_2",
+            "type": "nodes.looks:GlowBlur"
+          },
+          {
+            "id": "1a8dac3d-8409-5237-8e99-e4d0985f1d08",
+            "input_values": {
+              "radius": 0.024
+            },
+            "name": "blur_3",
+            "type": "nodes.looks:GlowBlur"
+          },
+          {
+            "id": "62aed5bc-54e4-52da-b63f-995325046e1f",
+            "input_values": {
+              "amount": 0.9
+            },
+            "name": "bloom",
+            "type": "nodes.looks:GlowAdd"
+          },
+          {
+            "id": "70c8bd39-b81d-5c6e-8a12-24e4508e64e5",
+            "input_values": {
+              "family": "image",
+              "port": "video_out"
+            },
+            "name": "video_out",
+            "type": "tatolab.stream:GraphOutput"
+          }
+        ]
+      },
+      "id": "e6baa1a4-5a1b-596d-bba8-75c89c7c3670",
+      "input_values": {
+        "passes": 3,
+        "strength": 0.9
+      },
+      "name": "glow",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          1000,
+          370
+        ]
+      },
+      "type": "nodes.looks:glow_look"
+    },
+    {
+      "id": "16ae2834-a12e-5387-987f-36c73db1bb37",
+      "input_values": {
+        "stream": {
+          "asset": "c82f4e17-6a3b-4d95-b1e0-7f2a9c4d3b58"
+        }
+      },
+      "name": "title",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          1250,
+          370
+        ]
+      },
+      "type": "tatolab.project:StreamFragment"
+    },
+    {
+      "id": "74228f65-fea3-5c7a-b683-492bd6602fe5",
+      "name": "program",
+      "studio": {
+        "contract": 1,
+        "group": "2ccc2217-415b-5a2b-a090-6d4e269dce79",
+        "position": [
+          1250,
+          520
+        ]
+      },
+      "type": "Core Nodes:program"
+    }
+  ],
+  "studio": {
+    "contract": 1,
+    "notes": [
+      {
+        "id": "09157756-1763-58f5-8606-4da948bb3717",
+        "position": [
+          0,
+          -190
+        ],
+        "size": [
+          460,
+          80
+        ],
+        "text": "Pulse and clock are variables: Set Variable names a value once, and each Get Variable reads it with no wire across the canvas."
+      },
+      {
+        "id": "0116b941-db9a-5bfc-bf60-ff515bf60f70",
+        "position": [
+          500,
+          670
+        ],
+        "size": [
+          460,
+          100
+        ],
+        "text": "glow is made by glow_look in nodes/looks.py: change passes on its card to run the generator again. title is the stream title_card, placed here as a subgraph."
+      }
+    ]
+  }
+}
