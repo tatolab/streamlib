@@ -15,12 +15,17 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
+mod bundle_input_read;
 mod live_input_values;
 mod live_input_values_kept_in_the_project_store;
 
+pub(crate) use bundle_input_read::{
+    ValuesABundleInputHolds, the_bundle_members_of, the_input_values_a_live_set_is_checked_against,
+};
 pub use live_input_values::{
     InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
-    LiveInputValuesOfAStream, the_words_of_an_input_set_twice_live,
+    LiveInputValuesOfAStream, a_live_set_replaces_an_earlier_one,
+    the_words_of_an_input_set_twice_live,
 };
 pub(crate) use live_input_values::{
     the_input_port_takes_a_value, the_input_value_change, the_lifetime_of_the_input,
@@ -77,12 +82,15 @@ pub struct NodeAnInputValueIsSetOn<'node> {
     pub input_values_after_the_set: &'node Map<String, Value>,
 }
 
-/// Refuse `value`, set on `node`'s input `input` with `None` taking it off, when the input does
-/// not take it. A node of a type `node_types` does not describe keeps any value it is given.
+/// Refuse `value`, set on `node`'s input `input`, or on its member `member` when one is named,
+/// with `None` taking it off, when the input does not take it. A member is checked by the type
+/// its bundle declares for it, and the bundle the input holds after the set by the input's type.
+/// A node of a type `node_types` does not describe keeps any value it is given.
 pub fn refuse_an_input_value_its_input_does_not_take(
     node_types: &NodeTypesOneStreamResolves,
     node: &NodeAnInputValueIsSetOn<'_>,
     input: &str,
+    member: Option<&str>,
     value: Option<&Value>,
 ) -> Result<(), InputValueRefusal> {
     let node_type = node.node_type;
@@ -106,6 +114,16 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     let the_input_port = ports
         .input_named(input)
         .filter(|_| !legacy_config.is_a_config_field(input));
+    if let Some(member) = member {
+        return refuse_a_member_value_its_bundle_input_does_not_take(
+            node,
+            node_types.node_kind(node_type),
+            the_input_port,
+            input,
+            member,
+            value,
+        );
+    }
     if let Some(port) = the_input_port {
         if port.is_a_trigger() {
             return Err(the_refusal_of_a_set_on_a_trigger_input(
@@ -160,6 +178,90 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             ),
         )
     })
+}
+
+/// Refuse `value`, set on member `member` of input `input` of `node`, `port` when the input is a
+/// port, with `None` taking it off: refused on an input that is no bundle, for a member the
+/// bundle does not declare, for a value the member's type does not take, and when the bundle the
+/// input reads after the set, its held members over the input's default and each member's own,
+/// leaves out a member, or is not one the input takes.
+fn refuse_a_member_value_its_bundle_input_does_not_take(
+    node: &NodeAnInputValueIsSetOn<'_>,
+    node_kind: Option<NodeKind>,
+    port: Option<&PortInfo>,
+    input: &str,
+    member: &str,
+    value: Option<&Value>,
+) -> Result<(), InputValueRefusal> {
+    let node_name = node.name;
+    let Some((port, members)) = port.and_then(|port| Some((port, the_bundle_members_of(port)?)))
+    else {
+        return Err(InputValueRefusal::of(
+            InputValueRefusalCode::InputValueNotValid,
+            format!(
+                "input `{input}` of `{node_name}` is no bundle, so it has no member `{member}` to \
+                 set. To fix: leave `member` out to set the whole input"
+            ),
+        ));
+    };
+    let Some(declared) = members.iter().find(|declared| declared.name == member) else {
+        return Err(InputValueRefusal::of(
+            InputValueRefusalCode::PortNotFound,
+            format!(
+                "input `{input}` of `{node_name}` is a bundle with no member `{member}`; its \
+                 members are {}. To fix: name one of them",
+                names_in_backticks(
+                    &members
+                        .iter()
+                        .map(|declared| declared.name.clone())
+                        .collect::<Vec<_>>()
+                )
+            ),
+        ));
+    };
+    let read_after_the_set = node.input_values_after_the_set.get(input).map(|held| {
+        ValuesABundleInputHolds {
+            live: None,
+            saved: Some(held),
+            input_default: port.pin_default.as_ref(),
+        }
+        .the_bundle_read(members)
+        .unwrap_or_else(|| Value::Object(Map::new()))
+    });
+    match value {
+        Some(value) => declared
+            .member_type
+            .check_value(value)
+            .map_err(|not_taken| {
+                InputValueRefusal::of(
+                    InputValueRefusalCode::InputValueNotValid,
+                    format!(
+                        "the value of member `{member}` of input `{input}` of `{node_name}` is \
+                     {value}, and `{member}` takes {}. To fix: send {}",
+                        not_taken.takes, not_taken.example
+                    ),
+                )
+            })?,
+        None if read_after_the_set
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|read| !read.contains_key(member)) =>
+        {
+            return Err(InputValueRefusal::of(
+                InputValueRefusalCode::InputValueNotValid,
+                format!(
+                    "member `{member}` of input `{input}` of `{node_name}` declares no default, \
+                     nor does the input's default hold it, so the bundle the input holds may not \
+                     leave it out. To fix: set `{member}` to a value, or set the whole input"
+                ),
+            ));
+        }
+        None => {}
+    }
+    match &read_after_the_set {
+        Some(read) => refuse_a_value_the_input_port_does_not_take(node_name, node_kind, port, read),
+        None => Ok(()),
+    }
 }
 
 /// Why a set on Trigger input `input` of the node named `node_name` is refused, which holds no

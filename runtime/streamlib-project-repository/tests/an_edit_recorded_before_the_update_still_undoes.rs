@@ -99,6 +99,7 @@ fn set_of_the_mixer(input: &str, from: Option<Value>, to: Option<Value>) -> Proj
     ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
         stream: stream(),
         graph_operation: StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: mixer(),
             input: input.to_owned(),
             from,
@@ -198,6 +199,7 @@ fn each_recorded_edit_is_listed_as_the_input_value_sets_it_stands_for() {
         listed[2].transaction.actions,
         vec![ProjectAction::StreamGraph(
             StreamGraphAction::SetNodeInputValue {
+                member: None,
                 stream: stream(),
                 level: Vec::new(),
                 node: MIXER.to_owned(),

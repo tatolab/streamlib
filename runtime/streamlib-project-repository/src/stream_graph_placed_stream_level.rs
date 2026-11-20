@@ -355,11 +355,13 @@ fn the_operation_with_each_node_and_group_renamed(
         StreamGraphOperation::SetNodeInputValue {
             node,
             input,
+            member,
             from,
             to,
         } => Ok(StreamGraphOperation::SetNodeInputValue {
             node: renamed_uuid(node),
             input,
+            member,
             from,
             to,
         }),

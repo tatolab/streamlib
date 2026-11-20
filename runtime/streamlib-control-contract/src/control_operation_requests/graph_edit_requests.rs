@@ -16,8 +16,9 @@ use streamlib_project_repository::{
     IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
-    NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
-    NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
+    NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION, NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION,
+    NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION, NOTE_ARGUMENT_DESCRIPTION,
+    NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::LinkCandidateEnd;
@@ -310,6 +311,9 @@ pub struct SetNodeInputValueRequest {
     /// The input, by name.
     #[schemars(description = NODE_INPUT_ARGUMENT_DESCRIPTION)]
     pub input: String,
+    /// The member of a bundle input the value is for; the whole input when omitted.
+    #[schemars(description = NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION)]
+    pub member: Option<String>,
     /// The value the input holds while no link feeds it; none takes the value off.
     #[schemars(description = NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION)]
     pub value: Option<Value>,

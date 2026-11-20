@@ -143,6 +143,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             _node_name: &str,
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
+            _member: ::std::option::Option<&str>,
             _value: ::std::option::Option<&::serde_json::Value>,
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             Ok(())

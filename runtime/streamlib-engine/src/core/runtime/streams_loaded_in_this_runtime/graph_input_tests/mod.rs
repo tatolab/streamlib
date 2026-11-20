@@ -191,6 +191,7 @@ fn set_live(
     value: Value,
 ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal> {
     stream.set_input_values_live(&[InputValueToSetLive {
+        member: None,
         node,
         input: VALUE.to_owned(),
         value: Some(value),
@@ -207,6 +208,7 @@ fn set_the_saved_input(
     async_runtime
         .block_on(stream.apply_a_stream_graph_operation_live(
             StreamGraphOperation::SetNodeInputValue {
+                member: None,
                 node,
                 input: input.to_owned(),
                 from: None,
