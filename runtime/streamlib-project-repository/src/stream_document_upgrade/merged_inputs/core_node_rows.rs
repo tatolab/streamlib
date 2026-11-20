@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The Core Nodes inputs that became one: each Color that was three numbers, and each Vector
-//! that was two. Each part keeps the default its old input declared, and a Color's alpha, which
-//! no old input fed, is opaque.
+//! The Core Nodes inputs that became one: each Color that was three or four numbers, and each
+//! Vector that was two. Each part keeps the default its old input declared, and a Color's alpha,
+//! where no old input fed it, is opaque.
 
 use super::{MergedInput, MergedInto, MergedPart};
 
@@ -306,6 +306,30 @@ pub(in crate::stream_document_upgrade) const MERGED_INPUTS: &[MergedInput] = &[
             MergedPart::FedBy {
                 old_input: "scroll_y",
                 default: 0.0,
+            },
+        ],
+    },
+    // Solid Color's four numbers, its alpha among them, one Color that defaults to opaque black.
+    MergedInput {
+        node_type: "core_nodes.solid_color:SolidColor",
+        input: "color",
+        merged_into: MergedInto::Color,
+        parts: &[
+            MergedPart::FedBy {
+                old_input: "red",
+                default: 0.0,
+            },
+            MergedPart::FedBy {
+                old_input: "green",
+                default: 0.0,
+            },
+            MergedPart::FedBy {
+                old_input: "blue",
+                default: 0.0,
+            },
+            MergedPart::FedBy {
+                old_input: "alpha",
+                default: 1.0,
             },
         ],
     },

@@ -257,7 +257,7 @@
       "id": "5a3bd1b2-f057-518a-8f30-908f26486073",
       "input_values": {
         "amplitude": 0.1,
-        "frequency_hz": 110.0
+        "frequency": 110.0
       },
       "name": "oscillator",
       "studio": {

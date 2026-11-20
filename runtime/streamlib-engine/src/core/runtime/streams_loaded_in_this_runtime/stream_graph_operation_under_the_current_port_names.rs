@@ -4,7 +4,7 @@
 //! A graph operation as a stream applies it: each input value and link end it names under the
 //! current name of the port its node type declares, so an older edit, or a caller, naming a port
 //! by a name it had reaches the port, and what is applied, answered and recorded holds the name
-//! it has now.
+//! it has now; each value it sets is in the form its input's type takes now.
 
 use streamlib_project_repository::{
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
@@ -112,6 +112,21 @@ fn the_current_name(
         .unwrap_or(name)
 }
 
+/// `value`, set on the input `input` of node `node`, in the form the input's type takes now, the
+/// node's ports as `ports_of` answers them by its UUID; as given when nothing answers.
+fn the_value_in_the_form_it_takes_now(
+    ports_of: &impl Fn(Uuid) -> Option<GraphNodePorts>,
+    node: Uuid,
+    input: &str,
+    value: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let value = value?;
+    match ports_of(node) {
+        Some(ports) => ports.input_value_in_the_form_it_takes_now(input, value),
+        None => Some(value),
+    }
+}
+
 /// `graph_operation` with each input value and link end it names under the current name of its
 /// port, each node's ports as `ports_of` answers them by its UUID; a name on a node `ports_of`
 /// does not answer, or that finds no port, is left as given.
@@ -139,12 +154,31 @@ pub(crate) fn the_operation_under_the_current_port_names(
             input,
             from,
             to,
-        } => StreamGraphOperation::SetPinValue {
-            input: current_name(node, input, PortDirection::Input),
+        } => {
+            let input = current_name(node, input, PortDirection::Input);
+            StreamGraphOperation::SetPinValue {
+                from: the_value_in_the_form_it_takes_now(&ports_of, node, &input, from),
+                to: the_value_in_the_form_it_takes_now(&ports_of, node, &input, to),
+                input,
+                node,
+            }
+        }
+        StreamGraphOperation::SetNodeInputValue {
             node,
+            input,
+            member: None,
             from,
             to,
-        },
+        } => {
+            let input = current_name(node, input, PortDirection::Input);
+            StreamGraphOperation::SetNodeInputValue {
+                from: the_value_in_the_form_it_takes_now(&ports_of, node, &input, from),
+                to: the_value_in_the_form_it_takes_now(&ports_of, node, &input, to),
+                input,
+                node,
+                member: None,
+            }
+        }
         StreamGraphOperation::SetNodeInputValue {
             node,
             input,

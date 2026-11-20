@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::PortInfo;
 use crate::core::PortDirection;
+use crate::core::descriptors::PinType;
 
 /// Container for a node's input and output ports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -118,8 +119,9 @@ impl GraphNodePorts {
 
     /// `values`, each value by input name, with each input holding a value under a name it had
     /// holding, under its current name, the value
-    /// [`Self::inputs_holding_a_value_under_a_name_they_had`] reads and no other; a key no input
-    /// names is kept as it is.
+    /// [`Self::inputs_holding_a_value_under_a_name_they_had`] reads and no other, and each value
+    /// saved in a form its input's type held before held in the form it holds now; a key no
+    /// input names is kept as it is.
     pub fn input_values_under_the_current_names(
         &self,
         mut values: serde_json::Map<String, serde_json::Value>,
@@ -135,6 +137,37 @@ impl GraphNodePorts {
                 values.insert(moved.current_name, read);
             }
         }
+        for input in &self.inputs {
+            if let Some(value) = values.remove(&input.name)
+                && let Some(value) = self.input_value_in_the_form_it_takes_now(&input.name, value)
+            {
+                values.insert(input.name.clone(), value);
+            }
+        }
         values
+    }
+
+    /// `value`, saved for the input named `input`, in the form its type takes now; `None` when
+    /// the form it was saved in held no value. An Asset was saved by a config class as its bare
+    /// UUID string, and as the empty string for no asset; it takes the object
+    /// `{"asset": "<uuid>"}`. Every other value is as saved.
+    pub fn input_value_in_the_form_it_takes_now(
+        &self,
+        input: &str,
+        value: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let holds_an_asset = self.input_named(input).is_some_and(|input| {
+            input
+                .pin
+                .as_ref()
+                .is_some_and(|pin| matches!(pin.pin_type, PinType::Asset { .. }))
+        });
+        match value {
+            serde_json::Value::String(uuid) if holds_an_asset && uuid.is_empty() => None,
+            serde_json::Value::String(uuid) if holds_an_asset => {
+                Some(serde_json::json!({ "asset": uuid }))
+            }
+            value => Some(value),
+        }
     }
 }

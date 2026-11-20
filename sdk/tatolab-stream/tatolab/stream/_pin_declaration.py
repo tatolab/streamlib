@@ -53,6 +53,8 @@ from ._pin_declaration_refusal_words import (
     words_refusing_a_type_parameter_limited_to,
 )
 from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
+from ._pin_type_narrowing import FlowsAsValue, PinAnnotationNotTaken, PinTypeNarrowing
+from ._pin_type_narrowing import an_output_flowing_as_a_value_by, pin_type_narrowed_by
 from ._pin_typed_by_a_setting import declaration_of_a_pin_a_setting_types
 from ._pin_value_stored_form import (
     PIN_TYPE_DESCRIPTION_BY_NAME as _PIN_TYPE_DESCRIPTION_BY_NAME,
@@ -299,10 +301,19 @@ class _PinReading:
         exact_size = self._exact_size_among(metadata)
         pin_type = self._pin_type_of(written_type, exact_size)
         row = _PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]]
+        try:
+            pin_type = pin_type_narrowed_by(metadata, pin_type, self._pin_named)
+            flows_as_value = an_output_flowing_as_a_value_by(
+                metadata, pin_type, self._pin_named, direction=self._direction
+            )
+        except PinAnnotationNotTaken as not_taken:
+            raise self._refusal(not_taken.words, not_taken.finding_code) from None
+        taken_off = (PinTypeNarrowing, FlowsAsValue)
+        metadata = [entry for entry in metadata if not isinstance(entry, taken_off)]
         annotations = self._annotations_among(metadata, row)
         declaration: PinDeclarationOnTheWire = {
             "pin_type": {"kind": "is", "pin_type": pin_type},
-            "flow": self._flow_of(row),
+            "flow": "value" if flows_as_value else self._flow_of(row),
         }
         if annotations:
             declaration["annotations"] = annotations
