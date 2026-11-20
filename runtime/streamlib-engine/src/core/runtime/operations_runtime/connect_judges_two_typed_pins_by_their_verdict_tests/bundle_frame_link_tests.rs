@@ -6,13 +6,15 @@
 //! each member that makes it one; a bundle of small members links there as before.
 
 use super::*;
-use crate::core::descriptors::BundleMember;
+use crate::core::descriptors::{BundleMember, DeclaredPinType};
 
 const FRAMED_PICTURE_SOURCE: &str = "VerdictCheckFramedPictureSource";
 const FRAMED_PICTURE_SINK: &str = "VerdictCheckFramedPictureSink";
 const PICTURES_SOURCE: &str = "VerdictCheckPicturesSource";
 const SMALL_READING_SOURCE: &str = "VerdictCheckSmallReadingSource";
 const UNTYPED_SEND_CONTENT_SINK: &str = "VerdictCheckUntypedSendContentSink";
+const ANY_TYPE_PASS_THROUGH: &str = "VerdictCheckAnyTypePassThrough";
+const FRAMED_OR_REGION_SOURCE: &str = "VerdictCheckFramedOrRegionSource";
 
 fn a_member(name: &str, member_type: PinType) -> BundleMember {
     BundleMember {
@@ -73,6 +75,38 @@ fn register_the_bundle_frame_fixture_node_types() {
                         a_member("level", float()),
                         a_member("label", PinType::String {}),
                     ],
+                },
+            )],
+        ));
+        let records_port = |name: &str, pin_type: DeclaredPinType| {
+            PortDescriptor::new(
+                name,
+                name,
+                true,
+                PortFamilyDeclaration::of_family(PortFamily::Records),
+            )
+            .with_pin_declaration(PinDeclaration {
+                pin_type,
+                ..PinDeclaration::exactly(PinType::String {})
+            })
+        };
+        register(a_node_type(
+            class_path(ANY_TYPE_PASS_THROUGH),
+            vec![records_port("in", DeclaredPinType::Any)],
+            vec![records_port(
+                "out",
+                DeclaredPinType::SameAsInput {
+                    input_port_name: "in".to_owned(),
+                },
+            )],
+        ));
+        register(a_node_type(
+            class_path(FRAMED_OR_REGION_SOURCE),
+            Vec::new(),
+            vec![records_port(
+                "either",
+                DeclaredPinType::OneOf {
+                    pin_types: vec![PinType::Rectangle {}, a_framed_picture()],
                 },
             )],
         ));
@@ -182,4 +216,60 @@ fn a_bundle_holding_a_texture_into_an_input_of_its_type_connects() {
     )
     .expect("an input typed as the bundle takes its frame apart");
     assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A pass-through already wired into an untyped input carries on what is linked into it, so a
+/// link of the bundle holding a Texture into the pass-through is refused naming that wired link
+/// and the Texture.
+///
+/// Mental-revert: the walk past the pass-through refuses only a named type into an untyped
+/// input, so the bundle's link connects.
+#[test]
+fn a_bundle_holding_a_texture_carried_on_into_an_untyped_input_is_refused() {
+    register_the_bundle_frame_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(FRAMED_PICTURE_SOURCE));
+    let pass_through = a_node_of(&compiler, class_path(ANY_TYPE_PASS_THROUGH));
+    let sink = a_node_of(&compiler, class_path(UNTYPED_SEND_CONTENT_SINK));
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(pass_through.clone(), "out"),
+        InputLinkPortRef::new(sink, "content"),
+    )
+    .expect("an output carrying nothing yet links into an untyped input");
+
+    let refused = connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(source, "framed"),
+        InputLinkPortRef::new(pass_through, "in"),
+    )
+    .expect_err("the pass-through would carry Bundle frames into the untyped input");
+
+    let words = refused.to_string();
+    assert!(words.contains("member `picture` is a Texture"), "{words}");
+    assert!(words.contains("the wired link"), "{words}");
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// An output one of whose alternatives is a bundle holding a Texture may write Bundle frames, so
+/// it does not link into an untyped input either.
+#[test]
+fn an_output_that_may_carry_a_bundle_holding_a_texture_into_an_untyped_input_is_refused() {
+    register_the_bundle_frame_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(FRAMED_OR_REGION_SOURCE));
+    let sink = a_node_of(&compiler, class_path(UNTYPED_SEND_CONTENT_SINK));
+
+    let refusal = the_verdicts_refusal(
+        connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(source, "either"),
+            InputLinkPortRef::new(sink, "content"),
+        )
+        .expect_err("one of the output's alternatives travels as a Bundle frame"),
+    );
+
+    let words = refusal.to_string();
+    assert!(words.contains("member `picture` is a Texture"), "{words}");
+    assert_eq!(the_links_in(&compiler), 0);
 }
