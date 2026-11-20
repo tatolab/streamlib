@@ -45,6 +45,7 @@ __all__ = [
     "queue_a_fire_of_each_trigger_input",
     "read_each_unlinked_input_port_as_its_pin_value",
     "read_the_control_value_at_an_input_port",
+    "read_the_named_value_at_an_input_port",
     "read_the_parts_at_an_input_port",
     "read_the_stored_value_at_an_input_port",
     "read_the_message_at_an_input_port_unread",
@@ -52,6 +53,7 @@ __all__ = [
     "stop_feeding_an_input_port_from_a_function_node_island",
     "take_each_function_node_raise_newly_noted",
     "why_each_function_node_its_islands_call_is_raising",
+    "write_the_named_value_on_an_output_port",
     "write_the_stored_value_on_an_output_port",
 ]
 
@@ -85,9 +87,10 @@ class FunctionNodeEvaluatedAsAStandaloneNode:
         Of a compiled node's `input_count` inputs, the last set the config values these indices name.
         """
     def evaluate(
-        self, input_values: list[float | dict[str, Any] | _stream_protocols.UnreadMessage]
-    ) -> list[float | dict[str, Any] | _stream_protocols.UnreadMessage | None]:
-        """Call the node with `input_values` at the stream's time now, answering its outputs, a `float`, a `dict`, the `UnreadMessage` it hands on, or `None` for one that hands out nothing."""
+        self,
+        input_values: list[float | dict[str, Any] | bytes | _stream_protocols.UnreadMessage | None],
+    ) -> list[float | dict[str, Any] | bytes | _stream_protocols.UnreadMessage | None]:
+        """Call the node with `input_values` at the stream's time now, answering its outputs, a `float`, a `dict`, the `bytes` of a named type, the `UnreadMessage` it hands on, or `None` for one that hands out nothing."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,
@@ -184,6 +187,22 @@ def write_the_stored_value_on_an_output_port(
     record: dict[str, Any],
 ) -> None:
     """Write `record`, `{"value": ...}` of a String, Menu, Asset or List of `pin_type` (JSON), on `output_port` as that type packs."""
+
+def read_the_named_value_at_an_input_port(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    node_id: str,
+    input_port: str,
+) -> bytes | None:
+    """The bytes of the value of a named type `input_port` holds for this read, off a Bytes message; `None` when none arrived."""
+
+def write_the_named_value_on_an_output_port(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    output_port: str,
+    payload: bytes,
+) -> None:
+    """Write `payload`, the bytes a value of a named type packs as, on `output_port` as a Bytes message."""
 
 def hand_an_unread_message_on(
     *,

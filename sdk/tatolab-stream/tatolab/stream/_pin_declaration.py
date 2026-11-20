@@ -39,6 +39,7 @@ from ._contract_pin_types import (
 )
 from ._description import Description
 from ._formerly_named import FormerlyNamed
+from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._number_range import NumberRange
 from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
 from ._pin_types import (
@@ -291,8 +292,35 @@ class _PinReading:
             return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
         if optional:
             declaration["may_be_unset"] = True
+        if row.value_component is None:
+            return self._read_an_input_holding_no_value(declaration, row, optional, default)
         default_value = self._default_value(default, pin_type, row, annotations, optional)
         return DeclaredPin(declaration, optional=optional, default_value=default_value)
+
+    def _read_an_input_holding_no_value(
+        self,
+        declaration: PinDeclarationOnTheWire,
+        row: PinTypeDescription,
+        optional: bool,
+        default: object,
+    ) -> DeclaredPin:
+        """An input of a type that stores no value: wire only, reading `None` while unlinked when it may be unset."""
+        if optional and default is not None:
+            raise self._refusal(
+                f"{self._pin_named} is typed `T | None`, so it reads `None` while unlinked, and "
+                f"it defaults to {default!r}. To fix: `= None`.",
+                "unset_input_with_a_default",
+            )
+        if not optional and default is not NO_DEFAULT:
+            raise self._refusal(
+                f"{self._pin_named} is a {row.label}, which holds no value, so it reads only "
+                f"what a link brings, and it defaults to {default!r}. To fix: drop the default, "
+                f"or type it `T | None = None` so it reads `None` while unlinked.",
+                "wire_only_input_with_a_default",
+            )
+        return DeclaredPin(
+            declaration, optional=optional, default_value=None if optional else NO_DEFAULT
+        )
 
     def _state_former_names(
         self, declaration: PinDeclarationOnTheWire, metadata: "list[object]"
@@ -510,6 +538,9 @@ class _PinReading:
             return self._menu_pin_type_of(written_type)
         if written_form == "list":
             return self._list_pin_type_of(written_type)
+        named = named_pin_type_declared_by(written_type)
+        if named is not None:
+            return {"type": "named", "named_pin_type": named.import_path}  # pyright: ignore[reportReturnType]
         if exact_size is None:
             pin_type: PinType = {"type": spelling.pin_type_name}  # pyright: ignore[reportAssignmentType]
             return pin_type
@@ -605,6 +636,8 @@ class _PinReading:
             return "list"
         if _is_a_value_class_of_parts(written_type) or written_type is Asset:
             return written_type.__name__
+        if named_pin_type_declared_by(written_type) is not None:
+            return "named_pin_type"
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
         )

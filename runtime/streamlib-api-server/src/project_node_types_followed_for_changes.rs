@@ -474,6 +474,7 @@ mod tests {
                 },
                 node_types,
                 graph_generators: Vec::new(),
+                named_pin_types: Vec::new(),
                 unreadable_modules: Vec::new(),
             }],
         }
