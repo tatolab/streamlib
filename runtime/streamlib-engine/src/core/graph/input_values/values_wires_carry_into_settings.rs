@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::the_value_a_setting_reads_with_no_wire;
 use crate::core::graph::{Graph, LinkUniqueId};
 
 /// One setting a wire feeds: its node's UUID and its name.
@@ -19,7 +20,7 @@ type WiredSetting = (Uuid, String);
 
 /// The values the Value wires into one stream's settings read at setup carry.
 #[derive(Debug, Default)]
-pub struct ValuesWiresCarryIntoSettings {
+pub(crate) struct ValuesWiresCarryIntoSettings {
     held: Mutex<ValuesHeld>,
     arrival: tokio::sync::Notify,
 }
@@ -34,10 +35,19 @@ struct ValuesHeld {
     refused: HashMap<WiredSetting, Value>,
 }
 
+impl ValuesHeld {
+    /// Forget what each setting `holds` keeps.
+    fn forget_each_setting_that(&mut self, holds: impl Fn(&WiredSetting) -> bool) {
+        self.built_with.retain(|setting, _| !holds(setting));
+        self.waiting.retain(|setting, _| !holds(setting));
+        self.refused.retain(|setting, _| !holds(setting));
+    }
+}
+
 /// A value a wire carried into one setting that its node is to be rebuilt with, and the value it
 /// was built with before.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValueAWireCarriedIntoASetting {
+pub(crate) struct ValueAWireCarriedIntoASetting {
     /// The node's UUID.
     pub node: Uuid,
     /// The setting.
@@ -52,7 +62,7 @@ impl ValuesWiresCarryIntoSettings {
     /// Hold `value`, which the wire into setting `setting` of `node` carried, for the next
     /// rebuild of `node`, in place of any it carried since its last; a value its node was last
     /// built with, or last refused, waits for nothing.
-    pub fn carried(&self, node: Uuid, setting: &str, value: Value) {
+    pub(crate) fn carried(&self, node: Uuid, setting: &str, value: Value) {
         let key = (node, setting.to_owned());
         let mut held = self.held.lock();
         if held.refused.get(&key) == Some(&value) {
@@ -89,7 +99,11 @@ impl ValuesWiresCarryIntoSettings {
 
     /// The value the wire into setting `setting` of `node` carried that its node is built with;
     /// `None` when its wire has carried none.
-    pub fn the_value_its_node_is_built_with(&self, node: Uuid, setting: &str) -> Option<Value> {
+    pub(crate) fn the_value_its_node_is_built_with(
+        &self,
+        node: Uuid,
+        setting: &str,
+    ) -> Option<Value> {
         self.held
             .lock()
             .built_with
@@ -129,6 +143,20 @@ impl ValuesWiresCarryIntoSettings {
             .collect()
     }
 
+    /// Hold each value waiting for a rebuild of one of `nodes` as what it is built with, as
+    /// those nodes are about to be built: they are built with it, and rebuild for nothing.
+    pub(crate) fn build_each_of_the_nodes_with_what_waits(&self, nodes: &[Uuid]) {
+        let mut held = self.held.lock();
+        let waiting = std::mem::take(&mut held.waiting);
+        for ((node, setting), value) in waiting {
+            if nodes.contains(&node) {
+                held.built_with.insert((node, setting), value);
+            } else {
+                held.waiting.insert((node, setting), value);
+            }
+        }
+    }
+
     /// Put back what each of `refused` was built with before, each value it carried held as
     /// refused until its wire carries another.
     pub(crate) fn put_back(&self, refused: &[ValueAWireCarriedIntoASetting]) {
@@ -145,24 +173,37 @@ impl ValuesWiresCarryIntoSettings {
 
     /// Forget every value carried into a setting of `node`, as it leaves the graph.
     pub(crate) fn forget_the_node(&self, node: Uuid) {
-        let mut held = self.held.lock();
-        held.built_with.retain(|(of, _), _| *of != node);
-        held.waiting.retain(|(of, _), _| *of != node);
-        held.refused.retain(|(of, _), _| *of != node);
+        self.held
+            .lock()
+            .forget_each_setting_that(|(of, _)| *of == node);
     }
 
-    /// Forget every value carried into setting `setting` of `node`, as its wire leaves it.
-    pub(crate) fn forget_the_setting(&self, node: Uuid, setting: &str) {
+    /// Forget every value carried into setting `setting` of `node`, as its wire leaves it; when
+    /// its node was built with a value the wire carried other than `read_with_no_wire`, what
+    /// the setting reads now, that value waits for the node's rebuild.
+    pub(crate) fn its_wire_left(
+        &self,
+        node: Uuid,
+        setting: &str,
+        read_with_no_wire: Option<Value>,
+    ) {
         let key = (node, setting.to_owned());
         let mut held = self.held.lock();
-        held.built_with.remove(&key);
-        held.waiting.remove(&key);
-        held.refused.remove(&key);
+        let built_with = held.built_with.get(&key).cloned();
+        held.forget_each_setting_that(|wired| *wired == key);
+        let read_with_no_wire = read_with_no_wire.unwrap_or(Value::Null);
+        if built_with.is_none_or(|built_with| built_with == read_with_no_wire) {
+            return;
+        }
+        held.waiting.insert(key, read_with_no_wire);
+        drop(held);
+        self.arrival.notify_one();
     }
 }
 
 /// Forget what link `link_id` of `graph` carried into the setting read at setup it feeds, if it
-/// feeds one, as it leaves the graph: its node reads the setting's own value from its next build.
+/// feeds one, as it leaves the graph; a node built with what it carried is rebuilt with the
+/// setting's own value.
 pub(crate) fn forget_what_a_link_into_a_setting_carried(graph: &Graph, link_id: &LinkUniqueId) {
     let Some(to) = graph
         .traversal()
@@ -172,15 +213,16 @@ pub(crate) fn forget_what_a_link_into_a_setting_carried(graph: &Graph, link_id: 
     else {
         return;
     };
+    if !graph.is_a_setting_read_at_setup(to.node_run_id(), to.port_name()) {
+        return;
+    }
     let Some(node) = graph.traversal().v(to.node_run_id()).first() else {
         return;
     };
-    if node
-        .input_port(to.port_name())
-        .is_some_and(|port| port.is_a_setting_read_at_setup())
-    {
-        graph
-            .values_wires_carry_into_settings()
-            .forget_the_setting(node.node_uuid, to.port_name());
-    }
+    let read_with_no_wire = the_value_a_setting_reads_with_no_wire(graph, node, to.port_name());
+    graph.values_wires_carry_into_settings().its_wire_left(
+        node.node_uuid,
+        to.port_name(),
+        read_with_no_wire,
+    );
 }

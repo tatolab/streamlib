@@ -140,8 +140,17 @@ impl Graph {
 
     /// The values the Value wires into this graph's settings read at setup carry, which change
     /// under its read lock.
-    pub fn values_wires_carry_into_settings(&self) -> &Arc<ValuesWiresCarryIntoSettings> {
+    pub(crate) fn values_wires_carry_into_settings(&self) -> &Arc<ValuesWiresCarryIntoSettings> {
         &self.values_wires_carry_into_settings
+    }
+
+    /// Whether input `input` of the node `node_run_id` is a setting its node reads at setup;
+    /// `false` when this graph holds no such node or input.
+    pub fn is_a_setting_read_at_setup(&self, node_run_id: &NodeRunId, input: &str) -> bool {
+        self.traversal().v(node_run_id).first().is_some_and(|node| {
+            node.input_port(input)
+                .is_some_and(super::PortInfo::is_a_setting_read_at_setup)
+        })
     }
 
     /// Each `GraphInput` of this graph, each at its stream's top level.

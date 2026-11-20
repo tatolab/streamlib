@@ -39,6 +39,28 @@ struct NodeRebuilt {
     state: Arc<ObservableNodeState>,
 }
 
+/// How one node's rebuild went: its UUID, and why it did not build, in its own words.
+struct HowANodesRebuildWent {
+    node_uuid: Uuid,
+    refused_because: Option<String>,
+}
+
+/// Why `node` did not build, settled as `settled` after its rebuild, in its own words.
+fn the_refusal_of_a_rebuild(node: &NodeRebuilt, settled: NodeState) -> String {
+    let why = match (settled, node.state.failure_reason()) {
+        (NodeState::Error, Some(reason)) => reason,
+        (settled, _) if settled.is_before_setup_completed() => format!(
+            "it had not finished its setup within {}s",
+            LONGEST_WAIT_FOR_A_REBUILT_NODE_TO_SET_UP.as_secs()
+        ),
+        (settled, _) => format!("it reads {settled} after its setup"),
+    };
+    format!(
+        "`{}` was rebuilt to read the settings set, and did not build with them: {why}",
+        node.display_name
+    )
+}
+
 impl LoadedStreamInThisRuntime {
     /// Whether input `input` of the node `node_run_id` is a setting the node reads once, when it
     /// is set up.
@@ -47,16 +69,8 @@ impl LoadedStreamInThisRuntime {
         node_run_id: &NodeRunId,
         input: &str,
     ) -> bool {
-        self.compiler.scope(|graph, _tx| {
-            graph
-                .traversal()
-                .v(node_run_id)
-                .first()
-                .is_some_and(|node| {
-                    node.input_port(input)
-                        .is_some_and(|port| port.is_a_setting_read_at_setup())
-                })
-        })
+        self.compiler
+            .scope(|graph, _tx| graph.is_a_setting_read_at_setup(node_run_id, input))
     }
 
     /// Leave the node `node_run_id` to rebuild at the next
@@ -84,12 +98,20 @@ impl LoadedStreamInThisRuntime {
         &self,
     ) -> Result<Vec<Uuid>> {
         let node_run_ids = std::mem::take(&mut *self.nodes_a_setting_read_at_setup_rebuilds.lock());
-        self.rebuild_the_nodes(node_run_ids).await
+        let rebuilt = self.rebuild_the_nodes(node_run_ids).await?;
+        if let Some(refusal) = rebuilt.iter().find_map(|node| node.refused_because.clone()) {
+            return Err(Error::Configuration(refusal));
+        }
+        Ok(rebuilt.iter().map(|node| node.node_uuid).collect())
     }
 
     /// Rebuild each of `node_run_ids` once, as
-    /// [`Self::rebuild_each_node_a_setting_read_at_setup_changed`] does.
-    async fn rebuild_the_nodes(&self, node_run_ids: Vec<NodeRunId>) -> Result<Vec<Uuid>> {
+    /// [`Self::rebuild_each_node_a_setting_read_at_setup_changed`] does, and answer how each
+    /// one's rebuild went; refused only when the compile refuses the rebuild.
+    async fn rebuild_the_nodes(
+        &self,
+        node_run_ids: Vec<NodeRunId>,
+    ) -> Result<Vec<HowANodesRebuildWent>> {
         if node_run_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -149,25 +171,15 @@ impl LoadedStreamInThisRuntime {
                 node.display_name
             );
         }
-        if let Some((node, settled)) = nodes_rebuilt
+        Ok(nodes_rebuilt
             .iter()
             .zip(settled)
-            .find(|(_, settled)| !matches!(settled, NodeState::Running | NodeState::Paused))
-        {
-            let why = match (settled, node.state.failure_reason()) {
-                (NodeState::Error, Some(reason)) => reason,
-                (settled, _) if settled.is_before_setup_completed() => format!(
-                    "it had not finished its setup within {}s",
-                    LONGEST_WAIT_FOR_A_REBUILT_NODE_TO_SET_UP.as_secs()
-                ),
-                (settled, _) => format!("it reads {settled} after its setup"),
-            };
-            return Err(Error::Configuration(format!(
-                "`{}` was rebuilt to read the settings set, and did not build with them: {why}",
-                node.display_name
-            )));
-        }
-        Ok(nodes_rebuilt.iter().map(|node| node.node_uuid).collect())
+            .map(|(node, settled)| HowANodesRebuildWent {
+                node_uuid: node.node_uuid,
+                refused_because: (!matches!(settled, NodeState::Running | NodeState::Paused))
+                    .then(|| the_refusal_of_a_rebuild(node, settled)),
+            })
+            .collect())
     }
 
     /// Rebuild, once each, every running node a Value wire into one of its settings read at
@@ -189,27 +201,59 @@ impl LoadedStreamInThisRuntime {
         if node_run_ids.is_empty() {
             return;
         }
-        let refusal = match self.rebuild_the_nodes(node_run_ids.clone()).await {
-            Ok(rebuilt) => {
-                tracing::info!(
-                    nodes_rebuilt = rebuilt.len(),
-                    "rebuilt each node a wire into its settings carried a new value into"
+        let rebuilt = match self.rebuild_the_nodes(node_run_ids).await {
+            Ok(rebuilt) => rebuilt,
+            Err(not_compiled) => {
+                tracing::warn!(
+                    %not_compiled,
+                    "the rebuild of each node a wire into its settings carried a new value into \
+                     was refused, so their values are put back"
                 );
+                carried.put_back(&values);
                 return;
             }
-            Err(refusal) => refusal,
         };
-        tracing::warn!(
-            %refusal,
-            "a node did not build with what a wire into its settings carried, so it is built \
-             again from the values it had"
+        let refused: Vec<Uuid> = rebuilt
+            .iter()
+            .filter_map(|node| {
+                let refusal = node.refused_because.as_ref()?;
+                tracing::warn!(
+                    node = %node.node_uuid,
+                    "{refusal}; it is built again from the values it had"
+                );
+                Some(node.node_uuid)
+            })
+            .collect();
+        tracing::info!(
+            nodes_rebuilt = rebuilt.len() - refused.len(),
+            nodes_refused = refused.len(),
+            "rebuilt each node a wire into its settings carried a new value into"
         );
-        carried.put_back(&values);
-        if let Err(not_rebuilt) = self.rebuild_the_nodes(node_run_ids).await {
-            tracing::error!(
+        if refused.is_empty() {
+            return;
+        }
+        let values_refused: Vec<ValueAWireCarriedIntoASetting> = values
+            .into_iter()
+            .filter(|carried| refused.contains(&carried.node))
+            .collect();
+        carried.put_back(&values_refused);
+        let node_run_ids = self.the_nodes_holding_the_settings(&values_refused);
+        match self.rebuild_the_nodes(node_run_ids).await {
+            Ok(rebuilt) => {
+                for refusal in rebuilt
+                    .iter()
+                    .filter_map(|node| node.refused_because.as_ref())
+                {
+                    tracing::error!(
+                        "{refusal}, after the values a wire carried into its settings were put \
+                         back"
+                    );
+                }
+            }
+            Err(not_rebuilt) => tracing::error!(
                 %not_rebuilt,
-                "a node whose wired settings were put back did not build with them either"
-            );
+                "the nodes whose wired settings were put back were not rebuilt"
+            ),
         }
     }
 

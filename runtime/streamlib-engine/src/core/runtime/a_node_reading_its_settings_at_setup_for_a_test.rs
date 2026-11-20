@@ -28,9 +28,22 @@ pub const A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH: i64 = 0;
 /// Each setup the fixture node ran, by node: the settings it read.
 static SETUPS_RUN: Mutex<Vec<(Uuid, Map<String, Value>)>> = Mutex::new(Vec::new());
 
+/// Each setup and teardown the fixture node ran, by node, in the order run.
+static SETUPS_AND_TEARDOWNS_RUN: Mutex<Vec<(Uuid, WhatANodeRan)>> = Mutex::new(Vec::new());
+
+/// What the fixture node ran: its setup or its teardown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhatANodeRan {
+    Setup,
+    Teardown,
+}
+
 /// The output writer of each source node a test writes, by node.
 static SOURCE_OUTPUTS: Mutex<Option<HashMap<Uuid, Arc<crate::iceoryx2::OutputWriterInner>>>> =
     Mutex::new(None);
+
+/// The value each source node writes as it sets up, by node.
+static VALUES_WRITTEN_AT_SETUP: Mutex<Option<HashMap<Uuid, i64>>> = Mutex::new(None);
 
 /// The output of the source node type, an Integer that flows as a value.
 pub const THE_SOURCES_OUTPUT: &str = "integer";
@@ -66,6 +79,9 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
         SETUPS_RUN
             .lock()
             .push((self.node_uuid, self.settings.clone()));
+        SETUPS_AND_TEARDOWNS_RUN
+            .lock()
+            .push((self.node_uuid, WhatANodeRan::Setup));
         if self.settings.get("kernel_size") == Some(&json!(A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH)) {
             return Err(Error::Configuration(format!(
                 "a kernel of size {A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH} blurs nothing"
@@ -75,6 +91,9 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
     }
 
     fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        SETUPS_AND_TEARDOWNS_RUN
+            .lock()
+            .push((self.node_uuid, WhatANodeRan::Teardown));
         Ok(())
     }
 
@@ -177,7 +196,14 @@ impl DynGeneratedNode for IntegerSourceATestWrites {
                 .get_or_insert_with(HashMap::new)
                 .insert(self.node_uuid, Arc::clone(output));
         }
-        Ok(())
+        let written_at_setup = VALUES_WRITTEN_AT_SETUP
+            .lock()
+            .as_ref()
+            .and_then(|values| values.get(&self.node_uuid).copied());
+        match written_at_setup {
+            Some(value) => write_from_the_source(self.node_uuid, value),
+            None => Ok(()),
+        }
     }
 
     fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -301,6 +327,14 @@ pub fn the_node_type_whose_output_a_test_writes() -> NodeClassImportPath {
     the_source_node_type()
 }
 
+/// Have the source node `node` write `value` as it sets up.
+pub fn write_from_the_source_at_its_setup(node: Uuid, value: i64) {
+    VALUES_WRITTEN_AT_SETUP
+        .lock()
+        .get_or_insert_with(HashMap::new)
+        .insert(node, value);
+}
+
 /// Write `value` on the output of the source node `node`, set up in a running stream.
 pub fn write_from_the_source(node: Uuid, value: i64) -> Result<()> {
     let output = SOURCE_OUTPUTS
@@ -364,6 +398,12 @@ pub fn the_node_type_reading_its_settings_at_setup() -> NodeClassImportPath {
 /// Forget each setup a node of the type ran, for a test starting afresh.
 pub fn forget_every_setup_run() {
     SETUPS_RUN.lock().clear();
+    SETUPS_AND_TEARDOWNS_RUN.lock().clear();
+}
+
+/// Each setup and teardown a node of the type ran, by node, in the order run.
+pub fn each_setup_and_teardown_run() -> Vec<(Uuid, WhatANodeRan)> {
+    SETUPS_AND_TEARDOWNS_RUN.lock().clone()
 }
 
 /// The settings each setup the node `node` ran read, in the order run.

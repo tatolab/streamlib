@@ -72,17 +72,60 @@ fn a_value_put_back_keeps_the_earlier_one_and_waits_for_nothing_until_another_ar
 }
 
 #[test]
-fn a_node_or_a_setting_forgotten_holds_nothing() {
+fn a_node_forgotten_holds_nothing() {
     let carried = ValuesWiresCarryIntoSettings::default();
     let node = Uuid::new_v4();
+    let another = Uuid::new_v4();
     carried.carried(node, "kernel_size", json!(5));
-    carried.carried(node, "width", json!(640));
-    carried.forget_the_setting(node, "width");
-    assert_eq!(carried.take_each_value_waiting().len(), 1);
-
+    carried.carried(another, "kernel_size", json!(6));
     carried.forget_the_node(node);
+
+    let waiting = carried.take_each_value_waiting();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].node, another);
     assert_eq!(
         carried.the_value_its_node_is_built_with(node, "kernel_size"),
         None
     );
+}
+
+/// Mental-revert: forgetting the setting alone as its wire leaves leaves its node built with
+/// the wire's value.
+#[test]
+fn a_wire_leaving_a_setting_its_node_was_built_with_from_it_waits_with_the_settings_own_value() {
+    let carried = ValuesWiresCarryIntoSettings::default();
+    let node = Uuid::new_v4();
+    carried.built_with_unless_its_wire_carried_one(node, "kernel_size", json!(3));
+    carried.carried(node, "kernel_size", json!(5));
+    carried.take_each_value_waiting();
+
+    carried.its_wire_left(node, "kernel_size", Some(json!(3)));
+    let waiting = carried.take_each_value_waiting();
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0].value, json!(3));
+
+    carried.its_wire_left(node, "kernel_size", Some(json!(3)));
+    assert!(
+        carried.take_each_value_waiting().is_empty(),
+        "a node built with the setting's own value rebuilds for nothing"
+    );
+}
+
+/// Mental-revert: leaving the values waiting rebuilds a node right after it is built with them.
+#[test]
+fn a_value_waiting_for_a_node_about_to_be_built_is_what_it_is_built_with() {
+    let carried = ValuesWiresCarryIntoSettings::default();
+    let built = Uuid::new_v4();
+    let running = Uuid::new_v4();
+    carried.carried(built, "kernel_size", json!(5));
+    carried.carried(running, "kernel_size", json!(6));
+
+    carried.build_each_of_the_nodes_with_what_waits(&[built]);
+    assert_eq!(
+        carried.the_value_its_node_is_built_with(built, "kernel_size"),
+        Some(json!(5))
+    );
+    let waiting = carried.take_each_value_waiting();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].node, running);
 }

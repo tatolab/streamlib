@@ -36,7 +36,7 @@ pub(crate) use live_input_values::{
 };
 pub(crate) use live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
 pub(crate) use values_wires_carry_into_settings::forget_what_a_link_into_a_setting_carried;
-pub use values_wires_carry_into_settings::{
+pub(crate) use values_wires_carry_into_settings::{
     ValueAWireCarriedIntoASetting, ValuesWiresCarryIntoSettings,
 };
 

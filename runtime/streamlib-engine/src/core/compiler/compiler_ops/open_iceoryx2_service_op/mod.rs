@@ -40,10 +40,8 @@ use link_destination_side::{
     DestinationOfALinkAsItsWiringReadsIt, open_the_destination_side_of_a_link,
     read_the_destination_of_a_link, release_the_destination_side_of_a_link,
 };
-use link_into_a_setting_read_by_the_engine::{
-    ReaderOfALinkIntoASettingComponent, is_read_by_the_engine,
-    open_a_link_into_a_setting_read_by_the_engine,
-};
+pub(crate) use link_into_a_setting_read_by_the_engine::ReaderOfALinkIntoASettingComponent;
+use link_into_a_setting_read_by_the_engine::open_a_link_into_a_setting_read_by_the_engine;
 use link_source_side::{
     OpenedSourceSideOfALink, open_the_source_side_of_a_link, release_the_source_side_of_a_link,
 };
@@ -80,7 +78,7 @@ pub(crate) fn open_iceoryx2_service(
         .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found in graph", link_id)))?
         .to_port()
         .clone();
-    if is_read_by_the_engine(graph, &to_port) {
+    if graph.is_a_setting_read_at_setup(to_port.node_run_id(), to_port.port_name()) {
         let from_port = graph
             .traversal()
             .e(link_id)
