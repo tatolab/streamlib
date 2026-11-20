@@ -168,9 +168,9 @@ impl GpuContext {
     /// wrote it before the batch is not the batch's to know — and narrows to
     /// compute-to-compute once this recording is the writer.
     ///
-    /// One kernel may appear only once. A kernel owns a single descriptor set,
-    /// so a second bind would retarget the dispatch already recorded against it
-    /// — silently, since nothing has executed yet. Refused by name rather than
+    /// One kernel may appear only once. A kernel records into one descriptor
+    /// set, so a second bind would retarget the dispatch already recorded
+    /// against it — silently, since nothing has executed yet. Refused by name rather than
     /// dispatched wrong.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn dispatch_compute_kernel_batch(
@@ -188,7 +188,7 @@ impl GpuContext {
             {
                 return Err(Error::GpuError(format!(
                     "dispatch {index} of this batch names the kernel dispatch {earlier} already \
-                     names; a kernel owns one descriptor set, so binding it twice in one \
+                     names; a kernel records into one descriptor set, so binding it twice in one \
                      recording would give dispatch {earlier} this dispatch's bindings. Build a \
                      second kernel, or run them as separate batches"
                 )));

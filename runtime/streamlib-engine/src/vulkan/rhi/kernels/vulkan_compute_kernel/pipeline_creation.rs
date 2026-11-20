@@ -19,6 +19,8 @@ use crate::vulkan::rhi::kernels::vulkan_pipeline_cache_on_disk::{
     pipeline_cache_file_path_keyed_by, read_cache_blob,
 };
 
+use super::{COMPUTE_DISPATCH_SLOTS, ComputeDispatchSlot};
+
 fn descriptor_kind_to_vk(kind: ComputeBindingKind) -> vk::DescriptorType {
     match kind {
         ComputeBindingKind::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
@@ -252,13 +254,17 @@ pub(super) fn pipeline_cache_file_path(
     )
 }
 
+/// One descriptor set per dispatch slot, and one for recording into a
+/// caller's command buffer.
+const SETS_A_KERNEL_ALLOCATES: u32 = COMPUTE_DISPATCH_SLOTS as u32 + 1;
+
 pub(super) fn create_descriptor_pool(
     device: &vulkanalia::Device,
     bindings: &[ComputeBindingSpec],
 ) -> Result<vk::DescriptorPool> {
     let mut counts: HashMap<vk::DescriptorType, u32> = HashMap::new();
     for spec in bindings {
-        *counts.entry(descriptor_kind_to_vk(spec.kind)).or_insert(0) += 1;
+        *counts.entry(descriptor_kind_to_vk(spec.kind)).or_insert(0) += SETS_A_KERNEL_ALLOCATES;
     }
     let pool_sizes: Vec<vk::DescriptorPoolSize> = counts
         .into_iter()
@@ -271,7 +277,7 @@ pub(super) fn create_descriptor_pool(
         .collect();
 
     let info = vk::DescriptorPoolCreateInfo::builder()
-        .max_sets(1)
+        .max_sets(SETS_A_KERNEL_ALLOCATES)
         .pool_sizes(&pool_sizes)
         .build();
     unsafe { device.create_descriptor_pool(&info, None) }
@@ -293,7 +299,7 @@ pub(super) fn allocate_descriptor_set(
     Ok(sets[0])
 }
 
-pub(super) fn create_command_pool(
+fn create_command_pool(
     device: &vulkanalia::Device,
     queue_family_index: u32,
 ) -> Result<vk::CommandPool> {
@@ -305,7 +311,7 @@ pub(super) fn create_command_pool(
         .map_err(|e| Error::GpuError(format!("Failed to create command pool: {e}")))
 }
 
-pub(super) fn allocate_command_buffer(
+fn allocate_command_buffer(
     device: &vulkanalia::Device,
     pool: vk::CommandPool,
 ) -> Result<vk::CommandBuffer> {
@@ -317,6 +323,72 @@ pub(super) fn allocate_command_buffer(
     let buffers = unsafe { device.allocate_command_buffers(&info) }
         .map_err(|e| Error::GpuError(format!("Failed to allocate command buffer: {e}")))?;
     Ok(buffers[0])
+}
+
+/// Every dispatch slot, each with its descriptor set from `pool`, its own
+/// command pool and buffer, and a signaled fence. On failure the command pools
+/// and fences made so far are destroyed; the sets go with `pool`.
+pub(super) fn create_dispatch_slots(
+    device: &vulkanalia::Device,
+    pool: vk::DescriptorPool,
+    layout: vk::DescriptorSetLayout,
+    queue_family_index: u32,
+) -> Result<Vec<ComputeDispatchSlot>> {
+    let mut slots: Vec<ComputeDispatchSlot> = Vec::with_capacity(COMPUTE_DISPATCH_SLOTS);
+    let destroy_made = |slots: &[ComputeDispatchSlot]| {
+        for slot in slots {
+            unsafe {
+                device.destroy_fence(slot.fence, None);
+                device.destroy_command_pool(slot.command_pool, None);
+            }
+        }
+    };
+    for _ in 0..COMPUTE_DISPATCH_SLOTS {
+        match create_one_dispatch_slot(device, pool, layout, queue_family_index) {
+            Ok(slot) => slots.push(slot),
+            Err(e) => {
+                destroy_made(&slots);
+                return Err(e);
+            }
+        }
+    }
+    Ok(slots)
+}
+
+fn create_one_dispatch_slot(
+    device: &vulkanalia::Device,
+    pool: vk::DescriptorPool,
+    layout: vk::DescriptorSetLayout,
+    queue_family_index: u32,
+) -> Result<ComputeDispatchSlot> {
+    let descriptor_set = allocate_descriptor_set(device, pool, layout)?;
+    let command_pool = create_command_pool(device, queue_family_index)?;
+    let command_buffer = match allocate_command_buffer(device, command_pool) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            unsafe { device.destroy_command_pool(command_pool, None) };
+            return Err(e);
+        }
+    };
+    // Signaled, so the slot's first dispatch finds it free to reset.
+    let fence_info = vk::FenceCreateInfo::builder()
+        .flags(vk::FenceCreateFlags::SIGNALED)
+        .build();
+    let fence = match unsafe { device.create_fence(&fence_info, None) } {
+        Ok(fence) => fence,
+        Err(e) => {
+            unsafe { device.destroy_command_pool(command_pool, None) };
+            return Err(Error::GpuError(format!(
+                "Failed to create compute fence: {e}"
+            )));
+        }
+    };
+    Ok(ComputeDispatchSlot {
+        descriptor_set,
+        command_pool,
+        command_buffer,
+        fence,
+    })
 }
 
 pub(super) fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
