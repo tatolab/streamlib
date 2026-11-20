@@ -252,11 +252,8 @@ pub struct GpuContext {
     /// dispatch records only through a set whose submission named here has
     /// retired, since Vulkan disallows rewriting a set still in use.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    latest_submission_per_compute_kernel_batch_descriptor_set: Arc<
-        parking_lot::Mutex<
-            HashMap<(usize, usize), crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot>,
-        >,
-    >,
+    latest_submission_per_compute_kernel_batch_descriptor_set:
+        Arc<parking_lot::Mutex<compute_dispatch_batches::LatestSubmissionPerBatchDescriptorSet>>,
     /// The recorder every surface-to-surface copy reuses, built on first use;
     /// its lock is what serializes two copies.
     #[cfg(any(target_os = "linux", target_os = "macos"))]

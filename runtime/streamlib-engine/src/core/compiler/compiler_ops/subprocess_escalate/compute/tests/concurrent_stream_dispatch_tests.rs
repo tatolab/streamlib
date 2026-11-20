@@ -47,6 +47,52 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 }
 ";
 
+fn register_the_shaded_kernel(sandbox: &GpuContextLimitedAccess) -> String {
+    match handle_register_compute_kernel(
+        sandbox,
+        "reg-shaded".to_string(),
+        EscalateRequestRegisterComputeKernel {
+            push_constant_size: 4,
+            ..register_from_slang(SPIN_THEN_WRITE_A_PUSHED_SHADE_SLANG, "compute")
+        },
+    ) {
+        EscalateResponse::Ok(ok) => ok.handle_id,
+        other => panic!("registering the shaded kernel failed: {other:?}"),
+    }
+}
+
+/// One invocation of the shaded kernel, writing `shade` at pixel 0 of
+/// `texture_id`.
+fn shaded_dispatch(
+    kernel_id: &str,
+    texture_id: &str,
+    shade: u8,
+) -> EscalateRequestRunComputeKernel {
+    EscalateRequestRunComputeKernel {
+        push_constants_hex: u32::from(shade)
+            .to_le_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        ..single_storage_image_dispatch(kernel_id, "shaded_image", texture_id, 1)
+    }
+}
+
+fn assert_each_holds_its_own_shade(
+    sandbox: &GpuContextLimitedAccess,
+    shade_of_each: &[(&str, u8)],
+    held: &[crate::core::context::PooledTextureHandle],
+) {
+    for ((texture_id, shade), texture) in shade_of_each.iter().zip(held) {
+        let pixels = read_back_rgba8(sandbox, texture_id, texture.texture(), texture_id);
+        assert_eq!(
+            pixels[..4],
+            [*shade, *shade, *shade, 255],
+            "{texture_id} holds another stream's shade"
+        );
+    }
+}
+
 fn single_storage_image_dispatch(
     kernel_id: &str,
     binding_name: &str,
@@ -161,8 +207,7 @@ fn a_second_streams_dispatch_is_submitted_while_the_firsts_is_still_running() {
 }
 
 /// Two streams dispatching one cached kernel over and over each write their
-/// own target: a dispatch records through a batch descriptor set no running
-/// submission uses, and waits for one when every set is in flight.
+/// own target.
 #[test]
 fn two_streams_dispatching_one_kernel_each_write_their_own_target() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
@@ -220,26 +265,10 @@ fn a_second_streams_dispatch_of_the_same_kernel_is_submitted_while_the_firsts_is
         println!("overlapping dispatches of one kernel: no GPU — skipping");
         return;
     };
-    let kernel_id = match handle_register_compute_kernel(
-        &sandbox,
-        "reg-shaded".to_string(),
-        EscalateRequestRegisterComputeKernel {
-            push_constant_size: 4,
-            ..register_from_slang(SPIN_THEN_WRITE_A_PUSHED_SHADE_SLANG, "compute")
-        },
-    ) {
-        EscalateResponse::Ok(ok) => ok.handle_id,
-        other => panic!("registering the shaded kernel failed: {other:?}"),
-    };
+    let kernel_id = register_the_shaded_kernel(&sandbox);
     let held = seeded_chain_textures(&sandbox, ["one-kernel-first", "one-kernel-second"]);
-    let shaded_dispatch = |texture_id: &str, shade: u32| EscalateRequestRunComputeKernel {
-        push_constants_hex: shade
-            .to_le_bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-        ..single_storage_image_dispatch(&kernel_id, "shaded_image", texture_id, 1)
-    };
+    let shaded_dispatch =
+        |texture_id: &str, shade: u8| shaded_dispatch(&kernel_id, texture_id, shade);
     // The second stream's texture is bound once first; see the warm-up in
     // `a_second_streams_dispatch_is_submitted_while_the_firsts_is_still_running`.
     let warm_up = handle_run_compute_kernel(
@@ -308,16 +337,99 @@ fn a_second_streams_dispatch_of_the_same_kernel_is_submitted_while_the_firsts_is
             );
         }
     });
-    for ((texture_id, shade), texture) in [("one-kernel-first", 200), ("one-kernel-second", 64)]
-        .into_iter()
-        .zip(&held)
-    {
-        let pixels = read_back_rgba8(&sandbox, texture_id, texture.texture(), texture_id);
-        assert_eq!(
-            pixels[..4],
-            [shade, shade, shade, 255],
-            "{texture_id} holds another stream's shade"
+    assert_each_holds_its_own_shade(
+        &sandbox,
+        &[("one-kernel-first", 200), ("one-kernel-second", 64)],
+        &held,
+    );
+    drop(held);
+}
+
+/// Three streams dispatching one kernel, which holds two batch descriptor
+/// sets: the third waits for a set to come free, so its submission reaches
+/// the queue only after one of the first two has completed, and each stream
+/// still writes its own shade. A third dispatch taking a set still in use
+/// would rewrite a running dispatch's bindings.
+#[test]
+fn a_third_streams_dispatch_of_a_kernel_with_both_sets_in_flight_waits_for_one() {
+    let Some(sandbox) = make_gpu_sandbox_if_available() else {
+        println!("a kernel with every batch set in flight: no GPU — skipping");
+        return;
+    };
+    assert_eq!(crate::vulkan::rhi::COMPUTE_BATCH_DESCRIPTOR_SETS, 2);
+    let kernel_id = register_the_shaded_kernel(&sandbox);
+    let streams = [
+        ("busy-first", 200),
+        ("busy-second", 120),
+        ("busy-third", 40),
+    ];
+    let held = seeded_chain_textures(&sandbox, streams.map(|(texture_id, _)| texture_id));
+    // Every stream's texture is bound once first; see the warm-up in
+    // `a_second_streams_dispatch_is_submitted_while_the_firsts_is_still_running`.
+    for (texture_id, _) in streams {
+        let warm_up = handle_run_compute_kernel(
+            &sandbox,
+            format!("{texture_id}-warm-up"),
+            shaded_dispatch(&kernel_id, texture_id, 0),
         );
+        assert!(matches!(warm_up, EscalateResponse::Ok(_)), "{warm_up:?}");
     }
+
+    let host = sandbox.host_inner();
+    let device = std::sync::Arc::clone(&host.device().inner);
+    let wait_for_the_submission_count_to_reach = |submission_count: usize| {
+        let gave_up_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while host.queue_submission_count() < submission_count {
+            assert!(
+                std::time::Instant::now() < gave_up_at,
+                "a dispatch never reached the queue"
+            );
+            std::thread::yield_now();
+        }
+    };
+    let submissions_before = host.queue_submission_count();
+    std::thread::scope(|scope| {
+        let mut running_streams = Vec::new();
+        let mut first_streams_submission = None;
+        for (index, (texture_id, shade)) in streams.into_iter().enumerate() {
+            let sandbox = &sandbox;
+            let kernel_id = &kernel_id;
+            running_streams.push(scope.spawn(move || {
+                handle_run_compute_kernel(
+                    sandbox,
+                    texture_id.to_string(),
+                    shaded_dispatch(kernel_id, texture_id, shade),
+                )
+            }));
+            if index == 2 {
+                break;
+            }
+            wait_for_the_submission_count_to_reach(submissions_before + index + 1);
+            let submission = device.snapshot_of_queue_submissions_made_so_far();
+            assert!(
+                !device
+                    .every_queue_submission_in_snapshot_has_completed(&submission)
+                    .expect("reading the queue completion timelines"),
+                "stream {index}'s work finished before the next could submit behind it; \
+                 the spin shader no longer holds the queue long enough"
+            );
+            first_streams_submission.get_or_insert(submission);
+        }
+        wait_for_the_submission_count_to_reach(submissions_before + 3);
+        let first_streams_submission =
+            first_streams_submission.expect("the first stream submitted");
+        assert!(
+            device
+                .every_queue_submission_in_snapshot_has_completed(&first_streams_submission)
+                .expect("reading the queue completion timelines"),
+            "the third stream's dispatch reached the queue while both of the kernel's batch \
+             descriptor sets were still in use"
+        );
+        for stream in running_streams {
+            let response = stream.join().expect("a stream's thread");
+            assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
+        }
+    });
+    assert_each_holds_its_own_shade(&sandbox, &streams, &held);
     drop(held);
 }

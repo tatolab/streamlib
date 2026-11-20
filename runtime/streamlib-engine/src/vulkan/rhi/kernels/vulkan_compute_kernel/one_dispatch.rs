@@ -17,7 +17,7 @@ use super::{PendingState, VulkanComputeKernelInner};
 ///
 /// The kernel runs [`COMPUTE_DISPATCH_SLOTS`](super::COMPUTE_DISPATCH_SLOTS)
 /// dispatches at once; a dispatch past that waits for a slot to finish.
-#[must_use = "a dispatch runs nothing until its `dispatch` is called"]
+#[must_use = "a dispatch runs nothing until it is dispatched or recorded"]
 pub struct ComputeKernelDispatch<'kernel> {
     kernel: &'kernel VulkanComputeKernelInner,
     staged: PendingState,

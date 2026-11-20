@@ -19,7 +19,7 @@ use crate::vulkan::rhi::kernels::vulkan_pipeline_cache_on_disk::{
     pipeline_cache_file_path_keyed_by, read_cache_blob,
 };
 
-use super::{COMPUTE_BATCH_DESCRIPTOR_SETS, COMPUTE_DISPATCH_SLOTS, ComputeDispatchSlot};
+use super::{COMPUTE_DISPATCH_SLOTS, ComputeDispatchSlot, RECORDING_DESCRIPTOR_SETS};
 
 fn descriptor_kind_to_vk(kind: ComputeBindingKind) -> vk::DescriptorType {
     match kind {
@@ -254,10 +254,7 @@ pub(super) fn pipeline_cache_file_path(
     )
 }
 
-/// One descriptor set per dispatch slot, and one for recording into a
-/// caller's command buffer.
-const SETS_A_KERNEL_ALLOCATES: u32 =
-    (COMPUTE_DISPATCH_SLOTS + 1 + COMPUTE_BATCH_DESCRIPTOR_SETS) as u32;
+const SETS_A_KERNEL_ALLOCATES: u32 = (COMPUTE_DISPATCH_SLOTS + RECORDING_DESCRIPTOR_SETS) as u32;
 
 pub(super) fn create_descriptor_pool(
     device: &vulkanalia::Device,
@@ -283,21 +280,6 @@ pub(super) fn create_descriptor_pool(
         .build();
     unsafe { device.create_descriptor_pool(&info, None) }
         .map_err(|e| Error::GpuError(format!("Failed to create descriptor pool: {e}")))
-}
-
-pub(super) fn allocate_descriptor_set(
-    device: &vulkanalia::Device,
-    pool: vk::DescriptorPool,
-    layout: vk::DescriptorSetLayout,
-) -> Result<vk::DescriptorSet> {
-    let set_layouts = [layout];
-    let info = vk::DescriptorSetAllocateInfo::builder()
-        .descriptor_pool(pool)
-        .set_layouts(&set_layouts)
-        .build();
-    let sets = unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| Error::GpuError(format!("Failed to allocate descriptor set: {e}")))?;
-    Ok(sets[0])
 }
 
 /// `N` descriptor sets of `layout` from `pool`, allocated in one call.
@@ -380,7 +362,7 @@ fn create_one_dispatch_slot(
     layout: vk::DescriptorSetLayout,
     queue_family_index: u32,
 ) -> Result<ComputeDispatchSlot> {
-    let descriptor_set = allocate_descriptor_set(device, pool, layout)?;
+    let [descriptor_set] = allocate_descriptor_sets::<1>(device, pool, layout)?;
     let command_pool = create_command_pool(device, queue_family_index)?;
     let command_buffer = match allocate_command_buffer(device, command_pool) {
         Ok(buffer) => buffer,

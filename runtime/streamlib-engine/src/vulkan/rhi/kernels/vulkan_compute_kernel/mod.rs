@@ -81,6 +81,10 @@ const COMPUTE_DISPATCH_SLOTS: usize = 2;
 /// How many batched recordings of one kernel can be in flight at once.
 pub(crate) const COMPUTE_BATCH_DESCRIPTOR_SETS: usize = 2;
 
+/// The sets a kernel records into a caller's command buffer through: one for
+/// `record`, then the batch descriptor sets.
+const RECORDING_DESCRIPTOR_SETS: usize = 1 + COMPUTE_BATCH_DESCRIPTOR_SETS;
+
 /// The Vulkan state one dispatch records, submits and waits on. Each slot has
 /// its own command pool, because a pool may record on one thread at a time.
 struct ComputeDispatchSlot {
@@ -606,7 +610,7 @@ impl VulkanComputeKernel {
     /// thread dispatching this kernel meanwhile binds into its own dispatch.
     /// This kernel's own `set_*` methods and [`Self::dispatch`] share one
     /// staging, so they suit one thread.
-    #[must_use = "a dispatch runs nothing until its `dispatch` is called"]
+    #[must_use = "a dispatch runs nothing until it is dispatched or recorded"]
     pub fn begin_dispatch(&self) -> ComputeKernelDispatch<'_> {
         ComputeKernelDispatch::of(self.host_inner())
     }

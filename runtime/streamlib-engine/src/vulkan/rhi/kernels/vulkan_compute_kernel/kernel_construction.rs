@@ -22,7 +22,7 @@ use super::pipeline_creation::{
     create_shader_module,
 };
 use super::spirv_validation::validate_against_spirv;
-use super::{COMPUTE_BATCH_DESCRIPTOR_SETS, PendingState, VulkanComputeKernelInner};
+use super::{PendingState, RECORDING_DESCRIPTOR_SETS, VulkanComputeKernelInner};
 
 impl VulkanComputeKernelInner {
     /// Create a new compute kernel from a SPIR-V shader and a binding declaration.
@@ -211,10 +211,10 @@ impl VulkanComputeKernelInner {
         };
 
         // One set for `record`, then one per batched recording in flight.
-        let recording_descriptor_sets = match allocate_descriptor_sets::<
-            { 1 + COMPUTE_BATCH_DESCRIPTOR_SETS },
-        >(
-            device, descriptor_pool, descriptor_set_layout
+        let recording_descriptor_sets = match allocate_descriptor_sets::<RECORDING_DESCRIPTOR_SETS>(
+            device,
+            descriptor_pool,
+            descriptor_set_layout,
         ) {
             Ok(s) => s,
             Err(e) => {
