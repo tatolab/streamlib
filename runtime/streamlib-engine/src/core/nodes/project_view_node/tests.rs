@@ -150,7 +150,6 @@ fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_
         }),
         "the input takes no wire and is read each run"
     );
-    assert!(!setting.input_mode.unwrap().takes_a_wire());
     assert_eq!(
         setting.lifetime,
         NodeValueLifetime::Reset,

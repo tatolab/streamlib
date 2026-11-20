@@ -19,7 +19,9 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
-use crate::core::graph::input_values::{LiveInputValuesOfAStream, the_value_an_input_reads};
+use crate::core::graph::input_values::{
+    LiveInputValuesOfAStream, ValuesWiresCarryIntoSettings, the_value_an_input_reads,
+};
 use crate::core::graph::pin_type_link_checks::the_verdict_on_a_link_between_typed_ends;
 use crate::core::graph::the_pin_a_port_resolves_to;
 use crate::core::json_schema::{
@@ -71,6 +73,10 @@ pub struct Graph {
 
     /// The values set live on this graph's inputs, held apart from its nodes.
     live_input_values: Arc<LiveInputValuesOfAStream>,
+
+    /// The values the Value wires into this graph's settings read at setup carry, held apart
+    /// from its nodes and kept across a Stop.
+    values_wires_carry_into_settings: Arc<ValuesWiresCarryIntoSettings>,
 }
 
 /// Why a node leaves its stream's graph, which decides what the stream forgets of it.
@@ -213,12 +219,28 @@ impl Graph {
             compiled_at: None,
             state: GraphState::Idle,
             live_input_values: Arc::new(live_input_values),
+            values_wires_carry_into_settings: Arc::default(),
         }
     }
 
     /// The values set live on this graph's inputs, which change under its read lock.
     pub fn live_input_values(&self) -> &Arc<LiveInputValuesOfAStream> {
         &self.live_input_values
+    }
+
+    /// The values the Value wires into this graph's settings read at setup carry, which change
+    /// under its read lock.
+    pub(crate) fn values_wires_carry_into_settings(&self) -> &Arc<ValuesWiresCarryIntoSettings> {
+        &self.values_wires_carry_into_settings
+    }
+
+    /// Whether input `input` of the node `node_run_id` is a setting its node reads at setup;
+    /// `false` when this graph holds no such node or input.
+    pub(crate) fn is_a_setting_read_at_setup(&self, node_run_id: &NodeRunId, input: &str) -> bool {
+        self.traversal().v(node_run_id).first().is_some_and(|node| {
+            node.input_port(input)
+                .is_some_and(super::PortInfo::is_a_setting_read_at_setup)
+        })
     }
 
     /// Each `GraphInput` of this graph, each at its stream's top level.
@@ -330,6 +352,10 @@ impl Graph {
                 why,
                 &inputs_its_replacement_declares_alike,
             );
+            if why == WhyTheNodeLeaves::Removed && self.node_by_uuid(node_uuid).is_none() {
+                self.values_wires_carry_into_settings
+                    .forget_the_node(node_uuid);
+            }
         }
         dropped
     }

@@ -338,7 +338,7 @@ pub(crate) fn the_ports_of_a_graph_document_node(
 
 /// Refuse `port` unless `node` has it in `direction`, whether its type declares it or it is
 /// a config field the node exposes, listing the ports it does have there; and refuse an input
-/// that is a setting, which takes no wire, as the end of a link.
+/// that is a setting taking no wire as the end of a link.
 pub(crate) fn refuse_a_port_the_node_does_not_have(
     node_types: &NodeTypesOneStreamResolves,
     node_name: &str,
@@ -354,9 +354,15 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
         })
         .unwrap_or_default();
     match GraphNodePorts::the_port_of_a_type_a_name_finds(&ports, &port_cast) {
-        Some(declared) if direction == PortDirection::Input && !declared.takes_a_wire() => Err(
-            the_refusal_of_a_link_into_a_setting(&declared.name, node_name),
-        ),
+        Some(declared)
+            if direction == PortDirection::Input
+                && !declared.takes_a_wire_on_a_node_of(&node.node_type) =>
+        {
+            Err(the_refusal_of_a_link_into_a_setting(
+                &declared.name,
+                node_name,
+            ))
+        }
         Some(_) => Ok(()),
         None => Err(Error::GraphError(format!(
             "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",

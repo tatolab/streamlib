@@ -417,13 +417,13 @@ async fn a_built_in_node_type_is_described_with_each_input_mode_value_schema_and
         json!([
             { "name": "gain", "documentation": "",
               "pin_type": { "kind": "is", "pin_type": { "type": "float" } }, "flow": "value",
-              "mode": "wire_or_value", "lifetime": "kept",
+              "mode": "wire_or_value", "takes_a_wire": true, "lifetime": "kept",
               "value_json_schema": { "type": "number", "minimum": -f64::MAX, "maximum": f64::MAX } },
             { "name": "video", "documentation": "",
               "pin_type": { "kind": "is", "pin_type": { "type": "texture" } }, "flow": "stream",
-              "mode": "wire_only", "lifetime": "kept" },
+              "mode": "wire_only", "takes_a_wire": true, "lifetime": "kept" },
             { "name": "frame_width", "documentation": "", "mode": "setting_only",
-              "read": "at_setup", "lifetime": "kept",
+              "takes_a_wire": false, "read": "at_setup", "lifetime": "kept",
               "value_json_schema": {
                   "type": ["integer", "null"], "format": "uint32", "minimum": 0.0,
                   "default": null,
@@ -493,7 +493,7 @@ async fn a_project_node_type_is_described_from_source_or_says_why_it_is_not() {
             "declared_at": { "path": "nodes/mix.py", "line": 7 },
             "inputs": [{ "name": "level", "documentation": "the level",
                          "family": { "family": "channels" }, "annotation": "float",
-                         "default_value": 0.5 }],
+                         "takes_a_wire": true, "default_value": 0.5 }],
             "outputs": [{ "name": "mixed", "documentation": "",
                           "family": { "family": "channels" } }],
         })

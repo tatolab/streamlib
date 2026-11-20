@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A Rust node type's settings: a struct whose every field is an input that takes no wire, read
-//! once, when the node is set up, so a change rebuilds the node. `#[node_settings]` derives
+//! A Rust node type's settings: a struct whose every field is an input read once, when the node
+//! is set up, from its value or from a Value wire into it, so a change rebuilds the node. `#[node_settings]` derives
 //! [`NodeSettings`] for the struct, and `#[node(settings = …)]` declares each field as one of
 //! the node's inputs and builds the struct from the values they hold before the node is set up.
 
@@ -19,8 +19,8 @@ use crate::{PortFamily, PortFamilyDeclaration};
     note = "add `#[streamlib::sdk::node_settings]` to `{Self}`, which declares each of its fields as a setting the node reads at setup"
 )]
 pub trait NodeSettings: Default + Serialize + DeserializeOwned + Send + 'static {
-    /// Each setting, in the order the struct declares its fields, as an input of the node that
-    /// takes no wire, read at setup, holding its field's default until it is set.
+    /// Each setting, in the order the struct declares its fields, as an input of the node read
+    /// at setup, holding its field's default until it is set or a wire into it carries a value.
     fn setting_inputs() -> Vec<PortDescriptor>;
 
     /// The settings `input_values` hold, each input's value by its name: a setting they name
@@ -153,7 +153,8 @@ pub fn the_input_of_a_setting(
         read: SettingReadTime::AtSetup,
     })
     .with_pin_default(default);
-    // A setting takes no wire, so no message is delivered to it.
+    // The engine reads a wire into a setting in the node's place, so no message is delivered
+    // to it.
     setting.delivery_profile = None;
     setting
 }

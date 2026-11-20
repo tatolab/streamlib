@@ -58,7 +58,7 @@ impl GraphNodePorts {
         node_type: &crate::core::descriptors::NodeClassImportPath,
         config: Option<&serde_json::Value>,
     ) -> Self {
-        if crate::core::graph::graph_interface_resolution::is_the_graph_input_type(node_type) {
+        if node_type.is_the_graph_input_type() {
             crate::core::graph::graph_interface_resolution::resolve_the_value_input_a_graph_input_config_declares(
                 &mut self, config,
             );

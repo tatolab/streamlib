@@ -39,6 +39,7 @@ use crate::core::test_support::{
 use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 
 mod graph_input_pin_type_tests;
+mod graph_input_port_takes_no_wire_tests;
 mod graph_input_relink_lifetime_and_range_tests;
 
 const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
