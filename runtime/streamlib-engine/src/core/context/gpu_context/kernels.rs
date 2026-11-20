@@ -461,6 +461,7 @@ impl GpuContext {
                 spv,
                 bindings: &reflected,
                 push_constant_size,
+                specialization_constants: &[],
             },
         )?);
 

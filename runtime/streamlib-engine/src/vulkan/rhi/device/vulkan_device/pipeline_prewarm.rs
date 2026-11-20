@@ -29,6 +29,7 @@ impl HostVulkanDevice {
                 crate::core::rhi::ComputeBindingSpec::storage_image(4),
             ],
             push_constant_size: 128,
+            specialization_constants: &[],
         };
         match crate::vulkan::rhi::VulkanComputeKernel::new(device, &descriptor) {
             // `_kernel` drops at the end of this arm — only the

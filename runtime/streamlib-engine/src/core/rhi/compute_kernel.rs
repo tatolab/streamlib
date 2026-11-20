@@ -14,8 +14,10 @@ use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::{Error, Result};
 
+use super::ShaderSpecializationConstant;
+
 use super::kernel_binding_names::{
-    quote_declared_shader_binding_names, reflect_spirv_without_its_debug_source_strings,
+    quote_declared_shader_binding_names, reflect_spirv_without_what_rspirv_refuses,
     refuse_a_descriptor_set_other_than_set_0,
 };
 
@@ -198,6 +200,9 @@ pub struct ComputeKernelDescriptor<'a> {
     pub bindings: &'a [ComputeBindingSpec],
     /// Push-constant range size in bytes; 0 if the shader uses no push constants.
     pub push_constant_size: u32,
+    /// The specialization constants baked into the pipeline. A constant the
+    /// shader declares and this leaves out keeps the shader's default.
+    pub specialization_constants: &'a [ShaderSpecializationConstant],
 }
 
 /// Derive a binding declaration and push-constant size directly from a SPIR-V
@@ -216,7 +221,7 @@ pub struct ComputeKernelDescriptor<'a> {
 /// dispatch: bindings are resolved by name in one spelling for both
 /// languages, so an unnamed binding cannot be bound at all.
 pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>, u32)> {
-    let reflection = reflect_spirv_without_its_debug_source_strings(spv)
+    let reflection = reflect_spirv_without_what_rspirv_refuses(spv)
         .map_err(|e| Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}")))?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {

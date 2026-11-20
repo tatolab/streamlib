@@ -163,6 +163,7 @@ impl VulkanComputeKernelInner {
             pipeline_layout,
             descriptor.spv,
             &entry_point,
+            descriptor.specialization_constants,
             descriptor.label,
             pipeline_cache_directory_of_its_stream,
         ) {

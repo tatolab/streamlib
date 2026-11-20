@@ -5,7 +5,7 @@ use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::rhi::{
     GraphicsBindingKind, GraphicsBindingSpec, GraphicsKernelDescriptor, GraphicsShaderStage,
-    GraphicsShaderStageFlags, reflect_spirv_without_its_debug_source_strings,
+    GraphicsShaderStageFlags, reflect_spirv_without_what_rspirv_refuses,
     refuse_a_binding_the_shader_left_unnamed, refuse_a_descriptor_set_other_than_set_0,
     refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
@@ -33,13 +33,12 @@ pub(super) fn validate_against_spirv(
 
     for stage in descriptor.stages {
         let stage_flag = stage_to_flag(stage.stage);
-        let reflection =
-            reflect_spirv_without_its_debug_source_strings(stage.spv).map_err(|e| {
-                Error::GpuError(format!(
-                    "Graphics kernel '{}': failed to reflect SPIR-V for {:?} stage: {e:?}",
-                    descriptor.label, stage.stage
-                ))
-            })?;
+        let reflection = reflect_spirv_without_what_rspirv_refuses(stage.spv).map_err(|e| {
+            Error::GpuError(format!(
+                "Graphics kernel '{}': failed to reflect SPIR-V for {:?} stage: {e:?}",
+                descriptor.label, stage.stage
+            ))
+        })?;
         subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
             &kernel_kind_label,
             graphics_stage_to_vk(stage.stage),
