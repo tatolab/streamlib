@@ -13,6 +13,7 @@ object. A named type holds no stored value: an input of one reads only what a li
 from __future__ import annotations
 
 import inspect
+import typing
 from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from typing import Any, Final, Optional, Protocol, Self, TypeVar, runtime_checkable
@@ -72,7 +73,7 @@ def named_pin_type(*, description: str) -> Callable[[_NamedPinTypeClass], _Named
         )
 
     def declare(declared_class: _NamedPinTypeClass) -> _NamedPinTypeClass:
-        if not inspect.isclass(declared_class):
+        if not inspect.isclass(typing.cast(object, declared_class)):
             raise TypeError(
                 f"@named_pin_type goes on a class, and was put on {declared_class!r}. To fix: "
                 f"decorate the class whose values the pins carry."

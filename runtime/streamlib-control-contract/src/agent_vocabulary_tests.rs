@@ -234,7 +234,7 @@ fn the_places_an_agent_reads_a_leaving_word() -> Vec<String> {
         )
     {
         let name = entry["name"].as_str().expect("an entry name");
-        let place = format!("{name}");
+        let place = name.to_string();
         walk.read_text(&place, name);
         for field in ["summary", "description"] {
             if let Some(text) = entry[field].as_str() {
