@@ -214,6 +214,7 @@ impl GraphVariablesAsDrawn {
                 pin_default: None,
                 pin: None,
                 annotations: crate::core::descriptors::PinAnnotations::default(),
+                takes_a_wire: None,
                 value_read: None,
             };
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;

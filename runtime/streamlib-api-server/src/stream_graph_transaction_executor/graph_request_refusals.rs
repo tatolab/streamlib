@@ -400,6 +400,7 @@ impl GraphTransactionRefusal {
                     code_and_place.refusal_code,
                     ControlOperationRefusalCode::InputTakesNoWire
                         | ControlOperationRefusalCode::LinkStreamsIntoASetting
+                        | ControlOperationRefusalCode::LinkFromAFunctionNodeIntoASetting
                 )
             })
             .map(|link| link.target.node.clone());

@@ -454,9 +454,14 @@ pub struct PortDescriptorOutput {
 }
 
 impl PortDescriptorOutput {
-    /// Whether a link may end at this input: every input but a setting read each run.
+    /// Whether a link may end at this input, by the one rule
+    /// [`crate::core::descriptors::an_input_takes_a_wire`].
     pub fn takes_a_wire(&self) -> bool {
-        self.input_mode.is_none_or(NodeInputMode::takes_a_wire)
+        let pin_type = self.pin.as_ref().and_then(|pin| match &pin.pin_type {
+            crate::core::descriptors::DeclaredPinType::Is { pin_type } => Some(pin_type),
+            _ => None,
+        });
+        crate::core::descriptors::an_input_takes_a_wire(self.input_mode, pin_type)
     }
 
     /// The input a config field of a node type not yet typed is: a setting read
@@ -569,7 +574,7 @@ fn ports_rendered_over_their_settled_contracts(
             .ports
             .inputs
             .iter()
-            .map(|port| input_port_rendered_over_any_settled_contract(port, settled))
+            .map(|port| input_port_rendered_over_any_settled_contract(node, port, settled))
             .collect(),
         outputs: node
             .ports
@@ -585,13 +590,17 @@ fn ports_rendered_over_their_settled_contracts(
     }
 }
 
-/// One input port, with a `match_device` declaration replaced by whatever its own device stream
-/// settled it to.
+/// One input port of `node`, saying whether a link may end at it, with a `match_device`
+/// declaration replaced by whatever its own device stream settled it to.
 fn input_port_rendered_over_any_settled_contract(
+    node: &crate::core::graph::GraphNode,
     port: &crate::core::graph::PortInfo,
     settled: Option<&crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort>,
 ) -> GraphNodePortOnTheWire {
-    let mut rendered = GraphNodePortOnTheWire::from(port);
+    let mut rendered = GraphNodePortOnTheWire {
+        takes_a_wire: Some(port.takes_a_wire_on_a_node_of(node.node_type())),
+        ..GraphNodePortOnTheWire::from(port)
+    };
     if !matches!(
         rendered.audio_window,
         Some(crate::core::descriptors::AudioWindowContract::MatchDevice {})
@@ -629,6 +638,7 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
             annotations: port.annotations.0.clone(),
+            takes_a_wire: None,
             value_read: None,
         }
     }

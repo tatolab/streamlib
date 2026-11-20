@@ -6,8 +6,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::NodeTypeInputMod
 
 use super::NodeTypePortsDescribedOnTheWire;
 use crate::core::descriptors::{
-    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
-    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
+    NodeKind, PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    SettingReadTime,
 };
 
 /// A node type of `node_kind` with one String input, `label`, that carries Records.
@@ -92,6 +93,70 @@ fn an_input_whose_pin_type_takes_no_wire_is_described_as_a_setting() {
         Some(NodeTypeInputMode::SettingOnly)
     );
     assert!(described.inputs[0].value_json_schema.is_some());
+    assert!(!described.inputs[0].takes_a_wire);
+}
+
+/// Each input says whether it takes a wire as the link check rules: an input read each run and
+/// a setting read at setup take one; a setting read each run, and every setting of a
+/// `GraphInput`, take none.
+///
+/// Mental-revert: reading the mark from the mode alone says a `GraphInput`'s `port` takes one.
+#[test]
+fn each_input_says_whether_it_takes_a_wire_as_the_link_check_rules() {
+    let float = || PinDeclaration::exactly(PinType::Float { exact_size: None });
+    let an_input = |name: &str, mode: NodeInputMode| {
+        PortDescriptor::new(
+            name,
+            "",
+            false,
+            PortFamilyDeclaration::of_family(PortFamily::Records),
+        )
+        .with_pin_declaration(float())
+        .with_input_mode(mode)
+    };
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new("Blur").unwrap(),
+        NodeClassImportPath::new("nodes.blur:Blur").unwrap(),
+        "",
+    )
+    .with_input(an_input("amount", NodeInputMode::WireOrValue))
+    .with_input(an_input(
+        "radius",
+        NodeInputMode::SettingOnly {
+            read: SettingReadTime::AtSetup,
+        },
+    ))
+    .with_input(an_input(
+        "gain",
+        NodeInputMode::SettingOnly {
+            read: SettingReadTime::EachRun,
+        },
+    ));
+
+    let takes_a_wire: Vec<(String, bool)> = NodeTypePortsDescribedOnTheWire::of(&descriptor)
+        .inputs
+        .into_iter()
+        .map(|input| (input.port.name, input.takes_a_wire))
+        .collect();
+    assert_eq!(
+        takes_a_wire,
+        [
+            ("amount".to_owned(), true),
+            ("radius".to_owned(), true),
+            ("gain".to_owned(), false),
+        ]
+    );
+
+    let graph_input = NodeTypePortsDescribedOnTheWire::of(
+        &crate::core::nodes::graph_interface_node_types::the_node_type_of_a_graph_input()
+            .expect("the GraphInput node type"),
+    );
+    let port = graph_input
+        .inputs
+        .iter()
+        .find(|input| input.port.name == "port")
+        .expect("a GraphInput has a `port` setting");
+    assert!(!port.takes_a_wire, "a GraphInput's settings take no wire");
 }
 
 /// A config field of a type not yet typed carries its schema's range into the value schema its

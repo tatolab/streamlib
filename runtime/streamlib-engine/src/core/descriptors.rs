@@ -23,7 +23,7 @@ pub use streamlib_node_schema::pin_type::{
     PinDeclaration, PinFlow, PinLinkEnd, PinLinkEndNamed, PinLinkInputEnd, PinLinkOutcome,
     PinLinkRefusal, PinLinkVerdict, PinLinkWarning, PinNumberRange, PinProjectAssetAnnotation,
     PinType, PinValueNotTaken, ProjectAssetMedia, ResolvedPin, SettingReadTime, TexturePixelFormat,
-    VectorComponentCount, built_in_pin_type, pin_link_verdict,
+    VectorComponentCount, an_input_takes_a_wire, built_in_pin_type, pin_link_verdict,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

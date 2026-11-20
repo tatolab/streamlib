@@ -195,8 +195,10 @@ fn verdict_between(
     conversions: &[PinConversion],
 ) -> PinLinkVerdict {
     if matches!(input.pin_type, PinTypeInItsGraph::Any) {
-        // An input of any type takes the output's own, judged by its mode and its flow alone.
-        if let Some(output_pin_type) = output.the_types_it_may_carry().first() {
+        // A setting of any type takes the output's own, judged by its mode and its flow alone.
+        if input.port.is_a_setting()
+            && let Some(output_pin_type) = output.the_types_it_may_carry().first()
+        {
             return pin_link_verdict(
                 output.link_end(output_pin_type),
                 PinLinkInputEnd {

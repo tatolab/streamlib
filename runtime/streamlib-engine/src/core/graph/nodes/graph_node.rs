@@ -233,14 +233,9 @@ impl GraphNode {
     /// declares its stream's interface rather than running on a value.
     pub(crate) fn refuse_a_link_into_a_setting(&self, input: &str) -> crate::core::Result<()> {
         match self.input_port(input) {
-            Some(port)
-                if !port.takes_a_wire() || (self.is_a_graph_input() && port.is_a_setting()) =>
-            {
-                Err(the_refusal_of_a_link_into_a_setting(
-                    &port.name,
-                    &self.display_name,
-                ))
-            }
+            Some(port) if !port.takes_a_wire_on_a_node_of(&self.node_type) => Err(
+                the_refusal_of_a_link_into_a_setting(&port.name, &self.display_name),
+            ),
             _ => Ok(()),
         }
     }
@@ -260,18 +255,13 @@ impl GraphNode {
             Some(kind @ (NodeKind::Function { .. } | NodeKind::Shader))
                 if into_a_setting_read_at_setup =>
             {
-                Err(crate::core::Error::InvalidLink(format!(
-                    "a link from {} node `{}` enters setting `{input}` of `{}`; a {0} node's \
-                     value is worked out inside the read of each node it feeds, and a setting is \
-                     read by no run. To fix: link a node that is no function or shader node, \
-                     or set the setting's value with `set_node_input_value`",
-                    if matches!(kind, NodeKind::Shader) {
-                        "shader"
-                    } else {
-                        "function"
+                Err(crate::core::Error::PinLinkRefused(Box::new(
+                    crate::core::descriptors::PinLinkRefusal::ComputedValueIntoASetting {
+                        output_node_name: self.display_name.clone(),
+                        output_node_kind: kind,
+                        node_name: reader.display_name.clone(),
+                        input_name: input.to_owned(),
                     },
-                    self.display_name,
-                    reader.display_name,
                 )))
             }
             _ => Ok(()),
