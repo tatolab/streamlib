@@ -4,8 +4,9 @@
 use iceoryx2::prelude::*;
 
 use crate::{
-    ArrayFrameDescriptorBody, ChannelsBlockDescriptorBody, GpuPoolSlotFrameDescriptorBody,
-    ImageFrameDescriptorBody, PacketsUnitCodecNameDoesNotFit, PacketsUnitDescriptorBody,
+    ArrayFrameDescriptorBody, BundleFrameDescriptorBody, ChannelsBlockDescriptorBody,
+    GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody, PacketsUnitCodecNameDoesNotFit,
+    PacketsUnitDescriptorBody,
 };
 
 /// Whether a message opens a group or continues the one before it, carried in
@@ -204,6 +205,10 @@ pub enum DataChannelPayloadDescriptorKind {
     /// An Array frame; the body is an [`ArrayFrameDescriptorBody`] and the
     /// payload starts with its attribute table, then each CPU attribute's data.
     ArrayFrame = 6,
+    /// A Bundle frame: a bundle or a List holding a Texture, Audio or an
+    /// encoded unit. The body is a [`BundleFrameDescriptorBody`] and the
+    /// payload starts with its row table, then each row's bytes.
+    BundleFrame = 7,
 }
 
 impl DataChannelPayloadDescriptorKind {
@@ -217,6 +222,7 @@ impl DataChannelPayloadDescriptorKind {
             4 => Some(Self::PacketsUnit),
             5 => Some(Self::RecordsMessage),
             6 => Some(Self::ArrayFrame),
+            7 => Some(Self::BundleFrame),
             _ => None,
         }
     }
@@ -289,6 +295,14 @@ impl DataChannelPayloadDescriptor {
     pub fn array_frame(body: ArrayFrameDescriptorBody) -> Self {
         Self {
             kind: DataChannelPayloadDescriptorKind::ArrayFrame as u32,
+            body: body.to_descriptor_body(),
+        }
+    }
+
+    /// The descriptor of a Bundle frame.
+    pub fn bundle_frame(body: BundleFrameDescriptorBody) -> Self {
+        Self {
+            kind: DataChannelPayloadDescriptorKind::BundleFrame as u32,
             body: body.to_descriptor_body(),
         }
     }

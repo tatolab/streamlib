@@ -184,6 +184,23 @@ fn a_flow_its_type_allows_is_taken_and_any_other_is_refused_by_name() {
              flows as `value` or `stream`"
         )
     );
+    assert_eq!(
+        declared_with_flow(bundle_of(vec![float(), texture()]), PinFlow::Value)
+            .refusal_of_its_flow("still"),
+        None
+    );
+    assert_eq!(
+        declared_with_flow(
+            bundle_of(vec![texture(), PinType::Audio {}]),
+            PinFlow::Value
+        )
+        .refusal_of_its_flow("take")
+        .as_deref(),
+        Some(
+            "port `take` states the flow `value`, which the Bundle type does not allow, as it \
+             holds member `member_1` of the Audio type; it flows as `stream`"
+        )
+    );
     let one_of_a_picture_or_sound = PinDeclaration {
         pin_type: DeclaredPinType::OneOf {
             pin_types: vec![texture(), PinType::Audio {}],
