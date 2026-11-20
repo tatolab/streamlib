@@ -12,16 +12,20 @@ third of the camera's rate shows its last frame rather than a gap.
 from __future__ import annotations
 
 import struct
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrame,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -69,18 +73,32 @@ def pip_slide_progress_at(elapsed_seconds: float) -> float:
 
 
 @node.meta(description="Three-layer compositor with a sliding picture-in-picture")
-@node.process
+@node
 class BreakingNewsCompositor:
     """Video underneath, overlay over it, the android's stage inside the PiP."""
 
-    video_from_upstream = Input(Image, delivery="newest", description="The graded camera video")
-    overlay_from_neon_source = Input(
-        Image, delivery="newest", description="The premultiplied skia overlay"
-    )
-    avatar_from_pose_scene = Input(
-        Image, delivery="newest", description="The android's stage, for the picture-in-picture"
-    )
-    video_to_downstream = Output(Image, description="The three layers composited")
+    video_from_upstream: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("The graded camera video")]
+    ]
+    overlay_from_neon_source: InputPin[
+        Annotated[
+            Texture, StreamDelivery("newest"), Description("The premultiplied skia overlay")
+        ]
+    ]
+    avatar_from_pose_scene: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description("The android's stage, for the picture-in-picture"),
+        ]
+    ]
+    video_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The three layers composited"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
@@ -105,15 +123,15 @@ class BreakingNewsCompositor:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        video = ctx.inputs.read(self.video_from_upstream)
+        video = self.video_from_upstream.read()
         if video is None:
             return
         elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
 
-        newer_overlay = ctx.inputs.read(self.overlay_from_neon_source)
+        newer_overlay = self.overlay_from_neon_source.read()
         if newer_overlay is not None:
             self.latest_overlay = newer_overlay
-        newer_avatar_scene = ctx.inputs.read(self.avatar_from_pose_scene)
+        newer_avatar_scene = self.avatar_from_pose_scene.read()
         if newer_avatar_scene is not None:
             self.latest_avatar_scene = newer_avatar_scene
 
@@ -151,8 +169,7 @@ class BreakingNewsCompositor:
                 elapsed_seconds,
             ),
         )
-        ctx.outputs.write(
-            self.video_to_downstream,
+        self.video_to_downstream.write(
             ImageFrameToWrite.of_texture(composited, video.colour),
             timestamp_ns=video.timestamp_ns,
         )

@@ -12,19 +12,23 @@ nobody in frame the android glides into an idle sway.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Annotated
 
 import numpy
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrame,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
-    Records,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
@@ -48,7 +52,7 @@ from ..gpu_surface_conventions import (
     copy_host_pixels_into_ring_texture,
 )
 from ..pose_tracking import PoseSample, PoseTracker
-from ..solved_pose_record import SOLVED_POSE_RECORD_NAMES, PoseProvenance, SolvedPoseRecord
+from ..solved_pose_record import PoseProvenance, SolvedPose, SolvedPoseRecord
 
 # Every second pixel of a 1080p frame — 960x540. The detector resizes
 # internally, but a desk-framed torso at 640 wide was marginal for it; the
@@ -59,34 +63,48 @@ CAMERA_DECIMATION_STRIDE = 2
 TRACKING_ACCOUNTING_EVERY_FRAMES = 300
 
 
-@dataclass
-class CyberpunkAvatarConfig:
-    """CyberpunkAvatar's settings, as its node's config in the graph document spells them."""
-
-    scene_width: int = 960
-    scene_height: int = 675
-    detection_confidence: float = 0.35
-    pose_model_path: str | None = None
-
-
 @node.meta(description="3D android on a neon stage, dancing your pose")
-@node.process
+@node
 class CyberpunkAvatar:
-    """Camera frame in, rendered avatar stage out."""
+    """Camera frame in, rendered avatar stage out.
 
-    def __init__(self, config: CyberpunkAvatarConfig) -> None:
-        self.scene_width = config.scene_width
-        self.scene_height = config.scene_height
-        self.detection_confidence = config.detection_confidence
-        self.pose_model_path = config.pose_model_path
+    Each setting is read at setup, where the tracker and the stage are built, so a change
+    builds them again.
+    """
 
-    video_from_camera = Input(Image, delivery="newest", description="Frames from the camera")
-    scene_to_downstream = Output(Image, description="The android's rendered stage")
-    pose_to_downstream = Output(
-        Records,
-        names=SOLVED_POSE_RECORD_NAMES,
-        description="The resolved pose as data: joints, visibility, provenance",
-    )
+    scene_width: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The stage's width in pixels.")
+    ] = 960
+    scene_height: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The stage's height in pixels.")
+    ] = 675
+    detection_confidence: Annotated[
+        float,
+        SettingOnly(),
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("How sure the pose detector must be before it reports a person."),
+    ] = 0.35
+    pose_model_path: Annotated[
+        str | None,
+        SettingOnly(),
+        Description("A MediaPipe pose model to load; the default model, fetched once, when unset."),
+    ] = None
+    video_from_camera: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
+    ]
+    scene_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The android's rendered stage"),
+        ]
+    ]
+    pose_to_downstream: OutputPin[
+        Annotated[
+            SolvedPose,
+            Description("The resolved pose as data: joints, visibility, provenance"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # The one setup step that can touch the network (the model fetch, on
@@ -117,7 +135,7 @@ class CyberpunkAvatar:
         self.a_tracker_failure_has_been_reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_camera)
+        frame = self.video_from_camera.read()
         if frame is None:
             return
         elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
@@ -174,10 +192,8 @@ class CyberpunkAvatar:
                 else {}
             ),
         }
-        ctx.outputs.write(
-            self.pose_to_downstream,
-            dict(solved_pose_record),
-            timestamp_ns=frame.timestamp_ns,
+        self.pose_to_downstream.write(
+            SolvedPose(solved_pose_record), timestamp_ns=frame.timestamp_ns
         )
 
         scene_pixels = self.scene_renderer.render(
@@ -189,8 +205,7 @@ class CyberpunkAvatar:
         )
         copy_host_pixels_into_ring_texture(scene_texture, scene_pixels)
 
-        ctx.outputs.write(
-            self.scene_to_downstream,
+        self.scene_to_downstream.write(
             ImageFrameToWrite.of_texture(scene_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=frame.timestamp_ns,
         )

@@ -14,16 +14,20 @@ the write — is here so each effect module is only its effect.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Annotated, ClassVar
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrame,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
 )
 
 from .elapsed_seconds_since_first_process import ElapsedSecondsSinceFirstProcess
@@ -49,8 +53,8 @@ _CLASS_ATTRIBUTES_EVERY_EFFECT_DECLARES = {
 class SinglePassVideoEffect(ABC):
     """Base for an effect that is one fragment shader over one input frame."""
 
-    fragment_shader_file_name: str
-    push_constant_size: int
+    fragment_shader_file_name: ClassVar[str]
+    push_constant_size: ClassVar[int]
 
     def __init_subclass__(cls, **class_keywords: object) -> None:
         super().__init_subclass__(**class_keywords)
@@ -69,8 +73,18 @@ class SinglePassVideoEffect(ABC):
                 f"`push_constants_for(self, frame, elapsed_seconds) -> bytes`"
             )
 
-    video_from_upstream = Input(Image, delivery="newest", description="The frame to draw the effect over")
-    video_to_downstream = Output(Image, description="The same frame through the effect")
+    video_from_upstream: InputPin[
+        Annotated[
+            Texture, StreamDelivery("newest"), Description("The frame to draw the effect over")
+        ]
+    ]
+    video_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The same frame through the effect"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
@@ -87,7 +101,7 @@ class SinglePassVideoEffect(ABC):
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is None:
             return
         elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
@@ -102,8 +116,7 @@ class SinglePassVideoEffect(ABC):
             vertex_count=3,
             push_constants=self.push_constants_for(frame, elapsed_seconds),
         )
-        ctx.outputs.write(
-            self.video_to_downstream,
+        self.video_to_downstream.write(
             ImageFrameToWrite.of_texture(color_target, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
