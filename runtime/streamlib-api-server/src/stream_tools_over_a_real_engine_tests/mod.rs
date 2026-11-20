@@ -73,6 +73,7 @@ mod renamed_pin_tests;
 mod stream_input_of_a_playing_stream_tests;
 mod stream_listing_actions_and_record_tests;
 mod stream_named_by_its_id_tests;
+mod texture_format_convert_inserted_on_a_link_tests;
 mod trigger_fire_tests;
 mod typed_pin_link_tests;
 mod venv_sync_stream_action_resource_tests;
