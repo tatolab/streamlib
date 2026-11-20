@@ -125,7 +125,7 @@ def function_node_run_as_python_in_its_reader(
             raise FunctionNodeDoesNotCompile(
                 f"{import_path}'s port `{each_port['port']}` is {each_port['value_type']}, and a "
                 f"function node carries numbers, bools, Colors, Vectors, Rectangles, Transforms, "
-                f"Strings, Menus, Assets, Lists, named types and dicts in this release. To fix: make it one "
+                f"Strings, Menus, Assets, Lists, bundles, named types and dicts in this release. To fix: make it one "
                 f"of them."
             )
     for each_input in function_signature["inputs"]:

@@ -20,7 +20,9 @@ Bare `@node` reads the same signature in the typed grammar: each pin is read by
 `read_pin_declaration` into the pin type it declares and what it states besides,
 which its port carries to the runtime as `pin_declaration`, and no spelling of
 the family grammar is read there. One returned value is the output `result`, and
-a `NamedTuple` one output per field. A pin typed by a type parameter of the
+a `NamedTuple` one output per field. A frozen dataclass, taken or returned, is one
+bundle pin whose members are its fields, and the signature names the dataclass
+so the body is handed one and gives one back. A pin typed by a type parameter of the
 function, `def Gate[PinValue](value: PinValue) -> PinValue`, hands on unread what
 its link brings, as an `UnreadMessage` does, and its output takes the type linked
 into its input.
@@ -48,6 +50,7 @@ from ._node_meta_declaration import (
     take_node_meta_held_for_the_kind_decorator,
     the_conversion_a_node_states,
 )
+from ._bundle_pin_type import dataclass_a_bundle_pin_is_written_as
 from ._pin_declaration import (
     NO_DEFAULT,
     DeclaredPin,
@@ -113,6 +116,7 @@ _SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME: "dict[str, str]" = {
     "menu": "menu",
     "asset": "asset",
     "list_of": "list_of",
+    "bundle": "bundle",
     "named": "named",
 }
 
@@ -511,6 +515,7 @@ class _FunctionNodeSignatureReading:
             declared.declaration
         ):
             signature_input["pin_type"] = _the_pin_type_a_pin_declares(declared.declaration)
+            self._state_the_dataclass_of_a_bundle(signature_input, parameter.name, annotation)
         signature_input["optional"] = declared.optional
         input_port: "dict[str, Any]" = {
             "name": port_name,
@@ -523,6 +528,30 @@ class _FunctionNodeSignatureReading:
             input_port["pin_default"] = declared.default_value
         self._signature_inputs.append(signature_input)
         self.input_ports.append(input_port)
+
+    def _state_the_dataclass_of_a_bundle(
+        self, signature_entry: "dict[str, Any]", pin_name: str, annotation: Any
+    ) -> None:
+        """Name on `signature_entry` the dataclass its bundle, or its List's bundle elements,
+        are written as, `module:QualifiedName`, which the body is handed and gives back."""
+        pin_type = signature_entry["pin_type"]
+        if pin_type["type"] == "list_of":
+            pin_type = pin_type["element_type"]
+        if pin_type["type"] != "bundle":
+            return
+        bundle_class = dataclass_a_bundle_pin_is_written_as(annotation)
+        assert bundle_class is not None, "a bundle pin is written as a dataclass"
+        if _FUNCTION_LOCAL_MARKER in bundle_class.__qualname__.split("."):
+            raise NodeDeclarationRefusal(
+                f"`{self._function_name}`'s pin `{pin_name}` is typed `{bundle_class.__name__}`, "
+                f"a dataclass declared inside a function, which the node's reader does not "
+                f"find by its import path. To fix: declare `{bundle_class.__name__}` at the top "
+                f"level of its module.",
+                finding_code="pin_type_unknown",
+                node=self._function_name,
+                pin=pin_name,
+            )
+        signature_entry["bundle_class"] = f"{bundle_class.__module__}:{bundle_class.__qualname__}"
 
     def _pin_default(self, parameter: inspect.Parameter, pin_value_type: str) -> Any:
         default = parameter.default
@@ -548,7 +577,7 @@ class _FunctionNodeSignatureReading:
         )
         if returned_description is not None and (
             typing.get_origin(returned_without_it) is Stateful
-            or _is_a_record_of_outputs(returned_without_it)
+            or (not self._reads_pin_types and _is_a_record_of_outputs(returned_without_it))
             or (self._reads_pin_types and _is_a_named_tuple(returned_without_it))
         ):
             raise TypeError(
@@ -722,16 +751,6 @@ class _FunctionNodeSignatureReading:
                 node=self._function_name,
                 pin=output_name,
             )
-        if _is_a_record_of_outputs(value_annotation) and value_annotation not in PIN_VALUE_CLASSES:
-            raise NodeDeclarationRefusal(
-                f"`{self._function_name}`'s output `{output_name}` is typed "
-                f"{_name_of(value_annotation)}, a dataclass, which the typed grammar does not "
-                f"read as a bundle yet. To fix: return a `NamedTuple` for several outputs, or "
-                f"keep this node on `@node.function` until it does.",
-                finding_code="return_not_read_yet",
-                node=self._function_name,
-                pin=output_name,
-            )
         port_name = self._cast_port_name(output_name)
         declared = read_pin_declaration(
             self._function_name,
@@ -754,6 +773,7 @@ class _FunctionNodeSignatureReading:
         }
         if signature_output["value_type"] != UNREAD_MESSAGE_VALUE_TYPE:
             signature_output["pin_type"] = _the_pin_type_a_pin_declares(declared.declaration)
+            self._state_the_dataclass_of_a_bundle(signature_output, output_name, output_annotation)
         signature_output["may_hand_out_nothing"] = declared.optional
         return output_port, signature_output
 

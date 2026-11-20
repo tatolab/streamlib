@@ -304,10 +304,6 @@ def Split(x: float = 0.0) -> Corners:
     return Corners(x, x)
 
 
-def Record(x: float = 0.0) -> Smoothed:
-    return Smoothed(x)
-
-
 def Configured(x: float = 0.0, config: Smoothed = Smoothed()) -> float:
     return x
 
@@ -389,9 +385,8 @@ def test_a_wide_integer_any_and_an_unknown_type_are_refused() -> None:
     assert refusal_of(Fields).finding_code == "pin_type_unknown"
 
 
-def test_a_bundle_and_a_config_are_refused_until_they_are_read() -> None:
+def test_a_named_tuple_names_its_outputs_and_a_config_is_refused() -> None:
     assert node(Split) is not None, "a named tuple names its outputs"
-    assert refusal_of(Record).finding_code == "return_not_read_yet"
     assert refusal_of(Configured).finding_code == "parameter_not_a_pin"
 
 
