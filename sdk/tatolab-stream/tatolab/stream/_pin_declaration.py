@@ -13,7 +13,9 @@ finding code, the node and the pin, so the declaration check can answer it as da
 A pin whose type its link finds is wire only and takes no default: `object` and an unbounded
 type parameter take any type, a union and a type parameter bounded by one take each of its
 types, and an output typed by a type parameter takes the type linked into the one input that
-parameter types.
+parameter types. A type only a pin carries, such as `Texture`, holds no stored value, so a
+function takes it only as a type parameter's bound, whose value its body hands on unread, and
+only when it flows as a Value, since a function reads the newest message on each input.
 """
 
 from __future__ import annotations
@@ -435,22 +437,26 @@ class _PinReading:
     ) -> "tuple[DeclaredPinType, PinFlow]":
         if type_parameter is not None:
             if type_parameter.__constraints__:
-                return self._one_of(type_parameter.__constraints__)
+                return self._one_of(type_parameter.__constraints__, bounding_a_type_parameter=True)
             bound = type_parameter.__bound__
             if bound is None or bound is object:
                 return {"kind": "any"}, "value"
             if _is_a_union(bound):
-                return self._one_of(typing.get_args(bound))
-            pin_type = self._a_member_pin_type(bound)
-            return {"kind": "is", "pin_type": pin_type}, _the_default_flow_of(pin_type)
+                return self._one_of(typing.get_args(bound), bounding_a_type_parameter=True)
+            pin_type = self._a_member_pin_type(bound, bounding_a_type_parameter=True)
+            return {"kind": "is", "pin_type": pin_type}, _the_flow_a_function_input_reads(pin_type)
         if written_type is object:
             return {"kind": "any"}, "value"
         return self._one_of(typing.get_args(written_type))
 
-    def _one_of(self, members: "Sequence[object]") -> "tuple[DeclaredPinType, PinFlow]":
+    def _one_of(
+        self, members: "Sequence[object]", *, bounding_a_type_parameter: bool = False
+    ) -> "tuple[DeclaredPinType, PinFlow]":
         pin_types: list[PinType] = []
         for member in members:
-            pin_type = self._a_member_pin_type(member)
+            pin_type = self._a_member_pin_type(
+                member, bounding_a_type_parameter=bounding_a_type_parameter
+            )
             if pin_type in pin_types:
                 raise self._refusal(
                     f"{self._pin_named} is typed one of several types, and names "
@@ -458,10 +464,16 @@ class _PinReading:
                     "pin_annotation_repeated",
                 )
             pin_types.append(pin_type)
-        return {"kind": "one_of", "pin_types": pin_types}, _the_default_flow_of(pin_types[0])
+        return {"kind": "one_of", "pin_types": pin_types}, _the_flow_a_function_input_reads(
+            pin_types[0]
+        )
 
-    def _a_member_pin_type(self, member: object) -> PinType:
-        """The pin type one type of a union or a type parameter's bound names."""
+    def _a_member_pin_type(self, member: object, *, bounding_a_type_parameter: bool) -> PinType:
+        """The pin type one type of a union or a type parameter's bound names.
+
+        A type parameter's bound may name a type only a pin carries: its value is handed on
+        unread, so the body never holds it as a value.
+        """
         member_type, metadata, optional = self._written_type_metadata_and_optional(member)
         if optional or member_type is object or isinstance(member_type, typing.TypeVar) or (
             member_type is typing.Any
@@ -478,7 +490,11 @@ class _PinReading:
                     f"carries {entry!r}, which only a pin of one type takes. To fix: drop it.",
                     "pin_annotation_not_taken",
                 )
-        return self._pin_type_of(member_type, self._exact_size_among(metadata))
+        return self._pin_type_of(
+            member_type,
+            self._exact_size_among(metadata),
+            bounding_a_type_parameter=bounding_a_type_parameter,
+        )
 
     def _output_pin_type_found_from_an_input(
         self,
@@ -563,11 +579,18 @@ class _PinReading:
         exact_size: Optional[ExactNumberSize],
         *,
         as_an_element: bool = False,
+        bounding_a_type_parameter: bool = False,
     ) -> PinType:
         written_form = self._written_form_of(written_type, exact_size)
         spelling = pin_type_spelling_written_as(written_form)
         row = _PIN_TYPE_DESCRIPTION_BY_NAME[spelling.pin_type_name]
-        if spelling.only_a_pin_carries and (self._form != "pin" or as_an_element):
+        if spelling.only_a_pin_carries and bounding_a_type_parameter and "value" not in row.flows:
+            raise self._refusal_of_a_bound_that_flows_as_no_value(row)
+        if (
+            spelling.only_a_pin_carries
+            and not bounding_a_type_parameter
+            and (self._form != "pin" or as_an_element)
+        ):
             raise self._refusal_of_a_type_only_a_pin_carries(row, as_an_element=as_an_element)
         if spelling.not_read_yet_because is not None:
             typed_as = (
@@ -621,13 +644,33 @@ class _PinReading:
                 f"`{self._pin_name}: InputPin[{row.python_forms[0]}]`.",
                 "field_typed_as_a_stream",
             )
+        written_form = row.python_forms[0]
+        class_node = f"declare a class node with `{self._pin_name}: InputPin[{written_form}]`"
+        if "value" not in row.flows:
+            why_and_fix = f"only a class node's pin carries it. To fix: {class_node}"
+        else:
+            why_and_fix = (
+                f"a function under bare `@node` takes it only through a type parameter bound to "
+                f"it, whose value its body hands on unread. To fix: `def {self._node}[Carried: "
+                f"{written_form}]({self._pin_name}: Carried, ...) -> Carried`, or {class_node} "
+                f"to read it"
+            )
         return self._refusal(
-            f"{self._pin_named} is typed `{row.python_forms[0]}`, a {row.label}, which a "
-            f"function under bare `@node` does not take: it holds no stored value, so only a "
-            f"class node's pin carries it. To fix: keep this node on `@node.function`, or "
-            f"declare a class node with "
-            f"`{self._pin_name}: InputPin[{row.python_forms[0]}]`.",
+            f"{self._pin_named} is typed `{written_form}`, a {row.label}, which holds no stored "
+            f"value, so {why_and_fix}.",
             "pin_type_not_read_yet",
+        )
+
+    def _refusal_of_a_bound_that_flows_as_no_value(
+        self, row: PinTypeDescription
+    ) -> NodeDeclarationRefusal:
+        written_form = row.python_forms[0]
+        return self._refusal(
+            f"{self._pin_named} is typed by a type parameter bound to `{written_form}`, a "
+            f"{row.label}, which flows only as {' or '.join(f'a {flow}' for flow in row.flows)}, "
+            f"and a function reads the newest message on each input, so it would drop the rest. "
+            f"To fix: declare a class node with `{self._pin_name}: InputPin[{written_form}]`.",
+            "pin_flow_not_taken",
         )
 
     def _menu_pin_type_of(self, written_type: object) -> PinType:
@@ -877,6 +920,12 @@ _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
 )
 
 
+# The pin types that hold no stored value, so only a pin carries them.
+_PIN_TYPE_NAMES_ONLY_A_PIN_CARRIES: Final[frozenset[str]] = frozenset(
+    spelling.pin_type_name for spelling in PIN_TYPE_SPELLINGS if spelling.only_a_pin_carries
+)
+
+
 def _written_forms_a_list_element_takes() -> str:
     return ", ".join(
         f"`{spelling.written_form}`"
@@ -925,7 +974,11 @@ def _spellings_read_today() -> str:
     return ", ".join(read_today)
 
 
-def _the_default_flow_of(pin_type: PinType) -> PinFlow:
+def _the_flow_a_function_input_reads(pin_type: PinType) -> PinFlow:
+    """How a function's input of `pin_type` reads: a type only a pin carries as a Value, since a
+    function reads the newest message on each input, and any other type by its first flow."""
+    if pin_type["type"] in _PIN_TYPE_NAMES_ONLY_A_PIN_CARRIES:
+        return "value"
     return _PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]].flows[0]
 
 

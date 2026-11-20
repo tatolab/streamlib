@@ -329,6 +329,21 @@ fn two_named_types_connect_only_under_one_path() {
     ));
 }
 
+/// A number is no picture: a link from any number into a Texture input is refused, as into Hold
+/// Frame's `frame`.
+#[test]
+fn a_number_into_a_texture_is_refused() {
+    for output in [boolean(), integer(), float()] {
+        assert!(
+            matches!(
+                the_outcome_between(&output, &texture(&[])),
+                PinLinkOutcome::Refused(_)
+            ),
+            "{output}"
+        );
+    }
+}
+
 #[test]
 fn different_meanings_warn_and_never_block() {
     let verdict = pin_link_verdict(

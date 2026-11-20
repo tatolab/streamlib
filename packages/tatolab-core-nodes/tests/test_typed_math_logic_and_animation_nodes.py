@@ -3,7 +3,7 @@
 
 """The math, logic and animation nodes are declared in the typed form: every pin states its pin
 type, Compare hands out its three outputs from a named tuple, and Gate and Hold Frame hand on
-the type linked into their input."""
+the type linked into their input, Gate of any type and Hold Frame only a Texture."""
 
 from __future__ import annotations
 
@@ -60,11 +60,17 @@ def test_compare_hands_out_each_field_of_its_named_tuple():
 @pytest.mark.parametrize(("declared", "input_port"), [(Gate, "value"), (HoldFrame, "frame")])
 def test_gate_and_hold_frame_hand_on_the_type_linked_into_their_input(declared: Any, input_port: str):
     ports = ports_of(declared)
-    assert ports[input_port]["pin_declaration"]["pin_type"] == {"kind": "any"}
     assert ports["result"]["pin_declaration"]["pin_type"] == {
         "kind": "same_as_input",
         "input_port_name": input_port,
     }
+
+
+def test_gate_takes_any_type_and_hold_frame_takes_only_pictures():
+    assert ports_of(Gate)["value"]["pin_declaration"]["pin_type"] == {"kind": "any"}
+    frame = ports_of(HoldFrame)["frame"]
+    assert frame["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "texture"}}
+    assert frame["family"] == {"family": "image"}, "a number's link, on Channels, finds no family here"
 
 
 def test_hold_frame_holds_the_first_frame_until_refresh_takes_a_newer_one():

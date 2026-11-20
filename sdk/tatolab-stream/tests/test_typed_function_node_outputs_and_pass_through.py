@@ -21,6 +21,10 @@ from tatolab.stream import (
     PinMeaning,
     State,
     Stateful,
+    Audio,
+    Tensor,
+    Texture,
+    Trigger,
     UnreadMessage,
     node,
 )
@@ -176,6 +180,84 @@ def test_a_bound_narrows_the_input_a_type_parameter_types() -> None:
         "may_be_unset": True,
     }
     assert level["pin_default"] is None
+
+
+@node
+def Freeze[Frame: Texture](frame: Frame | None = None) -> Frame | None:
+    return frame
+
+
+def test_a_type_parameter_bound_to_texture_takes_texture_links_and_hands_on_the_type_linked_in() -> None:
+    frame = inputs(Freeze)["frame"]
+    assert frame["pin_declaration"] == {
+        "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
+        "flow": "value",
+        "may_be_unset": True,
+    }
+    assert frame["family"] == {"family": "image"}
+    (result,) = outputs(Freeze).values()
+    assert result["pin_declaration"] == {
+        "pin_type": {"kind": "same_as_input", "input_port_name": "frame"},
+        "flow": "value",
+    }
+    assert result["family"] == {"family": "image", "family_follows_input_port": "frame"}
+    assert signature(Freeze)["inputs"][0] == {
+        "parameter": "frame",
+        "port": "frame",
+        "value_type": "unread_message",
+        "optional": True,
+        "default": None,
+    }, "the body is handed the frame unread"
+    assert signature(Freeze)["outputs"][0]["value_type"] == "unread_message"
+
+
+@node
+def PictureOrArray[Carried: (Texture, Tensor)](value: Carried) -> Carried:
+    return value
+
+
+def test_a_type_parameter_constrained_to_types_only_a_pin_carries_takes_each_as_a_value() -> None:
+    value = inputs(PictureOrArray)["value"]
+    assert value["pin_declaration"] == {
+        "pin_type": {"kind": "one_of", "pin_types": [{"type": "texture"}, {"type": "tensor"}]},
+        "flow": "value",
+    }
+
+
+def HoldsAPictureDirectly(frame: Texture | None = None) -> float:
+    return 0.0
+
+
+def HoldsAPictureOrANumberDirectly(frame: Texture | float | None = None) -> float:
+    return 0.0
+
+
+def test_a_parameter_typed_texture_directly_is_refused_naming_the_type_parameter_form() -> None:
+    for function in (HoldsAPictureDirectly, HoldsAPictureOrANumberDirectly):
+        refusal = refusal_of(function)
+        assert refusal.finding_code == "pin_type_not_read_yet", function
+        assert refusal.pin == "frame"
+        assert "through a type parameter bound to it" in str(refusal)
+        assert f"`def {function.__name__}[Carried: Texture](frame: Carried, ...) -> Carried`" in str(
+            refusal
+        )
+
+
+def HoldsAudio[Carried: Audio](samples: Carried) -> Carried:
+    return samples
+
+
+def HoldsATrigger[Carried: Trigger](fired: Carried) -> Carried:
+    return fired
+
+
+def test_a_bound_of_a_type_that_flows_as_no_value_is_refused() -> None:
+    for function, pin in ((HoldsAudio, "samples"), (HoldsATrigger, "fired")):
+        refusal = refusal_of(function)
+        assert refusal.finding_code == "pin_flow_not_taken", function
+        assert refusal.pin == pin
+        assert "reads the newest message on each input" in str(refusal)
+        assert "InputPin[" in str(refusal)
 
 
 @node
