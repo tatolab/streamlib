@@ -373,7 +373,13 @@ pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse
         return Ok(());
     };
     let convert_node_name = conversion.node_type.to_string();
-    let held = serde_json::Value::Object(convert_node.input_values.clone());
+    let held = crate::core::graph::the_values_port_facts_read(
+        Some(&serde_json::Value::Object(
+            convert_node.input_values.clone(),
+        )),
+        &ports.inputs,
+        &convert_node.input_values,
+    );
     let refusal = refusal_of_the_names_and_codec_a_link_carries(
         PortFamilyLinkEndpoint {
             node_name: &from_node.display_name,
@@ -381,7 +387,7 @@ pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse
             declaration: &output_port.family,
         },
         output_port.family.family,
-        from_node.config.as_ref(),
+        from_node.the_values_its_port_facts_read().as_ref(),
         PortFamilyLinkEndpoint {
             node_name: &convert_node_name,
             port_name: &into_it.name,
@@ -396,7 +402,7 @@ pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse
                 declaration: &out_of_it.family,
             },
             out_of_it.family.family,
-            Some(&held),
+            held.as_ref(),
             PortFamilyLinkEndpoint {
                 node_name: &to_node.display_name,
                 port_name: &input_port.name,
@@ -650,7 +656,7 @@ fn the_link_its_pin_types_or_families_take(
                     declaration: &output_port.family,
                 },
                 output_port.family.family,
-                from_node.config.as_ref(),
+                from_node.the_values_its_port_facts_read().as_ref(),
                 PortFamilyLinkEndpoint {
                     node_name: &to_node.display_name,
                     port_name: &input_port.name,

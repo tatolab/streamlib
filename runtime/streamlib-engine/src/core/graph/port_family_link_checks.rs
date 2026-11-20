@@ -170,7 +170,7 @@ fn refusal_of_a_link_from_an_output(
             port_name: from_port_name,
             declaration: output_declaration,
         },
-        from_node.config.as_ref(),
+        from_node.the_values_its_port_facts_read().as_ref(),
         PortFamilyLinkEndpoint {
             node_name: &to_node.display_name,
             port_name: to_port_name,

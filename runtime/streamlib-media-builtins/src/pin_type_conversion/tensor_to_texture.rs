@@ -18,7 +18,6 @@ use streamlib::sdk::iceoryx2::{
 };
 use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
-use streamlib::sdk::schemars::JsonSchema;
 
 use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 use super::texture_to_tensor::{
@@ -28,17 +27,22 @@ use super::texture_to_tensor::{
 const ARRAY_INPUT_PORT: &str = "array";
 const IMAGE_OUTPUT_PORT: &str = "image";
 
-/// Configuration for [`TensorToTexture`].
-#[streamlib::sdk::node_config]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "streamlib::sdk::schemars")]
+/// The settings [`TensorToTexture`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TensorToTextureConfig {
-    #[serde(default = "default_image_attribute_name")]
+pub struct TensorToTextureSettings {
     #[description = "The attribute of each Array frame read as the image."]
     pub attribute: String,
-    #[serde(default = "default_image_format_wire_name")]
     #[description = "The texture format each Image frame states, by its wire name."]
+    #[options(
+        "rgba8_unorm",
+        "rgba8_unorm_srgb",
+        "bgra8_unorm",
+        "bgra8_unorm_srgb",
+        "rgba16_float",
+        "rgba32_float"
+    )]
     pub format: String,
 }
 
@@ -50,7 +54,7 @@ fn default_image_format_wire_name() -> String {
     TextureFormat::Rgba8Unorm.wire_name().to_string()
 }
 
-impl Default for TensorToTextureConfig {
+impl Default for TensorToTextureSettings {
     fn default() -> Self {
         Self {
             attribute: default_image_attribute_name(),
@@ -62,7 +66,7 @@ impl Default for TensorToTextureConfig {
 #[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
-    config = crate::pin_type_conversion::tensor_to_texture::TensorToTextureConfig,
+    settings = crate::pin_type_conversion::tensor_to_texture::TensorToTextureSettings,
     input(
         "array",
         description = "The Array frames whose `attribute` is converted",
@@ -95,10 +99,9 @@ pub struct TensorToTexture {
 }
 
 impl TensorToTexture::Node {
-    /// The texture format each Image frame states: the one its config names now, so a config
-    /// taken live is written from the next frame, as a link's verdict reads it.
+    /// The texture format each Image frame states: the one its settings name.
     pub fn image_format_it_writes(&self) -> Result<TextureFormat> {
-        image_format_of_the_config(&self.config)
+        image_format_of_the_settings(&self.settings)
     }
 }
 
@@ -124,7 +127,7 @@ impl ReactiveNode for TensorToTexture::Node {
         };
         while let Some(message) = self.inputs.read_raw(ARRAY_INPUT_PORT)? {
             match image_frame_of_the_array_frame(
-                &self.config.attribute,
+                &self.settings.attribute,
                 image_format,
                 message.payload_descriptor,
                 message.payload.bytes(),
@@ -207,16 +210,16 @@ fn the_texture_of_the_format(format: &str) -> PinType {
     }
 }
 
-/// The texture format `config.format` names, refused unless one `[h, w, c]`
+/// The texture format `settings.format` names, refused unless one `[h, w, c]`
 /// tensor holds it.
-pub fn image_format_of_the_config(config: &TensorToTextureConfig) -> Result<TextureFormat> {
-    TextureFormat::from_wire_name(&config.format)
+pub fn image_format_of_the_settings(settings: &TensorToTextureSettings) -> Result<TextureFormat> {
+    TextureFormat::from_wire_name(&settings.format)
         .filter(|format| tensor_element_and_channels_of_one_pixel(*format).is_some())
         .ok_or_else(|| {
             Error::Configuration(format!(
                 "TensorToTexture: `format` is {:?}; it is one of rgba8_unorm, rgba8_unorm_srgb, \
                  bgra8_unorm, bgra8_unorm_srgb, rgba16_float and rgba32_float",
-                config.format
+                settings.format
             ))
         })
 }
