@@ -16,7 +16,7 @@ use super::runtime::TokioRuntimeVariant;
 use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
-use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassImportPath, PinGroupDescriptor};
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
 use crate::core::graph::input_values::{
     InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
@@ -698,6 +698,11 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     ) -> Option<crate::core::GraphNodePorts> {
         self.node_types_this_stream_resolves()
             .port_info(&NodeClassImportPath::new(node_type).ok()?)
+    }
+
+    fn the_pin_groups_a_node_type_declares(&self, node_type: &str) -> Vec<PinGroupDescriptor> {
+        self.node_types_this_stream_resolves()
+            .the_pin_groups_of(node_type)
     }
 
     fn the_config_a_node_holding_the_input_values_takes(

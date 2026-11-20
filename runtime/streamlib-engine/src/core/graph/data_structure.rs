@@ -134,6 +134,36 @@ impl Graph {
         }
     }
 
+    /// Grow the pin group holding each of `from` and `to`, as
+    /// [`Self::grow_the_pin_group_holding_the_port`] does, for a link between them to be judged.
+    pub(crate) fn grow_the_pin_groups_holding_the_ends(
+        &mut self,
+        from: &super::OutputLinkPortRef,
+        to: &super::InputLinkPortRef,
+    ) {
+        self.grow_the_pin_group_holding_the_port(
+            from.node_run_id(),
+            PortDirection::Output,
+            from.port_name(),
+        );
+        self.grow_the_pin_group_holding_the_port(
+            to.node_run_id(),
+            PortDirection::Input,
+            to.port_name(),
+        );
+    }
+
+    /// Give the nodes of `from` and `to` the slots their links and values hold, a slot grown for
+    /// a link not made given back.
+    pub(crate) fn reshape_the_pin_groups_holding_the_ends(
+        &mut self,
+        from: &super::OutputLinkPortRef,
+        to: &super::InputLinkPortRef,
+    ) {
+        self.reshape_the_pin_group_slots_of_the_node(from.node_run_id());
+        self.reshape_the_pin_group_slots_of_the_node(to.node_run_id());
+    }
+
     /// Refuse `value` as the count of the node `node_run_id`'s pin group named `input` when it
     /// leaves out a slot a link reaches.
     pub(crate) fn refuse_a_slot_count_leaving_out_a_linked_slot(

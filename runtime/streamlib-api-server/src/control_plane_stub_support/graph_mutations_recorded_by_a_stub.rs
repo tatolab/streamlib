@@ -130,6 +130,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::std::option::Option<::streamlib::sdk::graph::GraphNodePorts> {
             None
         }
+        fn the_pin_groups_a_node_type_declares(
+            &self,
+            _node_type: &str,
+        ) -> ::std::vec::Vec<::streamlib::sdk::descriptors::PinGroupDescriptor> {
+            ::std::vec::Vec::new()
+        }
         fn the_config_a_node_holding_the_input_values_takes(
             &self,
             _node_type: &str,

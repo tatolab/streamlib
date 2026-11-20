@@ -353,7 +353,7 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
             PortDirection::Output => outputs,
         })
         .unwrap_or_default();
-    match ports.iter().find(|declared| declared.name == port_cast) {
+    match GraphNodePorts::the_port_of_a_type_a_name_finds(&ports, &port_cast) {
         Some(declared)
             if direction == PortDirection::Input
                 && !declared.takes_a_wire_on_a_node_of(&node.node_type) =>
