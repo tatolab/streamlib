@@ -55,7 +55,7 @@ def one_cycle_of_the_waveform(waveform: str, phases_in_cycles: numpy.ndarray) ->
 
 @node.meta(
     category="Audio",
-    description="A steady tone: a sine, square, saw or triangle wave at the pitch you set. Wire it into Program, or to a Speaker, to hear it.",
+    description="A steady tone: a sine, square, saw or triangle wave at the pitch you set. Wire it into the Audio Video Preview, or to a Speaker, to hear it.",
 )
 @node.process(execution="continuous", interval_ms=5)
 class Oscillator:

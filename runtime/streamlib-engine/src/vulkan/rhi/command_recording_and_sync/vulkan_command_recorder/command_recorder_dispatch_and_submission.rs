@@ -26,6 +26,27 @@ impl RhiCommandRecorderInner {
         kernel.record(self.command_buffer, group_x, group_y, group_z)
     }
 
+    /// Record one staged dispatch into the recorder's command buffer, through
+    /// the kernel's batch descriptor set `batch_descriptor_set`, which the
+    /// caller keeps to this recording until its submission retires.
+    pub(crate) fn record_staged_dispatch(
+        &mut self,
+        dispatch: crate::vulkan::rhi::ComputeKernelDispatch<'_>,
+        batch_descriptor_set: usize,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+    ) -> Result<()> {
+        self.expect_recording("record_staged_dispatch")?;
+        dispatch.record_into_batch_descriptor_set(
+            self.command_buffer,
+            batch_descriptor_set,
+            group_x,
+            group_y,
+            group_z,
+        )
+    }
+
     /// Submit with the given semaphore waits and signals. Mirrors
     /// [`Self::submit_inner`]'s recorder-state and fence bookkeeping so the
     /// next [`Self::begin`] waits correctly.

@@ -247,9 +247,9 @@ impl PythonKernelDispatchBatch {
     /// name the shader does not declare or a wrong push-constant size refuses
     /// at this line rather than when the scope closes.
     ///
-    /// One kernel may appear only once per batch: a kernel owns a single
-    /// descriptor set, so binding it again would hand its earlier dispatch
-    /// these bindings.
+    /// One kernel may appear only once per batch: a recording binds a kernel
+    /// through one descriptor set, so binding it again would hand its earlier
+    /// dispatch these bindings.
     #[pyo3(signature = (kernel, bindings, group_count, push_constants = None))]
     fn dispatch(
         &self,
@@ -303,9 +303,9 @@ impl PythonKernelDispatchBatch {
                 .position(|already| already.kernel_id == kernel.kernel_id)
             {
                 return Err(PyValueError::new_err(format!(
-                    "this kernel is already dispatch {earlier} of this batch; a kernel owns \
-                     one descriptor set, so dispatching it again here would give dispatch \
-                     {earlier} these bindings. Build a second kernel, or use a second batch"
+                    "this kernel is already dispatch {earlier} of this batch; a recording \
+                     binds a kernel through one descriptor set, so dispatching it again here \
+                     would give dispatch {earlier} these bindings. Build a second kernel, or use a second batch"
                 )));
             }
 
