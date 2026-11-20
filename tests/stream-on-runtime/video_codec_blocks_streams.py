@@ -65,7 +65,7 @@ def _add_a_codec_round_trip_with_probes(
     )
     encoder = stream_builder.add(
         encoder_class,
-        config={
+        input_values={
             "fps": TEST_PATTERN_FRAMES_PER_SECOND,
             "keyframe_interval_seconds": KEYFRAME_INTERVAL_SECONDS,
         },
