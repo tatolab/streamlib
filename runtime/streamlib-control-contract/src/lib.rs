@@ -19,7 +19,7 @@ pub use agent_surface::{
     AgentOperationExample, AgentOperationGroup, AgentOperationInItsGroup, AgentToolListed,
     CALL_OPERATION_TOOL_NAME, CallOperationRequest, DESCRIBE_OPERATIONS_TOOL_NAME,
     DescribeOperationsRequest, DescribeOperationsResult, LIST_OPERATION_GROUPS_TOOL_NAME,
-    ListOperationGroupsRequest, ListOperationGroupsResult,
+    LOCAL_API_MCP_SERVER_INSTRUCTIONS, ListOperationGroupsRequest, ListOperationGroupsResult,
     a_json_schema_carrying_its_own_definitions, the_agent_tool_call_that_reaches,
     the_agent_tools_listed, the_operation_groups_served_to_agents,
     the_operation_served_to_agents_as, the_operations_described_for,

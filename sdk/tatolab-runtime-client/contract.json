@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 24
+    "x-contract-revision": 25
   },
   "methods": [
     {
@@ -427,7 +427,7 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "listed_as_a_tool",
+      "x-agent-tool-listing": "reached_through_call_operation",
       "examples": [
         {
           "name": "describe_runtime_example",
@@ -1099,7 +1099,7 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-agent-tool-listing": "listed_as_a_tool",
       "examples": [
         {
           "name": "check_link_example",
@@ -1217,7 +1217,7 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-agent-tool-listing": "listed_as_a_tool",
       "examples": [
         {
           "name": "check_link_candidates_example",
@@ -3102,7 +3102,7 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "listed_as_a_tool",
+      "x-agent-tool-listing": "reached_through_call_operation",
       "examples": [
         {
           "name": "pause_playback_example",
@@ -3176,7 +3176,7 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "listed_as_a_tool",
+      "x-agent-tool-listing": "reached_through_call_operation",
       "examples": [
         {
           "name": "resume_playback_example",
@@ -5117,7 +5117,7 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-agent-tool-listing": "listed_as_a_tool",
       "examples": [
         {
           "name": "read_project_file_example",
@@ -5216,7 +5216,7 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-agent-tool-listing": "listed_as_a_tool",
       "examples": [
         {
           "name": "create_node_file_example",
@@ -5308,7 +5308,7 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-agent-tool-listing": "listed_as_a_tool",
       "examples": [
         {
           "name": "create_node_ui_element_example",
@@ -5403,7 +5403,7 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-agent-tool-listing": "listed_as_a_tool",
       "examples": [
         {
           "name": "write_project_file_example",
@@ -5504,7 +5504,7 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation",
+      "x-agent-tool-listing": "listed_as_a_tool",
       "examples": [
         {
           "name": "check_project_code_example",
@@ -7284,7 +7284,7 @@
     {
       "name": "list_operation_groups",
       "summary": "List every operation the runtime serves, by group.",
-      "description": "List every operation this runtime serves, by group, each with its name and one sentence saying what it does. The tools in this tool list are the ones used most; every other operation — a project's assets, files, dependencies, node types and views, each single graph edit, redo, viewers — is reached through `call_operation`. Start here when no listed tool does what you need, then read the operation's params with `describe_operations`.",
+      "description": "List every operation this runtime serves, by group, each with its name and one sentence saying what it does. The tools in this tool list are the ones used most; every other operation — `list_pin_types`, a project's assets, its other files, imports and views, each single graph edit, `redo`, viewers, pausing and resuming playback, `describe_runtime` — is reached through `call_operation`. Start here when no listed tool does what you need, then read the operation's params with `describe_operations`.",
       "params": {
         "$ref": "#/components/schemas/ListOperationGroupsRequest"
       },

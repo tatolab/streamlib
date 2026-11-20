@@ -57,7 +57,7 @@ impl ControlOperation for ReadProjectFile {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::READ_PROJECT_FILE);
 }
 
@@ -77,7 +77,7 @@ impl ControlOperation for CreateNodeFile {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CREATE_NODE_FILE);
 }
 
@@ -97,7 +97,7 @@ impl ControlOperation for CreateNodeUiElement {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CREATE_NODE_UI_ELEMENT);
 }
 
@@ -116,7 +116,7 @@ impl ControlOperation for WriteProjectFile {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::WRITE_PROJECT_FILE);
 }
 
@@ -137,7 +137,7 @@ impl ControlOperation for CheckProjectCode {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_PROJECT_CODE);
 }
 
