@@ -6,13 +6,22 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal
 
 import numpy
-from tatolab.stream import Channels, Output, RuntimeContextLimitedAccess, from_config, log, node
-
-OSCILLATOR_OUTPUT_PORT = "audio"
+from tatolab.stream import (
+    Audio,
+    Description,
+    FormerlyNamed,
+    NumberRange,
+    NumberUnit,
+    OutputPin,
+    PinMeaning,
+    RuntimeContextLimitedAccess,
+    SettingOnly,
+    log,
+    node,
+)
 
 # How far behind real time an oscillator may fall before it starts a new run
 # rather than emitting the whole backlog: a burst that large outruns any mailbox.
@@ -23,18 +32,6 @@ MAXIMUM_BLOCKS_OF_CATCH_UP = 4
 LEAST_CATCH_UP_MS = 100
 
 NANOSECONDS_PER_SECOND = 1_000_000_000
-
-
-@dataclass
-class OscillatorConfig:
-    """An `Oscillator`'s tone and the shape of the audio it publishes."""
-
-    frequency_hz: float = 220.0
-    waveform: Literal["sine", "square", "saw", "triangle"] = "sine"
-    amplitude: float = 0.2
-    sample_rate: int = 48_000
-    channels: int = 2
-    block_size: int = 512
 
 
 def one_cycle_of_the_waveform(waveform: str, phases_in_cycles: numpy.ndarray) -> numpy.ndarray:
@@ -57,42 +54,31 @@ def one_cycle_of_the_waveform(waveform: str, phases_in_cycles: numpy.ndarray) ->
     category="Audio",
     description="A steady tone: a sine, square, saw or triangle wave at the pitch you set. Wire it into the Audio Video Preview, or to a Speaker, to hear it.",
 )
-@node.process(execution="continuous", interval_ms=5)
+@node(execution="continuous", interval_ms=5)
 class Oscillator:
     """A phase-continuous tone, paced by the stream's clock.
 
     The tick is shorter than any block: each `process()` emits however many
-    whole blocks elapsed time owes, so the tone stays locked to real time.
+    whole blocks elapsed time owes, so the tone stays locked to real time. Its
+    pitch, waveform and loudness follow their inputs from the next block on;
+    a change to its rate, channels or block size builds it again.
     """
 
-    audio = Output(
-        Channels,
-        rate=from_config("sample_rate"),
-        dtype="f32",
-        description="The tone, the same on every channel",
-    )
+    frequency: Annotated[
+        float,
+        NumberUnit("Hz"),
+        PinMeaning("frequency"),
+        NumberRange(minimum=0.0),
+        FormerlyNamed("frequency_hz"),
+    ] = 220.0
+    waveform: Literal["sine", "square", "saw", "triangle"] = "sine"
+    amplitude: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 0.2
+    sample_rate: Annotated[int, SettingOnly(), NumberUnit("Hz"), NumberRange(minimum=1)] = 48_000
+    channels: Annotated[int, SettingOnly(), NumberRange(minimum=1)] = 2
+    block_size: Annotated[int, SettingOnly(), NumberRange(minimum=1)] = 512
+    audio: OutputPin[Annotated[Audio, Description("The tone, the same on every channel")]]
 
-    def __init__(self, config: OscillatorConfig) -> None:
-        self.frequency_hz = float(config.frequency_hz)
-        self.waveform = config.waveform
-        self.amplitude = float(config.amplitude)
-        self.sample_rate = int(config.sample_rate)
-        self.channels = int(config.channels)
-        self.block_size = int(config.block_size)
-        one_cycle_of_the_waveform(self.waveform, numpy.zeros(1))
-
-        # A block_size of zero never advances the emitted-sample counter, so
-        # `process()` would publish empty blocks forever.
-        for field_name, value in (
-            ("sample_rate", self.sample_rate),
-            ("channels", self.channels),
-            ("block_size", self.block_size),
-        ):
-            if value <= 0:
-                raise ValueError(
-                    f"Oscillator's {field_name} is {value}. To fix: set it to 1 or more"
-                )
-
+    def __init__(self) -> None:
         self.run_anchor_timestamp_ns: int | None = None
         # The stream-wide index of this run's first sample. A new run carries
         # the samples it skipped, so the index keeps counting real time.
@@ -123,9 +109,9 @@ class Oscillator:
             samples_owed = 0
 
         while self.samples_emitted_in_this_run + self.block_size <= samples_owed:
-            self._publish_one_block(ctx)
+            self._publish_one_block()
 
-    def _publish_one_block(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def _publish_one_block(self) -> None:
         assert self.run_anchor_timestamp_ns is not None
         # The anchor plus the emitted-sample offset in integer arithmetic, never
         # an accumulated per-block delta, which drifts at 44.1 kHz-family rates.
@@ -133,18 +119,17 @@ class Oscillator:
             self.run_anchor_timestamp_ns
             + (self.samples_emitted_in_this_run * NANOSECONDS_PER_SECOND) // self.sample_rate
         )
-        ctx.outputs.write_channels_block(
-            OSCILLATOR_OUTPUT_PORT,
+        self.audio.write(
             self._next_planar_samples(),
+            first_sample_timestamp_ns,
             start_sample=self.start_sample_of_this_run + self.samples_emitted_in_this_run,
             sample_rate=self.sample_rate,
-            timestamp_ns=first_sample_timestamp_ns,
         )
         self.samples_emitted_in_this_run += self.block_size
 
     def _next_planar_samples(self) -> numpy.ndarray:
         """The next block, `[channel][sample]`, every channel the same tone."""
-        phase_step_in_cycles = self.frequency_hz / self.sample_rate
+        phase_step_in_cycles = self.frequency / self.sample_rate
         phases = self.next_phase_in_cycles + phase_step_in_cycles * numpy.arange(
             self.block_size, dtype=numpy.float64
         )

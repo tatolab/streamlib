@@ -28,6 +28,9 @@ from ._exposed_name_cast import (
 )
 from ._description import Description as Description
 from ._formerly_named import FormerlyNamed as FormerlyNamed
+from ._pin_type_narrowing import AssetMedia as AssetMedia
+from ._pin_type_narrowing import FlowsAsValue as FlowsAsValue
+from ._pin_type_narrowing import TexturePixelFormats as TexturePixelFormats
 from ._named_pin_type_declaration import NamedPinTypeValue as NamedPinTypeValue
 from ._named_pin_type_declaration import named_pin_type as named_pin_type
 from ._number_range import NumberRange as NumberRange
@@ -237,6 +240,9 @@ __all__ = [
     "NodeReference",
     "NodeReferenceToNodeType",
     "FormerlyNamed",
+    "FlowsAsValue",
+    "AssetMedia",
+    "TexturePixelFormats",
     "NamedPinTypeValue",
     "NumberRange",
     "NumberStep",

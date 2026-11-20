@@ -5,37 +5,37 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Annotated, Any
 
 from tatolab.stream import (
+    Asset,
+    AssetMedia,
     ColorInfo,
-    Image,
+    FlowsAsValue,
     ImageFrameToWrite,
     NodeOutputTextureRing,
-    Output,
-    ProjectAssetUuid,
+    OutputPin,
+    RuntimeContextLimitedAccess,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
 #: The texture format an `ImageFile` publishes: 8-bit RGBA, the decode of a PNG or a JPEG.
 IMAGE_FILE_TEXTURE_FORMAT = "rgba8_unorm"
 
-#: Two slots, so a frame published on a config change never waits on a reader
+#: Two slots, so a frame published for a newly chosen asset never waits on a reader
 #: still holding the one before it.
 IMAGE_FILE_OUTPUT_RING_DEPTH = 2
+
+#: How often an `ImageFile` looks at its `asset`: to publish one newly chosen, and to try
+#: again one it could not read. It sends nothing between, since its output keeps its picture.
+IMAGE_FILE_INTERVAL_BETWEEN_LOOKS_MS = 100
 
 #: What an 8-bit PNG or JPEG decodes to: sRGB primaries and transfer, RGB, full range.
 DECODED_IMAGE_FILE_COLOUR = ColorInfo(
     primaries="bt709", transfer="srgb", matrix="identity", range="full"
 )
-
-
-@dataclass(frozen=True)
-class ImageFileConfig:
-    """Which project image asset an `ImageFile` publishes, by its UUID."""
-
-    asset: Annotated[str, ProjectAssetUuid(media=("image",))] = ""
 
 
 #: The Pillow modes whose channels an embedded colour profile of that mode reads directly.
@@ -86,53 +86,52 @@ def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
 
 @node.meta(
     category="Sources",
-    description="Show a picture from the project's assets. Pick a PNG or JPEG you imported in its `asset` setting.",
+    description="Show a picture from the project's assets. Pick a PNG or JPEG you imported in its `asset` input.",
 )
-@node.process(execution="continuous", interval_ms=100)
+@node(execution="continuous", interval_ms=IMAGE_FILE_INTERVAL_BETWEEN_LOOKS_MS)
 class ImageFile:
-    """Publishes the project image asset its config names, once at start and again on each config change.
+    """Publishes the project image asset its `asset` names, once for each asset chosen.
 
-    A reader that connects after a publish is sent the same picture again,
-    with no decode and no upload. While no asset is named, or the one named
-    cannot be read, the node reports itself not ready, saying why, and the
-    publish is tried again at each process until one succeeds.
+    Its output flows as a value, so the runtime sends the picture again to a reader linked
+    after it was published, with no decode and no upload. While no asset is chosen, or the one
+    chosen cannot be read, the node reports itself not ready, saying why, and tries the publish
+    again at each look until one succeeds.
     """
 
-    image = Output(Image, formats=(IMAGE_FILE_TEXTURE_FORMAT,))
+    asset: Annotated[Asset, AssetMedia("image")] | None = None
+    image: OutputPin[
+        Annotated[Texture, TexturePixelFormats(IMAGE_FILE_TEXTURE_FORMAT), FlowsAsValue()]
+    ]
 
-    def __init__(self, config: ImageFileConfig) -> None:
-        self._asset = config.asset
+    def __init__(self) -> None:
         self._output_texture_ring = NodeOutputTextureRing(
             IMAGE_FILE_TEXTURE_FORMAT, ["texture_binding"], depth=IMAGE_FILE_OUTPUT_RING_DEPTH
         )
-        self._publish_on_the_next_process = True
-        self._frame_of_the_last_publish: Any = None
+        self._asset_published: "Asset | None" = None
 
-    def configure(self, config: ImageFileConfig) -> None:
-        """Publish the asset `config` names on the next process."""
-        self._asset = config.asset
-        self._publish_on_the_next_process = True
-
-    def process(self, ctx) -> None:
-        if not self._publish_on_the_next_process:
-            self._resend_the_last_publish_to_a_reader_it_missed(ctx)
-            return
-        if not self._asset:
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        asset = self.asset
+        if asset is None:
+            self._asset_published = None
             ctx.report_not_ready(
-                "ImageFile names no image asset. To fix: set its `asset` config to the UUID of "
-                "a PNG or JPEG imported into the project"
+                "ImageFile names no image asset. To fix: set its `asset` input to a PNG or JPEG "
+                "imported into the project"
             )
             return
+        if asset == self._asset_published:
+            return
         try:
-            self._publish_the_asset(ctx)
+            self._publish(asset, ctx)
         except Exception as failure:
             ctx.report_not_ready(f"ImageFile cannot read its image asset: {failure}")
             return
         ctx.report_ready()
-        self._publish_on_the_next_process = False
+        self._asset_published = asset
 
-    def _publish_the_asset(self, ctx) -> None:
-        pixels = decoded_rgba_pixels_of_the_image_file(ctx.asset_content_path(self._asset))
+    def _publish(self, asset: Asset, ctx: RuntimeContextLimitedAccess) -> None:
+        pixels = decoded_rgba_pixels_of_the_image_file(
+            ctx.asset_content_path(asset.asset, asset.from_project)
+        )
         height, width = pixels.shape[0], pixels.shape[1]
         slot = self._output_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, width, height
@@ -142,12 +141,4 @@ class ImageFile:
             slot.as_numpy()[:height, :width] = pixels
         finally:
             slot.unlock()
-        frame = ImageFrameToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR)
-        ctx.outputs.write(self.image, frame)
-        self._frame_of_the_last_publish = frame
-
-    def _resend_the_last_publish_to_a_reader_it_missed(self, ctx) -> None:
-        if self._frame_of_the_last_publish is None:
-            return
-        if ctx.outputs.has_a_reader_the_last_write_missed(self.image):
-            ctx.outputs.write(self.image, self._frame_of_the_last_publish)
+        self.image.write(ImageFrameToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR))

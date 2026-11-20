@@ -348,6 +348,45 @@ fn a_core_duotone_opens_with_its_dark_and_light_colors_and_a_wire_kept_on_a_comb
     assert_eq!(upgraded_as_shipped(&upgraded), None);
 }
 
+const CORE_SOLID_COLOR: &str = "imports/core-nodes/core_nodes.solid_color:SolidColor";
+
+#[test]
+fn a_core_solid_color_opens_with_one_color_of_its_four_numbers_and_a_wired_alpha_kept() {
+    let document = json!({
+        "nodes": [
+            a_core_node(CORE_SOLID_COLOR, json!({"width": 1280, "red": 0.5, "blue": 0.25})),
+            an_lfo()
+        ],
+        "links": [a_link((LFO, "value"), (TINT, "alpha"))]
+    });
+    let upgraded = upgraded_as_shipped(&document).expect("Solid Color's numbers merge");
+    assert_eq!(
+        upgraded["nodes"][0]["input_values"],
+        json!({"width": 1280}),
+        "a wired part keeps every saved part on the combining node"
+    );
+    let combining_id = the_combining_node_id(TINT, "color");
+    assert_eq!(
+        the_combining_node_of(&upgraded, "color")["input_values"],
+        json!({"red": 0.5, "green": 0.0, "blue": 0.25}),
+        "each part the combining node defaults otherwise is written"
+    );
+    assert_eq!(
+        upgraded["links"],
+        json!([
+            a_link((LFO, "value"), (&combining_id, "alpha")),
+            a_link((&combining_id, COMBINED_OUTPUT), (TINT, "color")),
+        ])
+    );
+
+    let unwired =
+        json!({"nodes": [a_core_node(CORE_SOLID_COLOR, json!({"green": 1.0, "alpha": 0.5}))]});
+    assert_eq!(
+        upgraded_as_shipped(&unwired).expect("Solid Color's numbers merge")["nodes"][0]["input_values"],
+        json!({"color": {"red": 0.0, "green": 1.0, "blue": 0.0, "alpha": 0.5}})
+    );
+}
+
 #[test]
 fn a_core_tint_or_duotone_saved_with_no_numbers_is_left_as_written() {
     for node_type in [CORE_TINT, CORE_DUOTONE] {
