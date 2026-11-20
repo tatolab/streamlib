@@ -34,9 +34,15 @@ use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_t
 /// what it started.
 const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10);
 
+/// The most pages one browser host process renders before the next page goes
+/// to a further one: every page's raster and compositing runs on its CEF GPU
+/// process's one scheduler thread, which held 8 pages at 1080p60 to about
+/// 43 fps on an RTX 3090, where two processes of 4 held all 8 at 60.
+const MOST_TABS_ONE_BROWSER_HOST_PROCESS_TAKES: usize = 4;
+
 /// Offer every node the browser host the runtime unit or its app bundle
-/// carries, which a `BrowserSource` opens its tabs in; one built without it
-/// offers none.
+/// carries, which a `BrowserSource` opens its tabs in, spread over as many
+/// processes of it as the pages need; one built without it offers none.
 fn offer_the_browser_host_when_the_runtime_unit_carries_it(
     engine: &Runner,
     lend_directory: &std::path::Path,
@@ -58,6 +64,7 @@ fn offer_the_browser_host_when_the_runtime_unit_carries_it(
         tatolab_state_directory,
         BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME,
         browser_host_executable,
+        Some(MOST_TABS_ONE_BROWSER_HOST_PROCESS_TAKES),
     );
 }
 
@@ -88,20 +95,24 @@ fn offer_the_video_encode_host_when_the_runtime_unit_carries_it(
         tatolab_state_directory,
         VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
         video_encode_host_executable,
+        None,
     );
 }
 
 /// Offer `executable` to every node as the shared native service
-/// `service_name`, keeping its state under the state directory.
+/// `service_name`, keeping its state under the state directory, with a
+/// further process of it started for each `most_leases_per_process` leases.
 fn offer_the_shared_native_service(
     engine: &Runner,
     tatolab_state_directory: &TatolabStateDirectory,
     service_name: &str,
     executable: PathBuf,
+    most_leases_per_process: Option<usize>,
 ) {
     let offer = streamlib::sdk::shared_native_services::SharedNativeServiceOffer {
         service_name: service_name.to_string(),
         executable,
+        most_leases_per_process,
         state_directory: tatolab_state_directory
             .shared_native_service_state_directory(service_name),
     };
