@@ -206,6 +206,7 @@ fn a_helper_that_opened_its_board_mirrors_its_losses_as_its_reads_and_writes_cou
                 Some(21),
                 None,
                 None,
+                None,
             )
             .unwrap();
         destination
@@ -342,6 +343,7 @@ fn a_helper_that_opened_its_board_mirrors_its_losses_as_its_reads_and_writes_cou
                 None,
                 None,
                 None,
+                None,
             )
             .expect_err("a helper with a board open is told where every link's counts go");
         assert!(
@@ -412,6 +414,7 @@ fn a_windowed_input_link_hands_the_child_windows_rather_than_the_blocks_it_was_s
                 1,
                 "link-1",
                 Some(contract.as_any()),
+                None,
                 None,
                 None,
                 None,
@@ -576,6 +579,7 @@ fn an_unknown_read_mode_is_refused_by_name() {
                 2,
                 1,
                 "link-1",
+                None,
                 None,
                 None,
                 None,
