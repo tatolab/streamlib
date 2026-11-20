@@ -11,7 +11,7 @@ use super::{BundleMember, IntegerSize, PinType};
 impl PinType {
     /// Refuse a type no port may declare, saying why: a List of a List, a List element or a
     /// bundle member that is no small type in a bundle that is not all Tensors, a bundle inside
-    /// a bundle, a menu with no option,
+    /// a bundle, a bundle naming one member twice, a menu with no option,
     /// and an `Int64` or `UInt64` Integer that is no element.
     pub fn validate(&self) -> Result<(), String> {
         match self {
@@ -23,15 +23,7 @@ impl PinType {
                 exact_size.variant_name()
             )),
             Self::ListOf { element_type } => validate_a_list_element(element_type),
-            Self::Bundle { members }
-                if !members.is_empty()
-                    && members
-                        .iter()
-                        .all(|member| matches!(member.member_type, PinType::Tensor {})) =>
-            {
-                Ok(())
-            }
-            Self::Bundle { members } => members.iter().try_for_each(validate_a_bundle_member),
+            Self::Bundle { members } => validate_a_bundle(members),
             Self::PinTypeChoice { among } => among.iter().try_for_each(PinType::validate),
             Self::Menu { option_names } if option_names.is_empty() => {
                 Err("a Menu lists at least one option".to_owned())
@@ -70,13 +62,42 @@ fn validate_a_list_element(element_type: &PinType) -> Result<(), String> {
                 .iter()
                 .all(|member| member.member_type.is_a_small_type()) =>
         {
-            members.iter().try_for_each(validate_a_bundle_member)
+            validate_a_bundle(members)
         }
         element_type if element_type.is_a_small_type() => element_type.validate(),
         element_type => Err(format!(
             "a List element is a small type, or a bundle of them, and {element_type} is neither"
         )),
     }
+}
+
+/// Refuse a bundle naming one member twice, or holding a member that is no small type nor a
+/// List of them, unless every member is a Tensor.
+fn validate_a_bundle(members: &[BundleMember]) -> Result<(), String> {
+    if let Some(named_twice) = a_member_named_twice(members) {
+        return Err(format!(
+            "bundle member `{named_twice}` is named more than once, and each member of a bundle \
+             has a name of its own"
+        ));
+    }
+    if !members.is_empty()
+        && members
+            .iter()
+            .all(|member| matches!(member.member_type, PinType::Tensor {}))
+    {
+        return Ok(());
+    }
+    members.iter().try_for_each(validate_a_bundle_member)
+}
+
+/// The name of the first member `members` names more than once.
+fn a_member_named_twice(members: &[BundleMember]) -> Option<&str> {
+    members.iter().enumerate().find_map(|(place, member)| {
+        members[..place]
+            .iter()
+            .any(|earlier| earlier.name == member.name)
+            .then_some(member.name.as_str())
+    })
 }
 
 fn validate_a_bundle_member(member: &BundleMember) -> Result<(), String> {
