@@ -104,6 +104,9 @@ pub struct ANodeTypesPort<'a> {
     pub node_type: &'a str,
     /// The port's name, as the node type declares it.
     pub port: &'a str,
+    /// The member of the bundle an output port carries that the end is; `None` for the whole
+    /// port.
+    pub member: Option<&'a str>,
 }
 
 /// One writer's batch of graph edits on one stream, from

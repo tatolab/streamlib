@@ -62,10 +62,12 @@ fn a_link(source: (Uuid, &str), target: (Uuid, &str)) -> StreamGraphDocumentLink
         source: StreamGraphDocumentLinkEnd {
             node: source.0,
             port: source.1.to_owned(),
+            member: None,
         },
         target: StreamGraphDocumentLinkEnd {
             node: target.0,
             port: target.1.to_owned(),
+            member: None,
         },
     }
 }

@@ -124,10 +124,12 @@ fn what_a_link_action_names(
             source: GraphLinkEndOnTheWire {
                 node: source.node.clone(),
                 port: source.port.clone(),
+                member: source.member.clone(),
             },
             target: GraphLinkEndOnTheWire {
                 node: target.node.clone(),
                 port: target.port.clone(),
+                member: target.member.clone(),
             },
         }),
         ..WhatAGraphOperationNames::default()
@@ -407,7 +409,7 @@ impl GraphTransactionRefusal {
             .or(what_the_refused_operation_names.field);
         ProjectActionRefusalOnTheWire {
             refused_operation_index: self.refused_operation_index,
-            refused_link: what_the_refused_operation_names.link,
+            refused_link: what_the_refused_operation_names.link.map(Box::new),
             refused_params_pointer,
             suggested_call,
             ..code_and_place.on_the_refusal_of(tool_name, runtime_words)

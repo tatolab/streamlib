@@ -31,8 +31,9 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, DataChannelPayloadDescriptor,
     HelperProcessLossCountBoardWriter, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    MessageGroupBoundary, OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
-    StreamClockBoardPublishListener, input_port_borrow_quota as resolve_input_port_borrow_quota,
+    MemberTakenAtTheRead, MessageGroupBoundary, OutputWriterInner, ReadMode,
+    ResolvedAudioWindowContract, StreamClockBoardPublishListener,
+    input_port_borrow_quota as resolve_input_port_borrow_quota,
 };
 use streamlib::sdk::node_interpreter::NODE_INTERPRETER_NODE_RUN_ID_ENVIRONMENT_VARIABLE;
 
@@ -410,6 +411,7 @@ impl PythonNodeLinkDataAccess {
         loss_count_slot = None,
         wiring_generation = None,
         input_port_borrow_quota = None,
+        member_taken_at_the_read = None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -432,8 +434,12 @@ impl PythonNodeLinkDataAccess {
         loss_count_slot: Option<usize>,
         wiring_generation: Option<u64>,
         input_port_borrow_quota: Option<usize>,
+        member_taken_at_the_read: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
+        let member_taken_at_the_read = member_taken_at_the_read
+            .map(|wired| read_the_member_the_parent_wired(python, port_name, wired))
+            .transpose()?;
         let input_port_borrow_quota =
             resolve_input_port_borrow_quota(port_name, input_port_borrow_quota)
                 .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
@@ -487,6 +493,7 @@ impl PythonNodeLinkDataAccess {
                     link_id,
                     &InboundLinkName::from(inbound_link_name),
                     channel.create_subscriber(input_port_ring_depth)?,
+                    member_taken_at_the_read,
                 );
                 if let Some((board_writer, (loss_count_slot, wiring_generation))) =
                     loss_count_slot_and_generation
@@ -695,6 +702,24 @@ impl PythonNodeLinkDataAccess {
 /// never a sentinel it could not settle. Field by field rather than through a
 /// serde bridge, so a key the parent got wrong is named here rather than
 /// surfacing as an anonymous decode failure.
+/// The member of a bundle the parent wired a link into `port_name` to take from each message.
+fn read_the_member_the_parent_wired(
+    python: Python<'_>,
+    port_name: &str,
+    wired: &Bound<'_, PyAny>,
+) -> PyResult<MemberTakenAtTheRead> {
+    let rendered: String = python
+        .import("json")?
+        .call_method1("dumps", (wired,))?
+        .extract()?;
+    serde_json::from_str(&rendered).map_err(|read_failure| {
+        PyValueError::new_err(format!(
+            "input port {port_name:?} was wired with a `member_taken_at_the_read` the helper \
+             could not read: {read_failure}"
+        ))
+    })
+}
+
 fn read_the_window_contract_the_parent_wired(
     port_name: &str,
     declared: &Bound<'_, PyAny>,

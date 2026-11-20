@@ -638,9 +638,9 @@ impl LoadedStreamInThisRuntime {
             }
         };
         let held = match held_direction {
-            PortDirection::Output => {
-                ALinkEndTheGraphHolds::Output(OutputLinkPortRef::new(node_run_id, &held.port))
-            }
+            PortDirection::Output => ALinkEndTheGraphHolds::Output(
+                OutputLinkPortRef::new(node_run_id, &held.port).at_member(held.member.clone()),
+            ),
             PortDirection::Input => {
                 ALinkEndTheGraphHolds::Input(InputLinkPortRef::new(node_run_id, &held.port))
             }
@@ -696,7 +696,8 @@ impl LoadedStreamInThisRuntime {
             OutputLinkPortRef::new(
                 self.the_node_of_the_node(link.source.node)?,
                 &link.source.port,
-            ),
+            )
+            .at_member(link.source.member.clone()),
             InputLinkPortRef::new(
                 self.the_node_of_the_node(link.target.node)?,
                 &link.target.port,
@@ -712,6 +713,7 @@ impl LoadedStreamInThisRuntime {
         RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
             link.source.node,
             &link.source.port,
+            link.source.member.as_deref(),
             link.target.node,
             &link.target.port,
         )
@@ -731,6 +733,7 @@ impl LoadedStreamInThisRuntime {
         let link_as_given = RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
             link.source.node,
             &link.source.port,
+            link.source.member.as_deref(),
             link.target.node,
             &link.target.port,
         )?;
@@ -811,6 +814,7 @@ fn how_a_node_types_port_is_judged(
         node_type,
         ports_of_its_direction,
         port.port,
+        port.member,
     )))
 }
 

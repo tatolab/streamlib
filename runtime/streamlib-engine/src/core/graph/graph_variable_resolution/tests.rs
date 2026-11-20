@@ -23,10 +23,12 @@ fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
         source: LinkPortRefOutput {
             node: source.0.to_string(),
             port: source.1.to_string(),
+            member: None,
         },
         target: LinkPortRefOutput {
             node: target.0.to_string(),
             port: target.1.to_string(),
+            member: None,
         },
     }
 }

@@ -780,6 +780,7 @@ fn disconnect_reconnect_cycle_reclaims_notifier_and_data_service() {
             link_id,
             &InboundLinkName::from("psource/out"),
             data.create_subscriber(depth).expect("dest subscriber"),
+            None,
         );
         if !in_inner.has_listener() {
             in_inner.set_listener(notify.create_listener().expect("dest listener"));

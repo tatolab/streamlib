@@ -170,8 +170,10 @@ impl Graph {
         &self,
         from: super::OutputLinkPortRef,
     ) -> super::OutputLinkPortRef {
+        let member = from.member().map(str::to_owned);
         self.node_of_the_run_id(from.node_run_id())
             .and_then(|node| node.try_output(from.port_name()))
+            .map(|current| current.at_member(member))
             .unwrap_or(from)
     }
 

@@ -44,22 +44,26 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 pub(in crate::core::runtime) struct RunningLinkBetweenTwoNodesByUuid {
     pub(in crate::core::runtime) source_node: Uuid,
     pub(in crate::core::runtime) source_port: String,
+    pub(in crate::core::runtime) source_member: Option<String>,
     pub(in crate::core::runtime) target_node: Uuid,
     pub(in crate::core::runtime) target_port: String,
 }
 
 impl RunningLinkBetweenTwoNodesByUuid {
-    /// The link from `source_port` of `source_node` to `target_port` of `target_node`, each
-    /// port as drawn, under its cast name; refused when a name does not cast.
+    /// The link from `source_port` of `source_node`, or its member `source_member`, to
+    /// `target_port` of `target_node`, each port as drawn, under its cast name; refused when a
+    /// name does not cast.
     pub(in crate::core::runtime) fn of_drawn_link(
         source_node: Uuid,
         source_port: &str,
+        source_member: Option<&str>,
         target_node: Uuid,
         target_port: &str,
     ) -> Result<Self> {
         Ok(Self {
             source_node,
             source_port: cast_name(source_port)?,
+            source_member: source_member.map(str::to_owned),
             target_node,
             target_port: cast_name(target_port)?,
         })
@@ -427,7 +431,8 @@ impl LoadedStreamInThisRuntime {
             let from = OutputLinkPortRef::new(
                 node_of(&document_link.source_node)?,
                 &document_link.source_port,
-            );
+            )
+            .at_member(document_link.source_member.clone());
             let to = InputLinkPortRef::new(
                 node_of(&document_link.target_node)?,
                 &document_link.target_port,
@@ -536,6 +541,7 @@ impl LoadedStreamInThisRuntime {
             RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
                 document_node_uuid_named(&link.source.node)?,
                 &link.source.port,
+                link.source.member.as_deref(),
                 document_node_uuid_named(&link.target.node)?,
                 &link.target.port,
             )
@@ -722,6 +728,7 @@ impl LoadedStreamInThisRuntime {
             RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
                 node_uuid_named(&set_aside.link.source.node)?,
                 &set_aside.link.source.port,
+                set_aside.link.source.member.as_deref(),
                 node_uuid_named(&set_aside.link.target.node)?,
                 &set_aside.link.target.port,
             )
@@ -758,7 +765,8 @@ impl LoadedStreamInThisRuntime {
                             .get(&link.source_node)?
                             .clone(),
                         &link.source_port,
-                    );
+                    )
+                    .at_member(link.source_member.clone());
                     let to = InputLinkPortRef::new(
                         node_run_id_of_each_node_uuid
                             .get(&link.target_node)?
@@ -825,6 +833,7 @@ fn the_live_links_by_node_uuid_of(
                 RunningLinkBetweenTwoNodesByUuid {
                     source_node: *node_uuid_of_each_node.get(link.source.node_run_id())?,
                     source_port: link.source.port_name().to_owned(),
+                    source_member: link.source.member().map(str::to_owned),
                     target_node: *node_uuid_of_each_node.get(link.target.node_run_id())?,
                     target_port: link.target.port_name().to_owned(),
                 },
@@ -874,6 +883,7 @@ pub(in crate::core::runtime) fn the_live_links_as_given_by_node_uuid_of(
             link_as_given: RunningLinkBetweenTwoNodesByUuid {
                 source_node: into_the_pool.source_node,
                 source_port: into_the_pool.source_port.clone(),
+                source_member: into_the_pool.source_member.clone(),
                 target_node: out_of_the_pool.target_node,
                 target_port: out_of_the_pool.target_port.clone(),
             },

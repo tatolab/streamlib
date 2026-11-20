@@ -5,6 +5,7 @@
 //! and many candidate ends of the other direction, each judged by the one judgement `check_link`
 //! makes, and made nowhere.
 
+use streamlib::sdk::descriptors::{DeclaredPinType, PinType, PortDescriptor};
 use streamlib::sdk::error::PortDirection;
 use streamlib::sdk::runtime::ANodeTypesPort;
 use streamlib_control_contract::{
@@ -77,12 +78,20 @@ impl ControlOperationDispatcher {
                         PortDirection::Output => node_type.outputs,
                     };
                     let node_type = node_type.node_class_import_path.as_str().to_owned();
-                    ports
-                        .into_iter()
-                        .map(move |port| LinkCandidateEnd::NodeTypePort {
-                            node_type: node_type.clone(),
-                            port: port.name,
+                    ports.into_iter().flat_map(move |port| {
+                        let node_type = node_type.clone();
+                        let members = match candidate_direction {
+                            PortDirection::Output => the_members_a_declared_port_carries(&port),
+                            PortDirection::Input => Vec::new(),
+                        };
+                        the_port_and_its_members(port.name, members).map(move |(port, member)| {
+                            LinkCandidateEnd::NodeTypePort {
+                                node_type: node_type.clone(),
+                                port,
+                                member,
+                            }
                         })
+                    })
                 })
                 .collect(),
             LinkCandidatesAmong::Ends(ends) => ends,
@@ -91,18 +100,27 @@ impl ControlOperationDispatcher {
         let mut node_types_ports = Vec::new();
         for end in &ends {
             match end {
-                LinkCandidateEnd::PlacedPort { node, port } => {
+                LinkCandidateEnd::PlacedPort { node, port, member } => {
                     let candidate = StreamGraphActionLinkEnd {
                         node: node.clone(),
                         port: port.clone(),
+                        member: member.clone(),
                     };
                     placed_checks.push(Some(match held_direction {
                         PortDirection::Output => running_graph.check(&held, &candidate),
                         PortDirection::Input => running_graph.check(&candidate, &held),
                     }));
                 }
-                LinkCandidateEnd::NodeTypePort { node_type, port } => {
-                    node_types_ports.push(ANodeTypesPort { node_type, port });
+                LinkCandidateEnd::NodeTypePort {
+                    node_type,
+                    port,
+                    member,
+                } => {
+                    node_types_ports.push(ANodeTypesPort {
+                        node_type,
+                        port,
+                        member: member.as_deref(),
+                    });
                     placed_checks.push(None);
                 }
             }
@@ -135,7 +153,8 @@ impl ControlOperationDispatcher {
     }
 }
 
-/// Each port of `direction` of each node at the level `rendered` holds, as `graph` lists them.
+/// Each port of `direction` of each node at the level `rendered` holds, as `graph` lists them,
+/// each output followed by each member of the bundle it carries.
 fn the_placed_ports_of(
     rendered: &StreamGraphOnTheWire,
     direction: PortDirection,
@@ -146,10 +165,56 @@ fn the_placed_ports_of(
         .flat_map(|node| {
             the_ports_of(&node.ports, direction)
                 .iter()
-                .map(|port| LinkCandidateEnd::PlacedPort {
-                    node: node.id.clone(),
-                    port: port.name.clone(),
+                .flat_map(move |port| {
+                    let members = match direction {
+                        PortDirection::Output => {
+                            the_members_of(port.pin.as_ref().map(|pin| &pin.pin_type))
+                        }
+                        PortDirection::Input => Vec::new(),
+                    };
+                    the_port_and_its_members(port.name.clone(), members).map(|(port, member)| {
+                        LinkCandidateEnd::PlacedPort {
+                            node: node.id.clone(),
+                            port,
+                            member,
+                        }
+                    })
                 })
         })
         .collect()
+}
+
+/// `port`, then `port` at each of `members`, each as a port name and the member it names.
+fn the_port_and_its_members(
+    port: String,
+    members: Vec<String>,
+) -> impl Iterator<Item = (String, Option<String>)> {
+    std::iter::once((port.clone(), None)).chain(
+        members
+            .into_iter()
+            .map(move |member| (port.clone(), Some(member))),
+    )
+}
+
+/// The members of the bundle a port declaring `port` carries whatever it is linked to: its
+/// declared type's, when that is one bundle; none for any other declaration.
+fn the_members_a_declared_port_carries(port: &PortDescriptor) -> Vec<String> {
+    match port
+        .pin_declaration
+        .as_ref()
+        .map(|declared| &declared.pin_type)
+    {
+        Some(DeclaredPinType::Is { pin_type }) => the_members_of(Some(pin_type)),
+        _ => Vec::new(),
+    }
+}
+
+/// The names of the members of `pin_type`, in declared order, when it is a bundle.
+fn the_members_of(pin_type: Option<&PinType>) -> Vec<String> {
+    match pin_type {
+        Some(PinType::Bundle { members }) => {
+            members.iter().map(|member| member.name.clone()).collect()
+        }
+        _ => Vec::new(),
+    }
 }

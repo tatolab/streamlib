@@ -519,7 +519,8 @@ impl LoadedStreamInThisRuntime {
             let made = self
                 .block_on_the_engines_tokio_runtime(connect_impl(
                     self.live_graph_change(),
-                    OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port),
+                    OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port)
+                        .at_member(link.source.member.clone()),
                     InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
                     ALinkConnected::OfASavedGraph,
                     WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,

@@ -356,6 +356,7 @@ fn an_output_following_an_input_fed_by_a_graph_input_naming_no_family_carries_th
         &LinkPortRefOutput {
             node: "passer".into(),
             port: "result".into(),
+            member: None,
         },
         GraphInterfacePortDirection::Output,
     );

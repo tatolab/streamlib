@@ -31,20 +31,39 @@ pub(crate) fn the_node_a_connects_end_names(node: &str) -> Result<Uuid, GraphReq
     the_node_named(node, &HashMap::new())
 }
 
-/// The link from `source` to `target`, each node as [`the_node_named`] reads it.
+/// Refuse `target`, the input end of a link, when it names a member: a link ends at a whole
+/// input port.
+pub(crate) fn refuse_a_member_named_on_an_input_end(
+    target: &StreamGraphActionLinkEnd,
+) -> Result<(), GraphRequestRefusal> {
+    match &target.member {
+        None => Ok(()),
+        Some(member) => Err(streamlib::sdk::error::Error::InvalidLink(format!(
+            "a link ends at a whole input port, and the end at input '{}' names member `{member}`",
+            target.port
+        ))
+        .into()),
+    }
+}
+
+/// The link from `source` to `target`, each node as [`the_node_named`] reads it; refused when
+/// `target` names a member.
 pub(super) fn the_link_named(
     source: &StreamGraphActionLinkEnd,
     target: &StreamGraphActionLinkEnd,
     node_by_label: &HashMap<String, Uuid>,
 ) -> Result<StreamGraphDocumentLink, GraphRequestRefusal> {
+    refuse_a_member_named_on_an_input_end(target)?;
     Ok(StreamGraphDocumentLink {
         source: StreamGraphDocumentLinkEnd {
             node: the_node_named(&source.node, node_by_label)?,
             port: source.port.clone(),
+            member: source.member.clone(),
         },
         target: StreamGraphDocumentLinkEnd {
             node: the_node_named(&target.node, node_by_label)?,
             port: target.port.clone(),
+            member: None,
         },
     })
 }
@@ -713,12 +732,14 @@ fn a_node_added_on_the_link(
                 target: StreamGraphDocumentLinkEnd {
                     node: added_node,
                     port: carrying.input_port.to_owned(),
+                    member: None,
                 },
             },
             StreamGraphDocumentLink {
                 source: StreamGraphDocumentLinkEnd {
                     node: added_node,
                     port: carrying.output_port.to_owned(),
+                    member: None,
                 },
                 target: link.target.clone(),
             },

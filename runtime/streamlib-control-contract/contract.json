@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 19
+    "x-contract-revision": 20
   },
   "methods": [
     {
@@ -6140,13 +6140,20 @@
           "port": {
             "type": "string",
             "description": "The port's name."
+          },
+          "member": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The member of a bundle port the link starts at; absent for the whole port."
           }
         },
         "required": [
           "node",
           "port"
         ],
-        "description": "One end of a link a graph tool names: a node by its UUID and one of its ports."
+        "description": "One end of a link a graph tool names: a node by its UUID, one of its ports, and the member of\na bundle port it starts at, if any."
       },
       "ProjectFilePlaceOnTheWire": {
         "type": "object",
@@ -8897,13 +8904,20 @@
           "port": {
             "type": "string",
             "description": "The port's own name on that node."
+          },
+          "member": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The member of a bundle port the link starts at, which it carries alone; absent for the\nwhole port. Only a link's `source` names one."
           }
         },
         "required": [
           "node",
           "port"
         ],
-        "description": "One end of a link of a stream's graph: a node by its name, and one of its ports."
+        "description": "One end of a link of a stream's graph: a node by its name, one of its ports, and the member\nof a bundle port the link starts at, if any."
       },
       "GraphLinkStateOnTheWire": {
         "oneOf": [
@@ -10152,13 +10166,20 @@
           "port": {
             "type": "string",
             "description": "The port's name, as `graph` lists it under the node's `ports`."
+          },
+          "member": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The member of a bundle port the link starts at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. Only a link's `source` names one."
           }
         },
         "required": [
           "node",
           "port"
         ],
-        "description": "One end of a link a graph action names: a node and one of its ports."
+        "description": "One end of a link a graph action names: a node, one of its ports, and the member of a bundle\nport it starts at, if any."
       },
       "GraphEditMode": {
         "oneOf": [
@@ -10913,6 +10934,13 @@
                 "type": "string",
                 "description": "The port's name, as `graph` lists it under the node's `ports`."
               },
+              "member": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The member of the bundle an output port carries that the end is, by name; absent for\nthe whole port."
+              },
               "kind": {
                 "type": "string",
                 "const": "placed_port"
@@ -10936,6 +10964,13 @@
               "port": {
                 "type": "string",
                 "description": "The port's name, as the node type declares it."
+              },
+              "member": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The member of the bundle an output port carries that the end is, by name; absent for\nthe whole port."
               },
               "kind": {
                 "type": "string",

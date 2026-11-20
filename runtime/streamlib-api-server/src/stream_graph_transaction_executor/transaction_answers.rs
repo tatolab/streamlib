@@ -225,6 +225,7 @@ fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWi
     GraphLinkEndOnTheWire {
         node: end.node.to_string(),
         port: end.port.clone(),
+        member: end.member.clone(),
     }
 }
 

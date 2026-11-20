@@ -387,7 +387,7 @@ pub struct ProjectActionRefusalOnTheWire {
     pub refused_node: Option<String>,
     /// The link the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refused_link: Option<RefusedGraphLinkOnTheWire>,
+    pub refused_link: Option<Box<RefusedGraphLinkOnTheWire>>,
     /// The node's input or config field the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_field: Option<String>,

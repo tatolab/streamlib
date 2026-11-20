@@ -366,11 +366,14 @@ impl ALinkEndTheGraphHolds {
             .map(|pin| pin.pin_type.clone())
     }
 
-    /// The link between this end and port `port_name` of the node `node_run_id`, output first.
+    /// The link between this end and port `port_name` of the node `node_run_id`, output first;
+    /// `member` names the member of the bundle that port carries the link starts at, when the
+    /// port is the output.
     fn the_link_to(
         &self,
         node_run_id: &NodeRunId,
         port_name: &str,
+        member: Option<String>,
     ) -> (OutputLinkPortRef, InputLinkPortRef) {
         match self {
             Self::Output(from) => (
@@ -378,7 +381,7 @@ impl ALinkEndTheGraphHolds {
                 InputLinkPortRef::new(node_run_id.clone(), port_name),
             ),
             Self::Input(to) => (
-                OutputLinkPortRef::new(node_run_id.clone(), port_name),
+                OutputLinkPortRef::new(node_run_id.clone(), port_name).at_member(member),
                 to.clone(),
             ),
         }
@@ -406,17 +409,20 @@ pub(in crate::core::runtime) struct ANodeTypesPortToJudge {
     node_type: NodeClassImportPath,
     spec: NodeSpec,
     port_name: String,
+    member: Option<String>,
     ports_of_its_direction: Arc<[PortDescriptor]>,
 }
 
 impl ANodeTypesPortToJudge {
-    /// Port `port_name` of `node_type`, as `node_types` resolves the type, among the type's
-    /// `ports_of_its_direction`, which every port of the type judged in one batch shares.
+    /// Port `port_name` of `node_type`, or its `member` when it is an output carrying a bundle,
+    /// as `node_types` resolves the type, among the type's `ports_of_its_direction`, which every
+    /// port of the type judged in one batch shares.
     pub(in crate::core::runtime) fn of(
         node_types: &NodeTypesOneStreamResolves,
         node_type: NodeClassImportPath,
         ports_of_its_direction: Arc<[PortDescriptor]>,
         port_name: &str,
+        member: Option<&str>,
     ) -> Self {
         Self {
             spec: node_spec_holding_the_input_values(
@@ -427,6 +433,7 @@ impl ANodeTypesPortToJudge {
             ),
             node_type,
             port_name: port_name.to_owned(),
+            member: member.map(str::to_owned),
             ports_of_its_direction,
         }
     }
@@ -482,6 +489,7 @@ fn the_verdict_on_a_link_with_a_node_types_port(
         node_type,
         spec,
         port_name,
+        member,
         ports_of_its_direction,
     }: ANodeTypesPortToJudge,
 ) -> Result<Option<PinLinkVerdict>> {
@@ -494,7 +502,7 @@ fn the_verdict_on_a_link_with_a_node_types_port(
             port_name,
             direction,
         })?;
-    let (from, to) = held.the_link_to(&placed.node_run_id, &port_name);
+    let (from, to) = held.the_link_to(&placed.node_run_id, &port_name, member);
     let judge =
         |graph: &mut Graph| the_verdict_a_connect_made_now_takes(graph, from.clone(), to.clone());
     let as_placed = judge(placed.graph_mut())?;
@@ -668,7 +676,8 @@ pub(in crate::core::runtime) fn what_a_connect_makes_of_each_link_at_a_placed_le
                 (Ok(source), Ok(target)) => (source, target),
                 (Err(unjudged), _) | (_, Err(unjudged)) => return Ok(unjudged),
             };
-            let from = OutputLinkPortRef::new(source, &link.source.port);
+            let from = OutputLinkPortRef::new(source, &link.source.port)
+                .at_member(link.source.member.clone());
             let to = InputLinkPortRef::new(target, &link.target.port);
             let verdict = the_verdict_connect_takes_in(&mut graph, from.clone(), to.clone())?;
             if let Ok((from, to)) = the_ends_connect_links(&graph, from, to) {
@@ -728,7 +737,7 @@ fn the_graph_a_placed_level_runs_as(
         };
         if let Ok((from, to)) = the_ends_connect_links(
             &graph,
-            OutputLinkPortRef::new(source, held.source.port),
+            OutputLinkPortRef::new(source, held.source.port).at_member(held.source.member),
             InputLinkPortRef::new(target, held.target.port),
         ) {
             graph.traversal_mut().add_e(from, to);
