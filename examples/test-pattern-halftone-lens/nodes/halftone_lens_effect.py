@@ -8,15 +8,19 @@ name the engine spawns this node's child interpreter with.
 """
 
 import struct
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -76,16 +80,28 @@ WORKGROUP_TILE_SIZE_IN_PIXELS = 8
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
+# The one format the frames land in and the kernel writes.
+HALFTONE_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
+
+
 def workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // WORKGROUP_TILE_SIZE_IN_PIXELS
 
 
-@node.process
+@node
 class HalftoneLensEffect:
     """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 
-    video_from_upstream = Input(Image, delivery="newest")
-    video_to_downstream = Output(Image)
+    video_from_upstream: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames to put the lens over")]
+    ]
+    video_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(HALFTONE_FRAME_TEXTURE_FORMAT),
+            Description("The same frames, dotted where the lens covers them"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.halftone_lens_kernel = ctx.gpu_full_access.create_compute_kernel(
@@ -99,15 +115,15 @@ class HalftoneLensEffect:
         # A frame arrives as a pixel buffer, which a kernel cannot sample, so
         # each one is copied into a texture first.
         self.source_frame_textures = NodeOutputTextureRing(
-            "rgba8_unorm", ["texture_binding"], depth=1
+            HALFTONE_FRAME_TEXTURE_FORMAT, ["texture_binding"], depth=1
         )
         self.halftone_frame_textures = NodeOutputTextureRing(
-            "rgba8_unorm", ["storage_binding", "texture_binding"]
+            HALFTONE_FRAME_TEXTURE_FORMAT, ["storage_binding", "texture_binding"]
         )
         self.first_frame_at_ns: int | None = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is None:
             return
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
@@ -132,8 +148,7 @@ class HalftoneLensEffect:
             ),
             push_constants=HALFTONE_LENS_DIALS.pack(frame.width, frame.height, seconds),
         )
-        ctx.outputs.write(
-            self.video_to_downstream,
+        self.video_to_downstream.write(
             ImageFrameToWrite.of_texture(halftone_frame, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

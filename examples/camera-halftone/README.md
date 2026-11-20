@@ -60,10 +60,10 @@ names stand in for them here.
   the module's Rust, never Python.
 - `HalftoneCompute` is this project's own node, in `nodes/halftone_compute.py`
   — its own module, because every Python node runs in its own child
-  interpreter with its own GIL, which imports the class by name. Its config is
-  the `HalftoneComputeConfig` dataclass its `__init__` names; the graph document holds
-  a dict and the child builds the dataclass from it.
-- The input port is `Input(Image, delivery="newest")`, the profile for a
+  interpreter with its own GIL, which imports the class by name. Its settings
+  are the annotated fields on its class, each with a `NumberRange`, so each shows
+  as a slider in Tato Studio and is read again on every frame.
+- The input pin is `InputPin[Annotated[Texture, StreamDelivery("newest")]]`, the profile for a
   stream where a stale frame has no value once a fresher one exists.
 - **The runtime opens no windows.** Any port of the running stream, the
   kernel's output among them, is seen in Tato Studio's viewer.
@@ -158,7 +158,7 @@ ctx.gpu_limited_access.copy_surface_to_surface(
 )
 ```
 
-`frame` — the object `ctx.inputs.read(self.camera_frame_from_upstream)` handed back, an `ImageFrame`, —
+`frame` — the object `self.camera_frame_from_upstream.read()` handed back, an `ImageFrame`, —
 holds a claim on the camera's surface, and that claim is what keeps the
 camera's pixels still for the length of the copy. The engine picks the copy a
 buffer-to-texture pair needs, converts nothing, and returns once the kernel's

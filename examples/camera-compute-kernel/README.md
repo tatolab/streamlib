@@ -66,7 +66,7 @@ ctx.gpu_limited_access.copy_surface_to_surface(
 ```
 
 The engine does the copy, so it is worth reading closely. `frame` — the object
-`ctx.inputs.read(self.camera_frame_from_upstream)` handed back, an `ImageFrame`, — holds a claim on the
+`self.camera_frame_from_upstream.read()` handed back, an `ImageFrame`, — holds a claim on the
 camera's surface, and that claim is what keeps the camera's pixels still for
 the length of the copy. The call picks the copy a buffer-to-texture pair needs,
 converts nothing, and returns once the kernel's read of the texture would see
@@ -96,7 +96,7 @@ raises: this node drops its own frame and never waits on a consumer.
 `GrayscaleCompute` runs in its own child interpreter with its own GIL, like
 every Python node. `CameraSource` comes from the `tatolab-camera` module, and its per-frame path is
 the module's Rust, never Python. The input
-port is `Input(Image, delivery="newest")`, the profile for a stream where a stale frame has no
+pin is `InputPin[Annotated[Texture, StreamDelivery("newest")]]`, the profile for a stream where a stale frame has no
 value once a fresher one exists. The runtime opens no windows: any port of the running
 stream is seen in Tato Studio's viewer.
 

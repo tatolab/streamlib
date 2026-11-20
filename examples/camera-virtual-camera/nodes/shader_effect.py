@@ -15,17 +15,21 @@ and runs it over every frame on the GPU, so the pixels never leave it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -97,23 +101,28 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
-@dataclass
-class ShaderEffectConfig:
-    """The look: a Slang `float4 effect(float4 source, int2 at)` function."""
-
-    effect_slang: str = "float4 effect(float4 source, int2 at) { return source; }"
-
-
-@node.meta(description="Runs the Slang effect function its config carries over every frame")
-@node.process
+@node.meta(description="Runs the Slang effect function its setting carries over every frame")
+@node
 class ShaderEffect:
     """Frame in, the same frame through a Slang `effect` function out."""
 
-    video_from_upstream = Input(Image, delivery="newest", description="Frames to put the look on")
-    video_to_downstream = Output(Image, description="The same frames through the look")
-
-    def __init__(self, config: ShaderEffectConfig) -> None:
-        self.effect_slang = config.effect_slang
+    effect_slang: Annotated[
+        str,
+        SettingOnly(),
+        Description(
+            "The look: a Slang `float4 effect(float4 source, int2 at)` function, compiled at setup."
+        ),
+    ] = "float4 effect(float4 source, int2 at) { return source; }"
+    video_from_upstream: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames to put the look on")]
+    ]
+    video_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The same frames through the look"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Depth 1: `dispatch` returns with the GPU work retired, and nothing
@@ -139,7 +148,7 @@ class ShaderEffect:
             ) from refusal
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is None:
             return
 
@@ -169,8 +178,7 @@ class ShaderEffect:
             ),
         )
 
-        ctx.outputs.write(
-            self.video_to_downstream,
+        self.video_to_downstream.write(
             ImageFrameToWrite.of_texture(look_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
