@@ -1,0 +1,100 @@
+{
+  "asset": "c82f4e17-6a3b-4d95-b1e0-7f2a9c4d3b58",
+  "links": [
+    {
+      "source": {
+        "node": "7a460338-4840-544c-af0a-7f50ab1d9367",
+        "port": "value"
+      },
+      "target": {
+        "node": "65807237-516d-55ea-8ead-ac5a4a0ba52d",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "53d259e5-6b73-565b-be79-0794683b34ce",
+        "port": "value"
+      },
+      "target": {
+        "node": "65807237-516d-55ea-8ead-ac5a4a0ba52d",
+        "port": "seconds"
+      }
+    },
+    {
+      "source": {
+        "node": "65807237-516d-55ea-8ead-ac5a4a0ba52d",
+        "port": "result"
+      },
+      "target": {
+        "node": "910e4314-4d41-5cb3-a067-cafd2ef2c2ce",
+        "port": "value"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "7a460338-4840-544c-af0a-7f50ab1d9367",
+      "input_values": {
+        "family": "image",
+        "port": "video_in"
+      },
+      "name": "video_in",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          0
+        ]
+      },
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "53d259e5-6b73-565b-be79-0794683b34ce",
+      "input_values": {
+        "family": "channels",
+        "port": "seconds"
+      },
+      "name": "seconds",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          150
+        ]
+      },
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "65807237-516d-55ea-8ead-ac5a4a0ba52d",
+      "input_values": {
+        "size": 1.0
+      },
+      "name": "digits",
+      "studio": {
+        "contract": 1,
+        "position": [
+          250,
+          0
+        ]
+      },
+      "type": "nodes.stage_shaders:ClockDigits"
+    },
+    {
+      "id": "910e4314-4d41-5cb3-a067-cafd2ef2c2ce",
+      "input_values": {
+        "family": "image",
+        "port": "video_out"
+      },
+      "name": "video_out",
+      "studio": {
+        "contract": 1,
+        "position": [
+          500,
+          0
+        ]
+      },
+      "type": "tatolab.stream:GraphOutput"
+    }
+  ]
+}
