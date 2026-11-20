@@ -197,7 +197,7 @@
     },
     {
       "id": "b838f09c-f46b-57a3-bde4-82bbaeead760",
-      "name": "program",
+      "name": "audio_video_preview",
       "studio": {
         "contract": 1,
         "position": [
@@ -205,7 +205,7 @@
           0
         ]
       },
-      "type": "Core Nodes:program"
+      "type": "Core Nodes:audio_video_preview"
     }
   ]
 }
