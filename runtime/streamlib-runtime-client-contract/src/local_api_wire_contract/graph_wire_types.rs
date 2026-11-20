@@ -113,6 +113,11 @@ pub struct GraphTransactionConnectedLink {
     /// What the link converts and warns of, as the judgement of its two typed ends says.
     #[serde(flatten)]
     pub marks: PinLinkMarksOnTheWire,
+    /// Why the link was saved without its two ends being judged, when it was: inside a placed
+    /// stream, it reaches a node that runs as no node of its own, or one that is not built to
+    /// judge it, such as one whose type is not described.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_judged_because: Option<String>,
 }
 
 /// An input a graph transaction set a value on while a link feeds it, so the link's messages

@@ -140,7 +140,7 @@ pub struct CheckLinkRequest {
     /// The subgraph the link would be inside, by the fragment nodes leading to it; the stream's
     /// own level when omitted.
     #[schemars(
-        description = "The subgraph the link would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused."
+        description = "The subgraph the link would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level."
     )]
     pub level: Option<Vec<Uuid>>,
     /// The output port the link would carry from.

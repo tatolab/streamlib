@@ -6,8 +6,9 @@
 //! the graph, its document and the project's history are left as they were.
 
 use streamlib::sdk::descriptors::{
-    AudioWindowContract, FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeKind,
-    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    AudioWindowContract, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
+    NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor, PortFamily,
+    PortFamilyDeclaration,
 };
 
 use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
@@ -205,30 +206,61 @@ async fn check_link_answers_a_link_connect_makes_and_changes_nothing() {
     );
 }
 
-/// A link inside a placed stream is refused unchecked, since the check judges a link at the
-/// stream's own level alone.
+/// A link inside a placed stream, under a non-empty `level`, is checked as `connect` judges it
+/// there: each link `connect` refuses inside is answered with the very refusal it answers, and
+/// one it makes with `connects`, the placed stream's document left as it was by the check.
+///
+/// Mental-revert: refusing a non-empty `level` unchecked fails `check_link` itself.
 #[tokio::test(flavor = "multi_thread")]
-async fn check_link_refuses_a_link_inside_a_placed_stream() {
+async fn check_link_answers_what_connect_answers_for_a_link_inside_a_placed_stream() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_a_mixer();
     engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    let mut link = the_link(
-        json!(project.stream_asset_of("main")),
-        (MIXER_NODE_UUID, "level"),
-        (MIXER_NODE_UUID, "gain"),
-    );
-    link["level"] = json!([NO_NODE_UUID]);
+    let inside = engine
+        .the_mixer_collapsed_into_a_placed_stream(&project)
+        .await;
+    let link_inside = |source: (&str, &str), target: (&str, &str)| {
+        let mut link = the_link(json!(project.stream_asset_of("main")), source, target);
+        link["level"] = json!([inside.subgraph]);
+        link
+    };
+    let sub_before = project.the_graph_document_of("sub");
 
-    let refusal = engine
-        .the_answer_or_the_refusal_of("check_link", link)
-        .await
-        .expect_err("a level inside a placed stream is not checked");
+    for (what, link) in [
+        (
+            "pin types that do not connect",
+            link_inside((&inside.mixer, "level"), (&inside.mixer, "video")),
+        ),
+        (
+            "a setting",
+            link_inside((&inside.mixer, "level"), (&inside.volume, "value")),
+        ),
+        (
+            "a node the placed stream does not hold",
+            link_inside((&inside.mixer, "level"), (NO_NODE_UUID, "gain")),
+        ),
+    ] {
+        let checked = engine.the_check_of(&link).await;
+        assert_eq!(project.the_graph_document_of("sub"), sub_before, "{what}");
+        let refused = engine
+            .the_answer_or_the_refusal_of("connect", connected_by_alice(&link))
+            .await
+            .expect_err(what);
 
-    assert_eq!(refusal.action, "check_link", "{refusal:?}");
-    assert!(
-        refusal.runtime_words.contains("not checked yet"),
-        "{refusal:?}"
+        assert_eq!(checked["outcome"], "refused", "{what}: {checked}");
+        assert_eq!(
+            checked["refusal"],
+            serde_json::to_value(&*refused).unwrap(),
+            "{what}: check_link answers the refusal connect answers"
+        );
+    }
+
+    let made = link_inside((&inside.mixer, "level"), (&inside.mixer, "gain"));
+    assert_eq!(
+        engine.the_check_of(&made).await,
+        json!({ "outcome": "connects" })
     );
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
 }
 
 /// The function node type `node_type`, taking `inputs`, each a Records input or, with an audio
@@ -268,6 +300,52 @@ fn a_function_node_type(
         ));
     }
     descriptor
+}
+
+/// A pass-through stand-in for the `PreviousValue` node type a loop of function nodes closes
+/// through, not the node interpreter's own, which takes and gives a Float: it takes a value of
+/// any type into `value`, of the Records or the Channels family, and gives it back on `result`
+/// as the type and family of the link into `value`. A link closing a loop inside a placed
+/// stream has the links through the node judged among the level's nodes, and these tests close
+/// loops carrying Records as well as Floats, so the stand-in passes each through as it came.
+fn a_previous_value_node_type() -> NodeDescriptor {
+    let any_flow = PinDeclaration::exactly(PinType::Float { exact_size: None });
+    let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
+    value_family.also_takes_families = vec![PortFamily::Channels];
+    let value = PortDescriptor::new(
+        streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT,
+        "",
+        true,
+        value_family,
+    )
+    .with_delivery_profile("newest")
+    .with_pin_declaration(PinDeclaration {
+        pin_type: DeclaredPinType::Any,
+        ..any_flow.clone()
+    });
+    let mut result_family = PortFamilyDeclaration::of_family(PortFamily::Records);
+    result_family.family_follows_input_port =
+        Some(streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT.to_owned());
+    let result = PortDescriptor::new(
+        streamlib_project_repository::PREVIOUS_VALUE_NODE_OUTPUT_PORT,
+        "",
+        true,
+        result_family,
+    )
+    .with_pin_declaration(PinDeclaration {
+        pin_type: DeclaredPinType::SameAsInput {
+            input_port_name: streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT
+                .to_owned(),
+        },
+        ..any_flow
+    });
+    a_function_node_type(
+        streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE,
+        &[],
+        &[],
+    )
+    .with_input(value)
+    .with_output(result)
 }
 
 const LFO_TYPE: &str = "link_check_test:Lfo";
@@ -322,23 +400,13 @@ fn a_node_type_with_a_port_meaning(
     }
 }
 
-/// Register each node type the link check tests below place, `PreviousValue` among them as the
-/// function node a stream's node interpreter describes it as, once per test binary.
+/// Register each node type the link check tests below place, a pass-through stand-in for
+/// `PreviousValue` among them, once per test binary.
 pub(super) fn register_the_link_check_node_types_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         for descriptor in [
-            a_function_node_type(
-                streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE,
-                &[(
-                    streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT,
-                    None,
-                )],
-                &[(
-                    streamlib_project_repository::PREVIOUS_VALUE_NODE_OUTPUT_PORT,
-                    PortFamily::Records,
-                )],
-            ),
+            a_previous_value_node_type(),
             a_function_node_type(LFO_TYPE, &[], &[("result", PortFamily::Records)]),
             a_function_node_type(WAVE_TYPE, &[], &[("result", PortFamily::Channels)]),
             a_function_node_type(
@@ -534,6 +602,75 @@ async fn a_connected_link_carries_the_warnings_its_verdict_gives() {
         }]),
         "{connected}"
     );
+}
+
+/// A link closing a loop of function nodes inside a placed stream, which `connect` closes
+/// through a `PreviousValue` node it adds, has each of that node's two links judged as the top
+/// level judges them: a second link into a port an island already feeds is refused there as it
+/// is at the stream's own level, and the placed stream's document is left as it was.
+///
+/// Mental-revert: judging only a plain connect at a placed level saves the `PreviousValue`
+/// node and its links.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_loop_closed_inside_a_placed_stream_has_its_previous_value_links_judged() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let refused_at_the_top = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            connected_by_alice(&the_link(
+                json!(stream_asset),
+                (REMAP_UUID, "result"),
+                (MIX_UUID, "a"),
+            )),
+        )
+        .await
+        .expect_err("the stream's own level refuses a second link into `mix.a`");
+    let collapsed = engine
+        .the_answer_or_the_refusal_of(
+            "collapse_selection_into_subgraph",
+            json!({ "stream": stream_asset, "nodes": [FIRST_LFO_UUID, MIX_UUID, REMAP_UUID],
+                    "name": "sub", "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the function nodes collapse into `sub`");
+    let subgraph = collapsed["added_nodes"][0]["node"]
+        .as_str()
+        .expect("the placing node")
+        .to_owned();
+    let sub_before = project.the_graph_document_of("sub");
+    let drawn = |name: &str| {
+        the_uuid_a_held_node_takes_under(
+            &subgraph,
+            the_node_named(&sub_before, name)["id"]
+                .as_str()
+                .expect("the node's UUID"),
+        )
+    };
+    let mut closing_the_loop_inside = the_link(
+        json!(stream_asset),
+        (&drawn("remap"), "result"),
+        (&drawn("mix"), "a"),
+    );
+    closing_the_loop_inside["level"] = json!([subgraph]);
+
+    let refused_inside = engine
+        .the_answer_or_the_refusal_of("connect", connected_by_alice(&closing_the_loop_inside))
+        .await
+        .expect_err("a second link into `mix.a` is refused inside `sub` too");
+
+    for refused in [&refused_at_the_top, &refused_inside] {
+        assert!(
+            refused
+                .runtime_words
+                .contains("shares the port with no other link"),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(refused_inside.refusal_code, refused_at_the_top.refusal_code);
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
 }
 
 /// A Float output into an Integer input, each stating another meaning, connects for free with a

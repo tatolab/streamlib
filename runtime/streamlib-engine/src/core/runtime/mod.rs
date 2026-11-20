@@ -86,7 +86,7 @@ pub(crate) use node_interpreters::open_descriptor_soft_limit::{
     the_open_descriptor_limit,
 };
 pub use operations::{
-    ANodeTypesPort, BoxFuture, GraphEditBatch, GraphEditBatchRefused,
+    ANodeNotBuilt, ANodeTypesPort, BoxFuture, GraphEditBatch, GraphEditBatchRefused,
     HowFarARefusedBatchWasTakenBack, NodeInTheGraph, PortOfANodeOfAType, RuntimeOperations,
     WhatALiveConnectMakesOfALink,
 };
