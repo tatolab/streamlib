@@ -432,7 +432,7 @@ impl NodeInstanceFactory {
     }
 
     /// Register `descriptor` with `constructor` and a config check that takes any config.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn register_with_a_constructor_for_a_test(
         &self,
         descriptor: NodeDescriptor,

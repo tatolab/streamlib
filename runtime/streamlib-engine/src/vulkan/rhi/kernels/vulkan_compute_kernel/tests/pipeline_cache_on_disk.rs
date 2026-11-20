@@ -15,6 +15,10 @@ use super::*;
 // would otherwise be UB.
 
 use serial_test::serial;
+
+use crate::core::rhi::{
+    ShaderSpecializationConstant, ShaderSpecializationData, ShaderSpecializationValue,
+};
 use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
@@ -52,24 +56,45 @@ fn with_pipeline_cache_dir<R>(dir: &Path, f: impl FnOnce() -> R) -> R {
     r
 }
 
+fn unspecialized() -> ShaderSpecializationData {
+    ShaderSpecializationData::default()
+}
+
 #[test]
 #[serial(streamlib_pipeline_cache_env)]
 fn cache_file_path_is_stable_for_same_spirv_and_distinct_for_different() {
     let dir = unique_cache_dir("path-stability");
     with_pipeline_cache_dir(&dir, || {
         let main = c"main";
-        let p1 = pipeline_cache_file_path(blend_spv(1), main, None);
-        let p2 = pipeline_cache_file_path(blend_spv(1), main, None);
-        let p4 = pipeline_cache_file_path(blend_spv(4), main, None);
+        let p1 = pipeline_cache_file_path(blend_spv(1), main, &unspecialized(), None);
+        let p2 = pipeline_cache_file_path(blend_spv(1), main, &unspecialized(), None);
+        let p4 = pipeline_cache_file_path(blend_spv(4), main, &unspecialized(), None);
         assert_eq!(p1, p2, "same SPIR-V must hash to same path");
         assert_ne!(p1, p4, "different SPIR-V must hash to different paths");
         // One module backs one pipeline per entry point, and they are not
         // interchangeable — sharing a file would have them overwrite each
         // other's blob.
-        let sharpen = pipeline_cache_file_path(blend_spv(1), c"sharpen", None);
+        let sharpen = pipeline_cache_file_path(blend_spv(1), c"sharpen", &unspecialized(), None);
         assert_ne!(
             p1, sharpen,
             "two entry points over one module must not share a cache file"
+        );
+        // Each specialization is a pipeline of its own.
+        let specialized_to = |workgroup_size| {
+            ShaderSpecializationData::of_the_constants(&[ShaderSpecializationConstant {
+                constant_id: 0,
+                value: ShaderSpecializationValue::U32(workgroup_size),
+            }])
+        };
+        let at_32 = pipeline_cache_file_path(blend_spv(1), main, &specialized_to(32), None);
+        assert_ne!(
+            p1, at_32,
+            "a specialization must not share the unspecialized file"
+        );
+        assert_ne!(
+            at_32,
+            pipeline_cache_file_path(blend_spv(1), main, &specialized_to(64), None),
+            "two specializations must not share a cache file"
         );
         assert!(p1.starts_with(&dir));
         assert!(
@@ -120,8 +145,12 @@ fn a_streams_kernel_caches_under_its_stream_unless_the_env_override_is_set() {
             override_directory,
             "the env override must win over the stream's directory"
         );
-        let in_the_stream =
-            pipeline_cache_file_path(blend_spv(1), c"main", Some(&stream_directory));
+        let in_the_stream = pipeline_cache_file_path(
+            blend_spv(1),
+            c"main",
+            &unspecialized(),
+            Some(&stream_directory),
+        );
         assert!(in_the_stream.starts_with(&override_directory));
     });
 }
@@ -172,10 +201,11 @@ fn cache_miss_writes_cache_file_after_kernel_construction() {
                 spv: blend_spv(1),
                 bindings: &bindings,
                 push_constant_size: 4,
+                specialization_constants: &[],
             },
         )
         .expect("kernel creation");
-        let expected = pipeline_cache_file_path(blend_spv(1), c"main", None);
+        let expected = pipeline_cache_file_path(blend_spv(1), c"main", &unspecialized(), None);
         assert!(
             expected.exists(),
             "cache file {} should exist after construction",
@@ -215,11 +245,12 @@ fn cache_hit_does_not_panic_or_break_kernel_construction() {
                     spv: blend_spv(1),
                     bindings: &bindings,
                     push_constant_size: 4,
+                    specialization_constants: &[],
                 },
             )
             .expect("first construction"),
         );
-        let cache_path = pipeline_cache_file_path(blend_spv(1), c"main", None);
+        let cache_path = pipeline_cache_file_path(blend_spv(1), c"main", &unspecialized(), None);
         let warm_blob = std::fs::read(&cache_path).expect("warm read");
         assert!(
             !warm_blob.is_empty(),
@@ -239,6 +270,7 @@ fn cache_hit_does_not_panic_or_break_kernel_construction() {
                     spv: blend_spv(1),
                     bindings: &bindings,
                     push_constant_size: 4,
+                    specialization_constants: &[],
                 },
             )
             .expect("second construction"),
@@ -260,7 +292,7 @@ fn corrupt_cache_blob_falls_back_to_recompile_and_overwrites() {
     with_pipeline_cache_dir(&dir, || {
         create_directory_and_its_missing_parents_at_mode(&dir, OWNER_ONLY_DIRECTORY_MODE)
             .expect("mkdir");
-        let cache_path = pipeline_cache_file_path(blend_spv(1), c"main", None);
+        let cache_path = pipeline_cache_file_path(blend_spv(1), c"main", &unspecialized(), None);
         // Plant a header-invalid blob that the driver will reject.
         // 32 bytes of zeros has header_version=0 ≠ 1 — driver ignores
         // the data and treats the cache as empty.
@@ -275,6 +307,7 @@ fn corrupt_cache_blob_falls_back_to_recompile_and_overwrites() {
                 spv: blend_spv(1),
                 bindings: &bindings,
                 push_constant_size: 4,
+                specialization_constants: &[],
             },
         )
         .expect("kernel must construct despite corrupt cache");
@@ -320,6 +353,7 @@ fn read_only_cache_dir_does_not_break_kernel_construction() {
                 spv: blend_spv(1),
                 bindings: &bindings,
                 push_constant_size: 4,
+                specialization_constants: &[],
             },
         );
 

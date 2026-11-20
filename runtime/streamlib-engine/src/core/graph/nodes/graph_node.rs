@@ -175,6 +175,16 @@ impl GraphNode {
         &self.upstream_stream_facts_by_inbound_link
     }
 
+    /// The values this node's port facts read: its config, each setting it reads at setup laid
+    /// over it holding the value set on it or else its default.
+    pub(crate) fn the_values_its_port_facts_read(&self) -> Option<serde_json::Value> {
+        crate::core::graph::the_values_port_facts_read(
+            self.config.as_ref(),
+            &self.ports.inputs,
+            &self.pins,
+        )
+    }
+
     /// Update config and recompute checksum.
     pub fn set_config(&mut self, config: serde_json::Value) {
         self.config_checksum = compute_json_checksum(&config);

@@ -429,11 +429,19 @@ impl LoadedStreamInThisRuntime {
             .collect();
         self.update_node_config_compiled_right_away(&node_run_id, &config)
             .await?;
+        let mut a_setting_read_at_setup_changed = false;
         for input in pin_values_cleared {
             self.set_pin_value(&node_run_id, &input, None, None)?;
+            a_setting_read_at_setup_changed |=
+                self.is_a_setting_the_node_reads_at_setup(&node_run_id, &input);
         }
         for (input, value) in pin_values {
             self.set_pin_value(&node_run_id, &input, None, Some(value))?;
+            a_setting_read_at_setup_changed |=
+                self.is_a_setting_the_node_reads_at_setup(&node_run_id, &input);
+        }
+        if a_setting_read_at_setup_changed {
+            self.leave_the_node_to_rebuild(&node_run_id);
         }
         Ok(())
     }
@@ -441,7 +449,9 @@ impl LoadedStreamInThisRuntime {
     /// Set the input value `input` of `node`, or its member `member` when one is named, to
     /// `value`, `None` taking it off: a setting its type holds in its config is set in the config
     /// the node holds once each config update already logged for it is applied, any other on its
-    /// input.
+    /// input. A setting the node reads at setup is saved and leaves the node to rebuild, which
+    /// [`Self::rebuild_each_node_a_setting_read_at_setup_changed`] does once for every such set
+    /// made before it.
     async fn set_one_input_value_of_the_node(
         &self,
         node: Uuid,
@@ -461,7 +471,11 @@ impl LoadedStreamInThisRuntime {
         let legacy_config =
             LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
         if !legacy_config.is_a_config_field(input) {
-            return self.set_pin_value(&node_run_id, input, member, value);
+            self.set_pin_value(&node_run_id, input, member, value)?;
+            if self.is_a_setting_the_node_reads_at_setup(&node_run_id, input) {
+                self.leave_the_node_to_rebuild(&node_run_id);
+            }
+            return Ok(());
         }
         self.update_node_config_built_from_the_one_it_holds(&node_run_id, |config_held| {
             let mut config = match config_held.unwrap_or_default() {

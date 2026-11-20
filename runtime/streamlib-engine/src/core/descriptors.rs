@@ -12,6 +12,10 @@ pub use streamlib_node_schema::description_lint::{
 pub use streamlib_node_schema::descriptors::{
     CodeExamples, NodeDescriptor, NodeRuntime, PortDescriptor,
 };
+pub use streamlib_node_schema::node_settings::{
+    NodeSettings, SettingChosenFromOptions, SettingPinType, the_default_of_a_setting,
+    the_input_of_a_setting, the_menu_of_a_setting,
+};
 pub use streamlib_node_schema::pin_type::{
     BuiltInPinTypeName, BundleMember, ConvertNodeToInsert, DeclaredPinType, FloatSize,
     FreePinConversion, IntegerSize, NamedPinTypeImportPath, NodeInputMode, PinAnnotations,

@@ -85,6 +85,8 @@ pub mod sdk {
 
     pub use streamlib_engine::node_config;
 
+    pub use streamlib_engine::node_settings;
+
     // ---- Permission helpers ----
 
     pub mod permissions {
@@ -200,7 +202,8 @@ pub mod engine_internal {
         ReactiveNode, Result, Runner, RuntimeContext, RuntimeContextFullAccess,
         RuntimeContextLimitedAccess, StreamClock, StreamClockSpec, Texture, TextureDescriptor,
         TextureFormat, TexturePool, TexturePoolDescriptor, TextureUsages, core, crossbeam_channel,
-        iceoryx2, input, logging, node, node_config, output, platform, schemars, sdk, serde_json,
+        iceoryx2, input, logging, node, node_config, node_settings, output, platform, schemars,
+        sdk, serde_json,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use streamlib_engine::{

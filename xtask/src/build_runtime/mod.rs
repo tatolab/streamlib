@@ -78,10 +78,11 @@ fn runtime_unit_wheel_directory_in_the_workspace(workspace_root: &Path) -> PathB
 
 /// Each binary the runtime unit carries, as the cargo package that builds it
 /// and the binary target's name, which is also its file name in `bin/`.
-const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 3] = [
+const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 4] = [
     ("tatolabd", "tatolabd"),
     ("tatolab-cli", "tatolab"),
     ("tatolab-video-poster-frame", "tatolab-video-poster-frame"),
+    ("tatolab-video-encode-host", "tatolab-video-encode-host"),
 ];
 
 /// The cargo feature that moves the machine runtime lock, the state directory

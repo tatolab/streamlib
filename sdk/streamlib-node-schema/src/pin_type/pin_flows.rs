@@ -59,6 +59,32 @@ impl PinType {
             .unwrap_or(own_flows)
     }
 
+    /// Words for the member of a List or a bundle whose flows the whole takes, such as
+    /// "member `voice`, an Audio": `None` when its own type's flows stand.
+    fn the_member_its_flows_come_from(&self) -> Option<String> {
+        let flows = self.flows();
+        if flows == built_in_pin_type(self.built_in_name()).flows {
+            return None;
+        }
+        let label_of = |member_type: &PinType| built_in_pin_type(member_type.built_in_name()).label;
+        match self {
+            Self::ListOf { element_type } => {
+                Some(format!("elements of the {} type", label_of(element_type)))
+            }
+            Self::Bundle { members } => members
+                .iter()
+                .find(|member| member.member_type.flows() == flows)
+                .map(|member| {
+                    format!(
+                        "member `{}` of the {} type",
+                        member.name,
+                        label_of(&member.member_type)
+                    )
+                }),
+            _ => None,
+        }
+    }
+
     /// The flow a pin of this type has when its author states none.
     pub fn default_flow(&self) -> PinFlow {
         self.flows()[0]
@@ -146,9 +172,13 @@ impl PinDeclaration {
             .map(|flow| format!("`{}`", flow.name()))
             .collect::<Vec<_>>()
             .join(" or ");
+        let held_by = refusing_type
+            .the_member_its_flows_come_from()
+            .map(|words| format!(", as it holds {words}"))
+            .unwrap_or_default();
         Some(format!(
-            "port `{port_name}` states the flow `{}`, which the {} type does not allow; it flows \
-             as {flows_it_allows}",
+            "port `{port_name}` states the flow `{}`, which the {} type does not allow{held_by}; \
+             it flows as {flows_it_allows}",
             self.flow.name(),
             built_in_pin_type(refusing_type.built_in_name()).label,
         ))

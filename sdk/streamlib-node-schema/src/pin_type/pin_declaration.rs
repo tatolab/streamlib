@@ -242,6 +242,17 @@ impl NodeInputMode {
             }
         )
     }
+
+    /// Whether an input of this mode is a setting its node reads once, when it is set up, so a
+    /// change rebuilds the node.
+    pub fn is_a_setting_read_at_setup(self) -> bool {
+        matches!(
+            self,
+            Self::SettingOnly {
+                read: SettingReadTime::AtSetup
+            }
+        )
+    }
 }
 
 /// When a node reads a setting-only input.

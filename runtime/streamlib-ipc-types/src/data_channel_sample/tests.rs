@@ -59,12 +59,12 @@ fn a_payload_cache_line_is_sixty_four_bytes_at_sixty_four_byte_alignment() {
 #[test]
 fn a_descriptor_of_an_unknown_kind_is_refused_by_kind() {
     let unknown = DataChannelPayloadDescriptor {
-        kind: 7,
+        kind: 8,
         body: [0u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES],
     };
     assert_eq!(
         unknown.known_kind(),
-        Err(DataChannelSamplePayloadRefusal::UnknownPayloadDescriptorKind { kind: 7 })
+        Err(DataChannelSamplePayloadRefusal::UnknownPayloadDescriptorKind { kind: 8 })
     );
 }
 
