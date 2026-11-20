@@ -11,7 +11,7 @@ use super::{
     GRAPH_INTERFACE_VALUE_PORT_NAME,
 };
 use crate::core::descriptors::{
-    PinAnnotationName, PinAnnotations, PinNumberRange, PinType, built_in_pin_type,
+    DeclaredPinType, PinAnnotationName, PinAnnotations, PinNumberRange, PinType, built_in_pin_type,
 };
 use crate::core::graph::graph_snapshot::GraphSnapshotNode;
 use crate::core::{Error, Result};
@@ -25,6 +25,20 @@ const THE_ANNOTATION_SETTINGS_OF_A_GRAPH_INPUT: [(&str, PinAnnotationName); 5] =
     (GRAPH_INPUT_MEANING_SETTING, PinAnnotationName::Meaning),
     (GRAPH_INPUT_CONTROL_SETTING, PinAnnotationName::Control),
 ];
+
+/// The name of each setting of a top-level `GraphInput` stating an annotation of its `value`.
+pub(super) fn the_annotation_settings_of_a_graph_input() -> impl Iterator<Item = &'static str> {
+    THE_ANNOTATION_SETTINGS_OF_A_GRAPH_INPUT
+        .into_iter()
+        .map(|(setting, _)| setting)
+}
+
+/// Whether `setting` is a setting of a top-level `GraphInput` stating an annotation of its
+/// `value`.
+pub(super) fn is_an_annotation_setting_of_a_graph_input(setting: &str) -> bool {
+    the_annotation_settings_of_a_graph_input()
+        .any(|annotation_setting| annotation_setting == setting)
+}
 
 /// The range a `GraphInput`'s `config` declares a number of its `value` takes, as
 /// `[lowest, highest]`; `None` when it declares none.
@@ -46,33 +60,82 @@ fn the_range_a_graph_input_config_declares(
 
 /// The annotations a `GraphInput`'s `config` states of its `value` input, each from the setting
 /// [`THE_ANNOTATION_SETTINGS_OF_A_GRAPH_INPUT`] names for it; a setting it holds no value of,
-/// or one it cannot read, states none.
+/// or one it cannot read, states none, and so does each annotation no setting of it holds.
 pub(super) fn the_annotations_a_graph_input_config_states(
     config: Option<&serde_json::Value>,
 ) -> PinAnnotations {
+    let held = |setting: &str| config.and_then(|config| config.get(setting));
     let held_text = |setting: &str| {
-        config
-            .and_then(|config| config.get(setting))
+        held(setting)
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
     };
+    // Every field is named, so an annotation added to a pin is decided on here.
     PinAnnotations {
         range: the_range_a_graph_input_config_declares(config),
-        step: config
-            .and_then(|config| config.get(GRAPH_INPUT_STEP_SETTING))
-            .and_then(serde_json::Value::as_f64),
+        step: held(GRAPH_INPUT_STEP_SETTING).and_then(serde_json::Value::as_f64),
         unit: held_text(GRAPH_INPUT_UNIT_SETTING),
         meaning: held_text(GRAPH_INPUT_MEANING_SETTING),
         control: held_text(GRAPH_INPUT_CONTROL_SETTING),
-        ..PinAnnotations::default()
+        frame_rate: None,
+        sample_rate: None,
+        sample_type: None,
+        residency: None,
+        project_asset: None,
+    }
+}
+
+/// The pin type the `GraphInput` node type declares for its setting `setting`.
+fn the_pin_type_the_setting_declares(setting: &str) -> Option<PinType> {
+    crate::core::nodes::the_settings_of_a_graph_input()
+        .iter()
+        .find(|declared| declared.name == setting)
+        .and_then(|declared| declared.declared_pin())
+        .and_then(|declared| match declared.pin_type {
+            DeclaredPinType::Is { pin_type } => Some(pin_type),
+            DeclaredPinType::OneOf { .. }
+            | DeclaredPinType::Any
+            | DeclaredPinType::SameAsInput { .. }
+            | DeclaredPinType::SetByInput { .. } => None,
+        })
+}
+
+/// What a value `held` by the setting stating `annotation`, of the type `declared`, must be
+/// when it is not that: what `declared` takes, or for a step, a number above 0; `None` when it
+/// is of its form.
+fn the_form_a_held_annotation_is_not_of(
+    annotation: PinAnnotationName,
+    declared: Option<&PinType>,
+    held: &serde_json::Value,
+) -> Option<String> {
+    if let Some(Err(not_taken)) = declared.map(|declared| declared.check_value(held)) {
+        return Some(not_taken.takes);
+    }
+    match annotation {
+        PinAnnotationName::Step => {
+            (!held.as_f64().is_some_and(|step| step > 0.0)).then(|| "a number above 0".to_string())
+        }
+        // Its declared type alone judges each of these; the order of a range's bounds is
+        // judged with its family.
+        PinAnnotationName::Range
+        | PinAnnotationName::Unit
+        | PinAnnotationName::Meaning
+        | PinAnnotationName::Control => None,
+        // No setting of a `GraphInput` holds one of these: the first four only an output
+        // states, and an asset is picked by the Asset type.
+        PinAnnotationName::FrameRate
+        | PinAnnotationName::SampleRate
+        | PinAnnotationName::SampleType
+        | PinAnnotationName::Residency
+        | PinAnnotationName::ProjectAsset => None,
     }
 }
 
 /// Refuse a setting of the `GraphInput` `node` stating an annotation of its `value` that the
 /// `pin_type` it chooses does not take, naming the annotation and those the type takes, or one
 /// that holds a value of another form; and one stating any annotation but `range` while it
-/// chooses no pin type, which it is checked against. A `range` with no pin type chosen is
-/// checked against the family, as before the Input chose one.
+/// chooses no pin type. A `range` on an Input that chooses no pin type is checked against its
+/// family.
 pub(super) fn refuse_an_annotation_the_chosen_type_does_not_take(
     node: &GraphSnapshotNode,
     pin_type: Option<&PinType>,
@@ -86,7 +149,7 @@ pub(super) fn refuse_an_annotation_the_chosen_type_does_not_take(
             continue;
         };
         let Some(pin_type) = pin_type else {
-            if setting == GRAPH_INPUT_RANGE_CONFIG_KEY {
+            if annotation == PinAnnotationName::Range {
                 continue;
             }
             return Err(Error::GraphError(format!(
@@ -116,17 +179,11 @@ pub(super) fn refuse_an_annotation_the_chosen_type_does_not_take(
                 node.name, row.label
             )));
         }
-        let of_its_form = match setting {
-            GRAPH_INPUT_RANGE_CONFIG_KEY => true,
-            GRAPH_INPUT_STEP_SETTING => held.as_f64().is_some_and(|step| step > 0.0),
-            _ => held.is_string(),
-        };
-        if !of_its_form {
-            let form = if setting == GRAPH_INPUT_STEP_SETTING {
-                "a number above 0"
-            } else {
-                "a string"
-            };
+        if let Some(form) = the_form_a_held_annotation_is_not_of(
+            annotation,
+            the_pin_type_the_setting_declares(setting).as_ref(),
+            held,
+        ) {
             return Err(Error::GraphError(format!(
                 "`GraphInput` node `{}` states its `{setting}` as {held}, and it takes {form}",
                 node.name

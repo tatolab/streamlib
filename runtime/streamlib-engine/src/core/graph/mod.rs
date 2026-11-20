@@ -100,11 +100,11 @@ pub use edges::{
     InputLinkPortRef, InputPortMarker, Link, LinkCapacity, LinkDirection, LinkState, LinkUniqueId,
     OutputLinkPortRef, OutputPortMarker, PortMarker, input, output,
 };
-pub(crate) use nodes::the_refusal_of_a_link_into_a_setting;
 pub use nodes::{
     GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PinTypeAsDeclared,
-    PortAnnotations, PortInfo,
+    PortInfo,
 };
+pub(crate) use nodes::{PortAnnotations, the_refusal_of_a_link_into_a_setting};
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{
     LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut, TraversalSource,

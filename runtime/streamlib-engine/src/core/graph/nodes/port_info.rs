@@ -66,13 +66,13 @@ pub struct PortInfo {
     /// `GraphInput`'s `value` input, as its settings state it: its range, step, unit, meaning and
     /// control among them. Not rendered here: `graph` renders it beside the port's pin type.
     #[serde(skip)]
-    pub annotations: PortAnnotations,
+    pub(crate) annotations: PortAnnotations,
 }
 
 /// What a port's pin states besides its type, compared number by number bit for bit, so a port
 /// compares equal to itself.
 #[derive(Debug, Clone, Default)]
-pub struct PortAnnotations(pub crate::core::descriptors::PinAnnotations);
+pub(crate) struct PortAnnotations(pub(crate) crate::core::descriptors::PinAnnotations);
 
 impl PartialEq for PortAnnotations {
     fn eq(&self, other: &Self) -> bool {
@@ -88,16 +88,28 @@ impl PartialEq for PortAnnotations {
             residency,
             project_asset,
         } = &self.0;
-        range.map(InputNumberRange) == other.0.range.map(InputNumberRange)
-            && step.map(f64::to_bits) == other.0.step.map(f64::to_bits)
-            && unit == &other.0.unit
-            && meaning == &other.0.meaning
-            && control == &other.0.control
-            && frame_rate == &other.0.frame_rate
-            && sample_rate == &other.0.sample_rate
-            && sample_type == &other.0.sample_type
-            && residency == &other.0.residency
-            && project_asset == &other.0.project_asset
+        let crate::core::descriptors::PinAnnotations {
+            range: other_range,
+            step: other_step,
+            unit: other_unit,
+            meaning: other_meaning,
+            control: other_control,
+            frame_rate: other_frame_rate,
+            sample_rate: other_sample_rate,
+            sample_type: other_sample_type,
+            residency: other_residency,
+            project_asset: other_project_asset,
+        } = &other.0;
+        range.map(InputNumberRange) == other_range.map(InputNumberRange)
+            && step.map(f64::to_bits) == other_step.map(f64::to_bits)
+            && unit == other_unit
+            && meaning == other_meaning
+            && control == other_control
+            && frame_rate == other_frame_rate
+            && sample_rate == other_sample_rate
+            && sample_type == other_sample_type
+            && residency == other_residency
+            && project_asset == other_project_asset
     }
 }
 
