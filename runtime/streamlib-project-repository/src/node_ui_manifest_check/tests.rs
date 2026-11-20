@@ -34,7 +34,7 @@ fn a_built_in_types_default_control_and_a_body_for_a_node_type_the_project_does_
     let project_directory = a_project_holding_the_node_ui_manifest(MANIFEST);
     let to_check = the_node_ui_manifest_a_check_reads(project_directory.path(), None)
         .expect("the project has a node UI manifest");
-    assert!(to_check.registers_a_node_body());
+    assert!(to_check.is_judged_against_what_the_projects_modules_declare());
     assert_eq!(
         to_check.file_checked,
         Some(ProjectFileChecked {
@@ -43,8 +43,11 @@ fn a_built_in_types_default_control_and_a_body_for_a_node_type_the_project_does_
         })
     );
 
-    let node_types = BTreeSet::from(["crossfade:Crossfade".to_owned()]);
-    let findings = the_findings_of_a_node_ui_manifest(&to_check, Some(&node_types));
+    let declared = WhatTheProjectsModulesDeclare {
+        own_node_types: BTreeSet::from(["crossfade:Crossfade".to_owned()]),
+        ..WhatTheProjectsModulesDeclare::default()
+    };
+    let findings = the_findings_of_a_node_ui_manifest(&to_check, Some(&declared));
 
     let codes_and_words = the_codes_and_words(&findings);
     let [(default_code, default_words), (body_code, body_words)] = codes_and_words.as_slice()
@@ -80,12 +83,143 @@ fn a_built_in_types_default_control_and_a_body_for_a_node_type_the_project_does_
     );
 }
 
+const NAMED_TYPE_DEFAULTS: &str = r#"{"contract": "1.1",
+  "controls": [
+    {"type": "nodes.sensor:SensorReading", "script": "sensor_reading.ts"},
+    {"type": "rig.arm:Pose", "script": "pose.ts"},
+    {"type": "nowhere:Thing", "script": "thing.ts"},
+    {"type": "rig.arm:Pose", "control": "dial", "script": "pose_dial.ts"}
+  ]}"#;
+
+fn what_a_project_declaring_a_sensor_reading_and_importing_a_pose_declares()
+-> WhatTheProjectsModulesDeclare {
+    WhatTheProjectsModulesDeclare {
+        own_node_types: BTreeSet::new(),
+        module_declaring_each_named_pin_type: BTreeMap::from([
+            (
+                "nodes.sensor:SensorReading".to_owned(),
+                ModuleThatDeclares::TheProjectsOwnCode,
+            ),
+            (
+                "rig.arm:Pose".to_owned(),
+                ModuleThatDeclares::AnotherModule("the import `rig` (`imports/rig`)".to_owned()),
+            ),
+        ]),
+    }
+}
+
+/// Mental-revert: judging every default control as a built-in type's refuses the project's own
+/// `SensorReading` and names no declaring module for `Pose`.
+#[test]
+fn a_named_types_default_control_passes_only_in_the_module_that_declares_the_type() {
+    let project_directory = a_project_holding_the_node_ui_manifest(NAMED_TYPE_DEFAULTS);
+    let to_check = the_node_ui_manifest_a_check_reads(project_directory.path(), None)
+        .expect("the project has a node UI manifest");
+    assert!(to_check.is_judged_against_what_the_projects_modules_declare());
+
+    let findings = the_findings_of_a_node_ui_manifest(
+        &to_check,
+        Some(&what_a_project_declaring_a_sensor_reading_and_importing_a_pose_declares()),
+    );
+
+    let codes_and_words = the_codes_and_words(&findings);
+    let [
+        (imported_code, imported_words),
+        (undeclared_code, undeclared_words),
+    ] = codes_and_words.as_slice()
+    else {
+        panic!("two findings: {findings:?}");
+    };
+    assert_eq!(
+        *imported_code,
+        "default_control_not_the_modules_to_register"
+    );
+    assert!(
+        imported_words.contains("`controls[1]` registers the default control of `rig.arm:Pose`")
+            && imported_words.contains("register it in the import `rig` (`imports/rig`)"),
+        "{imported_words}"
+    );
+    assert_eq!(
+        *undeclared_code,
+        "default_control_not_the_modules_to_register"
+    );
+    assert!(
+        undeclared_words.contains("`controls[2]`")
+            && undeclared_words.contains("no module the project brings declares"),
+        "{undeclared_words}"
+    );
+    assert!(
+        the_findings_of_a_node_ui_manifest(&to_check, None).is_empty(),
+        "a named type's default is not judged without what the modules declare"
+    );
+}
+
+#[test]
+fn what_the_modules_declare_is_read_off_the_node_type_listing() {
+    let listing: ListProjectNodeTypesToolResult = serde_json::from_value(serde_json::json!({
+        "project_directory": "/projects/cell",
+        "project": "4a4602b0-9d26-4d3a-b13c-018fcbea7c53",
+        "project_name": "cell",
+        "sources": [
+            {
+                "source": "project",
+                "node_types": [{
+                    "type": "nodes.ik:InverseKinematics", "kind": "process", "description": "",
+                    "category": null, "category_from": null, "inputs": [], "outputs": [],
+                    "path": "nodes/ik.py", "line": 4,
+                }],
+                "graph_generators": [],
+                "named_pin_types": [{
+                    "named_pin_type": "nodes.sensor:SensorReading", "description": "A reading.",
+                    "path": "nodes/sensor.py", "line": 9,
+                }],
+                "unreadable_modules": [],
+            },
+            {
+                "source": "dependency", "project": "a17ac5c3-71fb-42f2-b8ef-a905b9c1c30f",
+                "folder": "rig", "version": "v1", "project_name": "Rig",
+                "node_types": [{
+                    "type": "rig.arm:Arm", "kind": "process", "description": "",
+                    "category": null, "category_from": null, "inputs": [], "outputs": [],
+                    "path": "imports/rig/rig/arm.py", "line": 2,
+                }],
+                "graph_generators": [],
+                "named_pin_types": [{
+                    "named_pin_type": "rig.arm:Pose", "description": "A pose.",
+                    "path": "imports/rig/rig/arm.py", "line": 12,
+                }],
+                "unreadable_modules": [],
+            },
+        ],
+    }))
+    .expect("a listing");
+
+    assert_eq!(
+        WhatTheProjectsModulesDeclare::read_off(&listing),
+        WhatTheProjectsModulesDeclare {
+            own_node_types: BTreeSet::from(["nodes.ik:InverseKinematics".to_owned()]),
+            module_declaring_each_named_pin_type: BTreeMap::from([
+                (
+                    "nodes.sensor:SensorReading".to_owned(),
+                    ModuleThatDeclares::TheProjectsOwnCode,
+                ),
+                (
+                    "rig.arm:Pose".to_owned(),
+                    ModuleThatDeclares::AnotherModule(
+                        "the import `Rig` (`imports/rig`)".to_owned()
+                    ),
+                ),
+            ]),
+        }
+    );
+}
+
 #[test]
 fn a_manifest_that_does_not_read_is_an_error_and_one_outside_the_paths_is_not_read() {
     let project_directory = a_project_holding_the_node_ui_manifest(r#"{"contract": "2.0"}"#);
     let to_check = the_node_ui_manifest_a_check_reads(project_directory.path(), None)
         .expect("the project has a node UI manifest");
-    assert!(!to_check.registers_a_node_body());
+    assert!(!to_check.is_judged_against_what_the_projects_modules_declare());
 
     let findings = the_findings_of_a_node_ui_manifest(&to_check, None);
 

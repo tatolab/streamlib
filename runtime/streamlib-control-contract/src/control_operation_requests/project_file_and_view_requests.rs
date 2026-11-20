@@ -107,7 +107,7 @@ pub struct CreateNodeUiElementRequest {
     pub project_directory: PathBuf,
     /// What to create, as its manifest entry registers it.
     #[schemars(
-        description = "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by and which it must have, since a pin type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
+        description = "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows, a built-in type's name or a named type's import path, and its `control` name, which a pin's `control` annotation picks it by and which a built-in type's control must have, since a built-in type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
     )]
     pub element: ProjectNodeUiElement,
     /// The new script, inside the project's `node_ui/` folder.

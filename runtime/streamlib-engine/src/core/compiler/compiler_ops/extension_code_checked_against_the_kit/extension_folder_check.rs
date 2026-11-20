@@ -459,10 +459,7 @@ impl ExtensionFolderToCheck {
         }
         let mut tie_file = vec![tie_lines.header];
         for (index, control) in controls.iter().enumerate() {
-            let pin_type = serde_json::to_value(control.pin_type)
-                .ok()
-                .and_then(|name| name.as_str().map(str::to_owned))
-                .unwrap_or_default();
+            let pin_type = control.pin_type.as_written();
             tie_file.push(
                 tie_lines
                     .controls
