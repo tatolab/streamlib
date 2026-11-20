@@ -29,11 +29,9 @@ use crate::core::supervised_child_process::{
 };
 use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
-/// The switch naming the socket a shared native service listens on.
-pub const SHARED_NATIVE_SERVICE_LISTEN_SOCKET_SWITCH: &str = "--listen-socket";
-
-/// The switch naming the directory a shared native service keeps its state in.
-pub const SHARED_NATIVE_SERVICE_STATE_DIRECTORY_SWITCH: &str = "--state-directory";
+pub use streamlib_runtime_client_contract::shared_native_service_command_line::{
+    SHARED_NATIVE_SERVICE_LISTEN_SOCKET_SWITCH, SHARED_NATIVE_SERVICE_STATE_DIRECTORY_SWITCH,
+};
 
 /// How long a service is kept running after its last lease is given back.
 pub const SHARED_NATIVE_SERVICE_GRACE_AFTER_THE_LAST_LEASE: Duration = Duration::from_secs(30);
@@ -45,7 +43,8 @@ const SHARED_NATIVE_SERVICE_GRACE_AFTER_SIGTERM: Duration = Duration::from_secs(
 const SHARED_NATIVE_SERVICE_FIRST_READINESS_BUDGET: Duration = Duration::from_secs(30);
 
 /// The variables of this process a native service is started with: what a
-/// display, an audio server and the system's own libraries are found by.
+/// display, an audio server, the system's own libraries and the Vulkan
+/// drivers this process enumerates are found by.
 const SHARED_NATIVE_SERVICE_INHERITED_ENVIRONMENT_VARIABLES: &[&str] = &[
     "HOME",
     "USER",
@@ -60,6 +59,9 @@ const SHARED_NATIVE_SERVICE_INHERITED_ENVIRONMENT_VARIABLES: &[&str] = &[
     "PULSE_SERVER",
     "DBUS_SESSION_BUS_ADDRESS",
     "RUST_LOG",
+    "VK_ICD_FILENAMES",
+    "VK_DRIVER_FILES",
+    "VK_ADD_DRIVER_FILES",
 ];
 
 /// A native service the runtime's host offers its nodes.
@@ -71,6 +73,10 @@ pub struct SharedNativeServiceOffer {
     pub executable: PathBuf,
     /// Where it keeps what outlives it, such as each stream's browser profile.
     pub state_directory: PathBuf,
+    /// The most leases one process of the service takes before a lease
+    /// starts another process of it; `None` runs one process for every
+    /// lease.
+    pub most_leases_per_process: Option<usize>,
 }
 
 /// Whether a shared native service is there to connect to.
@@ -110,6 +116,9 @@ struct OneSharedNativeService {
     supervisor_generation: u64,
     /// Bumped by each lease, so a grace stop scheduled before it does nothing.
     lease_generation: u64,
+    /// The offered service this record is a further process of, when it is
+    /// one.
+    further_process_of: Option<String>,
 }
 
 /// One lease on a shared native service; dropping it gives it back.
@@ -165,9 +174,76 @@ impl SharedNativeServicesOfTheEngine {
                 previous_supervisor_is_stopping: false,
                 supervisor_generation: 0,
                 lease_generation: 0,
+                further_process_of: None,
             },
         );
         Ok(())
+    }
+
+    /// The process of `service_name` a new lease goes to: the one holding the
+    /// fewest leases while it holds fewer than the offer's most per process,
+    /// or else a further process of it, recorded here and started by the
+    /// lease. A service offered with no most leases per process is its own
+    /// one process.
+    fn the_process_a_new_lease_of_the_service_goes_to(&self, service_name: &str) -> String {
+        let mut services_by_name = self.lock_services();
+        let Some(most_leases_per_process) = services_by_name
+            .get(service_name)
+            .and_then(|service| service.offer.most_leases_per_process)
+        else {
+            return service_name.to_string();
+        };
+        let processes_of_the_service = || {
+            services_by_name.iter().filter(|(process_name, process)| {
+                process_name.as_str() == service_name
+                    || process.further_process_of.as_deref() == Some(service_name)
+            })
+        };
+        if let Some((process_name, _)) = processes_of_the_service()
+            .filter(|(_, process)| {
+                process.leases_held < most_leases_per_process
+                    && !matches!(process.state, SharedNativeServiceState::Failed(_))
+            })
+            .min_by_key(|(_, process)| process.leases_held)
+        {
+            return process_name.clone();
+        }
+        let process_number = (2..)
+            .find(|process_number| {
+                !services_by_name.contains_key(&further_process_name(service_name, *process_number))
+            })
+            .unwrap_or(2);
+        let process_name = further_process_name(service_name, process_number);
+        let Some(offered) = services_by_name.get(service_name) else {
+            return service_name.to_string();
+        };
+        let further_offer = SharedNativeServiceOffer {
+            service_name: process_name.clone(),
+            executable: offered.offer.executable.clone(),
+            state_directory: further_process_state_directory(
+                &offered.offer.state_directory,
+                process_number,
+            ),
+            most_leases_per_process: None,
+        };
+        tracing::info!(
+            "every process of the shared native service {service_name} holds \
+             {most_leases_per_process} leases, so {process_name} is started for the next"
+        );
+        services_by_name.insert(
+            process_name.clone(),
+            OneSharedNativeService {
+                offer: further_offer,
+                leases_held: 0,
+                state: SharedNativeServiceState::Stopped,
+                supervisor: None,
+                previous_supervisor_is_stopping: false,
+                supervisor_generation: 0,
+                lease_generation: 0,
+                further_process_of: Some(service_name.to_string()),
+            },
+        );
+        process_name
     }
 
     /// The socket `service_name` listens on.
@@ -179,9 +255,15 @@ impl SharedNativeServicesOfTheEngine {
         self.services_directory.join(format!("{service_name}.pid"))
     }
 
-    /// Lease `service_name`, starting it when no lease holds it, and wait for
-    /// a service starting, for the first time or again, to accept.
+    /// Lease `service_name` on the process of it a new lease goes to,
+    /// starting that process when no lease holds it, and wait for a process
+    /// starting, for the first time or again, to accept.
     pub(crate) fn lease(self: &Arc<Self>, service_name: &str) -> Result<SharedNativeServiceLease> {
+        let process_name = self.the_process_a_new_lease_of_the_service_goes_to(service_name);
+        self.lease_the_process(&process_name)
+    }
+
+    fn lease_the_process(self: &Arc<Self>, service_name: &str) -> Result<SharedNativeServiceLease> {
         let readiness_deadline = Instant::now() + self.first_readiness_budget;
         let mut services_by_name = self.lock_services();
         loop {
@@ -509,6 +591,23 @@ fn the_environment_a_shared_native_service_inherits() -> Vec<(OsString, OsString
         .collect()
 }
 
+/// The name of the `process_number`th process of `service_name`.
+fn further_process_name(service_name: &str, process_number: usize) -> String {
+    format!("{service_name}-{process_number}")
+}
+
+/// Where the `process_number`th process of a service keeps its state: beside
+/// the first's, since two processes of one service cannot share a state
+/// directory.
+fn further_process_state_directory(state_directory: &Path, process_number: usize) -> PathBuf {
+    let mut directory_name = state_directory
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    directory_name.push(format!("-{process_number}"));
+    state_directory.with_file_name(directory_name)
+}
+
 fn a_connect_on_the_socket_succeeds(endpoint_socket_path: &Path) -> bool {
     UnixStream::connect(endpoint_socket_path).is_ok()
 }
@@ -517,6 +616,18 @@ fn a_connect_on_the_socket_succeeds(endpoint_socket_path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_service_finds_the_vulkan_drivers_this_process_enumerates() {
+        for vulkan_driver_variable in ["VK_ICD_FILENAMES", "VK_DRIVER_FILES", "VK_ADD_DRIVER_FILES"]
+        {
+            assert!(
+                SHARED_NATIVE_SERVICE_INHERITED_ENVIRONMENT_VARIABLES
+                    .contains(&vulkan_driver_variable),
+                "{vulkan_driver_variable} is not handed to a shared native service"
+            );
+        }
+    }
 
     /// A shell script standing in for a service: it binds its socket through
     /// Python and serves until `SIGTERM`.
@@ -562,6 +673,7 @@ mod tests {
                 service_name: "stand-in".to_string(),
                 executable: a_stand_in_service_executable(directory),
                 state_directory: directory.join("state"),
+                most_leases_per_process: None,
             })
             .unwrap();
         services
@@ -674,6 +786,7 @@ mod tests {
                     1.0,
                 ),
                 state_directory: directory.path().join("state"),
+                most_leases_per_process: None,
             })
             .unwrap();
         drop(services.lease("stand-in").unwrap());
@@ -695,6 +808,64 @@ mod tests {
     }
 
     #[test]
+    fn leases_past_the_most_per_process_go_to_a_further_process_with_its_own_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = SharedNativeServicesOfTheEngine::with_timings(
+            directory.path().join("services"),
+            Duration::from_secs(60),
+            SHARED_NATIVE_SERVICE_FIRST_READINESS_BUDGET,
+        );
+        services
+            .offer(SharedNativeServiceOffer {
+                service_name: "stand-in".to_string(),
+                executable: a_stand_in_service_executable(directory.path()),
+                state_directory: directory.path().join("state"),
+                most_leases_per_process: Some(2),
+            })
+            .unwrap();
+        let leases: Vec<SharedNativeServiceLease> = (0..4)
+            .map(|_| services.lease("stand-in").unwrap())
+            .collect();
+        let endpoint_of = |lease: &SharedNativeServiceLease| {
+            lease
+                .endpoint_socket_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(
+            leases.iter().map(endpoint_of).collect::<Vec<_>>(),
+            [
+                "stand-in.sock",
+                "stand-in.sock",
+                "stand-in-2.sock",
+                "stand-in-2.sock"
+            ]
+        );
+        for lease in &leases {
+            assert_eq!(lease.state(), SharedNativeServiceState::Running);
+            assert!(UnixStream::connect(lease.endpoint_socket_path()).is_ok());
+        }
+        assert!(directory.path().join("state").is_dir());
+        assert!(directory.path().join("state-2").is_dir());
+        assert_ne!(
+            std::fs::read_to_string(directory.path().join("services/stand-in.pid")).unwrap(),
+            std::fs::read_to_string(directory.path().join("services/stand-in-2.pid")).unwrap(),
+        );
+
+        let mut leases = leases.into_iter();
+        drop(leases.next());
+        let fifth = services.lease("stand-in").unwrap();
+        assert_eq!(
+            endpoint_of(&fifth),
+            "stand-in.sock",
+            "a new lease goes to the process holding the fewest"
+        );
+        services.stop_every_service();
+    }
+
+    #[test]
     fn a_service_that_was_not_offered_or_offered_twice_is_refused_by_name() {
         let directory = tempfile::tempdir().unwrap();
         let services = services_offering_the_stand_in(directory.path(), Duration::from_secs(60));
@@ -708,6 +879,7 @@ mod tests {
                 service_name: "stand-in".to_string(),
                 executable: PathBuf::from("/elsewhere"),
                 state_directory: PathBuf::from("/elsewhere-state"),
+                most_leases_per_process: None,
             })
             .unwrap_err()
             .to_string();
@@ -728,6 +900,7 @@ mod tests {
                 service_name: "missing".to_string(),
                 executable: directory.path().join("no-such-executable"),
                 state_directory: directory.path().join("state"),
+                most_leases_per_process: None,
             })
             .unwrap();
         // The supervisor keeps trying a service that ships with the runtime,

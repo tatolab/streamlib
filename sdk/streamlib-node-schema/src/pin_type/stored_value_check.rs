@@ -65,9 +65,11 @@ impl PinDeclaration {
 
 impl PinType {
     /// Whether an input of this type holds a value while no link feeds it. A type that carries
-    /// only messages, such as a Texture, an Audio stream or a Trigger, holds none.
+    /// only messages, such as a Texture, an Audio stream or a Trigger, holds none, nor does a
+    /// List or a bundle holding one.
     pub fn holds_a_stored_value(&self) -> bool {
         match self {
+            Self::ListOf { .. } | Self::Bundle { .. } if self.holds_a_heavy_member() => false,
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }

@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Which pin types a port may declare. A List element and a bundle member are a small type,
-//! the values that ride a message that exists; a List element may also be a bundle of small
-//! types, a bundle member a List of them, and a bundle may be all Tensors. A single pin holds a whole number exact to 2^53
-//! at most, so a 64-bit Integer types only an element.
+//! the values that ride a Records message, or a heavy type, a Texture, Audio or an encoded unit,
+//! which rides a Bundle frame by reference; a List element may also be a bundle of small types,
+//! a bundle member a List of small types, and a bundle may be all Tensors. A Trigger is never a
+//! member or an element, as it has no value. A single pin holds a whole number exact to 2^53 at
+//! most, so a 64-bit Integer types only an element.
 
 use super::{BundleMember, IntegerSize, PinType};
 
 impl PinType {
     /// Refuse a type no port may declare, saying why: a List of a List, a List element or a
-    /// bundle member that is no small type in a bundle that is not all Tensors, a bundle inside
-    /// a bundle, a bundle naming one member twice, a menu with no option,
+    /// bundle member that is neither a small type nor a heavy type in a bundle that is not all
+    /// Tensors, a bundle inside a bundle, a bundle naming one member twice, a menu with no option,
     /// and an `Int64` or `UInt64` Integer that is no element.
     pub fn validate(&self) -> Result<(), String> {
         match self {
@@ -49,6 +51,30 @@ impl PinType {
                 | Self::Asset { .. }
         )
     }
+
+    /// Whether this is a heavy type, one a bundle or a List holds by reference in a Bundle
+    /// frame: a Texture, Audio, Encoded video or Encoded audio.
+    pub fn is_a_heavy_type(&self) -> bool {
+        matches!(
+            self,
+            Self::Texture { .. }
+                | Self::Audio {}
+                | Self::EncodedVideo { .. }
+                | Self::EncodedAudio { .. }
+        )
+    }
+
+    /// Whether this is a List or a bundle holding a heavy type, which travels as one Bundle
+    /// frame.
+    pub fn holds_a_heavy_member(&self) -> bool {
+        match self {
+            Self::ListOf { element_type } => element_type.is_a_heavy_type(),
+            Self::Bundle { members } => members
+                .iter()
+                .any(|member| member.member_type.is_a_heavy_type()),
+            _ => false,
+        }
+    }
 }
 
 fn validate_a_list_element(element_type: &PinType) -> Result<(), String> {
@@ -64,15 +90,18 @@ fn validate_a_list_element(element_type: &PinType) -> Result<(), String> {
         {
             validate_a_bundle(members)
         }
-        element_type if element_type.is_a_small_type() => element_type.validate(),
+        element_type if element_type.is_a_small_type() || element_type.is_a_heavy_type() => {
+            element_type.validate()
+        }
         element_type => Err(format!(
-            "a List element is a small type, or a bundle of them, and {element_type} is neither"
+            "a List element is a small type, a bundle of them, or a Texture, Audio or encoded \
+             unit, and {element_type} is none of these"
         )),
     }
 }
 
-/// Refuse a bundle naming one member twice, or holding a member that is no small type nor a
-/// List of them, unless every member is a Tensor.
+/// Refuse a bundle naming one member twice, or holding a member that is neither a small type, a
+/// List of them, nor a heavy type, unless every member is a Tensor.
 fn validate_a_bundle(members: &[BundleMember]) -> Result<(), String> {
     if let Some(named_twice) = a_member_named_twice(members) {
         return Err(format!(
@@ -104,12 +133,12 @@ fn validate_a_bundle_member(member: &BundleMember) -> Result<(), String> {
     let member_type = &member.member_type;
     let taken = match member_type {
         PinType::ListOf { element_type } => element_type.is_a_small_type(),
-        member_type => member_type.is_a_small_type(),
+        member_type => member_type.is_a_small_type() || member_type.is_a_heavy_type(),
     };
     if !taken {
         return Err(format!(
-            "bundle member `{}` is {member_type}, and a member is a small type or a List of \
-             them, unless every member is a Tensor",
+            "bundle member `{}` is {member_type}, and a member is a small type, a List of them, \
+             or a Texture, Audio or encoded unit, unless every member is a Tensor",
             member.name
         ));
     }

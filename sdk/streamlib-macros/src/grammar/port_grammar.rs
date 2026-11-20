@@ -562,16 +562,21 @@ fn parse_string_literal_list(content: ParseStream<'_>, key: &str) -> syn::Result
         .collect()
 }
 
-/// Parse `from_config("key")`, when that is what follows, into its key.
+/// Parse `from_config("key")` or `from_setting("name")`, when that is what follows, into the
+/// config key or setting the fact is read from; the node's port facts read its settings laid over
+/// its config, so both name a value of the one map.
 fn parse_from_config_key(content: ParseStream<'_>) -> syn::Result<Option<String>> {
     if !(content.peek(Ident) && content.peek2(syn::token::Paren)) {
         return Ok(None);
     }
     let function: Ident = content.parse()?;
-    if function != "from_config" {
+    if function != "from_config" && function != "from_setting" {
         return Err(syn::Error::new(
             function.span(),
-            format!("expected `from_config(\"<config key>\")`, found `{function}(…)`"),
+            format!(
+                "expected `from_config(\"<config key>\")` or `from_setting(\"<setting>\")`, \
+                 found `{function}(…)`"
+            ),
         ));
     }
     let arguments;

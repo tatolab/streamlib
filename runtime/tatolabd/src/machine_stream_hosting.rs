@@ -34,9 +34,15 @@ use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_t
 /// what it started.
 const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10);
 
+/// The most pages one browser host process renders before the next page goes
+/// to a further one: every page's raster and compositing runs on its CEF GPU
+/// process's one scheduler thread, which held 8 pages at 1080p60 to about
+/// 43 fps on an RTX 3090, where two processes of 4 held all 8 at 60.
+const MOST_TABS_ONE_BROWSER_HOST_PROCESS_TAKES: usize = 4;
+
 /// Offer every node the browser host the runtime unit or its app bundle
-/// carries, which a `BrowserSource` opens its tabs in; one built without it
-/// offers none.
+/// carries, which a `BrowserSource` opens its tabs in, spread over as many
+/// processes of it as the pages need; one built without it offers none.
 fn offer_the_browser_host_when_the_runtime_unit_carries_it(
     engine: &Runner,
     lend_directory: &std::path::Path,
@@ -53,14 +59,65 @@ fn offer_the_browser_host_when_the_runtime_unit_carries_it(
         );
         return;
     };
+    offer_the_shared_native_service(
+        engine,
+        tatolab_state_directory,
+        BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME,
+        browser_host_executable,
+        Some(MOST_TABS_ONE_BROWSER_HOST_PROCESS_TAKES),
+    );
+}
+
+/// Offer every encoder node the encode host the runtime unit carries beside
+/// this executable, which encodes every node's frames on one device per GPU;
+/// one built without it offers none, and each encoder opens a device of its
+/// own.
+#[cfg(target_os = "linux")]
+fn offer_the_video_encode_host_when_the_runtime_unit_carries_it(
+    engine: &Runner,
+    tatolab_state_directory: &TatolabStateDirectory,
+) {
+    use streamlib::sdk::node_interpreter::{
+        VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME, VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
+    };
+    let video_encode_host_executable =
+        match crate::runtime_unit_executable_beside_tatolabd::runtime_unit_executable_beside_this_one(
+            VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME,
+        ) {
+            Ok(executable) => executable,
+            Err(missing) => {
+                tracing::info!("{missing}, so each encoder opens a device of its own");
+                return;
+            }
+        };
+    offer_the_shared_native_service(
+        engine,
+        tatolab_state_directory,
+        VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
+        video_encode_host_executable,
+        None,
+    );
+}
+
+/// Offer `executable` to every node as the shared native service
+/// `service_name`, keeping its state under the state directory, with a
+/// further process of it started for each `most_leases_per_process` leases.
+fn offer_the_shared_native_service(
+    engine: &Runner,
+    tatolab_state_directory: &TatolabStateDirectory,
+    service_name: &str,
+    executable: PathBuf,
+    most_leases_per_process: Option<usize>,
+) {
     let offer = streamlib::sdk::shared_native_services::SharedNativeServiceOffer {
-        service_name: BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME.to_string(),
-        executable: browser_host_executable,
+        service_name: service_name.to_string(),
+        executable,
+        most_leases_per_process,
         state_directory: tatolab_state_directory
-            .shared_native_service_state_directory(BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME),
+            .shared_native_service_state_directory(service_name),
     };
     if let Err(refusal) = engine.offer_shared_native_service(offer) {
-        tracing::warn!("the browser host was not offered: {refusal}");
+        tracing::warn!("the shared native service {service_name} was not offered: {refusal}");
     }
 }
 
@@ -148,6 +205,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         &lend_directory,
         tatolab_state_directory,
     );
+    #[cfg(target_os = "linux")]
+    offer_the_video_encode_host_when_the_runtime_unit_carries_it(&engine, tatolab_state_directory);
     streamlib_media_builtins::register_media_builtin_node_types();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();

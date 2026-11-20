@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! H.264 or H.265 encode on a Vulkan device this module owns: each published frame,
-//! a pixel buffer or a texture, is checked out over surface-share, imported
-//! onto the owned device and encoded there, so a fault in the video engine
-//! ends this helper and nothing else.
+//! One encoder node's session on a Vulkan Video encode device: each frame
+//! checked out over surface-share, imported onto the device and encoded
+//! there. The device is the machine's encode host's, shared by every
+//! session it runs on that GPU, or one the node's helper opened for itself.
 
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd};
@@ -13,10 +13,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use streamlib_consumer_rhi::{
-    ConsumerVulkanBuffer, ConsumerVulkanTexture, OwnedVulkanVideoCodecDevice, PixelFormat,
-    TextureFormat, VulkanLayout, VulkanVideoCodecDirection,
-    runtime_vulkan_device_uuid_named_at_spawn,
+    ConsumerVulkanBuffer, ConsumerVulkanTexture, H273ColorVui, OwnedVulkanVideoCodecDevice,
+    PixelFormat, TextureFormat, VulkanLayout,
 };
 use streamlib_surface_client::{
     CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, CheckedOutSurface, CheckedOutTexture,
@@ -29,18 +30,74 @@ use streamlib_vulkan_video::{
 };
 
 use crate::VideoCodecNodeIdentity;
-use crate::encoded_video_publication::{
-    EncodedVideoAccessUnit, EncodedVideoOutputPort, EncodedVideoPublication,
-};
+use crate::encoded_video_publication::EncodedVideoAccessUnit;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_encoder_settings::{VideoEncodeSessionShape, VideoEncoderSettings};
-
-const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
 /// Imports kept, one per producer pool slot; a producer's pool is far smaller.
 const MOST_SURFACE_IMPORTS_KEPT: usize = 32;
 
-const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
+/// One frame to encode: the published surface its pixels are checked out
+/// from, and what its descriptor states.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoFrameToEncode {
+    pub surface_id: String,
+    pub width: u32,
+    pub height: u32,
+    /// Monotonic nanoseconds, the stamp the media frame carries.
+    pub timestamp_ns: i64,
+    #[serde(with = "H273ColorVuiAsItCrosses")]
+    pub color_vui: H273ColorVui,
+}
+
+/// [`H273ColorVui`]'s fields, as a frame carries them to the encode host.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "H273ColorVui")]
+struct H273ColorVuiAsItCrosses {
+    primaries: Option<u8>,
+    transfer: Option<u8>,
+    matrix: Option<u8>,
+    full_range: Option<bool>,
+}
+
+impl VideoFrameToEncode {
+    /// The frame an encoder node read off its `video` port.
+    pub fn of_the_frame_read(frame: &ImageFrameReadByTheEncoder) -> Self {
+        Self {
+            surface_id: frame.surface_id().to_owned(),
+            width: frame.width,
+            height: frame.height,
+            timestamp_ns: frame.timestamp_ns,
+            color_vui: frame.color_vui,
+        }
+    }
+
+    fn surface_id(&self) -> &str {
+        &self.surface_id
+    }
+}
+
+/// What encoding one frame came to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VideoFrameEncodeOutcome {
+    Encoded(VideoFrameEncoded),
+    /// Its producer recycled the surface before the check-out, so it was
+    /// skipped.
+    NotCheckedOut,
+    /// A session mint failed earlier, so every frame is discarded.
+    DiscardedAfterAFailedMint,
+}
+
+/// One frame's access units and the session they were coded in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoFrameEncoded {
+    pub access_units: Vec<EncodedVideoAccessUnit>,
+    /// The session's coded extent, aligned up from the frame's.
+    pub coded_extent: (u32, u32),
+    /// Whether this frame minted a new session, so its first access unit
+    /// opens a new coded sequence.
+    pub minted_a_session: bool,
+}
 
 /// The encoder session and the extent it was minted for.
 struct VideoEncodeSessionMintedFromAFrame {
@@ -49,96 +106,72 @@ struct VideoEncodeSessionMintedFromAFrame {
     minted_height: u32,
 }
 
-/// A video encoder node's native half: the owned device, its surface-share
-/// connection, and the session minted from the frames it receives.
-pub struct OwnedDeviceVideoEncoder {
+/// One node's session on an encode device: the device, its surface-share
+/// connection, the surfaces imported onto the device and the session
+/// minted from the frames.
+pub struct VideoEncodeOnADevice {
     node: VideoCodecNodeIdentity,
     settings: VideoEncoderSettings,
-    owned_device: Arc<OwnedVulkanVideoCodecDevice>,
+    device: Arc<OwnedVulkanVideoCodecDevice>,
     surface_share_connection: UnixStream,
     imported_pixel_buffers: HashMap<String, ConsumerVulkanBuffer>,
     imported_textures: HashMap<String, ConsumerVulkanTexture>,
     minted_session: Option<VideoEncodeSessionMintedFromAFrame>,
     session_mint_already_failed: bool,
     next_frame_must_be_a_sync_point: bool,
-    publication: EncodedVideoPublication,
-    frames_encoded: u64,
+    /// Set when a session is minted and cleared once a frame's outcome
+    /// reports it, so a mint whose first frame failed is still reported.
+    session_minted_and_not_yet_reported: bool,
     frames_not_checked_out: u64,
-    publication_refusals: u64,
 }
 
-impl OwnedDeviceVideoEncoder {
-    /// Create the owned device on the GPU the runtime named and connect to
-    /// its surface-share service.
+impl VideoEncodeOnADevice {
+    /// Encode on `device`, checking frames out of the surface-share service
+    /// at `surface_share_socket_path`.
     pub fn open(
         node: VideoCodecNodeIdentity,
         settings: VideoEncoderSettings,
+        device: Arc<OwnedVulkanVideoCodecDevice>,
+        surface_share_socket_path: &Path,
     ) -> Result<Self, String> {
         let node_type_name = node.node_type_name;
-        let opening_started = Instant::now();
-        let runtime_vulkan_device_uuid = runtime_vulkan_device_uuid_named_at_spawn()
-            .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
-        let owned_device = Arc::new(
-            OwnedVulkanVideoCodecDevice::new_on_the_device_the_runtime_named(
-                runtime_vulkan_device_uuid,
-                VulkanVideoCodecDirection::Encode,
-            )
-            .map_err(|refusal| {
-                format!(
-                    "{node_type_name}: the owned Vulkan Video encode device was refused: {refusal}"
-                )
-            })?,
-        );
-        let owned_device_created_ms = opening_started.elapsed().as_secs_f64() * 1_000.0;
-        let surface_share_socket_path = std::env::var_os(SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE)
-            .ok_or_else(|| {
-                format!(
-                    "{node_type_name}: {SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE} is not set, so no \
-                     published frame can be checked out"
-                )
-            })?;
-        let surface_share_connection = connect_to_surface_share_socket(Path::new(
-            &surface_share_socket_path,
-        ))
-        .map_err(|connect_failure| {
+        let surface_share_connection = connect_to_surface_share_socket(surface_share_socket_path)
+            .map_err(|connect_failure| {
             format!(
                 "{node_type_name}: the surface-share socket refused a connection: {connect_failure}"
             )
         })?;
-        tracing::info!(
-            owned_device_created_ms,
-            device = owned_device.consumer_vulkan_device().name(),
-            "{node_type_name}: encoding on an owned Vulkan Video device"
-        );
         Ok(Self {
             node,
             settings,
-            owned_device,
+            device,
             surface_share_connection,
             imported_pixel_buffers: HashMap::new(),
             imported_textures: HashMap::new(),
             minted_session: None,
             session_mint_already_failed: false,
             next_frame_must_be_a_sync_point: false,
-            publication: EncodedVideoPublication::new(node.elementary_stream),
-            frames_encoded: 0,
+            session_minted_and_not_yet_reported: false,
             frames_not_checked_out: 0,
-            publication_refusals: 0,
         })
     }
 
-    /// Encode `frame` and publish its access units on `encoded_video`. A
-    /// frame its producer recycled before the check-out is skipped; a frame
-    /// arriving after a failed mint is discarded.
-    pub fn encode_and_publish(
+    /// The name of the device this session encodes on.
+    pub fn device_name(&self) -> String {
+        self.device.consumer_vulkan_device().name().to_string()
+    }
+
+    /// Encode `frame`, as a sync point when `as_a_sync_point`.
+    pub fn encode(
         &mut self,
-        frame: &ImageFrameReadByTheEncoder,
-        encoded_video: &dyn EncodedVideoOutputPort,
-    ) -> Result<(), String> {
+        frame: &VideoFrameToEncode,
+        as_a_sync_point: bool,
+    ) -> Result<VideoFrameEncodeOutcome, String> {
         let node_type_name = self.node.node_type_name;
         if self.minted_session.is_none() && self.session_mint_already_failed {
-            return Ok(());
+            return Ok(VideoFrameEncodeOutcome::DiscardedAfterAFailedMint);
         }
+        self.next_frame_must_be_a_sync_point |= as_a_sync_point;
         let checked_out = match check_out_surface_on_surface_share(
             &self.surface_share_connection,
             frame.surface_id(),
@@ -152,7 +185,7 @@ impl OwnedDeviceVideoEncoder {
                         "{node_type_name}: a frame could not be checked out and was skipped: {refusal}"
                     );
                 }
-                return Ok(());
+                return Ok(VideoFrameEncodeOutcome::NotCheckedOut);
             }
         };
         let encoded = match checked_out {
@@ -167,51 +200,21 @@ impl OwnedDeviceVideoEncoder {
             tracing::warn!("{node_type_name}: {release_refusal}");
         }
         let access_units = encoded?;
-
         let coded_extent = self
             .minted_session
             .as_ref()
             .map(|minted| minted.encoder.encoder().aligned_extent())
             .unwrap_or((frame.width, frame.height));
-        let outcome = self.publication.publish(
-            encoded_video,
-            &access_units,
-            frame.timestamp_ns,
+        Ok(VideoFrameEncodeOutcome::Encoded(VideoFrameEncoded {
+            access_units,
             coded_extent,
-        );
-        if outcome.next_frame_must_be_a_sync_point {
-            self.next_frame_must_be_a_sync_point = true;
-        }
-        if let Some(refusal) = outcome.refusal {
-            self.publication_refusals += 1;
-            if self.publication_refusals.is_power_of_two() {
-                tracing::warn!(
-                    publication_refusals = self.publication_refusals,
-                    access_units_dropped = self.publication.access_units_dropped_after_a_refusal(),
-                    "{node_type_name}: {refusal}; dropping to the next sync point and encoding the \
-                     next frame as one"
-                );
-            }
-        }
-
-        self.frames_encoded += 1;
-        if self.frames_encoded == 1 {
-            tracing::info!("{node_type_name}: first frame encoded");
-        } else if self
-            .frames_encoded
-            .is_multiple_of(ENCODE_PROGRESS_LOG_INTERVAL_FRAMES)
-        {
-            tracing::info!(
-                frames_encoded = self.frames_encoded,
-                "{node_type_name}: encode progress"
-            );
-        }
-        Ok(())
+            minted_a_session: std::mem::take(&mut self.session_minted_and_not_yet_reported),
+        }))
     }
 
     fn encode_checked_out_pixel_buffer(
         &mut self,
-        frame: &ImageFrameReadByTheEncoder,
+        frame: &VideoFrameToEncode,
         checked_out: CheckedOutPixelBuffer,
     ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
         let node_type_name = self.node.node_type_name;
@@ -279,7 +282,7 @@ impl OwnedDeviceVideoEncoder {
     /// in, so the next reader's acquire names it.
     fn encode_checked_out_texture(
         &mut self,
-        frame: &ImageFrameReadByTheEncoder,
+        frame: &VideoFrameToEncode,
         checked_out: CheckedOutTexture,
     ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
         let node_type_name = self.node.node_type_name;
@@ -378,7 +381,7 @@ impl OwnedDeviceVideoEncoder {
                     checked_out.format_wire_name
                 )
             })?;
-        let consumer_vulkan_device = self.owned_device.consumer_vulkan_device();
+        let consumer_vulkan_device = self.device.consumer_vulkan_device();
         let (memory_fd, imported) = match checked_out.memory {
             CheckedOutTextureMemory::DmaBuf {
                 memory_fd,
@@ -423,7 +426,7 @@ impl OwnedDeviceVideoEncoder {
             // SAFETY: Vulkan refused the fd, so it is still ours alone.
             drop(unsafe { OwnedFd::from_raw_fd(memory_fd) });
             format!(
-                "{node_type_name}: texture {surface_id:?} did not import onto the owned device: \
+                "{node_type_name}: texture {surface_id:?} did not import onto the encode device: \
                  {import_failure}"
             )
         })?;
@@ -447,7 +450,7 @@ impl OwnedDeviceVideoEncoder {
         {
             return Ok(());
         }
-        let consumer_vulkan_device = self.owned_device.consumer_vulkan_device();
+        let consumer_vulkan_device = self.device.consumer_vulkan_device();
         let plane0_size = checked_out.plane_sizes.first().copied().unwrap_or(0);
         let imported = match checked_out.memory {
             CheckedOutPixelBufferMemory::DmaBuf { plane_fds } => {
@@ -469,7 +472,7 @@ impl OwnedDeviceVideoEncoder {
                     drop(unsafe { OwnedFd::from_raw_fd(plane_raw_fd) });
                     format!(
                         "{node_type_name}: surface {surface_id:?}'s DMA-BUF did not import onto the \
-                             owned device: {import_failure}"
+                             encode device: {import_failure}"
                     )
                 })?
             }
@@ -485,7 +488,7 @@ impl OwnedDeviceVideoEncoder {
             )
             .map_err(|import_failure| {
                 format!(
-                    "{node_type_name}: surface {surface_id:?}'s opaque fd did not import onto the owned \
+                    "{node_type_name}: surface {surface_id:?}'s opaque fd did not import onto the encode \
                      device at memory type {vk_memory_type_index}: {import_failure}"
                 )
             })?,
@@ -500,7 +503,7 @@ impl OwnedDeviceVideoEncoder {
 
     fn mint_unless_a_session_matches(
         &mut self,
-        frame: &ImageFrameReadByTheEncoder,
+        frame: &VideoFrameToEncode,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -523,7 +526,7 @@ impl OwnedDeviceVideoEncoder {
                     .session_shape_for_frame(self.node.node_type_name, width, height);
             match self.mint_session(frame, shape) {
                 Ok(minted) => {
-                    self.publication.session_minted();
+                    self.session_minted_and_not_yet_reported = true;
                     self.minted_session = Some(minted);
                 }
                 Err(mint_failure) => {
@@ -537,7 +540,7 @@ impl OwnedDeviceVideoEncoder {
 
     fn mint_session(
         &self,
-        frame: &ImageFrameReadByTheEncoder,
+        frame: &VideoFrameToEncode,
         shape: VideoEncodeSessionShape,
     ) -> Result<VideoEncodeSessionMintedFromAFrame, String> {
         let node_type_name = self.node.node_type_name;
@@ -558,7 +561,7 @@ impl OwnedDeviceVideoEncoder {
             color_vui,
         };
         let mint_started = Instant::now();
-        let codec_device: Arc<dyn VulkanVideoCodecDevice> = self.owned_device.clone();
+        let codec_device: Arc<dyn VulkanVideoCodecDevice> = self.device.clone();
         let encoder = SimpleEncoder::new(codec_device, config).map_err(|mint_failure| {
             format!("{node_type_name}: the encoder session could not be minted: {mint_failure}")
         })?;

@@ -12,6 +12,9 @@ use vulkanalia::vk;
 use crate::core::rhi::{ComputeBindingKind, ComputeKernelDescriptor};
 use crate::core::{Error, Result};
 use crate::vulkan::rhi::HostVulkanDevice;
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::{
+    SamplerOfABinding, VulkanKernelSamplers, refuse_samplers_the_kernel_cannot_take,
+};
 
 use super::pipeline_creation::{
     allocate_command_buffer, allocate_descriptor_set, create_command_pool,
@@ -94,6 +97,13 @@ impl VulkanComputeKernelInner {
                     descriptor.label, binding, spec.kind
                 )));
             }
+            if spec.sampler.is_some() {
+                return Err(Error::GpuError(format!(
+                    "Compute kernel '{}': binding {binding} declares a sampler and is given an \
+                     immutable one; the immutable sampler would win, so declare only one",
+                    descriptor.label
+                )));
+            }
         }
         Self::new_inner(vulkan_device, descriptor, immutable_samplers, None)
     }
@@ -110,6 +120,15 @@ impl VulkanComputeKernelInner {
 
         let reconciled_bindings =
             validate_against_spirv(descriptor, vulkan_device.subgroup_operation_support())?;
+        refuse_samplers_the_kernel_cannot_take(
+            &format!("Compute kernel '{}'", descriptor.label),
+            reconciled_bindings.iter().map(|spec| SamplerOfABinding {
+                binding: spec.binding,
+                samples_a_texture: spec.kind == ComputeBindingKind::SampledTexture,
+                sampler: spec.sampler,
+            }),
+            vulkan_device.sampler_anisotropy_limit(),
+        )?;
 
         let spirv: Vec<u32> = descriptor
             .spv
@@ -163,6 +182,7 @@ impl VulkanComputeKernelInner {
             pipeline_layout,
             descriptor.spv,
             &entry_point,
+            descriptor.specialization_constants,
             descriptor.label,
             pipeline_cache_directory_of_its_stream,
         ) {
@@ -271,7 +291,10 @@ impl VulkanComputeKernelInner {
             command_pool,
             command_buffer,
             fence,
-            default_sampler: Mutex::new(None),
+            samplers: VulkanKernelSamplers::new(
+                device.clone(),
+                format!("Compute kernel '{}'", descriptor.label),
+            ),
             immutable_sampler_bindings: immutable_samplers.iter().map(|(b, _)| *b).collect(),
             pending: Mutex::new(PendingState {
                 bindings: HashMap::new(),

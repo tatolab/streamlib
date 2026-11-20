@@ -8,9 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::open_iceoryx2_service_op::{
-    close_iceoryx2_service, close_iceoryx2_service_into_the_host_of_a_shader_node_island,
-};
+use super::running_node_restart::RunningNodesALiveEditRestarts;
 use super::shader_node_island_program::{
     ShaderNodeIslandMember, ShaderNodeIslandMemberInput, ShaderNodeIslandProgram,
 };
@@ -18,13 +16,10 @@ use super::shader_node_program::ShaderNodeInputValueType;
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNode, GraphNodeWithComponents, InputLinkPortRef, Link,
-    LinkState, LinkStateComponent, LinkUniqueId, NodeInstanceComponent, NodeMetrics,
-    NodePauseGateComponent, NodeRunId, ShaderNodeFusedGroupComponent,
-    ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
-    StepProgressOfOneNodeComponent, cast_exposed_name_to_url_safe,
+    Graph, GraphNode, GraphNodeWithComponents, InputLinkPortRef, Link, LinkUniqueId, NodeRunId,
+    ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland, StateComponent,
+    cast_exposed_name_to_url_safe,
 };
-use crate::core::nodes::NodeState;
 
 /// The island a shader node evaluates, on the node whose Image leaves it.
 pub(crate) struct ShaderNodeIslandHostedHereComponent {
@@ -343,20 +338,6 @@ pub(crate) fn place_each_shader_node_island_on_its_host(
     Ok(placed)
 }
 
-/// The running shader nodes a live edit restarts so their islands are placed
-/// again, and the links rewired with them.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct RunningShaderNodesALiveEditRestarts {
-    pub(crate) nodes: Vec<NodeRunId>,
-    pub(crate) links: Vec<LinkUniqueId>,
-}
-
-impl RunningShaderNodesALiveEditRestarts {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
-    }
-}
-
 /// The running shader nodes whose islands a link added or removed while the
 /// stream runs changes — one between two shader nodes, or one into or out of a
 /// node fused into another's island — with every running shader node linked
@@ -372,7 +353,7 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
     nodes_to_add: &[NodeRunId],
     nodes_to_remove: &[NodeRunId],
     links_changed: &[LinkUniqueId],
-) -> Result<RunningShaderNodesALiveEditRestarts> {
+) -> Result<RunningNodesALiveEditRestarts> {
     let already_running =
         |node_id: &NodeRunId| !nodes_to_add.contains(node_id) && !nodes_to_remove.contains(node_id);
     let mut shader_nodes_to_visit: Vec<NodeRunId> = Vec::new();
@@ -479,63 +460,12 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
         }
     }
     links.sort();
-    Ok(RunningShaderNodesALiveEditRestarts { nodes, links })
-}
-
-/// Close the channel of each link of the shader nodes a live edit restarts the
-/// way it was wired before the edit, keeping the link in the graph so the
-/// compile wires it again: a call inside an island has no channel, and a link
-/// into a fused node was read at its island's host.
-pub(crate) fn unwire_each_link_of_the_shader_nodes_restarted(
-    graph: &mut Graph,
-    restarted: &RunningShaderNodesALiveEditRestarts,
-) -> Result<()> {
-    for link_id in &restarted.links {
-        let Some((source_id, reader_id, reader_port)) =
-            graph.traversal().e(link_id).first().map(|link| {
-                (
-                    link.source().node_run_id().clone(),
-                    link.to_port().node_run_id().clone(),
-                    link.to_port().port_name().to_string(),
-                )
-            })
-        else {
-            continue;
-        };
-        let was_placed_fused_into_another =
-            |node_id: &NodeRunId| {
-                graph.traversal().v(node_id).first().is_some_and(|node| {
-                    node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>()
-                })
-            };
-        if was_placed_fused_into_another(&source_id) {
-            if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-                link.insert(LinkStateComponent(LinkState::Disconnected));
-            }
-            continue;
-        }
-        let host_it_was_read_at = was_placed_fused_into_another(&reader_id)
-            .then(|| the_host_the_island_of_a_fused_node_was_placed_on(graph, &reader_id))
-            .flatten();
-        match host_it_was_read_at {
-            Some(host_id) => close_iceoryx2_service_into_the_host_of_a_shader_node_island(
-                graph,
-                link_id,
-                &the_host_input_port_a_fused_shader_node_input_is_read_at(
-                    &host_id,
-                    &reader_id,
-                    &reader_port,
-                ),
-            )?,
-            None => close_iceoryx2_service(graph, link_id)?,
-        }
-    }
-    Ok(())
+    Ok(RunningNodesALiveEditRestarts { nodes, links })
 }
 
 /// The node evaluating the island fused shader node `node_id` was placed in at
 /// its start, read off the fused group they share.
-fn the_host_the_island_of_a_fused_node_was_placed_on(
+pub(crate) fn the_host_the_island_of_a_fused_node_was_placed_on(
     graph: &Graph,
     node_id: &NodeRunId,
 ) -> Option<NodeRunId> {
@@ -563,28 +493,6 @@ fn the_host_the_island_of_a_fused_node_was_placed_on(
                         .is_some_and(|hosted| Arc::ptr_eq(&hosted.fused_group, &fused_group))
                 })
         })
-}
-
-pub(crate) fn forget_the_build_of_each_shader_node_restarted(
-    graph: &mut Graph,
-    nodes: &[NodeRunId],
-) {
-    for node_id in nodes {
-        let Some(node) = graph.traversal_mut().v(node_id).first_mut() else {
-            continue;
-        };
-        node.remove::<NodeInstanceComponent>();
-        node.remove::<NodeMetrics>();
-        node.remove::<ShutdownChannelComponent>();
-        node.remove::<NodePauseGateComponent>();
-        node.remove::<StepProgressOfOneNodeComponent>();
-        node.remove::<ShaderNodeIslandHostedHereComponent>();
-        node.remove::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>();
-        node.remove::<ShaderNodeFusedGroupComponent>();
-        if let Some(state) = node.get::<StateComponent>() {
-            state.transition_to(NodeState::Pending);
-        }
-    }
 }
 
 #[cfg(test)]
