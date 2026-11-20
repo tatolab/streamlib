@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Texture, node
 
 
 @node.meta(
@@ -20,7 +20,7 @@ float4 Mix(ImageInput a, ImageInput b, float amount)
 }
 """,
 )
-def Mix(a: ImageFrame, b: ImageFrame, amount: float = 0.5) -> ImageFrame: ...  # noqa: N802
+def Mix(a: Texture, b: Texture, amount: float = 0.5) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -41,8 +41,8 @@ float4 Over(ImageInput background, ImageInput foreground, float opacity)
 """,
 )
 def Over(  # noqa: N802
-    background: ImageFrame, foreground: ImageFrame, opacity: float = 1.0
-) -> ImageFrame: ...
+    background: Texture, foreground: Texture, opacity: float = 1.0
+) -> Texture: ...
 
 
 @node.meta(
@@ -58,7 +58,7 @@ float4 BlendAdd(ImageInput a, ImageInput b, float amount)
 }
 """,
 )
-def BlendAdd(a: ImageFrame, b: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
+def BlendAdd(a: Texture, b: Texture, amount: float = 1.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -74,7 +74,7 @@ float4 BlendMultiply(ImageInput a, ImageInput b, float amount)
 }
 """,
 )
-def BlendMultiply(a: ImageFrame, b: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
+def BlendMultiply(a: Texture, b: Texture, amount: float = 1.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -91,7 +91,7 @@ float4 BlendScreen(ImageInput a, ImageInput b, float amount)
 }
 """,
 )
-def BlendScreen(a: ImageFrame, b: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
+def BlendScreen(a: Texture, b: Texture, amount: float = 1.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -107,7 +107,7 @@ float4 BlendDifference(ImageInput a, ImageInput b, float amount)
 }
 """,
 )
-def BlendDifference(a: ImageFrame, b: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
+def BlendDifference(a: Texture, b: Texture, amount: float = 1.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -125,7 +125,7 @@ float4 Mask(ImageInput image, ImageInput mask, float invert)
 }
 """,
 )
-def Mask(image: ImageFrame, mask: ImageFrame, invert: float = 0.0) -> ImageFrame: ...  # noqa: N802
+def Mask(image: Texture, mask: Texture, invert: float = 0.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -145,9 +145,9 @@ float4 Wipe(ImageInput a, ImageInput b, float amount, float angle, float softnes
 """,
 )
 def Wipe(  # noqa: N802
-    a: ImageFrame,
-    b: ImageFrame,
+    a: Texture,
+    b: Texture,
     amount: float = 0.5,
     angle: float = 0.0,
     softness: float = 0.02,
-) -> ImageFrame: ...
+) -> Texture: ...

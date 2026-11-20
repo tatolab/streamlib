@@ -23,9 +23,71 @@ const COMBINED_OUTPUT: &str = "result";
 /// combining nodes of one node are.
 const COMBINING_NODE_OFFSET: (f64, f64) = (-240.0, 120.0);
 
-/// Each input of a node type that became one input. The first shipped rows are the colour and
-/// composite nodes'.
-pub(super) const MERGED_INPUTS: &[MergedInput] = &[];
+/// Each input of a node type that became one input.
+pub(super) const MERGED_INPUTS: &[MergedInput] = &[
+    // Tint's three numbers, one Color with the alpha it never had.
+    MergedInput {
+        node_type: "imports/core-nodes/core_nodes.color:Tint",
+        input: "color",
+        merged_into: MergedInto::Color,
+        parts: &[
+            MergedPart::FedBy {
+                old_input: "red",
+                default: 1.0,
+            },
+            MergedPart::FedBy {
+                old_input: "green",
+                default: 0.5,
+            },
+            MergedPart::FedBy {
+                old_input: "blue",
+                default: 0.2,
+            },
+            MergedPart::Fixed(1.0),
+        ],
+    },
+    // Duotone's shadow and highlight colours, three numbers each.
+    MergedInput {
+        node_type: "imports/core-nodes/core_nodes.color:Duotone",
+        input: "dark",
+        merged_into: MergedInto::Color,
+        parts: &[
+            MergedPart::FedBy {
+                old_input: "dark_red",
+                default: 0.05,
+            },
+            MergedPart::FedBy {
+                old_input: "dark_green",
+                default: 0.0,
+            },
+            MergedPart::FedBy {
+                old_input: "dark_blue",
+                default: 0.3,
+            },
+            MergedPart::Fixed(1.0),
+        ],
+    },
+    MergedInput {
+        node_type: "imports/core-nodes/core_nodes.color:Duotone",
+        input: "light",
+        merged_into: MergedInto::Color,
+        parts: &[
+            MergedPart::FedBy {
+                old_input: "light_red",
+                default: 1.0,
+            },
+            MergedPart::FedBy {
+                old_input: "light_green",
+                default: 0.8,
+            },
+            MergedPart::FedBy {
+                old_input: "light_blue",
+                default: 0.4,
+            },
+            MergedPart::Fixed(1.0),
+        ],
+    },
+];
 
 /// One input that a node type's old inputs became.
 #[derive(Debug, Clone, Copy)]
@@ -42,15 +104,15 @@ pub(super) struct MergedInput {
 }
 
 /// What a merged input holds.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no shipped row merges an input yet")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MergedInto {
     /// A Color, of four parts.
     Color,
     /// A Vector, of as many parts as the row names.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "no shipped row merges a Vector yet")
+    )]
     Vector,
 }
 
@@ -71,10 +133,6 @@ impl MergedInto {
 }
 
 /// How one part of a merged value was fed.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no shipped row merges an input yet")
-)]
 #[derive(Debug, Clone, Copy)]
 pub(super) enum MergedPart {
     /// By an old input, and its default when the row was written.

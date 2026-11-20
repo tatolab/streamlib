@@ -227,12 +227,17 @@ class _FunctionNodeSignatureReading:
         `reads_values_typed_beside_images` reads each input typed by a port family's read type,
         an `ImageFrame` among them, under the family grammar and every other under the typed
         grammar, as a shader's signature is read: its Images are the pictures it computes over,
-        and its values carry their pin types.
+        written `Texture` or `ImageFrame`, and its values carry their pin types.
         """
         self._function_name = function.__name__
         self._reads_pin_types = reads_pin_types
         self._reads_values_typed_beside_images = reads_values_typed_beside_images
         annotations = self._resolved_annotations(function)
+        if reads_values_typed_beside_images:
+            annotations = {
+                name: _a_texture_read_as_an_image(annotation)
+                for name, annotation in annotations.items()
+            }
         self.input_ports: "list[dict[str, Any]]" = []
         self._signature_inputs: "list[dict[str, Any]]" = []
         self._time_parameter: Optional[str] = None
@@ -901,6 +906,20 @@ def _families_by_read_type() -> "dict[Any, tuple[str, str]]":
         ChannelsBlock: ("channels_block", "channels"),
         PacketsUnit: ("packets_unit", "packets"),
     }
+
+
+def _a_texture_read_as_an_image(annotation: Any) -> Any:
+    """`annotation` with a `Texture`, also one `Annotated`, read as the `ImageFrame` it arrives as."""
+    from ._pin_types import Texture
+    from .image_frame import ImageFrame
+
+    if annotation is Texture:
+        return ImageFrame
+    if typing.get_origin(annotation) is typing.Annotated:
+        annotated, *metadata = typing.get_args(annotation)
+        if annotated is Texture:
+            return typing.Annotated[(ImageFrame, *metadata)]
+    return annotation
 
 
 def _names_a_port_family(annotation: Any) -> bool:

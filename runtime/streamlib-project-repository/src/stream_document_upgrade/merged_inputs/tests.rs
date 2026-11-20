@@ -277,3 +277,77 @@ fn a_node_placed_on_its_own_takes_the_merged_value_of_what_it_saved() {
     );
     assert!(!upgrade_a_node_with(&mut node, ROWS));
 }
+
+const CORE_TINT: &str = "imports/core-nodes/core_nodes.color:Tint";
+const CORE_DUOTONE: &str = "imports/core-nodes/core_nodes.color:Duotone";
+
+fn a_core_node(node_type: &str, input_values: Value) -> Value {
+    json!({
+        "id": TINT,
+        "name": "look",
+        "type": node_type,
+        "input_values": input_values,
+        "studio": {"position": {"x": 400.0, "y": 100.0}}
+    })
+}
+
+/// `document` upgraded with the shipped rows, as a runtime reads it.
+fn upgraded_as_shipped(document: &Value) -> Option<Value> {
+    let mut upgraded = document.clone();
+    super::super::upgrade_stream_document_in_place(&mut upgraded).then_some(upgraded)
+}
+
+#[test]
+fn a_core_tint_saved_with_some_numbers_opens_as_one_color_of_its_old_defaults_and_opaque() {
+    let document = json!({
+        "nodes": [a_core_node(CORE_TINT, json!({"green": 0.9, "amount": 0.5}))],
+        "links": []
+    });
+    let upgraded = upgraded_as_shipped(&document).expect("Tint's numbers merge");
+    assert_eq!(
+        upgraded["nodes"][0]["input_values"],
+        json!({
+            "color": {"red": 1.0, "green": 0.9, "blue": 0.2, "alpha": 1.0},
+            "amount": 0.5
+        })
+    );
+}
+
+#[test]
+fn a_core_duotone_opens_with_its_dark_and_light_colors_and_a_wire_kept_on_a_combine_color() {
+    let document = json!({
+        "nodes": [
+            a_core_node(CORE_DUOTONE, json!({"dark_blue": 0.6, "light_red": 0.7})),
+            an_lfo()
+        ],
+        "links": [a_link((LFO, "value"), (TINT, "light_green"))]
+    });
+    let upgraded = upgraded_as_shipped(&document).expect("Duotone's numbers merge");
+    assert_eq!(
+        upgraded["nodes"][0]["input_values"],
+        json!({"dark": {"red": 0.05, "green": 0.0, "blue": 0.6, "alpha": 1.0}})
+    );
+    let combining_id = the_combining_node_id(TINT, "light");
+    let combining_node = the_combining_node_of(&upgraded, "light");
+    assert_eq!(combining_node["type"], COMBINE_COLOR_NODE_TYPE);
+    assert_eq!(
+        combining_node["input_values"],
+        json!({"red": 0.7, "blue": 0.4, "alpha": 1.0})
+    );
+    assert_eq!(
+        upgraded["links"],
+        json!([
+            a_link((LFO, "value"), (&combining_id, "green")),
+            a_link((&combining_id, COMBINED_OUTPUT), (TINT, "light")),
+        ])
+    );
+    assert_eq!(upgraded_as_shipped(&upgraded), None);
+}
+
+#[test]
+fn a_core_tint_or_duotone_saved_with_no_numbers_is_left_as_written() {
+    for node_type in [CORE_TINT, CORE_DUOTONE] {
+        let document = json!({"nodes": [a_core_node(node_type, json!({}))]});
+        assert_eq!(upgraded_as_shipped(&document), None, "{node_type}");
+    }
+}

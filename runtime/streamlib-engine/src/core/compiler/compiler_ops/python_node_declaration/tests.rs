@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::core::descriptors::{FloatSize, PinType};
+use crate::core::descriptors::{FloatSize, PinType, TexturePixelFormat};
 
 #[test]
 fn image_formats_spell_every_engine_texture_format() {
@@ -251,11 +251,8 @@ fn exactly(pin_type: PinType) -> Option<crate::core::descriptors::PinDeclaration
 }
 
 #[test]
-fn a_shaders_float_input_is_a_float_and_its_pictures_are_textures() {
+fn a_shaders_float_input_is_a_float_its_pictures_are_textures_and_its_output_states_its_format() {
     let shader = read(&a_described_tint_shader()).expect("reads");
-    let texture = PinType::Texture {
-        pixel_formats: vec![],
-    };
 
     assert_eq!(
         declared_pin_of(&shader, "amount"),
@@ -263,8 +260,18 @@ fn a_shaders_float_input_is_a_float_and_its_pictures_are_textures() {
             exact_size: Some(FloatSize::Float32)
         })
     );
-    assert_eq!(declared_pin_of(&shader, "image"), exactly(texture.clone()));
-    assert_eq!(declared_pin_of(&shader, "result"), exactly(texture));
+    assert_eq!(
+        declared_pin_of(&shader, "image"),
+        exactly(PinType::Texture {
+            pixel_formats: vec![]
+        })
+    );
+    assert_eq!(
+        declared_pin_of(&shader, "result"),
+        exactly(PinType::Texture {
+            pixel_formats: vec![TexturePixelFormat::Rgba8Unorm]
+        })
+    );
 }
 
 #[test]

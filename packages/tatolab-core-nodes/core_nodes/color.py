@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Color, Texture, node
 
 
 @node.meta(
@@ -23,12 +23,12 @@ float4 Level(ImageInput image, float brightness, float contrast, float gamma, fl
 """,
 )
 def Level(  # noqa: N802
-    image: ImageFrame,
+    image: Texture,
     brightness: float = 0.0,
     contrast: float = 1.0,
     gamma: float = 1.0,
     opacity: float = 1.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -64,8 +64,8 @@ float4 HsvAdjust(ImageInput image, float hue_shift, float saturation, float valu
 """,
 )
 def HsvAdjust(  # noqa: N802
-    image: ImageFrame, hue_shift: float = 0.0, saturation: float = 1.0, value: float = 1.0
-) -> ImageFrame: ...
+    image: Texture, hue_shift: float = 0.0, saturation: float = 1.0, value: float = 1.0
+) -> Texture: ...
 
 
 @node.meta(
@@ -80,7 +80,7 @@ float4 Invert(ImageInput image, float amount)
 }
 """,
 )
-def Invert(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
+def Invert(image: Texture, amount: float = 1.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -96,7 +96,7 @@ float4 Monochrome(ImageInput image, float amount)
 }
 """,
 )
-def Monochrome(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
+def Monochrome(image: Texture, amount: float = 1.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -115,30 +115,28 @@ float4 Threshold(ImageInput image, float threshold, float softness)
 """,
 )
 def Threshold(  # noqa: N802
-    image: ImageFrame, threshold: float = 0.5, softness: float = 0.02
-) -> ImageFrame: ...
+    image: Texture, threshold: float = 0.5, softness: float = 0.02
+) -> Texture: ...
 
 
 @node.meta(
     category="Color",
-    description="Multiply a picture by a colour, like a coloured gel over a light.",
+    description="Multiply a picture by a colour, like a coloured gel over a light. Amount and the colour's alpha fade the effect in.",
 )
 @node.shader(
     """
-float4 Tint(ImageInput image, float red, float green, float blue, float amount)
+float4 Tint(ImageInput image, float4 color, float amount)
 {
-    float3 tinted = image.pixel.rgb * float3(red, green, blue);
-    return float4(lerp(image.pixel.rgb, tinted, saturate(amount)), image.pixel.a);
+    float3 tinted = image.pixel.rgb * color.rgb;
+    return float4(lerp(image.pixel.rgb, tinted, saturate(amount) * saturate(color.a)), image.pixel.a);
 }
 """,
 )
 def Tint(  # noqa: N802
-    image: ImageFrame,
-    red: float = 1.0,
-    green: float = 0.5,
-    blue: float = 0.2,
+    image: Texture,
+    color: Color = Color(1.0, 0.5, 0.2, 1.0),
     amount: float = 1.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -147,23 +145,19 @@ def Tint(  # noqa: N802
 )
 @node.shader(
     """
-float4 Duotone(ImageInput image, float dark_red, float dark_green, float dark_blue, float light_red, float light_green, float light_blue)
+float4 Duotone(ImageInput image, float4 dark, float4 light)
 {
     float luma = dot(image.pixel.rgb, float3(0.2126, 0.7152, 0.0722));
-    float3 color = lerp(float3(dark_red, dark_green, dark_blue), float3(light_red, light_green, light_blue), luma);
-    return float4(color, image.pixel.a);
+    float4 color = lerp(dark, light, luma);
+    return float4(color.rgb, image.pixel.a * saturate(color.a));
 }
 """,
 )
 def Duotone(  # noqa: N802
-    image: ImageFrame,
-    dark_red: float = 0.05,
-    dark_green: float = 0.0,
-    dark_blue: float = 0.3,
-    light_red: float = 1.0,
-    light_green: float = 0.8,
-    light_blue: float = 0.4,
-) -> ImageFrame: ...
+    image: Texture,
+    dark: Color = Color(0.05, 0.0, 0.3, 1.0),
+    light: Color = Color(1.0, 0.8, 0.4, 1.0),
+) -> Texture: ...
 
 
 @node.meta(
@@ -179,7 +173,7 @@ float4 Posterize(ImageInput image, float levels)
 }
 """,
 )
-def Posterize(image: ImageFrame, levels: float = 4.0) -> ImageFrame: ...  # noqa: N802
+def Posterize(image: Texture, levels: float = 4.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -195,4 +189,4 @@ float4 Lookup(ImageInput image, ImageInput gradient)
 }
 """,
 )
-def Lookup(image: ImageFrame, gradient: ImageFrame) -> ImageFrame: ...  # noqa: N802
+def Lookup(image: Texture, gradient: Texture) -> Texture: ...  # noqa: N802
