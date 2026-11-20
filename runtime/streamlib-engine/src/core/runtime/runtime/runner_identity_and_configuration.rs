@@ -16,7 +16,7 @@ use crate::iceoryx2::Iceoryx2Node;
 
 use super::{CreatedProjectFirstCommit, Runner};
 use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::{
-    ExtensionCodeCheck, ExtensionCodeCheckers,
+    ExtensionCodeCheck, ExtensionCodeCheckers, ExtensionSdkKitTemplate,
 };
 
 impl Runner {
@@ -132,6 +132,22 @@ impl Runner {
                 paths,
                 resources.node_interpreter_lend_directory.get(),
             )
+    }
+
+    /// The template `template_file` in the first extension SDK kit found for the project at
+    /// `project_directory`, looked for as [`Runner::check_a_projects_extension_code`] looks, or
+    /// why there is none.
+    pub fn a_template_from_the_extension_sdk_kit(
+        &self,
+        project_directory: &Path,
+        template_file: &str,
+    ) -> std::result::Result<ExtensionSdkKitTemplate, String> {
+        let resources = &self.engine_resources_shared_by_every_stream;
+        resources.extension_code_checkers.a_template_from_the_kit(
+            project_directory,
+            template_file,
+            resources.node_interpreter_lend_directory.get(),
+        )
     }
 
     /// Hand this runtime what commits a project [`Runner::create_project`] wrote as the first

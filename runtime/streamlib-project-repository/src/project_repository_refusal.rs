@@ -60,6 +60,8 @@ pub enum ProjectRepositoryRefusal {
     NoSuchProjectFile(String),
     #[error("the project already holds `{0}`, and a new file is never written over it")]
     ProjectFileAlreadyExists(String),
+    #[error("`{path}` does not take the new node UI element: {why}")]
+    NodeUiElementNotRegistered { path: String, why: String },
     #[error("the project holds no folder at `{0}`")]
     NoSuchProjectFolder(String),
     #[error("the file `{path}` is not written with write_project_file: {why}")]

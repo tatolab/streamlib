@@ -11,7 +11,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::core::NodeDescriptor;
-use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::ExtensionCodeCheck;
+use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::{
+    ExtensionCodeCheck, ExtensionSdkKitTemplate,
+};
 use crate::core::context::StreamClockReading;
 use crate::core::error::Result;
 use crate::core::nodes::InstalledModuleOfANodeType;
@@ -210,6 +212,13 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         project_directory: &Path,
         paths: Option<&[String]>,
     ) -> ExtensionCodeCheck;
+
+    /// [`Runner::a_template_from_the_extension_sdk_kit`].
+    fn a_template_from_the_extension_sdk_kit(
+        &self,
+        project_directory: &Path,
+        template_file: &str,
+    ) -> std::result::Result<ExtensionSdkKitTemplate, String>;
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
@@ -434,5 +443,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         paths: Option<&[String]>,
     ) -> ExtensionCodeCheck {
         Runner::check_a_projects_extension_code(self, project_directory, paths)
+    }
+
+    fn a_template_from_the_extension_sdk_kit(
+        &self,
+        project_directory: &Path,
+        template_file: &str,
+    ) -> std::result::Result<ExtensionSdkKitTemplate, String> {
+        Runner::a_template_from_the_extension_sdk_kit(self, project_directory, template_file)
     }
 }
