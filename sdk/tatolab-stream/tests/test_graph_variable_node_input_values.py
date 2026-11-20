@@ -36,6 +36,20 @@ def test_a_set_variable_records_the_node_it_holds_as_a_reference() -> None:
     assert recorded["held"] == {"variable": "other"}
 
 
+def test_a_set_variable_refuses_a_node_of_another_stream_it_is_given_to_hold() -> None:
+    other_stream_builder = StreamBuilder("other")
+    held_elsewhere = other_stream_builder.add(
+        GetVariable, name="elsewhere", input_values={"variable": "other"}
+    )
+    stream_builder = StreamBuilder("rig")
+
+    with pytest.raises(ValueError, match="`elsewhere`"):
+        stream_builder.add(
+            SetVariable,
+            input_values={"variable": "gateway", "node_reference": held_elsewhere},
+        )
+
+
 def test_a_variable_node_refuses_a_value_its_settings_do_not_take() -> None:
     stream_builder = StreamBuilder("rig")
 
