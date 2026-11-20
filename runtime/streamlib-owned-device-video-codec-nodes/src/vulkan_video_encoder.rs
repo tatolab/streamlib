@@ -3,48 +3,30 @@
 
 //! H.264 or H.265 encode with Vulkan Video: each frame is encoded in the
 //! machine's encode host, on the one encode device it shares among every
-//! encoder on the GPU, and its access units are published here. A runtime
-//! that offers no encode host leaves the node to encode on a device of its
-//! own.
+//! encoder on the GPU, and its access units are published here.
 
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Instant;
-
-use streamlib_consumer_rhi::{
-    OwnedVulkanVideoCodecDevice, VulkanVideoCodecDirection,
-    runtime_vulkan_device_uuid_named_at_spawn,
-};
+use streamlib_consumer_rhi::runtime_vulkan_device_uuid_named_at_spawn;
 use tatolab_module_sdk::ModuleHost;
 
 use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{EncodedVideoOutputPort, EncodedVideoPublication};
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_encode_host_protocol::{
-    VIDEO_ENCODE_HOST_PROTOCOL_VERSION, VideoEncodeHostElementaryStream,
-    VideoEncodeHostSessionRequest,
+    VIDEO_ENCODE_HOST_PROTOCOL_VERSION, VideoEncodeHostSessionRequest,
 };
 use crate::video_encode_host_session_of_the_node::VideoEncodeHostSessionOfTheNode;
-use crate::video_encode_on_a_device::{
-    VideoEncodeOnADevice, VideoFrameEncodeOutcome, VideoFrameToEncode,
-};
+use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
 use crate::video_encoder_settings::VideoEncoderSettings;
 
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
 const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 
-/// Where a node's frames are encoded.
-enum VideoEncodeOfTheNode {
-    InTheEncodeHost(VideoEncodeHostSessionOfTheNode),
-    OnADeviceOfItsOwn(Box<VideoEncodeOnADevice>),
-}
-
 /// A video encoder node's native half: where its frames are encoded, and the
 /// publication of their access units on its `encoded_video` port.
 pub struct VulkanVideoEncoder {
     node: VideoCodecNodeIdentity,
-    encode: VideoEncodeOfTheNode,
+    session: VideoEncodeHostSessionOfTheNode,
     next_frame_must_be_a_sync_point: bool,
     publication: EncodedVideoPublication,
     frames_encoded: u64,
@@ -53,7 +35,7 @@ pub struct VulkanVideoEncoder {
 
 impl VulkanVideoEncoder {
     /// Open a session in the machine's encode host on the GPU the runtime
-    /// named, or, when the runtime offers none, a device of the node's own.
+    /// named.
     pub fn open(
         node: VideoCodecNodeIdentity,
         module_host: &ModuleHost,
@@ -62,36 +44,37 @@ impl VulkanVideoEncoder {
         let node_type_name = node.node_type_name;
         let vulkan_device_uuid = runtime_vulkan_device_uuid_named_at_spawn()
             .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
-        let surface_share_socket_path = std::env::var(SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE)
-            .map_err(|_| {
-                format!(
+        let surface_share_socket_path = match std::env::var(
+            SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE,
+        ) {
+            Ok(surface_share_socket_path) => surface_share_socket_path,
+            Err(std::env::VarError::NotPresent) => {
+                return Err(format!(
                     "{node_type_name}: {SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE} is not set, so \
                      no published frame can be checked out"
-                )
-            })?;
-        let session_request = VideoEncodeHostSessionRequest {
-            protocol_version: VIDEO_ENCODE_HOST_PROTOCOL_VERSION,
-            elementary_stream: VideoEncodeHostElementaryStream::of_the_node(node),
-            settings: settings.into(),
-            vulkan_device_uuid,
-            surface_share_socket_path: surface_share_socket_path.clone(),
-        };
-        let encode = match VideoEncodeHostSessionOfTheNode::open(node, module_host, session_request)
-        {
-            Ok(session) => VideoEncodeOfTheNode::InTheEncodeHost(session),
-            Err(refusal) => {
-                tracing::warn!("{refusal}; encoding on a device of the node's own");
-                VideoEncodeOfTheNode::OnADeviceOfItsOwn(Box::new(open_a_device_of_the_nodes_own(
-                    node,
-                    settings,
-                    vulkan_device_uuid,
-                    Path::new(&surface_share_socket_path),
-                )?))
+                ));
+            }
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(format!(
+                    "{node_type_name}: {SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE} is not UTF-8, so \
+                     the encode host cannot be told where frames are checked out"
+                ));
             }
         };
+        let session = VideoEncodeHostSessionOfTheNode::open(
+            node,
+            module_host,
+            VideoEncodeHostSessionRequest {
+                protocol_version: VIDEO_ENCODE_HOST_PROTOCOL_VERSION,
+                elementary_stream: node.elementary_stream.into(),
+                settings,
+                vulkan_device_uuid,
+                surface_share_socket_path,
+            },
+        )?;
         Ok(Self {
             node,
-            encode,
+            session,
             next_frame_must_be_a_sync_point: false,
             publication: EncodedVideoPublication::new(node.elementary_stream),
             frames_encoded: 0,
@@ -108,16 +91,10 @@ impl VulkanVideoEncoder {
         encoded_video: &dyn EncodedVideoOutputPort,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
-        let frame_to_encode = VideoFrameToEncode::of_the_frame_read(frame);
-        let as_a_sync_point = self.next_frame_must_be_a_sync_point;
-        let outcome = match &mut self.encode {
-            VideoEncodeOfTheNode::InTheEncodeHost(session) => {
-                session.encode(&frame_to_encode, as_a_sync_point)
-            }
-            VideoEncodeOfTheNode::OnADeviceOfItsOwn(session) => {
-                session.encode(&frame_to_encode, as_a_sync_point)
-            }
-        }?;
+        let outcome = self.session.encode(
+            VideoFrameToEncode::of_the_frame_read(frame),
+            self.next_frame_must_be_a_sync_point,
+        )?;
         let encoded = match outcome {
             VideoFrameEncodeOutcome::Encoded(encoded) => encoded,
             VideoFrameEncodeOutcome::NotCheckedOut
@@ -162,29 +139,4 @@ impl VulkanVideoEncoder {
         }
         Ok(())
     }
-}
-
-fn open_a_device_of_the_nodes_own(
-    node: VideoCodecNodeIdentity,
-    settings: VideoEncoderSettings,
-    vulkan_device_uuid: [u8; 16],
-    surface_share_socket_path: &Path,
-) -> Result<VideoEncodeOnADevice, String> {
-    let node_type_name = node.node_type_name;
-    let opening_started = Instant::now();
-    let device = Arc::new(
-        OwnedVulkanVideoCodecDevice::new_on_the_device_the_runtime_named(
-            vulkan_device_uuid,
-            VulkanVideoCodecDirection::Encode,
-        )
-        .map_err(|refusal| {
-            format!("{node_type_name}: the owned Vulkan Video encode device was refused: {refusal}")
-        })?,
-    );
-    tracing::info!(
-        owned_device_created_ms = opening_started.elapsed().as_secs_f64() * 1_000.0,
-        device = device.consumer_vulkan_device().name(),
-        "{node_type_name}: encoding on an owned Vulkan Video device"
-    );
-    VideoEncodeOnADevice::open(node, settings, device, surface_share_socket_path)
 }

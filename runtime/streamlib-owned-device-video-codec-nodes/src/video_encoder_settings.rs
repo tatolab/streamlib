@@ -10,7 +10,7 @@ pub const DEFAULT_ENCODE_FPS: u32 = 60;
 pub const DEFAULT_KEYFRAME_INTERVAL_SECONDS: u32 = 2;
 
 /// The config keys `H264Encoder` and `H265Encoder` take, each absent unless set.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VideoEncoderSettings {
     /// Expected frame width, a guardrail: a mismatching frame wins.
     pub width: Option<u32>,

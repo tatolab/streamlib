@@ -13,6 +13,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanTexture, H273ColorVui, OwnedVulkanVideoCodecDevice,
     PixelFormat, TextureFormat, VulkanLayout,
@@ -37,14 +39,25 @@ const MOST_SURFACE_IMPORTS_KEPT: usize = 32;
 
 /// One frame to encode: the published surface its pixels are checked out
 /// from, and what its descriptor states.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoFrameToEncode {
     pub surface_id: String,
     pub width: u32,
     pub height: u32,
     /// Monotonic nanoseconds, the stamp the media frame carries.
     pub timestamp_ns: i64,
+    #[serde(with = "H273ColorVuiAsItCrosses")]
     pub color_vui: H273ColorVui,
+}
+
+/// [`H273ColorVui`]'s fields, as a frame carries them to the encode host.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "H273ColorVui")]
+struct H273ColorVuiAsItCrosses {
+    primaries: Option<u8>,
+    transfer: Option<u8>,
+    matrix: Option<u8>,
+    full_range: Option<bool>,
 }
 
 impl VideoFrameToEncode {
@@ -65,7 +78,7 @@ impl VideoFrameToEncode {
 }
 
 /// What encoding one frame came to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoFrameEncodeOutcome {
     Encoded(VideoFrameEncoded),
     /// Its producer recycled the surface before the check-out, so it was
@@ -76,7 +89,7 @@ pub enum VideoFrameEncodeOutcome {
 }
 
 /// One frame's access units and the session they were coded in.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoFrameEncoded {
     pub access_units: Vec<EncodedVideoAccessUnit>,
     /// The session's coded extent, aligned up from the frame's.
@@ -106,7 +119,9 @@ pub struct VideoEncodeOnADevice {
     minted_session: Option<VideoEncodeSessionMintedFromAFrame>,
     session_mint_already_failed: bool,
     next_frame_must_be_a_sync_point: bool,
-    session_minted_by_this_frame: bool,
+    /// Set when a session is minted and cleared once a frame's outcome
+    /// reports it, so a mint whose first frame failed is still reported.
+    session_minted_and_not_yet_reported: bool,
     frames_not_checked_out: u64,
 }
 
@@ -136,7 +151,7 @@ impl VideoEncodeOnADevice {
             minted_session: None,
             session_mint_already_failed: false,
             next_frame_must_be_a_sync_point: false,
-            session_minted_by_this_frame: false,
+            session_minted_and_not_yet_reported: false,
             frames_not_checked_out: 0,
         })
     }
@@ -157,7 +172,6 @@ impl VideoEncodeOnADevice {
             return Ok(VideoFrameEncodeOutcome::DiscardedAfterAFailedMint);
         }
         self.next_frame_must_be_a_sync_point |= as_a_sync_point;
-        self.session_minted_by_this_frame = false;
         let checked_out = match check_out_surface_on_surface_share(
             &self.surface_share_connection,
             frame.surface_id(),
@@ -194,7 +208,7 @@ impl VideoEncodeOnADevice {
         Ok(VideoFrameEncodeOutcome::Encoded(VideoFrameEncoded {
             access_units,
             coded_extent,
-            minted_a_session: self.session_minted_by_this_frame,
+            minted_a_session: std::mem::take(&mut self.session_minted_and_not_yet_reported),
         }))
     }
 
@@ -512,7 +526,7 @@ impl VideoEncodeOnADevice {
                     .session_shape_for_frame(self.node.node_type_name, width, height);
             match self.mint_session(frame, shape) {
                 Ok(minted) => {
-                    self.session_minted_by_this_frame = true;
+                    self.session_minted_and_not_yet_reported = true;
                     self.minted_session = Some(minted);
                 }
                 Err(mint_failure) => {

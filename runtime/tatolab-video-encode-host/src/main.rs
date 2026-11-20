@@ -6,20 +6,19 @@
 //! and every connection is one encoder node's session on the one encode
 //! device it opens per GPU. `SIGTERM` ends it.
 
-mod video_encode_host_command_line;
-#[cfg(test)]
-mod video_encode_host_command_line_tests;
-
 use std::process::ExitCode;
 
-use crate::video_encode_host_command_line::video_encode_host_command_line_of;
+use streamlib_runtime_client_contract::shared_native_service_command_line::SharedNativeServiceCommandLine;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
-    let command_line = match video_encode_host_command_line_of(std::env::args().skip(1)) {
+    let command_line = match SharedNativeServiceCommandLine::of_the_arguments(
+        "the encode host",
+        std::env::args().skip(1),
+    ) {
         Ok(command_line) => command_line,
         Err(refusal) => {
             tracing::error!("{refusal}");

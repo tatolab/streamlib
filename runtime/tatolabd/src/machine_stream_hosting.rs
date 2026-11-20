@@ -53,15 +53,12 @@ fn offer_the_browser_host_when_the_runtime_unit_carries_it(
         );
         return;
     };
-    let offer = streamlib::sdk::shared_native_services::SharedNativeServiceOffer {
-        service_name: BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME.to_string(),
-        executable: browser_host_executable,
-        state_directory: tatolab_state_directory
-            .shared_native_service_state_directory(BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME),
-    };
-    if let Err(refusal) = engine.offer_shared_native_service(offer) {
-        tracing::warn!("the browser host was not offered: {refusal}");
-    }
+    offer_the_shared_native_service(
+        engine,
+        tatolab_state_directory,
+        BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME,
+        browser_host_executable,
+    );
 }
 
 /// Offer every encoder node the encode host the runtime unit carries beside
@@ -76,32 +73,40 @@ fn offer_the_video_encode_host_when_the_runtime_unit_carries_it(
     use streamlib::sdk::node_interpreter::{
         VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME, VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
     };
-    let Some(video_encode_host_executable) = std::env::current_exe()
-        .and_then(std::fs::canonicalize)
-        .ok()
-        .and_then(|this_executable| {
-            Some(
-                this_executable
-                    .parent()?
-                    .join(VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME),
-            )
-        })
-        .filter(|executable| executable.is_file())
-    else {
-        tracing::info!(
-            "the runtime unit carries no {VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME} beside this \
-             executable, so each encoder opens a device of its own"
-        );
-        return;
-    };
+    let video_encode_host_executable =
+        match crate::runtime_unit_executable_beside_tatolabd::runtime_unit_executable_beside_this_one(
+            VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME,
+        ) {
+            Ok(executable) => executable,
+            Err(missing) => {
+                tracing::info!("{missing}, so each encoder opens a device of its own");
+                return;
+            }
+        };
+    offer_the_shared_native_service(
+        engine,
+        tatolab_state_directory,
+        VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
+        video_encode_host_executable,
+    );
+}
+
+/// Offer `executable` to every node as the shared native service
+/// `service_name`, keeping its state under the state directory.
+fn offer_the_shared_native_service(
+    engine: &Runner,
+    tatolab_state_directory: &TatolabStateDirectory,
+    service_name: &str,
+    executable: PathBuf,
+) {
     let offer = streamlib::sdk::shared_native_services::SharedNativeServiceOffer {
-        service_name: VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME.to_string(),
-        executable: video_encode_host_executable,
+        service_name: service_name.to_string(),
+        executable,
         state_directory: tatolab_state_directory
-            .shared_native_service_state_directory(VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME),
+            .shared_native_service_state_directory(service_name),
     };
     if let Err(refusal) = engine.offer_shared_native_service(offer) {
-        tracing::warn!("the encode host was not offered: {refusal}");
+        tracing::warn!("the shared native service {service_name} was not offered: {refusal}");
     }
 }
 

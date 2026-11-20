@@ -29,11 +29,9 @@ use crate::core::supervised_child_process::{
 };
 use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
-/// The switch naming the socket a shared native service listens on.
-pub const SHARED_NATIVE_SERVICE_LISTEN_SOCKET_SWITCH: &str = "--listen-socket";
-
-/// The switch naming the directory a shared native service keeps its state in.
-pub const SHARED_NATIVE_SERVICE_STATE_DIRECTORY_SWITCH: &str = "--state-directory";
+pub use streamlib_runtime_client_contract::shared_native_service_command_line::{
+    SHARED_NATIVE_SERVICE_LISTEN_SOCKET_SWITCH, SHARED_NATIVE_SERVICE_STATE_DIRECTORY_SWITCH,
+};
 
 /// How long a service is kept running after its last lease is given back.
 pub const SHARED_NATIVE_SERVICE_GRACE_AFTER_THE_LAST_LEASE: Duration = Duration::from_secs(30);
@@ -45,7 +43,8 @@ const SHARED_NATIVE_SERVICE_GRACE_AFTER_SIGTERM: Duration = Duration::from_secs(
 const SHARED_NATIVE_SERVICE_FIRST_READINESS_BUDGET: Duration = Duration::from_secs(30);
 
 /// The variables of this process a native service is started with: what a
-/// display, an audio server and the system's own libraries are found by.
+/// display, an audio server, the system's own libraries and the Vulkan
+/// drivers this process enumerates are found by.
 const SHARED_NATIVE_SERVICE_INHERITED_ENVIRONMENT_VARIABLES: &[&str] = &[
     "HOME",
     "USER",
@@ -60,6 +59,9 @@ const SHARED_NATIVE_SERVICE_INHERITED_ENVIRONMENT_VARIABLES: &[&str] = &[
     "PULSE_SERVER",
     "DBUS_SESSION_BUS_ADDRESS",
     "RUST_LOG",
+    "VK_ICD_FILENAMES",
+    "VK_DRIVER_FILES",
+    "VK_ADD_DRIVER_FILES",
 ];
 
 /// A native service the runtime's host offers its nodes.
@@ -517,6 +519,18 @@ fn a_connect_on_the_socket_succeeds(endpoint_socket_path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_service_finds_the_vulkan_drivers_this_process_enumerates() {
+        for vulkan_driver_variable in ["VK_ICD_FILENAMES", "VK_DRIVER_FILES", "VK_ADD_DRIVER_FILES"]
+        {
+            assert!(
+                SHARED_NATIVE_SERVICE_INHERITED_ENVIRONMENT_VARIABLES
+                    .contains(&vulkan_driver_variable),
+                "{vulkan_driver_variable} is not handed to a shared native service"
+            );
+        }
+    }
 
     /// A shell script standing in for a service: it binds its socket through
     /// Python and serves until `SIGTERM`.

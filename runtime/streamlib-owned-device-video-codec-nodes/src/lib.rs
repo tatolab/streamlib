@@ -33,6 +33,8 @@ mod video_encode_host_protocol_tests;
 #[cfg(target_os = "linux")]
 pub mod video_encode_host_session_of_the_node;
 #[cfg(all(test, target_os = "linux"))]
+mod video_encode_host_session_of_the_node_tests;
+#[cfg(all(test, target_os = "linux"))]
 mod video_encode_host_tests;
 #[cfg(target_os = "linux")]
 pub mod video_encode_on_a_device;
