@@ -97,6 +97,13 @@ impl VulkanComputeKernelInner {
                     descriptor.label, binding, spec.kind
                 )));
             }
+            if spec.sampler.is_some() {
+                return Err(Error::GpuError(format!(
+                    "Compute kernel '{}': binding {binding} declares a sampler and is given an \
+                     immutable one; the immutable sampler would win, so declare only one",
+                    descriptor.label
+                )));
+            }
         }
         Self::new_inner(vulkan_device, descriptor, immutable_samplers, None)
     }
@@ -284,7 +291,10 @@ impl VulkanComputeKernelInner {
             command_pool,
             command_buffer,
             fence,
-            samplers: VulkanKernelSamplers::new(),
+            samplers: VulkanKernelSamplers::new(
+                device.clone(),
+                format!("Compute kernel '{}'", descriptor.label),
+            ),
             immutable_sampler_bindings: immutable_samplers.iter().map(|(b, _)| *b).collect(),
             pending: Mutex::new(PendingState {
                 bindings: HashMap::new(),

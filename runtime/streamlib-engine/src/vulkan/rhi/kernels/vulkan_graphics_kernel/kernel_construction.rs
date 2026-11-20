@@ -211,7 +211,10 @@ impl VulkanGraphicsKernelInner {
             descriptor_pool,
             descriptor_sets,
             pending: Mutex::new(pending),
-            samplers: VulkanKernelSamplers::new(),
+            samplers: VulkanKernelSamplers::new(
+                device.clone(),
+                format!("Graphics kernel '{}'", descriptor.label),
+            ),
             offscreen: Mutex::new(None),
         })
     }

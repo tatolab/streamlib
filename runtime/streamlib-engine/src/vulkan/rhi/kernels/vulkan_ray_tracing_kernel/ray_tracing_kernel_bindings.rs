@@ -6,7 +6,7 @@
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{RayTracingBindingKind, RayTracingBindingSpec, SamplerDescriptor, Texture};
+use crate::core::rhi::{RayTracingBindingKind, RayTracingBindingSpec, Texture};
 use crate::core::{Error, Result};
 
 use crate::vulkan::rhi::VulkanAccelerationStructure;
@@ -85,11 +85,7 @@ impl VulkanRayTracingKernelInner {
             use crate::host_rhi::HostTextureExt;
             texture.vulkan_inner().image_view()?
         };
-        let sampler = self.samplers.sampler_for(
-            &self.device,
-            &format!("Ray-tracing kernel '{}'", self.label),
-            SamplerDescriptor::LINEAR_CLAMP,
-        )?;
+        let sampler = self.samplers.sampler_for(None)?;
         self.pending
             .lock()
             .bindings

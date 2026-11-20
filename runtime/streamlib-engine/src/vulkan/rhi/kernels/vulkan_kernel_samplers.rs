@@ -57,30 +57,35 @@ pub(crate) fn refuse_samplers_the_kernel_cannot_take(
 
 /// A kernel's samplers, created the first time a binding asks for each one.
 pub(crate) struct VulkanKernelSamplers {
+    device: vulkanalia::Device,
+    /// Names the kernel in a refusal, as "Compute kernel 'label'".
+    kernel_label: String,
     created: Mutex<Vec<(SamplerDescriptor, vk::Sampler)>>,
 }
 
 impl VulkanKernelSamplers {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(device: vulkanalia::Device, kernel_label: String) -> Self {
         Self {
+            device,
+            kernel_label,
             created: Mutex::new(Vec::new()),
         }
     }
 
-    /// The sampler `descriptor` describes, created on `device` on first use.
-    pub(crate) fn sampler_for(
-        &self,
-        device: &vulkanalia::Device,
-        kernel_label: &str,
-        descriptor: SamplerDescriptor,
-    ) -> Result<vk::Sampler> {
+    /// The sampler a binding declared, [`SamplerDescriptor::LINEAR_CLAMP`]
+    /// when it declared none, created on first use.
+    pub(crate) fn sampler_for(&self, declared: Option<SamplerDescriptor>) -> Result<vk::Sampler> {
+        let descriptor = declared.unwrap_or_default();
         let mut created = self.created.lock();
         if let Some((_, sampler)) = created.iter().find(|(made, _)| *made == descriptor) {
             return Ok(*sampler);
         }
         let info = vk_sampler_create_info(descriptor);
-        let sampler = unsafe { device.create_sampler(&info, None) }.map_err(|e| {
-            Error::GpuError(format!("{kernel_label}: failed to create a sampler: {e}"))
+        let sampler = unsafe { self.device.create_sampler(&info, None) }.map_err(|e| {
+            Error::GpuError(format!(
+                "{}: failed to create a sampler: {e}",
+                self.kernel_label
+            ))
         })?;
         created.push((descriptor, sampler));
         Ok(sampler)
@@ -89,12 +94,31 @@ impl VulkanKernelSamplers {
     /// Destroy every sampler created.
     ///
     /// # Safety
-    /// No command buffer that reads one may still be pending on `device`.
-    pub(crate) unsafe fn destroy(&self, device: &vulkanalia::Device) {
-        for (_, sampler) in self.created.lock().drain(..) {
-            unsafe { device.destroy_sampler(sampler, None) };
+    /// No command buffer that reads one may still be pending.
+    pub(crate) unsafe fn destroy(&mut self) {
+        for (_, sampler) in self.created.get_mut().drain(..) {
+            unsafe { self.device.destroy_sampler(sampler, None) };
         }
     }
+}
+
+/// The most anisotropic filtering `vulkan_device` serves, for tests that must
+/// build an anisotropic sampler; the rig is asserted to serve some.
+#[cfg(test)]
+pub(crate) fn the_most_anisotropy_the_rig_serves(
+    vulkan_device: &crate::vulkan::rhi::HostVulkanDevice,
+) -> crate::core::rhi::SamplerAnisotropy {
+    use crate::core::rhi::SamplerAnisotropy;
+    let limit = vulkan_device.sampler_anisotropy_limit();
+    [
+        SamplerAnisotropy::X16,
+        SamplerAnisotropy::X8,
+        SamplerAnisotropy::X4,
+        SamplerAnisotropy::X2,
+    ]
+    .into_iter()
+    .find(|anisotropy| anisotropy.max_samples() <= limit)
+    .expect("the rig must serve anisotropic filtering")
 }
 
 pub(super) fn vk_sampler_create_info(descriptor: SamplerDescriptor) -> vk::SamplerCreateInfo {

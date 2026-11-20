@@ -18,8 +18,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-
-use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -28,6 +26,7 @@ use std::ffi::c_void;
 use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture};
 use crate::core::{Error, Result};
 
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use crate::vulkan::rhi::{HostVulkanDevice, SampledImageReadLayout};
 
 /// One compute kernel: shader pipeline + descriptor set + per-dispatch primitives.
@@ -187,26 +186,28 @@ impl VulkanComputeKernelInner {
     }
 
     /// Bind a sampled texture at `binding`, read through the binding's
-    /// sampler. Errors if the binding was declared with
-    /// an immutable sampler at construction time (in that case use
-    /// [`Self::set_combined_image_sampler_view`] — Vulkan would
-    /// silently ignore the default sampler in favor of the
-    /// layout-baked one, and a caller passing a non-default sampler
-    /// in `texture` would not get it applied).
+    /// sampler. Errors if the binding was given an immutable sampler at
+    /// construction, which Vulkan reads in place of any sampler written here;
+    /// bind that slot with [`Self::set_combined_image_sampler_view`].
     pub(crate) fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledTexture)?;
         if self.immutable_sampler_bindings.contains(&binding) {
             return Err(Error::GpuError(format!(
                 "Compute kernel '{}': binding {} has an immutable sampler from \
                  the descriptor-set layout (`new_with_immutable_samplers`); \
-                 use set_combined_image_sampler_view instead — the default \
-                 sampler set_sampled_texture would supply is silently ignored \
-                 by Vulkan when an immutable sampler is present",
+                 use set_combined_image_sampler_view instead — Vulkan reads the \
+                 immutable sampler in place of any sampler set_sampled_texture \
+                 would write",
                 self.label, binding,
             )));
         }
         let view = vk_image_view_for(texture)?;
-        let sampler = self.sampler_of(binding)?;
+        let declared = self
+            .bindings
+            .iter()
+            .find(|spec| spec.binding == binding)
+            .and_then(|spec| spec.sampler);
+        let sampler = self.samplers.sampler_for(declared)?;
         self.pending
             .lock()
             .bindings
@@ -314,27 +315,13 @@ impl VulkanComputeKernelInner {
         }
         Ok(())
     }
-
-    fn sampler_of(&self, binding: u32) -> Result<vk::Sampler> {
-        let sampler = self
-            .bindings
-            .iter()
-            .find(|spec| spec.binding == binding)
-            .and_then(|spec| spec.sampler)
-            .unwrap_or_default();
-        self.samplers.sampler_for(
-            &self.device,
-            &format!("Compute kernel '{}'", self.label),
-            sampler,
-        )
-    }
 }
 
 impl Drop for VulkanComputeKernelInner {
     fn drop(&mut self) {
         unsafe {
             let _ = self.vulkan_device.wait_idle();
-            self.samplers.destroy(&self.device);
+            self.samplers.destroy();
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device

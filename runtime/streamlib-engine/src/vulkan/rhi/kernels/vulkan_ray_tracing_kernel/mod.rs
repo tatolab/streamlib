@@ -27,8 +27,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-
-use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrRayTracingPipelineExtensionDeviceCommands as _;
@@ -43,6 +41,7 @@ use crate::core::rhi::{
 };
 use crate::core::{Error, Result};
 
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use crate::vulkan::rhi::{HostVulkanDevice, VulkanAccelerationStructure};
 use shader_binding_table::{build_sbt, drop_sbt};
 use spirv_binding_and_push_constant_validation::{
@@ -387,7 +386,10 @@ impl VulkanRayTracingKernelInner {
             command_buffer,
             fence,
             sbt,
-            samplers: VulkanKernelSamplers::new(),
+            samplers: VulkanKernelSamplers::new(
+                device.clone(),
+                format!("Ray-tracing kernel '{}'", descriptor.label),
+            ),
             pending: Mutex::new(PendingState {
                 bindings: HashMap::new(),
                 push_constants: Vec::new(),
@@ -402,7 +404,7 @@ impl Drop for VulkanRayTracingKernelInner {
             // Queue-mutex-guarded wait, not raw device_wait_idle (see
             // HostVulkanDevice::wait_idle — concurrent setup races otherwise).
             let _ = self.vulkan_device.wait_idle();
-            self.samplers.destroy(&self.device);
+            self.samplers.destroy();
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device

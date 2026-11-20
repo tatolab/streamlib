@@ -20,8 +20,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-
-use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -34,6 +32,7 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 
 use crate::vulkan::rhi::HostVulkanDevice;
+use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::VulkanKernelSamplers;
 use pipeline_state_conversions::index_type_to_vk;
 
 /// Rich data backing a [`VulkanGraphicsKernel`], reached through the
@@ -165,7 +164,12 @@ impl VulkanGraphicsKernelInner {
         self.expect_kind(binding, GraphicsBindingKind::SampledTexture)?;
         use crate::host_rhi::HostTextureExt;
         let view = texture.vulkan_inner().image_view()?;
-        let sampler = self.sampler_of(binding)?;
+        let declared = self
+            .bindings
+            .iter()
+            .find(|spec| spec.binding == binding)
+            .and_then(|spec| spec.sampler);
+        let sampler = self.samplers.sampler_for(declared)?;
         self.with_slot(frame_index, |slot| {
             slot.bindings
                 .insert(binding, BindingResource::SampledImage { view, sampler });
@@ -356,20 +360,6 @@ impl VulkanGraphicsKernelInner {
         Ok(())
     }
 
-    fn sampler_of(&self, binding: u32) -> Result<vk::Sampler> {
-        let sampler = self
-            .bindings
-            .iter()
-            .find(|spec| spec.binding == binding)
-            .and_then(|spec| spec.sampler)
-            .unwrap_or_default();
-        self.samplers.sampler_for(
-            &self.device,
-            &format!("Graphics kernel '{}'", self.label),
-            sampler,
-        )
-    }
-
     fn with_slot<R>(
         &self,
         frame_index: u32,
@@ -397,7 +387,7 @@ impl Drop for VulkanGraphicsKernelInner {
                 self.device
                     .destroy_command_pool(scaffold.command_pool, None);
             }
-            self.samplers.destroy(&self.device);
+            self.samplers.destroy();
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_pipeline(self.pipeline, None);

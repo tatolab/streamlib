@@ -557,8 +557,6 @@ impl HostVulkanDevice {
             .shader_float64(served_device_features.shader_float64 == vk::TRUE)
             .sampler_anisotropy(served_device_features.sampler_anisotropy == vk::TRUE)
             .build();
-        // The most samples an anisotropic kernel sampler may take here, 1 on a
-        // device without anisotropic filtering.
         let sampler_anisotropy_limit = if served_device_features.sampler_anisotropy == vk::TRUE {
             device_props.limits.max_sampler_anisotropy as u32
         } else {

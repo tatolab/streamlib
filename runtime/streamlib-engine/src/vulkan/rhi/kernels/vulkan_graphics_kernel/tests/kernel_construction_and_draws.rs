@@ -122,11 +122,10 @@ fn a_sampled_texture_with_an_anisotropic_repeating_sampler_constructs() {
         Some(d) => d,
         None => return,
     };
-    let anisotropy = if device.sampler_anisotropy_limit() >= 4 {
-        crate::core::rhi::SamplerAnisotropy::X4
-    } else {
-        crate::core::rhi::SamplerAnisotropy::Off
-    };
+    let anisotropy =
+        crate::vulkan::rhi::kernels::vulkan_kernel_samplers::the_most_anisotropy_the_rig_serves(
+            &device,
+        );
     let bindings = [
         GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT).with_sampler(
             crate::core::rhi::SamplerDescriptor {

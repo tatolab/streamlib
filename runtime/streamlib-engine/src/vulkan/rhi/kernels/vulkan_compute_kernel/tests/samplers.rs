@@ -52,12 +52,11 @@ fn two_texel_texture(device: &Arc<HostVulkanDevice>) -> Texture {
     <Texture as HostTextureExt>::from_vulkan(texture)
 }
 
-/// The two samples [`TWO_SAMPLES_SLANG`] takes through `sampler`.
-fn samples_through(
+/// A kernel running [`TWO_SAMPLES_SLANG`] over `bindings`.
+fn two_samples_kernel(
     device: &Arc<HostVulkanDevice>,
-    source: &Texture,
-    sampler: Option<SamplerDescriptor>,
-) -> Vec<u32> {
+    bindings: &[ComputeBindingSpec],
+) -> crate::core::Result<VulkanComputeKernel> {
     let spv = crate::core::rhi::SlangShaderSourceCompiler::new()
         .compile_or_reuse(
             TWO_SAMPLES_SLANG,
@@ -66,21 +65,29 @@ fn samples_through(
             "two-samples",
         )
         .expect("the sampling shader compiles");
-    let mut sampled = ComputeBindingSpec::sampled_texture(0);
-    sampled.sampler = sampler;
-    let bindings = [sampled, ComputeBindingSpec::storage_buffer(1)];
-    let kernel = VulkanComputeKernel::new(
+    VulkanComputeKernel::new(
         device,
         &ComputeKernelDescriptor {
             label: "two-samples",
             spv: &spv,
             entry_point: "main",
-            bindings: &bindings,
+            bindings,
             push_constant_size: 0,
             specialization_constants: &[],
         },
     )
-    .expect("the sampling kernel builds");
+}
+
+/// The two samples [`TWO_SAMPLES_SLANG`] takes through `sampler`.
+fn samples_through(
+    device: &Arc<HostVulkanDevice>,
+    source: &Texture,
+    sampler: Option<SamplerDescriptor>,
+) -> Vec<u32> {
+    let mut sampled = ComputeBindingSpec::sampled_texture(0);
+    sampled.sampler = sampler;
+    let kernel = two_samples_kernel(device, &[sampled, ComputeBindingSpec::storage_buffer(1)])
+        .expect("the sampling kernel builds");
     let written = make_storage_buffer(device, 2);
     kernel
         .set_sampled_texture(0, source)
@@ -148,11 +155,10 @@ fn each_binding_samples_through_the_filter_and_addressing_it_declares() {
 #[test]
 fn an_anisotropic_repeating_sampler_builds_and_samples() {
     let device = vulkan_device_for_dispatch_tests();
-    let anisotropy = if device.sampler_anisotropy_limit() >= 16 {
-        crate::core::rhi::SamplerAnisotropy::X16
-    } else {
-        crate::core::rhi::SamplerAnisotropy::Off
-    };
+    let anisotropy =
+        crate::vulkan::rhi::kernels::vulkan_kernel_samplers::the_most_anisotropy_the_rig_serves(
+            &device,
+        );
     let source = two_texel_texture(&device);
     let written = samples_through(
         &device,
@@ -172,6 +178,25 @@ fn an_anisotropic_repeating_sampler_builds_and_samples() {
 #[test]
 fn a_sampler_on_a_storage_buffer_binding_is_refused() {
     let device = vulkan_device_for_dispatch_tests();
+    let refusal = two_samples_kernel(
+        &device,
+        &[
+            ComputeBindingSpec::sampled_texture(0),
+            ComputeBindingSpec::storage_buffer(1).with_sampler(SamplerDescriptor::NEAREST_CLAMP),
+        ],
+    )
+    .expect_err("a storage buffer takes no sampler")
+    .to_string();
+    assert!(refusal.contains("samples no texture"), "{refusal}");
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
+fn a_declared_sampler_on_a_binding_given_an_immutable_one_is_refused() {
+    let device = vulkan_device_for_dispatch_tests();
     let spv = crate::core::rhi::SlangShaderSourceCompiler::new()
         .compile_or_reuse(
             TWO_SAMPLES_SLANG,
@@ -181,10 +206,10 @@ fn a_sampler_on_a_storage_buffer_binding_is_refused() {
         )
         .expect("the sampling shader compiles");
     let bindings = [
-        ComputeBindingSpec::sampled_texture(0),
-        ComputeBindingSpec::storage_buffer(1).with_sampler(SamplerDescriptor::NEAREST_CLAMP),
+        ComputeBindingSpec::sampled_texture(0).with_sampler(SamplerDescriptor::NEAREST_CLAMP),
+        ComputeBindingSpec::storage_buffer(1),
     ];
-    let refusal = VulkanComputeKernel::new(
+    let refusal = VulkanComputeKernel::new_with_immutable_samplers(
         &device,
         &ComputeKernelDescriptor {
             label: "two-samples",
@@ -194,8 +219,9 @@ fn a_sampler_on_a_storage_buffer_binding_is_refused() {
             push_constant_size: 0,
             specialization_constants: &[],
         },
+        &[(0, vk::Sampler::null())],
     )
-    .expect_err("a storage buffer takes no sampler")
+    .expect_err("two samplers for one binding must be refused")
     .to_string();
-    assert!(refusal.contains("samples no texture"), "{refusal}");
+    assert!(refusal.contains("declare only one"), "{refusal}");
 }
