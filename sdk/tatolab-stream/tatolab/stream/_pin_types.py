@@ -509,6 +509,7 @@ class PinTypeSpelling:
 
 
 _SETTING_TYPE_NOT_TAKEN = "a function node takes no setting yet"
+_A_CONNECTION_NOT_DECLARED_IN_PYTHON = "no Python class declares a connection type yet"
 _A_CHOICE_ONLY_THE_RUNTIME_DECLARES = (
     "only the runtime's own nodes declare a setting that chooses a pin's type yet"
 )
@@ -545,6 +546,7 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("list", "list_of"),
     PinTypeSpelling("dataclass", "bundle"),
     PinTypeSpelling("named_pin_type", "named"),
+    PinTypeSpelling("connection_type", "connection", _A_CONNECTION_NOT_DECLARED_IN_PYTHON),
     PinTypeSpelling("NodeReference", "node_reference", _SETTING_TYPE_NOT_TAKEN),
     PinTypeSpelling("NodeReferenceToNodeType", "node_reference", _SETTING_TYPE_NOT_TAKEN),
     PinTypeSpelling(

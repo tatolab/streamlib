@@ -50,6 +50,7 @@ mod bundle_frame_link_tests;
 mod bundle_member_link_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
+mod connection_wire_tests;
 mod convert_node_inserted_on_a_link_tests;
 mod convert_node_inside_a_placed_stream_tests;
 mod graph_action_feed_and_subscription_tests;

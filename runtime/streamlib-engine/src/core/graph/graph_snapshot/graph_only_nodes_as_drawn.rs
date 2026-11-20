@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 
+use crate::core::graph::connection_wire_lowering::ConnectionWiresAsDrawn;
 use crate::core::graph::graph_fragment_flattening::GraphFragmentsAsDrawn;
 use crate::core::graph::graph_interface_resolution::GraphInterfaceAsDrawn;
 use crate::core::graph::graph_variable_resolution::{
@@ -26,6 +27,7 @@ use super::{
 pub struct GraphOnlyNodesAsDrawn {
     pub fragments_as_drawn: GraphFragmentsAsDrawn,
     pub variables_as_drawn: GraphVariablesAsDrawn,
+    pub connection_wires_as_drawn: ConnectionWiresAsDrawn,
     pub interface_as_drawn: GraphInterfaceAsDrawn,
     pub groups_as_drawn: Vec<LabelledNodeGroup>,
     pub studio_as_drawn: Option<serde_json::Value>,
@@ -84,9 +86,10 @@ impl NodeChangeADrawnLinkBlocks {
 }
 
 impl GraphOnlyNodesAsDrawn {
-    /// Refuse `change` to the node named `node_name` while it is part of a fragment, or while a
+    /// Refuse `change` to the node named `node_name` while it is part of a fragment, while a
     /// drawn link between it and a fragment, a variable or an interface node names it, which
-    /// would leave that link dangling in the graph `graph` renders.
+    /// would leave that link dangling in the graph `graph` renders, and while a connection wire
+    /// names it, whose input holds the node it brings by its name.
     pub fn refuse_a_node_change_a_drawn_link_names(
         &self,
         node_name: &str,
@@ -123,6 +126,23 @@ impl GraphOnlyNodesAsDrawn {
                     .iter()
                     .map(|drawn| &drawn.link),
             );
+        if let Some(wire) = self
+            .connection_wires_as_drawn
+            .wires
+            .iter()
+            .find(|wire| names_the_node(&wire.source) || names_the_node(&wire.target))
+        {
+            return Err(Error::GraphError(format!(
+                "node `{node_name}` cannot be {}: the graph wires `{}/{}` into the connection \
+                 input `{}/{}`, which holds the node it brings by its name. To fix: take the \
+                 wire out first, then wire it again",
+                change.as_refused(),
+                wire.source.node,
+                wire.source.port,
+                wire.target.node,
+                wire.target.port
+            )));
+        }
         for link in links_drawn_to_a_graph_only_node {
             if names_the_node(&link.source) || names_the_node(&link.target) {
                 return Err(Error::GraphError(format!(
@@ -171,6 +191,7 @@ impl GraphOnlyNodesAsDrawn {
         node_types: &NodeTypesOneStreamResolves,
     ) {
         self.interface_as_drawn.render_into(graph_response);
+        self.connection_wires_as_drawn.render_into(graph_response);
         self.variables_as_drawn.render_into(graph_response);
         self.fragments_as_drawn
             .render_into(graph_response, node_types);

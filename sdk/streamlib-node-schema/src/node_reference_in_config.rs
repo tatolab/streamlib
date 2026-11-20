@@ -235,28 +235,37 @@ pub fn config_keys_holding_a_node_reference(
 }
 
 /// Every input among `inputs` that holds a node reference, in their order: each one declaring
-/// exactly a `NodeReference`, read as a config key of its name. Such an input takes nothing but a
-/// reference or no value.
+/// exactly a `NodeReference`, read as a config key of its name, and each one declaring exactly a
+/// `Connection`, which holds the node its wire brings once the wire is lowered, of any node type
+/// since the wire's connection type judged it. Such an input takes nothing but a reference or no
+/// value.
 pub fn inputs_holding_a_node_reference<'input>(
     inputs: impl IntoIterator<Item = &'input PortDescriptor>,
 ) -> Vec<ConfigKeyHoldingANodeReference> {
     inputs
         .into_iter()
         .filter_map(|input| {
-            let DeclaredPinType::Is {
-                pin_type:
+            let DeclaredPinType::Is { pin_type } = input.declared_pin()?.pin_type else {
+                return None;
+            };
+            let (referenced_node_type_import_path, one_referrer_per_referenced_node) =
+                match pin_type {
                     PinType::NodeReference {
                         referenced_node_type,
                         one_referrer_per_referenced_node,
-                    },
-            } = input.declared_pin()?.pin_type
-            else {
-                return None;
-            };
+                    } => (
+                        referenced_node_type.map(|node_type| node_type.as_str().to_string()),
+                        one_referrer_per_referenced_node,
+                    ),
+                    PinType::Connection {
+                        one_referrer_per_referenced_node,
+                        ..
+                    } => (None, one_referrer_per_referenced_node),
+                    _ => return None,
+                };
             Some(ConfigKeyHoldingANodeReference {
                 config_key: input.name.clone(),
-                referenced_node_type_import_path: referenced_node_type
-                    .map(|node_type| node_type.as_str().to_string()),
+                referenced_node_type_import_path,
                 takes_a_value_other_than_a_node_reference: false,
                 one_referrer_per_referenced_node,
             })
