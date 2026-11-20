@@ -452,3 +452,28 @@ fn hardware_construct_h264_encode_session() {
         }
     }
 }
+
+#[test]
+fn a_video_session_refused_for_too_many_objects_is_the_session_limit() {
+    let refusal = video_session_creation_refusal("encode/session", vk::ErrorCode::TOO_MANY_OBJECTS);
+    assert!(
+        matches!(
+            &refusal,
+            VideoError::VideoSessionLimitReached { session_label } if session_label == "encode/session"
+        ),
+        "{refusal:?}"
+    );
+}
+
+#[test]
+fn a_video_session_refused_for_anything_else_names_the_call() {
+    let refusal =
+        video_session_creation_refusal("encode/session", vk::ErrorCode::OUT_OF_DEVICE_MEMORY);
+    assert!(matches!(refusal, VideoError::Rhi(_)), "{refusal:?}");
+    assert!(
+        refusal
+            .to_string()
+            .contains("create_video_session_khr failed"),
+        "{refusal}"
+    );
+}

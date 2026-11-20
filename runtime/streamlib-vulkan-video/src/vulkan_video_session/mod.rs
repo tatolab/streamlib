@@ -23,6 +23,20 @@ use crate::VulkanVideoCodecDevice;
 /// below this on every Linux platform we exercise.
 const MAX_BOUND_MEMORY: usize = 40;
 
+/// What `vkCreateVideoSessionKHR` refusing with `refusal` means for the
+/// session labelled `session_label`: `VK_ERROR_TOO_MANY_OBJECTS` is the
+/// driver's limit on video sessions, which frees as other sessions end.
+fn video_session_creation_refusal(session_label: &str, refusal: vk::ErrorCode) -> VideoError {
+    if refusal == vk::ErrorCode::TOO_MANY_OBJECTS {
+        return VideoError::VideoSessionLimitReached {
+            session_label: session_label.to_owned(),
+        };
+    }
+    VideoError::Rhi(format!(
+        "video session '{session_label}': create_video_session_khr failed: {refusal}"
+    ))
+}
+
 /// Every Vulkan Video decode codec operation the engine knows.
 pub const VIDEO_DECODE_CODEC_OPERATIONS: vk::VideoCodecOperationFlagsKHR =
     vk::VideoCodecOperationFlagsKHR::from_bits_truncate(
@@ -284,13 +298,8 @@ impl VulkanVideoSession {
 
         let _device_lock = vulkan_device.lock_device();
 
-        let raw_session =
-            unsafe { device.create_video_session_khr(&create_info, None) }.map_err(|e| {
-                VideoError::Rhi(format!(
-                    "video session '{}': create_video_session_khr failed: {e}",
-                    descriptor.label,
-                ))
-            })?;
+        let raw_session = unsafe { device.create_video_session_khr(&create_info, None) }
+            .map_err(|refusal| video_session_creation_refusal(descriptor.label, refusal))?;
 
         let bind_result =
             unsafe { Self::allocate_and_bind_memory(device, allocator, raw_session, descriptor) };

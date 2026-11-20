@@ -603,3 +603,29 @@ fn test_gop_structure_streaming() {
     assert_eq!(gop.consecutive_b_frame_count(), 0);
     assert_eq!(gop.idr_period(), 60);
 }
+
+// -- Session creation refusals --
+
+#[test]
+fn the_video_session_limit_passes_through_the_encoder_as_itself() {
+    let refusal = super::session::encoder_session_creation_refusal(
+        crate::VideoError::VideoSessionLimitReached {
+            session_label: "encode/session".to_owned(),
+        },
+    );
+    assert!(
+        matches!(refusal, crate::VideoError::VideoSessionLimitReached { .. }),
+        "{refusal:?}"
+    );
+}
+
+#[test]
+fn any_other_video_session_refusal_names_the_encoder_session() {
+    let refusal = super::session::encoder_session_creation_refusal(crate::VideoError::Rhi(
+        "video session 'encode/session': create_video_session_khr failed".to_owned(),
+    ));
+    assert!(
+        matches!(&refusal, crate::VideoError::BitstreamError(message) if message.starts_with("encoder session: ")),
+        "{refusal:?}"
+    );
+}

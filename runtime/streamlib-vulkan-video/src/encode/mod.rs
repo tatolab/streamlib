@@ -463,7 +463,13 @@ impl SimpleEncoder {
 impl Drop for SimpleEncoder {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.codec_device.wait_idle();
+            // Only a configured encoder has submitted work; one whose
+            // configure was refused, such as at the driver's video session
+            // limit, has nothing in flight and must not stall every other
+            // session on the shared device.
+            if self.configured {
+                let _ = self.codec_device.wait_idle();
+            }
 
             // Drop RGB→NV12 converter first (owns Vulkan objects).
             drop(self.rgb_to_nv12.take());
