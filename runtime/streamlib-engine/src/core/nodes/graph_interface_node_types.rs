@@ -13,8 +13,9 @@ use crate::core::descriptors::{
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_RANGE_CONFIG_KEY,
-    GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+    GRAPH_INPUT_CONTROL_SETTING, GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_MEANING_SETTING,
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_STEP_SETTING,
+    GRAPH_INPUT_UNIT_SETTING, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
     GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
 };
@@ -28,7 +29,8 @@ static THE_SETTINGS_OF_A_GRAPH_OUTPUT: LazyLock<Vec<PortDescriptor>> =
     LazyLock::new(|| the_settings_of(the_node_type_of_a_graph_output()));
 
 /// The settings a `GraphInput` takes, as its type declares them: `port`, `pin_type`, `family`,
-/// `range` and `lifetime`.
+/// the annotations of its `value` (`range`, `step`, `unit`, `meaning` and `control`) and
+/// `lifetime`.
 pub(crate) fn the_settings_of_a_graph_input() -> &'static [PortDescriptor] {
     &THE_SETTINGS_OF_A_GRAPH_INPUT
 }
@@ -59,8 +61,9 @@ pub(crate) fn the_family_a_graph_interface_value_port_declares() -> PortFamilyDe
     family
 }
 
-/// The descriptor of the `GraphInput` node type: its settings `port`, `pin_type`, `family`,
-/// `range` and `lifetime`, each read at setup; its `value` input, a setting read each run that
+/// The descriptor of the `GraphInput` node type: its settings `port`, `pin_type`, `family` and
+/// `lifetime`, each read at setup, and the annotations of its `value` (`range`, `step`, `unit`,
+/// `meaning` and `control`), each read each run; its `value` input, a setting read each run that
 /// holds what a client sets, whose former name is `default`; and its `value` output, carrying
 /// that value as a value, which keeps its last message for a reader that connects later. Both
 /// `value` ports are of the type `pin_type` chooses, and of the family `family` names while it
@@ -75,14 +78,33 @@ pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
         port_setting("The Input's name on the stream."),
         pin_type_setting("The type of what enters the Input; unset, `family` decides it."),
         family_setting(),
-        setting(
+        annotation_setting(
             GRAPH_INPUT_RANGE_CONFIG_KEY,
             "`[lowest, highest]`, the span a control moves the Input's number in.",
             PinType::ListOf {
                 element_type: Box::new(PinType::Float { exact_size: None }),
             },
-            true,
-            None,
+        ),
+        annotation_setting(
+            GRAPH_INPUT_STEP_SETTING,
+            "The step a control moves the Input's number by.",
+            PinType::Float { exact_size: None },
+        ),
+        annotation_setting(
+            GRAPH_INPUT_UNIT_SETTING,
+            "The unit the Input's number is in, such as `Hz`.",
+            PinType::String {},
+        ),
+        annotation_setting(
+            GRAPH_INPUT_MEANING_SETTING,
+            "What the Input's value stands for, such as `frequency`.",
+            PinType::String {},
+        ),
+        annotation_setting(
+            GRAPH_INPUT_CONTROL_SETTING,
+            "The control that sets the Input's value, such as `dial`: one of the Studio's, or a \
+             module's qualified name.",
+            PinType::String {},
         ),
         setting(
             GRAPH_INPUT_LIFETIME_CONFIG_KEY,
@@ -172,6 +194,16 @@ fn setting(
         Some(pin_default) => port.with_pin_default(pin_default),
         None => port,
     }
+}
+
+/// A setting of a `GraphInput` named `name` of `pin_type`, stating `description`, that holds
+/// one annotation of its `value` and may be unset. The running node never reads it: it changes
+/// what `graph` serves on `value` and how a value set there is checked, so it is read each run
+/// and a change rebuilds nothing.
+fn annotation_setting(name: &str, description: &str, pin_type: PinType) -> PortDescriptor {
+    setting(name, description, pin_type, true, None).with_input_mode(NodeInputMode::SettingOnly {
+        read: SettingReadTime::EachRun,
+    })
 }
 
 /// The `port` setting: the name the interface node declares, a String every node holds.

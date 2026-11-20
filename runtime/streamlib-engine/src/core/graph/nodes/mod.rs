@@ -10,4 +10,5 @@ pub use graph_node::GraphNode;
 pub(crate) use graph_node::the_refusal_of_a_link_into_a_setting;
 pub use graph_node_ports::{GraphNodePorts, InputHoldingAValueUnderANameItHad};
 pub use node_run_id::NodeRunId;
-pub use port_info::{InputNumberRange, PinTypeAsDeclared, PortInfo};
+pub(crate) use port_info::PortAnnotations;
+pub use port_info::{PinTypeAsDeclared, PortInfo};

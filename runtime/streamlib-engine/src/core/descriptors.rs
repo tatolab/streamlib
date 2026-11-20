@@ -18,12 +18,12 @@ pub use streamlib_node_schema::node_settings::{
 };
 pub use streamlib_node_schema::pin_type::{
     BuiltInPinTypeName, BundleMember, ConvertNodeToInsert, DeclaredPinType, FloatSize,
-    FreePinConversion, IntegerSize, NamedPinTypeImportPath, NodeInputMode, PinAnnotations,
-    PinConversion, PinConversionOutputPick, PinConversionOutputPicked, PinDeclaration, PinFlow,
-    PinLinkEnd, PinLinkEndNamed, PinLinkInputEnd, PinLinkOutcome, PinLinkRefusal, PinLinkVerdict,
-    PinLinkWarning, PinNumberRange, PinProjectAssetAnnotation, PinType, PinValueNotTaken,
-    ProjectAssetMedia, ResolvedPin, SettingReadTime, TexturePixelFormat, VectorComponentCount,
-    pin_link_verdict,
+    FreePinConversion, IntegerSize, NamedPinTypeImportPath, NodeInputMode, PinAnnotationName,
+    PinAnnotations, PinConversion, PinConversionOutputPick, PinConversionOutputPicked,
+    PinDeclaration, PinFlow, PinLinkEnd, PinLinkEndNamed, PinLinkInputEnd, PinLinkOutcome,
+    PinLinkRefusal, PinLinkVerdict, PinLinkWarning, PinNumberRange, PinProjectAssetAnnotation,
+    PinType, PinValueNotTaken, ProjectAssetMedia, ResolvedPin, SettingReadTime, TexturePixelFormat,
+    VectorComponentCount, built_in_pin_type, pin_link_verdict,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

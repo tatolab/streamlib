@@ -13,9 +13,6 @@ import type {
   BundleMember,
   NamedPinTypeImportPath,
   PinFlow,
-  BuiltInPinTypeName,
-  PinAnnotationName,
-  DeclaredPinType,
   PinAnnotations,
   PinNumberRange,
   ImageOutputPortFrameRate,
@@ -24,6 +21,9 @@ import type {
   ChannelsOutputPortSampleType,
   ArrayOutputPortResidency,
   PinProjectAssetAnnotation,
+  BuiltInPinTypeName,
+  PinAnnotationName,
+  DeclaredPinType,
   BooleanPinValue,
   IntegerPinValue,
   FloatPinValue,
@@ -49,9 +49,6 @@ export type {
   BundleMember,
   NamedPinTypeImportPath,
   PinFlow,
-  BuiltInPinTypeName,
-  PinAnnotationName,
-  DeclaredPinType,
   PinAnnotations,
   PinNumberRange,
   ImageOutputPortFrameRate,
@@ -60,6 +57,9 @@ export type {
   ChannelsOutputPortSampleType,
   ArrayOutputPortResidency,
   PinProjectAssetAnnotation,
+  BuiltInPinTypeName,
+  PinAnnotationName,
+  DeclaredPinType,
   BooleanPinValue,
   IntegerPinValue,
   FloatPinValue,
@@ -906,6 +906,13 @@ export interface GraphNodePortOnTheWire {
    * How its messages are read.
    */
   flow?: PinFlow;
+  /**
+   * What the port's pin states besides its type, such as its range, its unit and the control
+   * that sets it, none of which decides a link: as its node type declares it, and on a
+   * `GraphInput`'s `value` input, as that node's settings state it. Absent on a port that
+   * states none.
+   */
+  annotations?: PinAnnotations;
   /**
    * The value it reads, null when it reads nothing; absent when a link feeds it, and on a
    * bundle input.
@@ -6850,6 +6857,14 @@ export interface ControlContractComponents {
   BundleMember: BundleMember;
   NamedPinTypeImportPath: NamedPinTypeImportPath;
   PinFlow: PinFlow;
+  PinAnnotations: PinAnnotations;
+  PinNumberRange: PinNumberRange;
+  ImageOutputPortFrameRate: ImageOutputPortFrameRate;
+  ImageStreamFrameRate: ImageStreamFrameRate;
+  ChannelsOutputPortSampleRate: ChannelsOutputPortSampleRate;
+  ChannelsOutputPortSampleType: ChannelsOutputPortSampleType;
+  ArrayOutputPortResidency: ArrayOutputPortResidency;
+  PinProjectAssetAnnotation: PinProjectAssetAnnotation;
   InputValueComesFromOnTheWire: InputValueComesFromOnTheWire;
   BundleMemberValueReadOnTheWire: BundleMemberValueReadOnTheWire;
   GraphNodeComponentsOnTheWire: GraphNodeComponentsOnTheWire;
@@ -7036,14 +7051,6 @@ export interface ControlContractComponents {
   NodeTypeDescription: NodeTypeDescription;
   NodeTypeInputDescribed: NodeTypeInputDescribed;
   DeclaredPinType: DeclaredPinType;
-  PinAnnotations: PinAnnotations;
-  PinNumberRange: PinNumberRange;
-  ImageOutputPortFrameRate: ImageOutputPortFrameRate;
-  ImageStreamFrameRate: ImageStreamFrameRate;
-  ChannelsOutputPortSampleRate: ChannelsOutputPortSampleRate;
-  ChannelsOutputPortSampleType: ChannelsOutputPortSampleType;
-  ArrayOutputPortResidency: ArrayOutputPortResidency;
-  PinProjectAssetAnnotation: PinProjectAssetAnnotation;
   NodeTypeInputMode: NodeTypeInputMode;
   SettingReadTime: SettingReadTime;
   NodeValueLifetime: NodeValueLifetime;
@@ -7220,7 +7227,7 @@ export interface ControlOperations {
   /**
    * Export a loaded stream's graph, or every loaded stream's, with each node's and link's state and each part not live yet marked.
    *
-   * Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. A node that keeps a state carries its `health` in its `components` (`healthy`, `not_ready`, `raising` or `failed`) with the `diagnostics` behind it, left out while it has none; a fragment's own node carries neither. Each stream graph carries its `condition`, as `list_streams` answers it. While a stream's graph document holds an edit its running graph did not take, its graph is the document's: each node and link the running graph holds rendered live, and each other drawn as the document writes it with `live: false` until the stream's playback stops and takes it; `live` is absent on every node and link that runs. Without `stream`, `{machine, streams}` holds every loaded stream's graph.
+   * Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`, and a port whose pin states annotations, such as its `range` and the `control` that sets it, carries them as `annotations`, a top-level Graph Input's `value` input those its settings state. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. A node that keeps a state carries its `health` in its `components` (`healthy`, `not_ready`, `raising` or `failed`) with the `diagnostics` behind it, left out while it has none; a fragment's own node carries neither. Each stream graph carries its `condition`, as `list_streams` answers it. While a stream's graph document holds an edit its running graph did not take, its graph is the document's: each node and link the running graph holds rendered live, and each other drawn as the document writes it with `live: false` until the stream's playback stops and takes it; `live` is absent on every node and link that runs. Without `stream`, `{machine, streams}` holds every loaded stream's graph.
    *
    * Since contract version 1, experimental.
    */
@@ -8141,7 +8148,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 29;
+export declare const CONTROL_CONTRACT_REVISION: 30;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

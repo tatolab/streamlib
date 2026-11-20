@@ -354,84 +354,6 @@ type PinFlow = Literal["value", "stream", "trigger"]
 """How a pin's messages are read."""
 
 
-type BuiltInPinTypeName = Literal[
-    "boolean",
-    "integer",
-    "float",
-    "string",
-    "menu",
-    "color",
-    "vector",
-    "rectangle",
-    "transform",
-    "texture",
-    "audio",
-    "encoded_video",
-    "encoded_audio",
-    "tensor",
-    "asset",
-    "trigger",
-    "list_of",
-    "bundle",
-    "named",
-    "node_reference",
-    "pin_type_choice",
-]
-"""The name of a built-in pin type: the `type` tag of its pin type."""
-
-
-class IsDeclaredPinType(TypedDict):
-    """Exactly this type."""
-
-    pin_type: PinType
-    """The type."""
-
-    kind: Literal["is"]
-
-
-class OneOfDeclaredPinType(TypedDict):
-    """Any one of these types."""
-
-    pin_types: list[PinType]
-    """The types it takes."""
-
-    kind: Literal["one_of"]
-
-
-class AnyDeclaredPinType(TypedDict):
-    """Every type. An input only."""
-
-    kind: Literal["any"]
-
-
-class SameAsInputDeclaredPinType(TypedDict):
-    """The type of the named input's link."""
-
-    input_port_name: str
-    """The input whose type it takes."""
-
-    kind: Literal["same_as_input"]
-
-
-class SetByInputDeclaredPinType(TypedDict):
-    """The type the named pin type choice input holds."""
-
-    input_name: str
-    """The input that chooses its type."""
-
-    kind: Literal["set_by_input"]
-
-
-type DeclaredPinType = (
-    IsDeclaredPinType
-    | OneOfDeclaredPinType
-    | AnyDeclaredPinType
-    | SameAsInputDeclaredPinType
-    | SetByInputDeclaredPinType
-)
-"""The pin type a port declares, or how it is found."""
-
-
 class PinAnnotations(TypedDict):
     """What a pin states besides its type. None of it decides a link."""
 
@@ -549,6 +471,84 @@ class PinProjectAssetAnnotation(TypedDict):
 
     media: NotRequired[list[ProjectAssetMedia]]
     """The media an asset must hold one of; empty, any asset of the project."""
+
+
+type BuiltInPinTypeName = Literal[
+    "boolean",
+    "integer",
+    "float",
+    "string",
+    "menu",
+    "color",
+    "vector",
+    "rectangle",
+    "transform",
+    "texture",
+    "audio",
+    "encoded_video",
+    "encoded_audio",
+    "tensor",
+    "asset",
+    "trigger",
+    "list_of",
+    "bundle",
+    "named",
+    "node_reference",
+    "pin_type_choice",
+]
+"""The name of a built-in pin type: the `type` tag of its pin type."""
+
+
+class IsDeclaredPinType(TypedDict):
+    """Exactly this type."""
+
+    pin_type: PinType
+    """The type."""
+
+    kind: Literal["is"]
+
+
+class OneOfDeclaredPinType(TypedDict):
+    """Any one of these types."""
+
+    pin_types: list[PinType]
+    """The types it takes."""
+
+    kind: Literal["one_of"]
+
+
+class AnyDeclaredPinType(TypedDict):
+    """Every type. An input only."""
+
+    kind: Literal["any"]
+
+
+class SameAsInputDeclaredPinType(TypedDict):
+    """The type of the named input's link."""
+
+    input_port_name: str
+    """The input whose type it takes."""
+
+    kind: Literal["same_as_input"]
+
+
+class SetByInputDeclaredPinType(TypedDict):
+    """The type the named pin type choice input holds."""
+
+    input_name: str
+    """The input that chooses its type."""
+
+    kind: Literal["set_by_input"]
+
+
+type DeclaredPinType = (
+    IsDeclaredPinType
+    | OneOfDeclaredPinType
+    | AnyDeclaredPinType
+    | SameAsInputDeclaredPinType
+    | SetByInputDeclaredPinType
+)
+"""The pin type a port declares, or how it is found."""
 
 
 class PinDeclarationOnTheWire(TypedDict):

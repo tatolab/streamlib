@@ -5,8 +5,8 @@
 //! chosen type or family, and the interface node rendered with its settings and its `value`.
 
 use crate::core::descriptors::{
-    PinLinkEnd, PinLinkInputEnd, PinType, PortFamilyDeclaration, PortFamilyLinkEndpoint,
-    ResolvedPin, pin_link_verdict, refusal_of_a_link_between_port_families,
+    PinAnnotations, PinLinkEnd, PinLinkInputEnd, PinType, PortFamilyDeclaration,
+    PortFamilyLinkEndpoint, ResolvedPin, pin_link_verdict, refusal_of_a_link_between_port_families,
 };
 use crate::core::graph::PortInfo;
 use crate::core::graph::graph_snapshot::{
@@ -139,7 +139,7 @@ impl GraphInterfacePort {
             port_name: &linked_port.port,
             member_name: linked_port.member.as_deref(),
             pin_type: &linked_pin.pin_type,
-            meaning: linked.meaning.as_deref(),
+            meaning: linked.meaning(),
         };
         let interface_end = PinLinkEnd {
             node_name: &self.interface_node,
@@ -213,6 +213,7 @@ impl GraphInterfacePort {
             family,
             pin_default: None,
             pin,
+            annotations: PinAnnotations::default(),
             value_read: None,
         }
     }

@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 29
+    "x-contract-revision": 30
   },
   "methods": [
     {
@@ -548,7 +548,7 @@
     {
       "name": "graph",
       "summary": "Export a loaded stream's graph, or every loaded stream's, with each node's and link's state and each part not live yet marked.",
-      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. A node that keeps a state carries its `health` in its `components` (`healthy`, `not_ready`, `raising` or `failed`) with the `diagnostics` behind it, left out while it has none; a fragment's own node carries neither. Each stream graph carries its `condition`, as `list_streams` answers it. While a stream's graph document holds an edit its running graph did not take, its graph is the document's: each node and link the running graph holds rendered live, and each other drawn as the document writes it with `live: false` until the stream's playback stops and takes it; `live` is absent on every node and link that runs. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
+      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`, and a port whose pin states annotations, such as its `range` and the `control` that sets it, carries them as `annotations`, a top-level Graph Input's `value` input those its settings state. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. A node that keeps a state carries its `health` in its `components` (`healthy`, `not_ready`, `raising` or `failed`) with the `diagnostics` behind it, left out while it has none; a fragment's own node carries neither. Each stream graph carries its `condition`, as `list_streams` answers it. While a stream's graph document holds an edit its running graph did not take, its graph is the document's: each node and link the running graph holds rendered live, and each other drawn as the document writes it with `live: false` until the stream's playback stops and takes it; `live` is absent on every node and link that runs. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -9392,6 +9392,10 @@
             "$ref": "#/components/schemas/PinFlow",
             "description": "How its messages are read."
           },
+          "annotations": {
+            "$ref": "#/components/schemas/PinAnnotations",
+            "description": "What the port's pin states besides its type, such as its range, its unit and the control\nthat sets it, none of which decides a link: as its node type declares it, and on a\n`GraphInput`'s `value` input, as that node's settings state it. Absent on a port that\nstates none."
+          },
           "value": {
             "description": "The value it reads, null when it reads nothing; absent when a link feeds it, and on a\nbundle input."
           },
@@ -10048,6 +10052,272 @@
           }
         ],
         "description": "How a pin's messages are read."
+      },
+      "PinAnnotations": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinNumberRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lowest and highest number it holds."
+          },
+          "step": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The step a control moves a number by."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The unit a number is in, such as `Hz`."
+          },
+          "meaning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What its value stands for, such as `frequency`."
+          },
+          "control": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The control that edits or shows it: one of the Studio's, or a module's qualified name."
+          },
+          "frame_rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageOutputPortFrameRate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The frame rate a Texture output's stream has, stated or read from a config key."
+          },
+          "sample_rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelsOutputPortSampleRate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sample rate an Audio output's stream has, stated or read from a config key."
+          },
+          "sample_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelsOutputPortSampleType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sample type an Audio output's stream has."
+          },
+          "residency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArrayOutputPortResidency"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a Tensor output's values live."
+          },
+          "project_asset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinProjectAssetAnnotation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That a String holds the UUID of one of the project's assets, so a client offers the\nproject's assets to pick from."
+          }
+        },
+        "description": "What a pin states besides its type. None of it decides a link."
+      },
+      "PinNumberRange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "minimum": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The lowest; absent, no lower bound."
+          },
+          "maximum": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The highest; absent, no upper bound."
+          }
+        },
+        "description": "The lowest and highest number a pin holds; either may be left open."
+      },
+      "ImageOutputPortFrameRate": {
+        "oneOf": [
+          {
+            "description": "Frames per second, stated on the class.",
+            "type": "object",
+            "properties": {
+              "stated": {
+                "$ref": "#/components/schemas/ImageStreamFrameRate"
+              }
+            },
+            "required": [
+              "stated"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The value of the node's config key of this name.",
+            "type": "object",
+            "properties": {
+              "from_config": {
+                "type": "object",
+                "properties": {
+                  "config_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "config_key"
+                ]
+              }
+            },
+            "required": [
+              "from_config"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "The frame rate an Image output states, written on the class or read from its node's config."
+      },
+      "ImageStreamFrameRate": {
+        "type": "object",
+        "properties": {
+          "numerator": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "denominator": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator"
+        ],
+        "additionalProperties": false,
+        "description": "An Image stream's frame rate, as a rational number of frames per second."
+      },
+      "ChannelsOutputPortSampleRate": {
+        "oneOf": [
+          {
+            "description": "Samples per second, stated on the class.",
+            "type": "object",
+            "properties": {
+              "stated": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "stated"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The value of the node's config key of this name.",
+            "type": "object",
+            "properties": {
+              "from_config": {
+                "type": "object",
+                "properties": {
+                  "config_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "config_key"
+                ]
+              }
+            },
+            "required": [
+              "from_config"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "The sample rate a Channels output states, written on the class or read from its node's config."
+      },
+      "ChannelsOutputPortSampleType": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "f32"
+          },
+          {
+            "type": "string",
+            "const": "f64"
+          }
+        ],
+        "description": "The sample type of a Channels output."
+      },
+      "ArrayOutputPortResidency": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "gpu"
+          },
+          {
+            "type": "string",
+            "const": "cpu"
+          }
+        ],
+        "description": "Where an Array output's attributes live."
+      },
+      "PinProjectAssetAnnotation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAssetMedia"
+            },
+            "description": "The media an asset must hold one of; empty, any asset of the project."
+          }
+        },
+        "description": "The project's assets a String holding an asset's UUID is picked from."
       },
       "InputValueComesFromOnTheWire": {
         "oneOf": [
@@ -18534,272 +18804,6 @@
           }
         ],
         "description": "The pin type a port declares, or how it is found."
-      },
-      "PinAnnotations": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "range": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PinNumberRange"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The lowest and highest number it holds."
-          },
-          "step": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "The step a control moves a number by."
-          },
-          "unit": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The unit a number is in, such as `Hz`."
-          },
-          "meaning": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What its value stands for, such as `frequency`."
-          },
-          "control": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The control that edits or shows it: one of the Studio's, or a module's qualified name."
-          },
-          "frame_rate": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ImageOutputPortFrameRate"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The frame rate a Texture output's stream has, stated or read from a config key."
-          },
-          "sample_rate": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ChannelsOutputPortSampleRate"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The sample rate an Audio output's stream has, stated or read from a config key."
-          },
-          "sample_type": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ChannelsOutputPortSampleType"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The sample type an Audio output's stream has."
-          },
-          "residency": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ArrayOutputPortResidency"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Where a Tensor output's values live."
-          },
-          "project_asset": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PinProjectAssetAnnotation"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "That a String holds the UUID of one of the project's assets, so a client offers the\nproject's assets to pick from."
-          }
-        },
-        "description": "What a pin states besides its type. None of it decides a link."
-      },
-      "PinNumberRange": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "minimum": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "The lowest; absent, no lower bound."
-          },
-          "maximum": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "The highest; absent, no upper bound."
-          }
-        },
-        "description": "The lowest and highest number a pin holds; either may be left open."
-      },
-      "ImageOutputPortFrameRate": {
-        "oneOf": [
-          {
-            "description": "Frames per second, stated on the class.",
-            "type": "object",
-            "properties": {
-              "stated": {
-                "$ref": "#/components/schemas/ImageStreamFrameRate"
-              }
-            },
-            "required": [
-              "stated"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "description": "The value of the node's config key of this name.",
-            "type": "object",
-            "properties": {
-              "from_config": {
-                "type": "object",
-                "properties": {
-                  "config_key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "config_key"
-                ]
-              }
-            },
-            "required": [
-              "from_config"
-            ],
-            "additionalProperties": false
-          }
-        ],
-        "description": "The frame rate an Image output states, written on the class or read from its node's config."
-      },
-      "ImageStreamFrameRate": {
-        "type": "object",
-        "properties": {
-          "numerator": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "denominator": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "numerator",
-          "denominator"
-        ],
-        "additionalProperties": false,
-        "description": "An Image stream's frame rate, as a rational number of frames per second."
-      },
-      "ChannelsOutputPortSampleRate": {
-        "oneOf": [
-          {
-            "description": "Samples per second, stated on the class.",
-            "type": "object",
-            "properties": {
-              "stated": {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "stated"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "description": "The value of the node's config key of this name.",
-            "type": "object",
-            "properties": {
-              "from_config": {
-                "type": "object",
-                "properties": {
-                  "config_key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "config_key"
-                ]
-              }
-            },
-            "required": [
-              "from_config"
-            ],
-            "additionalProperties": false
-          }
-        ],
-        "description": "The sample rate a Channels output states, written on the class or read from its node's config."
-      },
-      "ChannelsOutputPortSampleType": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "f32"
-          },
-          {
-            "type": "string",
-            "const": "f64"
-          }
-        ],
-        "description": "The sample type of a Channels output."
-      },
-      "ArrayOutputPortResidency": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "gpu"
-          },
-          {
-            "type": "string",
-            "const": "cpu"
-          }
-        ],
-        "description": "Where an Array output's attributes live."
-      },
-      "PinProjectAssetAnnotation": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "media": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ProjectAssetMedia"
-            },
-            "description": "The media an asset must hold one of; empty, any asset of the project."
-          }
-        },
-        "description": "The project's assets a String holding an asset's UUID is picked from."
       },
       "NodeTypeInputMode": {
         "oneOf": [

@@ -54,6 +54,39 @@ def test_a_chosen_pin_type_is_recorded_as_the_type_it_chooses() -> None:
     }
 
 
+def test_a_graph_input_records_the_annotations_of_its_value_as_its_settings() -> None:
+    recorded = the_values_recorded_for(
+        GraphInput,
+        {
+            "port": "lines",
+            "pin_type": PinTypeChoice(int),
+            "range": (1, 8),
+            "step": 1,
+            "unit": "lines",
+            "meaning": "count",
+            "control": "dial",
+        },
+    )
+
+    assert recorded == {
+        "port": "lines",
+        "pin_type": {"type": "integer"},
+        "range": [1.0, 8.0],
+        "step": 1.0,
+        "unit": "lines",
+        "meaning": "count",
+        "control": "dial",
+    }
+
+
+def test_a_control_that_is_not_its_name_is_refused_naming_the_input() -> None:
+    with pytest.raises(TypeError, match=r"`GraphInput`'s input `control` is set 3"):
+        StreamBuilder("rig").add(
+            GraphInput,
+            input_values={"port": "lines", "pin_type": PinTypeChoice(int), "control": 3},
+        )
+
+
 def test_a_graph_input_records_its_family_by_name_and_its_default_as_its_value() -> None:
     recorded = the_values_recorded_for(
         GraphInput, {"port": "cue", "family": "records", "default": {"scene": 1}}
@@ -75,7 +108,7 @@ def test_a_value_the_chosen_type_does_not_take_is_refused_naming_the_input() -> 
 
 
 def test_a_setting_a_graph_input_does_not_declare_is_refused_listing_its_inputs() -> None:
-    with pytest.raises(ValueError, match=r"declares no input `codec`.*`lifetime`, `pin_type`"):
+    with pytest.raises(ValueError, match=r"declares no input `codec`.*`lifetime`, `meaning`, `pin_type`"):
         StreamBuilder("rig").add(GraphInput, input_values={"port": "level", "codec": "h264"})
 
 
@@ -122,11 +155,24 @@ def test_a_graph_inputs_fields_declare_the_settings_and_the_value_the_runtime_de
     outputs = ports_by_name(GraphInput, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
     set_by_pin_type = {"kind": "set_by_input", "input_name": "pin_type"}
 
-    assert list(inputs) == ["port", "pin_type", "family", "range", "lifetime", "value"]
+    assert list(inputs) == [
+        "port",
+        "pin_type",
+        "family",
+        "range",
+        "step",
+        "unit",
+        "meaning",
+        "control",
+        "lifetime",
+        "value",
+    ]
     assert "pin_default" not in inputs["port"]
     assert inputs["lifetime"]["pin_default"] == "kept"
     assert inputs["pin_type"]["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
     assert inputs["value"]["input_mode"] == {"mode": "setting_only", "read": "each_run"}
+    for annotation in ["range", "step", "unit", "meaning", "control"]:
+        assert inputs[annotation]["input_mode"] == {"mode": "setting_only", "read": "each_run"}
     assert inputs["value"]["pin_declaration"]["pin_type"] == set_by_pin_type
     assert inputs["value"]["pin_declaration"]["former_names"] == ["default"]
     assert inputs["value"]["pin_declaration"]["may_be_unset"] is True

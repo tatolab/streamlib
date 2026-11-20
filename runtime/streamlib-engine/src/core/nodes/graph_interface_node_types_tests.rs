@@ -8,16 +8,12 @@ use crate::core::descriptors::{
     DeclaredPinType, NodeDescriptor, NodeInputMode, PinType, SettingReadTime,
 };
 
-fn the_setting_names(descriptor: &NodeDescriptor) -> Vec<&str> {
+/// The names of the settings `descriptor` declares read `read`.
+fn the_setting_names(descriptor: &NodeDescriptor, read: SettingReadTime) -> Vec<&str> {
     descriptor
         .inputs
         .iter()
-        .filter(|input| {
-            input.input_mode
-                == Some(NodeInputMode::SettingOnly {
-                    read: SettingReadTime::AtSetup,
-                })
-        })
+        .filter(|input| input.input_mode == Some(NodeInputMode::SettingOnly { read }))
         .map(|input| input.name.as_str())
         .collect()
 }
@@ -38,8 +34,12 @@ fn the_declared_type_of(descriptor: &NodeDescriptor, input: &str) -> DeclaredPin
 fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin_type_chooses() {
     let descriptor = the_node_type_of_a_graph_input().expect("the GraphInput type builds");
     assert_eq!(
-        the_setting_names(&descriptor),
-        ["port", "pin_type", "family", "range", "lifetime"]
+        the_setting_names(&descriptor, SettingReadTime::AtSetup),
+        ["port", "pin_type", "family", "lifetime"]
+    );
+    assert_eq!(
+        the_setting_names(&descriptor, SettingReadTime::EachRun),
+        ["range", "step", "unit", "meaning", "control", "value"]
     );
     assert_eq!(
         the_declared_type_of(&descriptor, "pin_type"),
@@ -99,7 +99,7 @@ fn the_output_value_type(descriptor: &NodeDescriptor) -> DeclaredPinType {
 fn a_graph_output_declares_its_settings_and_a_value_that_takes_a_wire() {
     let descriptor = the_node_type_of_a_graph_output().expect("the GraphOutput type builds");
     assert_eq!(
-        the_setting_names(&descriptor),
+        the_setting_names(&descriptor, SettingReadTime::AtSetup),
         ["port", "pin_type", "family"]
     );
     let value = descriptor

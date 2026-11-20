@@ -62,15 +62,58 @@ pub struct PortInfo {
     /// [`crate::core::descriptors::PortDescriptor`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_mode: Option<crate::core::descriptors::NodeInputMode>,
-    /// The lowest and highest number this input takes, as its pin declares them; `None` when it
-    /// declares no range. Not rendered here: the pin declaration a client reads carries it.
+    /// What this port's pin states besides its type, as its node type declares it or, on a
+    /// `GraphInput`'s `value` input, as its settings state it: its range, step, unit, meaning and
+    /// control among them. Not rendered here: `graph` renders it beside the port's pin type.
     #[serde(skip)]
-    pub range: Option<InputNumberRange>,
-    /// What this port's value stands for, as its pin declares it, such as `frequency`; `None`
-    /// when it declares none. Not rendered here: the pin declaration a client reads carries it.
-    #[serde(skip)]
-    pub meaning: Option<String>,
+    pub(crate) annotations: PortAnnotations,
 }
+
+/// What a port's pin states besides its type, compared number by number bit for bit, so a port
+/// compares equal to itself.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PortAnnotations(pub(crate) crate::core::descriptors::PinAnnotations);
+
+impl PartialEq for PortAnnotations {
+    fn eq(&self, other: &Self) -> bool {
+        let crate::core::descriptors::PinAnnotations {
+            range,
+            step,
+            unit,
+            meaning,
+            control,
+            frame_rate,
+            sample_rate,
+            sample_type,
+            residency,
+            project_asset,
+        } = &self.0;
+        let crate::core::descriptors::PinAnnotations {
+            range: other_range,
+            step: other_step,
+            unit: other_unit,
+            meaning: other_meaning,
+            control: other_control,
+            frame_rate: other_frame_rate,
+            sample_rate: other_sample_rate,
+            sample_type: other_sample_type,
+            residency: other_residency,
+            project_asset: other_project_asset,
+        } = &other.0;
+        range.map(InputNumberRange) == other_range.map(InputNumberRange)
+            && step.map(f64::to_bits) == other_step.map(f64::to_bits)
+            && unit == other_unit
+            && meaning == other_meaning
+            && control == other_control
+            && frame_rate == other_frame_rate
+            && sample_rate == other_sample_rate
+            && sample_type == other_sample_type
+            && residency == other_residency
+            && project_asset == other_project_asset
+    }
+}
+
+impl Eq for PortAnnotations {}
 
 /// The pin type a port's node type declares, or how its graph finds it: exactly one, one of
 /// several, any, the type linked into an input, or the type a setting chooses; and its flow.
@@ -82,10 +125,9 @@ pub struct PinTypeAsDeclared {
     pub flow: crate::core::descriptors::PinFlow,
 }
 
-/// The lowest and highest number an input takes, compared bound by bound bit for bit, so a port
-/// compares equal to itself.
+/// The lowest and highest number an input takes, compared bound by bound bit for bit.
 #[derive(Debug, Clone, Copy)]
-pub struct InputNumberRange(pub crate::core::descriptors::PinNumberRange);
+struct InputNumberRange(crate::core::descriptors::PinNumberRange);
 
 impl InputNumberRange {
     /// Each bound's bits, the form two ranges are compared in.
@@ -123,13 +165,12 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             may_be_unset: declared_pin
                 .as_ref()
                 .is_some_and(|declared| declared.may_be_unset),
-            range: declared_pin
-                .as_ref()
-                .and_then(|declared| declared.annotations.range)
-                .map(InputNumberRange),
-            meaning: declared_pin
-                .as_ref()
-                .and_then(|declared| declared.annotations.meaning.clone()),
+            annotations: PortAnnotations(
+                declared_pin
+                    .as_ref()
+                    .map(|declared| declared.annotations.clone())
+                    .unwrap_or_default(),
+            ),
             declared_pin_type: declared_pin.as_ref().map(|declared| PinTypeAsDeclared {
                 pin_type: declared.pin_type.clone(),
                 flow: declared.flow,
@@ -142,6 +183,18 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
 }
 
 impl PortInfo {
+    /// The lowest and highest number this input takes, as its pin states them; `None` when it
+    /// states no range.
+    pub fn range(&self) -> Option<crate::core::descriptors::PinNumberRange> {
+        self.annotations.0.range
+    }
+
+    /// What this port's value stands for, as its pin states it, such as `frequency`; `None` when
+    /// it states none.
+    pub fn meaning(&self) -> Option<&str> {
+        self.annotations.0.meaning.as_deref()
+    }
+
     /// Whether a link may end at this input: every input but a setting.
     pub fn takes_a_wire(&self) -> bool {
         self.input_mode
@@ -207,7 +260,7 @@ impl PortInfo {
             && self.family == other.family
             && self.pin == other.pin
             && self.declared_pin_type == other.declared_pin_type
-            && self.range == other.range
+            && self.range().map(InputNumberRange) == other.range().map(InputNumberRange)
             && self.input_mode == other.input_mode
             && self.lifetime == other.lifetime
             && self.may_be_unset == other.may_be_unset

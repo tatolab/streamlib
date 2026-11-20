@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use streamlib_node_schema::NodeClassImportPath;
-use streamlib_node_schema::pin_type::ResolvedPin;
+use streamlib_node_schema::pin_type::{PinAnnotations, ResolvedPin};
 
 use super::{
     GraphLinkOnTheWire, GraphNodeComponentsOnTheWire, StreamClockSpec, StreamConditionOnTheWire,
@@ -308,6 +308,12 @@ pub struct GraphNodePortOnTheWire {
     /// family alone.
     #[serde(flatten)]
     pub pin: Option<ResolvedPin>,
+    /// What the port's pin states besides its type, such as its range, its unit and the control
+    /// that sets it, none of which decides a link: as its node type declares it, and on a
+    /// `GraphInput`'s `value` input, as that node's settings state it. Absent on a port that
+    /// states none.
+    #[serde(default, skip_serializing_if = "PinAnnotations::is_empty")]
+    pub annotations: PinAnnotations,
     /// On an input, the value it reads while unlinked, as `value`, and where that value comes
     /// from, as `value_comes_from`; on a bundle input, each member's, as `member_values`. All
     /// are absent on an input that takes no stored value and no link feeds, and on an output.
