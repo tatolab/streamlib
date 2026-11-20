@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Texture, Vector2, node
 
 
 @node.meta(
@@ -14,10 +14,10 @@ from tatolab.stream import ImageFrame, node
 )
 @node.shader(
     """
-float4 Transform(ImageInput image, float move_x, float move_y, float scale, float rotate)
+float4 Transform(ImageInput image, float2 move, float scale, float rotate)
 {
     float2 aspect = float2(1.0, 0.5625);
-    float2 from_center = (image.uv - 0.5 - float2(move_x, move_y)) * aspect;
+    float2 from_center = (image.uv - 0.5 - move) * aspect;
     float turn = -rotate * 6.2831853;
     float2 turned = float2(from_center.x * cos(turn) - from_center.y * sin(turn), from_center.x * sin(turn) + from_center.y * cos(turn));
     float2 source = turned / (aspect * max(scale, 0.0001)) + 0.5;
@@ -27,12 +27,11 @@ float4 Transform(ImageInput image, float move_x, float move_y, float scale, floa
 """,
 )
 def Transform(  # noqa: N802
-    image: ImageFrame,
-    move_x: float = 0.0,
-    move_y: float = 0.0,
+    image: Texture,
+    move: Vector2 = Vector2(0.0, 0.0),
     scale: float = 1.0,
     rotate: float = 0.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -49,12 +48,12 @@ float4 Crop(ImageInput image, float left, float right, float top, float bottom)
 """,
 )
 def Crop(  # noqa: N802
-    image: ImageFrame,
+    image: Texture,
     left: float = 0.0,
     right: float = 0.0,
     top: float = 0.0,
     bottom: float = 0.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -70,7 +69,7 @@ float4 Flip(ImageInput image, float horizontal, float vertical)
 }
 """,
 )
-def Flip(image: ImageFrame, horizontal: float = 1.0, vertical: float = 0.0) -> ImageFrame: ...  # noqa: N802
+def Flip(image: Texture, horizontal: float = 1.0, vertical: float = 0.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -79,19 +78,18 @@ def Flip(image: ImageFrame, horizontal: float = 1.0, vertical: float = 0.0) -> I
 )
 @node.shader(
     """
-float4 Tile(ImageInput image, float across, float down, float scroll_x, float scroll_y)
+float4 Tile(ImageInput image, float across, float down, float2 scroll)
 {
-    return image.sample(frac(image.uv * float2(max(across, 0.0001), max(down, 0.0001)) + float2(scroll_x, scroll_y)));
+    return image.sample(frac(image.uv * float2(max(across, 0.0001), max(down, 0.0001)) + scroll));
 }
 """,
 )
 def Tile(  # noqa: N802
-    image: ImageFrame,
+    image: Texture,
     across: float = 2.0,
     down: float = 2.0,
-    scroll_x: float = 0.0,
-    scroll_y: float = 0.0,
-) -> ImageFrame: ...
+    scroll: Vector2 = Vector2(0.0, 0.0),
+) -> Texture: ...
 
 
 @node.meta(
@@ -109,7 +107,7 @@ float4 Mirror(ImageInput image, float horizontal, float vertical)
 }
 """,
 )
-def Mirror(image: ImageFrame, horizontal: float = 1.0, vertical: float = 0.0) -> ImageFrame: ...  # noqa: N802
+def Mirror(image: Texture, horizontal: float = 1.0, vertical: float = 0.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -132,5 +130,5 @@ float4 Kaleidoscope(ImageInput image, float segments, float rotate, float zoom)
 """,
 )
 def Kaleidoscope(  # noqa: N802
-    image: ImageFrame, segments: float = 6.0, rotate: float = 0.0, zoom: float = 1.0
-) -> ImageFrame: ...
+    image: Texture, segments: float = 6.0, rotate: float = 0.0, zoom: float = 1.0
+) -> Texture: ...
