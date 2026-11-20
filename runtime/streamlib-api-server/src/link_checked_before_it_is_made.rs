@@ -31,8 +31,8 @@ use crate::refusal_code_and_place::RefusalCodeAndPlace;
 use crate::stream_graph_transaction_executor::{
     AConnectJudgedInsideAPlacedStream, GraphRequestRefusal, GraphTransactionRefusal,
     StreamsTheRuntimeHolds, WhatAConnectAsks, WhereAnOperationEdits,
-    a_connect_judged_inside_a_placed_stream, the_current_name_of_a_port,
-    the_level_holds_both_ends_by_uuid, the_node_a_connects_end_names,
+    a_connect_judged_inside_a_placed_stream, refuse_a_member_named_on_an_input_end,
+    the_current_name_of_a_port, the_level_holds_both_ends_by_uuid, the_node_a_connects_end_names,
     what_a_connect_asks_of_the_running_stream,
 };
 
@@ -221,6 +221,9 @@ impl TheRunningGraphLinksAreCheckedOn {
         held_direction: PortDirection,
     ) -> Result<StreamGraphDocumentLinkEnd, GraphRequestRefusal> {
         let node = the_node_a_connects_end_names(&held.node)?;
+        if held_direction == PortDirection::Input {
+            refuse_a_member_named_on_an_input_end(held)?;
+        }
         let node_id = node.to_string();
         let Some(placed) = self
             .rendered
@@ -265,7 +268,11 @@ impl TheRunningGraphLinksAreCheckedOn {
         {
             return Err(port_not_found());
         }
-        Ok(StreamGraphDocumentLinkEnd { node, port })
+        Ok(StreamGraphDocumentLinkEnd {
+            node,
+            port,
+            member: held.member.clone(),
+        })
     }
 
     /// What `connect` would answer for the link from `source` to `target`: read as a

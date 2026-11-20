@@ -329,10 +329,12 @@ async fn tools_call_connect_and_disconnect_name_each_end_by_its_nodes_uuid() {
         source: streamlib_project_repository::StreamGraphDocumentLinkEnd {
             node: STUB_CAMERA_NODE_UUID.parse().unwrap(),
             port: "video".to_owned(),
+            member: None,
         },
         target: streamlib_project_repository::StreamGraphDocumentLinkEnd {
             node: STUB_EFFECT_NODE_UUID.parse().unwrap(),
             port: target_port.to_owned(),
+            member: None,
         },
     };
     assert_eq!(

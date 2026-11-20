@@ -13,7 +13,8 @@ use crate::iceoryx2::loss_counters::{
 };
 
 use super::{
-    ChannelDataServiceSubscriber, InputMailboxesInner, PortBoundSubscriber, WindowedPortInboundLink,
+    ChannelDataServiceSubscriber, InputMailboxesInner, MemberTakenAtTheRead, PortBoundSubscriber,
+    WindowedPortInboundLink,
 };
 
 impl InputMailboxesInner {
@@ -41,6 +42,7 @@ impl InputMailboxesInner {
         link_id: &str,
         inbound_link_name: &InboundLinkName,
         subscriber: ChannelDataServiceSubscriber,
+        member_taken_at_the_read: Option<MemberTakenAtTheRead>,
     ) {
         let dropped_bag_counter = self.dropped_bag_counts.counter_for_inbound_link(link_id);
         let into_a_windowed_port = self
@@ -60,6 +62,7 @@ impl InputMailboxesInner {
                 local_port: local_port.to_string(),
                 inbound_link_name: inbound_link_name.clone(),
                 subscriber,
+                member_taken_at_the_read,
                 dropped_bag_counter,
                 discarded_sample_counter,
                 bags_the_ring_overwrote: Default::default(),

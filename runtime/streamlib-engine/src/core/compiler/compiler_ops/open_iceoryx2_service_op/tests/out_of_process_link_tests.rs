@@ -48,6 +48,7 @@ fn record_wiring_for_both_out_of_process_endpoints(
         1,
         link_id,
         None,
+        None,
     )
     .expect("recording dest wiring must succeed");
 }
@@ -394,6 +395,7 @@ fn a_helper_placed_nodes_metrics_carry_exactly_the_keys_an_app_process_ones_do()
         1,
         &"L-helper-windowed".into(),
         declared,
+        None,
     )
     .expect("a windowed helper port wires");
 
@@ -721,6 +723,7 @@ fn a_link_between_an_engine_endpoint_and_a_helper_reclaims_each_its_own_way() {
         sizing_of_a_two_subscriber_test_channel(),
         1,
         &link_id,
+        None,
         None,
     )
     .expect("recording dest wiring must succeed");

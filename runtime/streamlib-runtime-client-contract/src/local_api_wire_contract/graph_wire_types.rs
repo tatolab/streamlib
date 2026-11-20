@@ -15,7 +15,8 @@ pub struct RefusedGraphLinkOnTheWire {
     pub target: GraphLinkEndOnTheWire,
 }
 
-/// One end of a link a graph tool names: a node by its UUID and one of its ports.
+/// One end of a link a graph tool names: a node by its UUID, one of its ports, and the member of
+/// a bundle port it starts at, if any.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphLinkEndOnTheWire {
@@ -23,6 +24,9 @@ pub struct GraphLinkEndOnTheWire {
     pub node: String,
     /// The port's name.
     pub port: String,
+    /// The member of a bundle port the link starts at; absent for the whole port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
 }
 
 /// A node a graph transaction added.

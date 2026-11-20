@@ -157,8 +157,13 @@ pub(crate) fn open_a_read_of_a_link_by_the_reader_of_a_function_node_island(
     };
     let wiring_link_id =
         the_wiring_link_id_of_a_read_by_the_reader_of_an_island(link_id, island_link_id);
-    let destination =
-        read_the_destination_of_a_link(graph, &reader_input_port, &to_port, &wiring_link_id)?;
+    let destination = read_the_destination_of_a_link(
+        graph,
+        &from_port,
+        &reader_input_port,
+        &to_port,
+        &wiring_link_id,
+    )?;
     let opened_source_side = open_the_source_side_of_a_link(
         graph,
         &from_port,
@@ -322,7 +327,8 @@ fn open_iceoryx2_service_read_at(
         (link.source().clone(), link.to_port().clone())
     };
 
-    let destination = read_the_destination_of_a_link(graph, read_at, &to_port, link_id)?;
+    let destination =
+        read_the_destination_of_a_link(graph, &from_port, read_at, &to_port, link_id)?;
     let opened_source_side =
         open_the_source_side_of_a_link(graph, &from_port, link_id, &destination, iceoryx2_node)?;
     let wire_reply_awaited_from_the_destination =

@@ -31,6 +31,7 @@ fn a_resampling_windowed_port_reports_data_only_once_a_full_window_can_be_emitte
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        None,
     );
 
     // 160-frame quanta, so the queue crosses one window's worth in steps
@@ -112,6 +113,7 @@ fn a_port_awaiting_its_device_hands_a_reader_nothing_however_much_is_queued() {
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        None,
     );
 
     for block in 0..4u64 {
@@ -155,6 +157,7 @@ fn a_bag_evicted_at_a_port_with_an_unsettled_contract_says_so_once_naming_the_po
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        None,
     );
 
     let ((), warnings) = CapturedTracingWarnings::captured_while(|| {
@@ -210,6 +213,7 @@ fn a_settled_ports_evictions_are_not_reported_as_an_unsettled_contract() {
         "L-only",
         &InboundLinkName::from("ponly/out"),
         subscriber,
+        None,
     );
     mailboxes
         .settle_a_ports_device_matched_audio_window_contract(
@@ -266,6 +270,7 @@ fn settling_a_port_converts_the_bags_that_arrived_before_the_device_was_known() 
             "L-only",
             &InboundLinkName::from("ponly/out"),
             subscriber,
+            None,
         );
         for block in 0..4u64 {
             publish_one_mono_channels_block(&publisher, 480, 16_000, (block * 30_000_000) as i64);

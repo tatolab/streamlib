@@ -61,7 +61,8 @@ pub const NOTE_POSITION_ARGUMENT_DESCRIPTION: &str =
 pub const NOTE_SIZE_ARGUMENT_DESCRIPTION: &str =
     "The note's width and height on the canvas, a `[width, height]` pair of numbers.";
 
-/// One end of a link a graph action names: a node and one of its ports.
+/// One end of a link a graph action names: a node, one of its ports, and the member of a bundle
+/// port it starts at, if any.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp-tool-json-schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -73,6 +74,14 @@ pub struct StreamGraphActionLinkEnd {
         schemars(description = "The port's name, as `graph` lists it under the node's `ports`.")
     )]
     pub port: String,
+    #[cfg_attr(
+        feature = "mcp-tool-json-schema",
+        schemars(
+            description = "The member of a bundle port the link starts at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. Only a link's `source` names one."
+        )
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
 }
 
 /// The stream a graph edit is to, as its caller named it: by the stream id `list_streams`

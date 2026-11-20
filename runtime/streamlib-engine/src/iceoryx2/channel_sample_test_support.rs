@@ -152,6 +152,7 @@ impl TestLinkIntoAnInputPort {
             &format!("L-test-{port}"),
             &super::InboundLinkName::from("psource/out"),
             subscriber,
+            None,
         );
         Self {
             publisher,

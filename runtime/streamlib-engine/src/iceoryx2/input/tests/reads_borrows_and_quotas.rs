@@ -18,6 +18,7 @@ fn a_message_written_as_bytes_reaches_read_raw_with_its_stamp_and_group_flag() {
         "L-bytes",
         &InboundLinkName::from("psource/out"),
         channel.create_subscriber(16).unwrap(),
+        None,
     );
     let output_writer = output_writer_publishing_onto(&channel, "out");
 
@@ -124,6 +125,7 @@ fn a_link_past_its_quota_drops_only_its_own_frames() {
         "L-stalled",
         &InboundLinkName::from("psource/out"),
         channel.create_subscriber(16).unwrap(),
+        None,
     );
     let keeping_up = InputMailboxesInner::new();
     keeping_up.add_port("in", MAILBOX_DEPTH, ReadMode::ReadNextInOrder);
@@ -132,6 +134,7 @@ fn a_link_past_its_quota_drops_only_its_own_frames() {
         "L-keeping-up",
         &InboundLinkName::from("psource/out"),
         channel.create_subscriber(16).unwrap(),
+        None,
     );
     let output_writer = output_writer_publishing_onto(&channel, "out");
     let quota = DEFAULT_INPUT_PORT_BORROW_QUOTA;

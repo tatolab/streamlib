@@ -303,11 +303,12 @@ fn a_link_to_another_stream_as_an_older_runtime_rendered_it_is_refused_naming_th
     );
 }
 
-/// A link end is spelled `{node, port}` and no other key: one carrying the
+/// A link end is spelled `{node, port}`, with a `member` on a link from one member of a
+/// bundle, and no other key: one carrying the
 /// `runtime_name` a retired render wrote is refused, naming the keys a link
 /// end is written with.
 #[test]
-fn a_link_end_carrying_a_key_besides_node_and_port_is_refused_naming_the_keys_of_a_link_end() {
+fn a_link_end_carrying_a_key_it_is_not_written_with_is_refused_naming_the_keys_of_a_link_end() {
     let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
         "links": [{"source": {"runtime_name": "rig", "node": "camera", "port": "video"},
@@ -318,7 +319,7 @@ fn a_link_end_carrying_a_key_besides_node_and_port_is_refused_naming_the_keys_of
     for named in [
         "the source end of the link `camera/video` → `camera/frames_in`",
         "`runtime_name`",
-        "`node` and `port`",
+        "`node`, `port` and `member`",
     ] {
         assert!(refusal.contains(named), "{named:?} not in: {refusal}");
     }

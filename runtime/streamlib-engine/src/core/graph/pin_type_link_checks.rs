@@ -20,10 +20,11 @@ use super::{
     PendingDeletionComponent, PortInfo,
 };
 use crate::core::descriptors::{
-    ConvertNodeToInsert, DeclaredPinType, PinConversion, PinLinkEnd, PinLinkInputEnd,
+    BundleMember, ConvertNodeToInsert, DeclaredPinType, PinConversion, PinLinkEnd, PinLinkInputEnd,
     PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType, PortFamilyDeclaration,
     PortFamilyLinkEndpoint, pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
 };
+use crate::core::error::AMemberTheOutputDoesNotHold;
 use crate::core::{Error, PortDirection, Result};
 
 /// Whose link a connect makes, which decides how leniently its pin types are judged.
@@ -43,6 +44,9 @@ pub(crate) enum ALinkConnected {
 struct TypedLinkEnds<'graph> {
     from_node: &'graph GraphNode,
     output_port: &'graph PortInfo,
+    /// The member of the bundle output the link starts at; `None` for the whole port, whose
+    /// type is `output_pin_type`. A member's own type is `output_pin_type`.
+    output_member: Option<BundleMember>,
     output_pin_type: PinTypeInItsGraph,
     to_node: &'graph GraphNode,
     input_port: &'graph PortInfo,
@@ -64,11 +68,13 @@ impl TypedLinkEnds<'_> {
             TypedEnd {
                 node: self.from_node,
                 port: self.output_port,
+                member: self.output_member.as_ref(),
                 pin_type: &self.output_pin_type,
             },
             TypedEnd {
                 node: self.to_node,
                 port: self.input_port,
+                member: None,
                 pin_type: &self.input_pin_type,
             },
             conversions,
@@ -124,11 +130,13 @@ pub(crate) fn the_verdict_of_a_link_between_declared_ports(
     ))
 }
 
-/// One typed end of a link: its node, its port and what the port carries in its graph.
+/// One typed end of a link: its node, its port, the member of a bundle port it names, and what
+/// the end carries in its graph.
 #[derive(Clone, Copy)]
 struct TypedEnd<'end> {
     node: &'end GraphNode,
     port: &'end PortInfo,
+    member: Option<&'end BundleMember>,
     pin_type: &'end PinTypeInItsGraph,
 }
 
@@ -137,9 +145,12 @@ impl<'end> TypedEnd<'end> {
         PinLinkEnd {
             node_name: &self.node.display_name,
             port_name: &self.port.name,
-            member_name: None,
+            member_name: self.member.map(|member| member.name.as_str()),
             pin_type,
-            meaning: self.port.meaning.as_deref(),
+            meaning: match self.member {
+                Some(member) => member.meaning.as_deref(),
+                None => self.port.meaning.as_deref(),
+            },
         }
     }
 
@@ -228,18 +239,110 @@ fn the_typed_ends_of<'graph>(
     let to_node = graph.traversal().v(to.node_run_id()).first()?;
     let output_port = from_node.output_port(from.port_name())?;
     let input_port = to_node.input_port(to.port_name())?;
-    let output_pin_type =
+    let port_pin_type =
         the_pin_type_of_a_port_in_its_graph(graph, from_node, output_port, PortDirection::Output);
+    let (output_member, output_pin_type) =
+        what_a_link_from_a_port_carries(from, port_pin_type).ok()?;
     let input_pin_type =
         the_pin_type_of_a_port_in_its_graph(graph, to_node, input_port, PortDirection::Input);
     (is_typed(&output_pin_type) && is_typed(&input_pin_type)).then_some(TypedLinkEnds {
         from_node,
         output_port,
+        output_member,
         output_pin_type,
         to_node,
         input_port,
         input_pin_type,
     })
+}
+
+/// What a link from `from`, a port carrying `port_pin_type`, carries: the port's type for a link
+/// from the whole port; for one from a member of a bundle, that member and its own type. `None`
+/// naming the member when the port holds no such member.
+fn what_a_link_from_a_port_carries(
+    from: &OutputLinkPortRef,
+    port_pin_type: PinTypeInItsGraph,
+) -> std::result::Result<(Option<BundleMember>, PinTypeInItsGraph), &str> {
+    let Some(member) = from.member() else {
+        return Ok((None, port_pin_type));
+    };
+    let held = the_member_of(&port_pin_type, member).ok_or(member)?.clone();
+    let member_pin_type = PinTypeInItsGraph::Is(held.member_type.clone());
+    Ok((Some(held), member_pin_type))
+}
+
+/// The member named `member` of a port carrying `pin_type`, when it carries one bundle that
+/// holds it.
+fn the_member_of<'pin>(
+    pin_type: &'pin PinTypeInItsGraph,
+    member: &str,
+) -> Option<&'pin BundleMember> {
+    match pin_type {
+        PinTypeInItsGraph::Is(PinType::Bundle { members }) => {
+            members.iter().find(|held| held.name == member)
+        }
+        _ => None,
+    }
+}
+
+/// The bundle the output of `from` carries and the member of it the link starts at; `None` for
+/// a link from a whole port, or one whose port holds no such member.
+pub(crate) fn the_bundle_member_a_link_starts_at(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+) -> Option<(PinType, BundleMember)> {
+    let member = from.member()?;
+    let from_node = graph.traversal().v(from.node_run_id()).first()?;
+    let output_port = from_node.output_port(from.port_name())?;
+    let pin_type =
+        the_pin_type_of_a_port_in_its_graph(graph, from_node, output_port, PortDirection::Output);
+    let held = the_member_of(&pin_type, member)?.clone();
+    match pin_type {
+        PinTypeInItsGraph::Is(bundle) => Some((bundle, held)),
+        _ => None,
+    }
+}
+
+/// Refuse a link from `from`, a member of a bundle output, whose port holds no member of that
+/// name or carries no bundle, naming the members it has. A link from a whole port, or from an
+/// end that is no port of `graph`, is left for the rest of the judgement.
+pub(crate) fn refuse_a_member_its_output_does_not_hold(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+) -> Result<()> {
+    let Some(member) = from.member() else {
+        return Ok(());
+    };
+    let Some(from_node) = graph.traversal().v(from.node_run_id()).first() else {
+        return Ok(());
+    };
+    let Some(output_port) = from_node.output_port(from.port_name()) else {
+        return Ok(());
+    };
+    let pin_type =
+        the_pin_type_of_a_port_in_its_graph(graph, from_node, output_port, PortDirection::Output);
+    if the_member_of(&pin_type, member).is_some() {
+        return Ok(());
+    }
+    let (pin_type_in_words, members_it_has) = match &pin_type {
+        PinTypeInItsGraph::Is(pin_type @ PinType::Bundle { members }) => (
+            pin_type.to_string(),
+            members.iter().map(|held| held.name.clone()).collect(),
+        ),
+        PinTypeInItsGraph::Is(pin_type) => (pin_type.to_string(), Vec::new()),
+        PinTypeInItsGraph::OneOf(_) => ("one of several types".to_owned(), Vec::new()),
+        PinTypeInItsGraph::Any => ("any type".to_owned(), Vec::new()),
+        PinTypeInItsGraph::Untyped => ("no pin type".to_owned(), Vec::new()),
+    };
+    Err(Error::OutputPortHasNoMemberNamed(Box::new(
+        AMemberTheOutputDoesNotHold {
+            node: from_node.display_name.clone(),
+            port: output_port.name.clone(),
+            member: member.to_owned(),
+            pin_type: pin_type_in_words,
+            members_it_has,
+        },
+    )))
 }
 
 /// What a link is judged by at its two ends: what each port carries in its graph, and its
@@ -398,16 +501,36 @@ pub(crate) fn refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_re
                 input_port,
                 PortDirection::Input,
             );
+            let (member, carried) = match what_a_link_from_a_port_carries(
+                link.source(),
+                carried.clone(),
+            ) {
+                Ok(what_it_carries) => what_it_carries,
+                Err(member) => {
+                    return Err(Error::Config(format!(
+                        "config update for {} refused: under it output `{}` holds no member `{}`, \
+                     which the wired link {} → {} starts at. To fix: choose a setting under \
+                     which the output holds that member, or remove the link first",
+                        node.display_name,
+                        output.name,
+                        member,
+                        link.source(),
+                        link.to_port(),
+                    )));
+                }
+            };
             let refused = if is_typed(&input_pin_type) {
                 verdict_between(
                     TypedEnd {
                         node,
                         port: output,
+                        member: member.as_ref(),
                         pin_type: &carried,
                     },
                     TypedEnd {
                         node: to_node,
                         port: input_port,
+                        member: None,
                         pin_type: &input_pin_type,
                     },
                     &conversions,
@@ -488,8 +611,16 @@ fn the_link_its_pin_types_or_families_take(
     to: &InputLinkPortRef,
     a_link_connected: ALinkConnected,
 ) -> Result<LinkTaken> {
+    refuse_a_member_its_output_does_not_hold(graph, from)?;
     let conversions = graph.node_types_this_stream_resolves().pin_conversions();
     let Some(ends) = the_typed_ends_of(graph, from, to) else {
+        if let Some(member) = from.member() {
+            return Err(Error::InvalidLink(format!(
+                "a link from member `{member}` of `{from}` enters `{to}`, which states no pin \
+                 type, and a member is read only by a typed input. To fix: link the whole port, \
+                 or link the member to a typed input"
+            )));
+        }
         let families = refuse_a_link_between_ports_whose_families_do_not_match(
             graph,
             from,
@@ -658,8 +789,8 @@ fn the_first_wired_link_past_an_input_refused(
     conversions: &[PinConversion],
 ) -> Option<String> {
     let mut inputs_passed = HashSet::from([(node.id.clone(), input_name.to_owned())]);
-    let mut inputs_to_pass = vec![(node, input_name.to_owned())];
-    while let Some((node, input_name)) = inputs_to_pass.pop() {
+    let mut inputs_to_pass = vec![(node, input_name.to_owned(), carried.clone())];
+    while let Some((node, input_name, carried)) = inputs_to_pass.pop() {
         let outputs_following_the_input = node.ports.outputs.iter().filter(|output| {
             matches!(
                 output.declared_pin_type.as_ref().map(|declared| &declared.pin_type),
@@ -687,16 +818,33 @@ fn the_first_wired_link_past_an_input_refused(
                     downstream_input,
                     PortDirection::Input,
                 );
+                let (member, carried_on) =
+                    match what_a_link_from_a_port_carries(link_out.source(), carried.clone()) {
+                        Ok(what_it_carries) => what_it_carries,
+                        Err(member) => {
+                            return Some(format!(
+                                "output `{}` of `{}` takes the type linked into `{input_name}`, \
+                                 and under it holds no member `{member}`, which the wired link \
+                                 {} → {} starts at",
+                                following_output.name,
+                                node.display_name,
+                                link_out.source(),
+                                link_out.to_port(),
+                            ));
+                        }
+                    };
                 if is_typed(&downstream_pin_type) {
                     let verdict = verdict_between(
                         TypedEnd {
                             node,
                             port: following_output,
-                            pin_type: carried,
+                            member: member.as_ref(),
+                            pin_type: &carried_on,
                         },
                         TypedEnd {
                             node: downstream_node,
                             port: downstream_input,
+                            member: None,
                             pin_type: &downstream_pin_type,
                         },
                         conversions,
@@ -714,7 +862,11 @@ fn the_first_wired_link_past_an_input_refused(
                 }
                 if inputs_passed.insert((downstream_node.id.clone(), downstream_input.name.clone()))
                 {
-                    inputs_to_pass.push((downstream_node, downstream_input.name.clone()));
+                    inputs_to_pass.push((
+                        downstream_node,
+                        downstream_input.name.clone(),
+                        carried_on,
+                    ));
                 }
             }
         }

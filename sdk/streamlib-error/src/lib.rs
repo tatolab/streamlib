@@ -180,6 +180,11 @@ pub enum Error {
         output_ports_the_node_has: String,
     },
 
+    /// A link starts at a member of an output port that holds no member of that name, or
+    /// carries no bundle.
+    #[error("{0}")]
+    OutputPortHasNoMemberNamed(Box<AMemberTheOutputDoesNotHold>),
+
     /// A node of a stream that a caller reached for does not run.
     #[error("{runtime_words}")]
     NodeOfAStreamIsNotRunning {
@@ -422,6 +427,29 @@ pub enum Error {
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// The member a link starts at, which its output port does not hold.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+#[error(
+    "a link starts at member `{member}` of output `{node}.{port}`, which carries {pin_type}{}. \
+     To fix: start the link at one of its members, or at the whole port",
+    match .members_it_has.as_slice() {
+        [] => ", no bundle, so it has no member".to_owned(),
+        members => format!("; its members are {}", names_in_backticks_or_none(members)),
+    }
+)]
+pub struct AMemberTheOutputDoesNotHold {
+    /// The node's name.
+    pub node: String,
+    /// The output port.
+    pub port: String,
+    /// The member the link names.
+    pub member: String,
+    /// The type the port carries, in words.
+    pub pin_type: String,
+    /// The port's bundle members, in declared order; empty when it carries no bundle.
+    pub members_it_has: Vec<String>,
 }
 
 /// StreamLib result alias.
