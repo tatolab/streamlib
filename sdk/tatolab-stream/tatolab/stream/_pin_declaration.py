@@ -42,6 +42,7 @@ from ._input_declaration_annotations import (
     StreamDelivery,
 )
 from ._named_pin_type_declaration import named_pin_type_declared_by
+from ._node_reference_class import is_the_node_reference_class
 from ._pin_annotations_on_the_wire import (
     ANNOTATION_NAME_OF_EACH_CLASS,
     annotation_classes_named,
@@ -55,6 +56,11 @@ from ._pin_declaration_refusal_words import (
 from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
 from ._pin_type_narrowing import FlowsAsValue, PinAnnotationNotTaken, PinTypeNarrowing
 from ._pin_type_narrowing import an_output_flowing_as_a_value_by, pin_type_narrowed_by
+from ._pin_type_spellings_read import (
+    WRITTEN_FORMS_A_LIST_ELEMENT_TAKES,
+    spellings_read_today,
+    written_forms_a_list_element_takes,
+)
 from ._pin_typed_by_a_setting import declaration_of_a_pin_a_setting_types
 from ._pin_value_stored_form import (
     PIN_TYPE_DESCRIPTION_BY_NAME as _PIN_TYPE_DESCRIPTION_BY_NAME,
@@ -183,10 +189,6 @@ class DeclaredPin:
     pin typed otherwise."""
 
 
-_WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
-    ExactNumberSize(size).written_form for size in INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS
-)
-
 # The read types of the family grammar, by the typed spelling that replaces each.
 _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME: Final[dict[str, str]] = {
     "ImageFrame": "Texture",
@@ -283,6 +285,8 @@ class _PinReading:
                 ),
                 "pin_typed_any",
             )
+        if written_type is object and self._of_the_runtimes_own_node and self._form == "pin":
+            return self._read_a_pin_of_the_runtimes_own_node_its_link_types(metadata)
         if (
             written_type is object
             or isinstance(written_type, typing.TypeVar)
@@ -292,7 +296,7 @@ class _PinReading:
                 raise self._refusal(
                     f"{self._pin_named} is typed {_name_of(written_type)}, which its link finds "
                     f"the type of, and a class node's field or pin states one pin type. To fix: "
-                    f"type it as one of {_spellings_read_today()}.",
+                    f"type it as one of {spellings_read_today()}.",
                     "pin_type_not_read_yet",
                 )
             return self._read_a_pin_whose_link_finds_its_type(
@@ -342,7 +346,7 @@ class _PinReading:
         if not self._of_the_runtimes_own_node:
             raise self._refusal(
                 f"{self._pin_named} carries `{type_settings[0]!r}`, which only the runtime's own "
-                f"nodes declare yet. To fix: type it as one of {_spellings_read_today()}.",
+                f"nodes declare yet. To fix: type it as one of {spellings_read_today()}.",
                 "pin_type_not_read_yet",
             )
         declaration = declaration_of_a_pin_a_setting_types(
@@ -463,6 +467,22 @@ class _PinReading:
             default_value=None if optional else NO_DEFAULT,
             type_parameter=type_parameter,
         )
+
+    def _read_a_pin_of_the_runtimes_own_node_its_link_types(
+        self, metadata: "list[object]"
+    ) -> DeclaredPin:
+        """A pin of the runtime's own node typed `object`, which carries whatever type the port
+        linked to it carries: a variable's `value`, of the type of the port its setter is linked
+        from. It states no annotation."""
+        for entry in metadata:
+            if not isinstance(entry, Description):
+                raise self._refusal(
+                    f"{self._pin_named} is typed `object`, which its link finds the type of, and "
+                    f"carries {entry!r}. To fix: drop it; such a pin takes `Description`.",
+                    "pin_annotation_not_taken",
+                )
+        declaration: PinDeclarationOnTheWire = {"pin_type": {"kind": "any"}, "flow": "value"}
+        return DeclaredPin(declaration, optional=False, default_value=NO_DEFAULT)
 
     def _input_pin_type_its_link_finds(
         self, written_type: object, type_parameter: Optional[typing.TypeVar]
@@ -632,7 +652,7 @@ class _PinReading:
             raise self._refusal(
                 f"{self._pin_named} is typed {typed_as} the {row.label} pin type, which "
                 f"the typed grammar does not read yet: {spelling.not_read_yet_because}. To "
-                f"fix: type it as one of {_spellings_read_today()}.",
+                f"fix: type it as one of {spellings_read_today()}.",
                 "pin_type_not_read_yet",
             )
         if _is_a_value_class_of_parts(written_type):
@@ -659,10 +679,10 @@ class _PinReading:
         return {"type": "float", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
 
     def _reads_a_type_choice(self, written_form: str) -> bool:
-        """Whether the pin is a `PinTypeChoice` setting of the runtime's own node, the one place
-        a type choice is read yet."""
+        """Whether the pin is a `PinTypeChoice` or a `NodeReference` setting of the runtime's own
+        node, the one place each is read yet."""
         return (
-            written_form == "PinTypeChoice"
+            written_form in ("PinTypeChoice", "NodeReference")
             and self._of_the_runtimes_own_node
             and self._form == "field"
         )
@@ -673,7 +693,7 @@ class _PinReading:
         if as_an_element:
             return self._refusal(
                 f"{self._pin_named} is a List of {row.label}, which holds no stored value, and a "
-                f"List element is a small type, {_written_forms_a_list_element_takes()}. To fix: "
+                f"List element is a small type, {written_forms_a_list_element_takes()}. To fix: "
                 f"type its elements as one of them.",
                 "list_element_not_taken",
             )
@@ -729,10 +749,10 @@ class _PinReading:
                 "list_element_not_taken",
             )
         element_form = self._written_form_of(element_type, self._exact_size_among(metadata))
-        if element_form not in _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES:
+        if element_form not in WRITTEN_FORMS_A_LIST_ELEMENT_TAKES:
             raise self._refusal(
                 f"{self._pin_named} is typed {_name_of(written_type)}, and a List element is a "
-                f"small type, {_written_forms_a_list_element_takes()}; `{element_form}` is not. "
+                f"small type, {written_forms_a_list_element_takes()}; `{element_form}` is not. "
                 f"To fix: type its elements as one of them.",
                 "list_element_not_taken",
             )
@@ -745,7 +765,7 @@ class _PinReading:
         if written_type is typing.Any:
             raise self._refusal(
                 f"{self._pin_named} is typed `Any`, which checks nothing. To fix: type it as "
-                f"one of {_spellings_read_today()}.",
+                f"one of {spellings_read_today()}.",
                 "pin_typed_any",
             )
         if exact_size is not None:
@@ -780,6 +800,8 @@ class _PinReading:
             return "named_pin_type"
         if written_type is PinTypeChoice:
             return "PinTypeChoice"
+        if is_the_node_reference_class(written_type):
+            return "NodeReference"
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
         )
@@ -814,7 +836,7 @@ class _PinReading:
             return "dataclass"
         raise self._refusal(
             f"{self._pin_named} is typed {_name_of(written_type)}, which is no pin type. To "
-            f"fix: type it as one of {_spellings_read_today()}.",
+            f"fix: type it as one of {spellings_read_today()}.",
             "pin_type_unknown",
         )
 
@@ -922,53 +944,14 @@ class _PinReading:
                 return "give it a default inside its range."
 
 
-# The written forms of the small types, which a List element takes.
-_WRITTEN_FORMS_A_LIST_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
-    spelling.written_form
-    for spelling in PIN_TYPE_SPELLINGS
-    if spelling.pin_type_name
-    in (
-        "boolean",
-        "integer",
-        "float",
-        "string",
-        "menu",
-        "color",
-        "vector",
-        "rectangle",
-        "transform",
-        "asset",
-    )
-)
-
-
 # The pin types that hold no stored value, so only a pin carries them.
 _PIN_TYPE_NAMES_ONLY_A_PIN_CARRIES: Final[frozenset[str]] = frozenset(
     spelling.pin_type_name for spelling in PIN_TYPE_SPELLINGS if spelling.only_a_pin_carries
 )
 
 
-def _written_forms_a_list_element_takes() -> str:
-    return ", ".join(
-        f"`{spelling.written_form}`"
-        for spelling in PIN_TYPE_SPELLINGS
-        if spelling.written_form in _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES
-    )
-
-
 def _is_a_value_class_of_parts(written_type: object) -> typing.TypeGuard[type[PinValueOfParts]]:
     return written_type in PIN_VALUE_CLASSES
-
-
-def _spellings_read_today() -> str:
-    read_today = [
-        f"`{spelling.written_form}`"
-        for spelling in PIN_TYPE_SPELLINGS
-        if spelling.not_read_yet_because is None
-        and not spelling.only_a_pin_carries
-        and spelling.written_form not in _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES
-    ]
-    return ", ".join(read_today)
 
 
 def _the_flow_a_function_input_reads(pin_type: PinType) -> PinFlow:
@@ -993,3 +976,4 @@ def _name_of(annotation: object) -> str:
     if isinstance(annotation, type):
         return f"`{annotation.__name__}`"
     return f"`{annotation!r}`"
+

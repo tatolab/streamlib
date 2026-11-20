@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::core::descriptors::PortFamilyDeclaration;
+use streamlib_runtime_client_contract::local_api_wire_contract::InputValueComesFromOnTheWire;
 
 fn the_family_no_linked_port_states(
     _linked_port: &LinkPortRefOutput,

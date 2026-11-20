@@ -144,7 +144,7 @@ fn a_reference_to_a_node_the_graph_does_not_hold_is_refused_naming_it() {
             .unwrap_err()
             .to_string();
     assert!(
-        refusal.contains("node `camera-track`'s config key `gateway` names node `nowhere`")
+        refusal.contains("input `gateway` of node `camera-track` names node `nowhere`")
             && refusal.contains("cloudflare"),
         "{refusal}"
     );
@@ -211,8 +211,9 @@ fn a_setter_no_get_reads_still_holds_a_node_the_graph_holds() {
         .unwrap_err()
         .to_string();
     assert!(
-        refusal.contains("`SetVariable` node `set-gateway` holds node `nowhere`")
-            && refusal.contains("cloudflare"),
+        refusal.contains(
+            "input `node_reference` of `SetVariable` node `set-gateway` names node `nowhere`"
+        ) && refusal.contains("cloudflare"),
         "{refusal}"
     );
 }

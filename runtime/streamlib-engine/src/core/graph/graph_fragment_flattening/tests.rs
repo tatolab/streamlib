@@ -5,6 +5,7 @@ use super::*;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
 };
+use crate::core::graph::graph_variable_resolution::SET_VARIABLE_NODE_TYPE;
 use streamlib_runtime_client_contract::local_api_wire_contract::NodeStateOnTheWire;
 
 const LOOK_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a01";
@@ -676,5 +677,48 @@ fn a_drawn_link_into_a_fragment_says_what_any_running_link_it_stands_for_convert
         camera_into_look.marks.warnings,
         [vector_read_as_a_color, texture_output_states_no_format],
         "each warning of either running link, once: {camera_into_look:?}"
+    );
+}
+
+/// Mental-revert: rendering a placed stream with only the Inputs its stream declares, as before,
+/// lists no `stream` input, so the stream it places reads no value on it.
+#[test]
+fn a_placed_stream_renders_its_stream_setting_as_an_input_reading_the_asset_it_places() {
+    let placed_asset = serde_json::json!({"asset": "0b8f6f2e-9a51-4d3c-8f0e-2f6b4c1d7a10"});
+    let mut graph = a_camera_through_look_holding_soft_into_a_display();
+    graph["nodes"][1]["type"] = serde_json::json!(STREAM_FRAGMENT_NODE_TYPE);
+    graph["nodes"][1]["config"] = serde_json::json!({"stream": placed_asset});
+    let flattening = flattened(graph).expect("flattens");
+    let mut render = a_render_of(&flattening.graph_the_runtime_runs);
+    flattening
+        .fragments_as_drawn
+        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+
+    let placed = &render.nodes[1];
+    let input_names: Vec<&str> = placed
+        .ports
+        .inputs
+        .iter()
+        .map(|input| input.name.as_str())
+        .collect();
+    assert_eq!(input_names, ["stream", "video"]);
+    let stream = &placed.ports.inputs[0];
+    assert_eq!(
+        stream.pin.as_ref().map(|pin| &pin.pin_type),
+        Some(&crate::core::descriptors::PinType::Asset {
+            media: vec![crate::core::descriptors::ProjectAssetMedia::Stream],
+        })
+    );
+    assert_eq!(
+        stream
+            .value_read
+            .as_ref()
+            .and_then(|read| read.value.clone()),
+        Some(placed_asset.clone())
+    );
+    assert_eq!(
+        placed.config,
+        Some(serde_json::json!({"stream": placed_asset})),
+        "the config `graph` serves keeps its keys"
     );
 }

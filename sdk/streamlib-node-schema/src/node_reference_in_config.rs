@@ -14,6 +14,9 @@ use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use crate::descriptors::PortDescriptor;
+use crate::pin_type::{DeclaredPinType, PinType};
+
 /// The schema keyword a config key holding a node reference carries. Its value
 /// is an object; its `node_type` key, when present, is the import path the
 /// referenced node must be, and its `one_referrer_per_referenced_node` key,
@@ -227,6 +230,36 @@ pub fn config_keys_holding_a_node_reference(
                             &mut Vec::new(),
                         ),
                 })
+        })
+        .collect()
+}
+
+/// Every input among `inputs` that holds a node reference, in their order: each one declaring
+/// exactly a `NodeReference`, read as a config key of its name. Such an input takes nothing but a
+/// reference or no value.
+pub fn inputs_holding_a_node_reference<'input>(
+    inputs: impl IntoIterator<Item = &'input PortDescriptor>,
+) -> Vec<ConfigKeyHoldingANodeReference> {
+    inputs
+        .into_iter()
+        .filter_map(|input| {
+            let DeclaredPinType::Is {
+                pin_type:
+                    PinType::NodeReference {
+                        referenced_node_type,
+                        one_referrer_per_referenced_node,
+                    },
+            } = input.declared_pin()?.pin_type
+            else {
+                return None;
+            };
+            Some(ConfigKeyHoldingANodeReference {
+                config_key: input.name.clone(),
+                referenced_node_type_import_path: referenced_node_type
+                    .map(|node_type| node_type.as_str().to_string()),
+                takes_a_value_other_than_a_node_reference: false,
+                one_referrer_per_referenced_node,
+            })
         })
         .collect()
 }

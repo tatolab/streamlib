@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use streamlib_node_schema::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references,
 };
+use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
 
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PORT_CONFIG_KEY, GraphInterfaceAsDrawn,
@@ -21,10 +22,9 @@ use crate::core::graph::graph_interface_resolution::{
     is_a_graph_interface_node_type, the_family_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
-use crate::core::graph::graph_variable_resolution::{
-    SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
+use crate::core::graph::input_values::{
+    the_read_of_an_input_a_link_feeds, the_settings_rendered_reading_the_values_held,
 };
-use crate::core::graph::input_values::the_read_of_an_input_a_link_feeds;
 use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
@@ -34,7 +34,7 @@ use crate::core::json_schema::{
     GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
     LinkStateOutput, PinLinkMarksOnTheWire, redraw_a_node_over_its_pins,
 };
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{NodeTypesOneStreamResolves, the_settings_of_a_placed_stream};
 use crate::core::{Error, Result};
 
 /// What separates a fragment's name from the name of a node it holds, in the name the node
@@ -305,15 +305,11 @@ fn end_on_this_level(
     }
 }
 
-/// The config keys of `node` holding a node reference: those its type's schema marks, and a
-/// `SetVariable`'s `node_reference`, which the graph resolves before any schema is read.
+/// The keys of `node` holding a node reference, as its type declares them.
 fn config_keys_holding_a_node_reference_of(
     node: &GraphSnapshotNode,
     node_types: &NodeTypesOneStreamResolves,
 ) -> Vec<String> {
-    if node.node_type.as_str() == SET_VARIABLE_NODE_TYPE {
-        return vec![SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY.to_string()];
-    }
     config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.node_type)
         .into_iter()
         .map(|ConfigKeyHoldingANodeReference { config_key, .. }| config_key)
@@ -511,6 +507,15 @@ impl GraphFragmentAsDrawn {
             ),
             &self.node.input_values,
         );
+        if self.node.node_type.as_str() == STREAM_FRAGMENT_NODE_TYPE {
+            inputs.splice(
+                0..0,
+                the_settings_rendered_reading_the_values_held(
+                    the_settings_of_a_placed_stream(),
+                    &self.node.input_values,
+                ),
+            );
+        }
         GraphNodeOutput {
             id: self
                 .node

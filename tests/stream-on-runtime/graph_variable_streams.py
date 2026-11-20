@@ -16,10 +16,10 @@ def a_test_pattern_held_in_a_variable_and_read_twice(stream_builder: StreamBuild
     pattern = stream_builder.add(
         TestPatternSource, config={"width": PATTERN_WIDTH, "height": 180}
     )
-    setter = stream_builder.add(SetVariable, config={"variable": "pattern"})
+    setter = stream_builder.add(SetVariable, input_values={"variable": "pattern"})
     stream_builder.connect(pattern.output("video"), setter.input("value"))
     for reader in ("front", "back"):
-        getter = stream_builder.add(GetVariable, config={"variable": "pattern"})
+        getter = stream_builder.add(GetVariable, input_values={"variable": "pattern"})
         image_reader = stream_builder.add(
             ImageVariableReader, name=reader, config={"reader": reader}
         )

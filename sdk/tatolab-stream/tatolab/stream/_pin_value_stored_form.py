@@ -16,6 +16,7 @@ from ._contract_pin_types import (
     PinTypeDescription,
 )
 from ._pin_type_choice import PinTypeChoice
+from ._node_reference_class import node_name_a_node_reference_holds
 from ._pin_types import INTEGER_BOUNDS_OF_EACH_SIZE, PIN_VALUE_CLASSES, Asset, PinValueOfParts
 from ._port_family_declaration import PortFamily
 
@@ -134,6 +135,11 @@ def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
             if type(value) is not Asset:
                 raise not_of_its_type
             return value.stored_value()
+        case {"type": "node_reference"}:
+            node_name = node_name_a_node_reference_holds(value)
+            if node_name is None:
+                raise not_of_its_type
+            return {"node": node_name}
         case {"type": "list_of", "element_type": element_type}:
             if not isinstance(value, (list, tuple)):
                 raise not_of_its_type
@@ -163,3 +169,4 @@ def _the_value_class_of(pin_type: PinType) -> type[PinValueOfParts]:
         value_class for value_class in PIN_VALUE_CLASSES if value_class.pin_type == pin_type
     ]
     return value_class
+

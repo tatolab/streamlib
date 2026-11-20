@@ -9,7 +9,7 @@
 
 use streamlib_node_schema::{
     ConfigKeyHoldingANodeReference, config_keys_holding_a_node_reference,
-    node_name_a_config_value_references,
+    inputs_holding_a_node_reference, node_name_a_config_value_references,
 };
 
 use std::collections::HashMap;
@@ -19,21 +19,31 @@ use crate::core::graph::{
     Graph, NodeRunId, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
 };
 use crate::core::json_schema::ConfigNodeReferenceEdgeOnTheWire;
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{NodeTypesOneStreamResolves, the_settings_of_a_graph_variable_node};
 use crate::core::{Error, Result};
 
-/// The config keys of `node_type` that hold a node reference, from the config
-/// schema its descriptor carries; none when the type has no descriptor or no
-/// schema.
+/// The keys of `node_type` that hold a node reference: each input of a `NodeReference` it
+/// declares, a `SetVariable`'s among them, then each config key its config schema marks that no
+/// such input is named; none when the type has neither.
 pub(crate) fn config_keys_of_a_node_type_holding_a_node_reference(
     node_types: &NodeTypesOneStreamResolves,
     node_type: &NodeClassImportPath,
 ) -> Vec<ConfigKeyHoldingANodeReference> {
-    node_types
-        .descriptor(node_type)
-        .and_then(|descriptor| descriptor.config_schema)
-        .map(|config_schema| config_keys_holding_a_node_reference(&config_schema))
-        .unwrap_or_default()
+    if let Some(settings) = the_settings_of_a_graph_variable_node(node_type) {
+        return inputs_holding_a_node_reference(settings);
+    }
+    let Some(descriptor) = node_types.descriptor(node_type) else {
+        return Vec::new();
+    };
+    let mut keys = inputs_holding_a_node_reference(&descriptor.inputs);
+    if let Some(config_schema) = &descriptor.config_schema {
+        for marked in config_keys_holding_a_node_reference(config_schema) {
+            if !keys.iter().any(|key| key.config_key == marked.config_key) {
+                keys.push(marked);
+            }
+        }
+    }
+    keys
 }
 
 /// One reference edge `node_name`'s config holds, with the type the key it sits
@@ -177,10 +187,10 @@ pub(crate) fn refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
             .get(cast_exposed_name_to_url_safe(referenced_node)?.as_ref())
         else {
             return Err(Error::GraphError(format!(
-                "node `{}`'s config key `{}` names node `{referenced_node}`, which the graph \
+                "input `{}` of node `{}` names node `{referenced_node}`, which the graph \
                  does not hold. The graph holds: {}",
-                reference.edge.node,
                 reference.edge.config_key,
+                reference.edge.node,
                 names_listed_for_a_refusal(
                     {
                         let mut names: Vec<&String> =

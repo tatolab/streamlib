@@ -555,10 +555,10 @@ impl GraphSnapshot {
                     .get(cast_exposed_name_to_url_safe(referenced_node_name)?.as_ref())
                 else {
                     return Err(Error::GraphError(format!(
-                        "node `{}`'s config key `{}` names node `{referenced_node_name}`, which \
+                        "input `{}` of node `{}` names node `{referenced_node_name}`, which \
                          the graph does not hold. The graph holds: {}",
-                        node.name,
                         reference.edge.config_key,
+                        node.name,
                         the_names_the_graph_holds()
                     )));
                 };

@@ -487,14 +487,16 @@ class _ClassNodeReading:
         return port_name
 
 
-# The family a pin whose type a setting chooses declares until the runtime resolves the choice.
-_FAMILY_OF_A_PIN_A_SETTING_TYPES: Final = "records"
+# The family a pin whose type a setting or its link chooses declares until the runtime resolves
+# that type.
+_FAMILY_OF_A_PIN_TYPED_ELSEWHERE: Final = "records"
 
 
 def _family_a_declared_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
-    """The family of a pin of one type, or of the Records family for one a setting types."""
-    if declaration["pin_type"]["kind"] == "set_by_input":
-        return _FAMILY_OF_A_PIN_A_SETTING_TYPES
+    """The family of a pin of one type, or of the Records family for one a setting or its link
+    types."""
+    if declaration["pin_type"]["kind"] in ("set_by_input", "any"):
+        return _FAMILY_OF_A_PIN_TYPED_ELSEWHERE
     return family_a_pin_travels_on(declaration)
 
 
