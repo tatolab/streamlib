@@ -5,25 +5,23 @@ use super::*;
 
 impl ProjectRepository {
     /// Every file of the project under `under`, or the whole project, as a listing shows it.
+    /// A folder under the link to the core project the runtime carries is listed through it,
+    /// as a read is.
     pub fn list_project_files(
         &self,
         under: Option<&str>,
     ) -> Result<Vec<ProjectFileListed>, ProjectRepositoryRefusal> {
         let under = under.map(ProjectRelativeFilePath::parse).transpose()?;
-        project_files_a_listing_shows(&self.project_directory, under.as_ref())
+        if let Some(under) = &under {
+            self.refuse_a_symbolic_link_on_the_way_to_a_read(under)?;
+        }
+        project_files_listed_under_a_checked_folder(&self.project_directory, under.as_ref())
     }
 
     /// The bytes of the project's file at `path`, as they are on disk now.
     pub fn read_project_file(&self, path: &str) -> Result<Vec<u8>, ProjectRepositoryRefusal> {
         let path = ProjectRelativeFilePath::parse(path)?;
-        let core_project_directory_the_runtime_carries = self
-            .core_project_directory_the_runtime_carries
-            .as_ref()
-            .and_then(|where_it_is| where_it_is());
-        path.refuse_a_symbolic_link_on_the_way_to_a_read_under(
-            &self.project_directory,
-            core_project_directory_the_runtime_carries.as_deref(),
-        )?;
+        self.refuse_a_symbolic_link_on_the_way_to_a_read(&path)?;
         let on_disk = path.on_disk_under(&self.project_directory);
         if !on_disk.is_file() {
             return Err(ProjectRepositoryRefusal::NoSuchProjectFile(
@@ -31,6 +29,22 @@ impl ProjectRepository {
             ));
         }
         Ok(std::fs::read(on_disk)?)
+    }
+
+    /// Refuse a read or a listing of `path` through a symbolic link, save the link to the core
+    /// project the runtime carries.
+    fn refuse_a_symbolic_link_on_the_way_to_a_read(
+        &self,
+        path: &ProjectRelativeFilePath,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let core_project_directory_the_runtime_carries = self
+            .core_project_directory_the_runtime_carries
+            .as_ref()
+            .and_then(|where_it_is| where_it_is());
+        path.refuse_a_symbolic_link_on_the_way_to_a_read_under(
+            &self.project_directory,
+            core_project_directory_the_runtime_carries.as_deref(),
+        )
     }
 
     /// Write `content` to the project's file at `path` by `author` as one transaction, whose
