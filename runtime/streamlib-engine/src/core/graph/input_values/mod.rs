@@ -24,7 +24,8 @@ pub(crate) use bundle_input_read::{
 };
 pub use live_input_values::{
     InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
-    LiveInputValuesOfAStream, the_words_of_an_input_set_twice_live,
+    LiveInputValuesOfAStream, a_live_set_replaces_an_earlier_one,
+    the_words_of_an_input_set_twice_live,
 };
 pub(crate) use live_input_values::{
     the_input_port_takes_a_value, the_input_value_change, the_lifetime_of_the_input,

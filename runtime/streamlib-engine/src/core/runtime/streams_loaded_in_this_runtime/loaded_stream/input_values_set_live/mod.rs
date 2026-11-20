@@ -25,9 +25,10 @@ use crate::core::error::WhyANodeOfAStreamIsNotRunning;
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
-    refuse_an_input_value_its_input_does_not_take, the_control_value_of_a_pin,
-    the_input_value_change, the_input_values_a_live_set_is_checked_against,
-    the_lifetime_of_the_input, the_words_of_an_input_set_twice_live,
+    a_live_set_replaces_an_earlier_one, refuse_an_input_value_its_input_does_not_take,
+    the_control_value_of_a_pin, the_input_value_change,
+    the_input_values_a_live_set_is_checked_against, the_lifetime_of_the_input,
+    the_words_of_an_input_set_twice_live,
 };
 use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{Graph, GraphNode, NodeRunId};
@@ -195,9 +196,7 @@ fn refuse_an_input_set_twice(
         let members_set = members_set_of_each_input
             .entry((set.node, set.input.as_str()))
             .or_default();
-        let set_twice = members_set
-            .iter()
-            .any(|member_set| member.is_none() || member_set.is_none() || *member_set == member);
+        let set_twice = a_live_set_replaces_an_earlier_one(members_set, member);
         members_set.push(member);
         if set_twice {
             let node_name = graph
