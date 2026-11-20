@@ -191,11 +191,13 @@ export interface PinAnnotations {
    */
   control?: string | null;
   /**
-   * The frame rate a Texture output's stream has, stated or read from a config key.
+   * The frame rate a Texture output's stream has, stated or read from one of its node's
+   * settings.
    */
   frame_rate?: ImageOutputPortFrameRate | null;
   /**
-   * The sample rate an Audio output's stream has, stated or read from a config key.
+   * The sample rate an Audio output's stream has, stated or read from one of its node's
+   * settings.
    */
   sample_rate?: ChannelsOutputPortSampleRate | null;
   /**
@@ -228,7 +230,7 @@ export interface PinNumberRange {
 }
 
 /**
- * The frame rate an Image output states, written on the class or read from its node's config.
+ * The frame rate a Texture output states, written on the class or read from one of its node's settings.
  */
 export type ImageOutputPortFrameRate = {
   stated: ImageStreamFrameRate;
@@ -239,7 +241,7 @@ export type ImageOutputPortFrameRate = {
 };
 
 /**
- * An Image stream's frame rate, as a rational number of frames per second.
+ * A Texture stream's frame rate, as a rational number of frames per second.
  */
 export interface ImageStreamFrameRate {
   numerator: number;
@@ -247,7 +249,7 @@ export interface ImageStreamFrameRate {
 }
 
 /**
- * The sample rate a Channels output states, written on the class or read from its node's config.
+ * The sample rate an Audio output states, written on the class or read from one of its node's settings.
  */
 export type ChannelsOutputPortSampleRate = {
   stated: number;
@@ -258,12 +260,12 @@ export type ChannelsOutputPortSampleRate = {
 };
 
 /**
- * The sample type of a Channels output.
+ * The sample type of an Audio output.
  */
 export type ChannelsOutputPortSampleType = "f32" | "f64";
 
 /**
- * Where an Array output's attributes live.
+ * Where a Tensor output's attributes live.
  */
 export type ArrayOutputPortResidency = "gpu" | "cpu";
 

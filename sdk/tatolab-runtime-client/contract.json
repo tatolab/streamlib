@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 30
+    "x-contract-revision": 31
   },
   "methods": [
     {
@@ -713,7 +713,7 @@
     {
       "name": "transact",
       "summary": "Apply operations on one project's stream graphs as one transaction, whole or not at all.",
-      "description": "Apply operations on the graphs of one project's loaded streams as one transaction by its `author`: applied in order, whole or not at all, to each running stream, and with `mode` `commit`, the default, written to each stream's graph document and recorded as one commit on the project's history, which `undo` reverses as one. Answers `mode`, the `transaction` and `commit` recording a committed edit, each operation as applied, `added_nodes` with each new node's UUID and the name it took, and `connected_links` with each new link's `state` — `pending`, `wired`, or `error` with its `error_reason`. Refused whole, in the runtime's own words, with nothing changed. A `live` transaction sets each input of a node once, since each value set live is published as its own write: one setting the same input of the same node twice is refused with `refused` at its second set, before anything is applied. A config value `{\"asset\": \"<uuid>\"}` must name an asset the project holds. An `add_node` may give its node an `as`, which later operations of the same transaction name the node by. The transaction is announced on the project's change feed, the resource `list_assets` names as `transactions_resource_uri`.",
+      "description": "Apply operations on the graphs of one project's loaded streams as one transaction by its `author`: applied in order, whole or not at all, to each running stream, and with `mode` `commit`, the default, written to each stream's graph document and recorded as one commit on the project's history, which `undo` reverses as one. Answers `mode`, the `transaction` and `commit` recording a committed edit, each operation as applied, `added_nodes` with each new node's UUID and the name it took, and `connected_links` with each new link's `state` — `pending`, `wired`, or `error` with its `error_reason`. Refused whole, in the runtime's own words, with nothing changed. A `live` transaction sets each input of a node once, since each value set live is published as its own write: one setting the same input of the same node twice is refused with `refused` at its second set, before anything is applied. An input value `{\"asset\": \"<uuid>\"}` must name an asset the project holds. An `add_node` may give its node an `as`, which later operations of the same transaction name the node by. The transaction is announced on the project's change feed, the resource `list_assets` names as `transactions_resource_uri`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -782,11 +782,7 @@
                     "operation": "add_node",
                     "stream": "night-show-main-3fa2b1",
                     "type": "tatolab.testpattern:TestPatternSource",
-                    "as": "source",
-                    "pins": {
-                      "width": 320,
-                      "height": 180
-                    }
+                    "as": "source"
                   },
                   {
                     "operation": "connect",
@@ -799,6 +795,13 @@
                       "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
                       "port": "layer_0"
                     }
+                  },
+                  {
+                    "operation": "set_node_input_value",
+                    "stream": "night-show-main-3fa2b1",
+                    "node": "source",
+                    "input": "width",
+                    "value": 320
                   }
                 ],
                 "author": {
@@ -947,10 +950,6 @@
               "value": {
                 "type": "nodes.clamp:Clamp",
                 "name": "clamp",
-                "pins": {
-                  "low": 0.0,
-                  "high": 1.0
-                },
                 "stream": "night-show-main-3fa2b1"
               }
             }
@@ -961,7 +960,7 @@
     {
       "name": "connect",
       "summary": "Link an output port to an input port in one loaded stream, as one transaction.",
-      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends, only when both ends are UUID-named nodes the edited level holds. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These rules judge a link inside a placed stream, under a non-empty `level`, the same way, among the nodes of that level alone, by the settings each holds and the links the level holds, and judge each link a `PreviousValue` node closing a loop there is linked by; `connect` places no convert node there, so a link that needs one is refused naming it. A link there reaching a fragment node, a `GraphInput` or `GraphOutput` that names no family, or a node whose type is not described is saved unjudged, and its entry under `connected_links` says why under `not_judged_because`.",
+      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends, only when both ends are UUID-named nodes the edited level holds. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports carry the same kind of message, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These rules judge a link inside a placed stream, under a non-empty `level`, the same way, among the nodes of that level alone, by the settings each holds and the links the level holds, and judge each link a `PreviousValue` node closing a loop there is linked by; `connect` places no convert node there, so a link that needs one is refused naming it. A link there reaching a fragment node, a `GraphInput` or `GraphOutput` that does not yet say what it carries, or a node whose type is not described is saved unjudged, and its entry under `connected_links` says why under `not_judged_because`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1043,7 +1042,7 @@
     {
       "name": "check_link",
       "summary": "Answer what `connect` would answer for one link in a loaded stream, changing nothing.",
-      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. A link inside a placed stream, under a non-empty `level`, is judged among the nodes of that level as `connect` judges it there. Some links are not checked yet, and `check_link` itself fails on them, saying why: one reaching a fragment node or a `GraphInput` or `GraphOutput` that names no family; inside a placed stream, one reaching a node whose type is not described; and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
+      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. A link inside a placed stream, under a non-empty `level`, is judged among the nodes of that level as `connect` judges it there. Some links are not checked yet, and `check_link` itself fails on them, saying why: one reaching a fragment node or a `GraphInput` or `GraphOutput` that does not yet say what it carries; inside a placed stream, one reaching a node whose type is not described; and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1309,7 +1308,7 @@
     {
       "name": "import_graph_generator",
       "summary": "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.",
-      "description": "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction: its generator as `type`, its promoted settings as `config`, and the nodes and links it built stored under `fragment`, each node with a UUID of its own. Run again under the name of a fragment the graph holds, it refreshes that fragment with the fresh run: each node it builds keeps the UUID of the node of the same name it built before, so links into the fragment and the graph's history hold. A generator that raises, refuses, or is not found is refused with its traceback, nothing changed. Answers as `transact` does, a new fragment node under `added_nodes`; undo restores the fragment as it was.",
+      "description": "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction: its generator as `type`, its promoted settings by name, and the nodes and links it built stored under `fragment`, each node with a UUID of its own. Run again under the name of a fragment the graph holds, it refreshes that fragment with the fresh run: each node it builds keeps the UUID of the node of the same name it built before, so links into the fragment and the graph's history hold. A generator that raises, refuses, or is not found is refused with its traceback, nothing changed. Answers as `transact` does, a new fragment node under `added_nodes`; undo restores the fragment as it was.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1375,9 +1374,6 @@
               "value": {
                 "generator": "generators.looks:night_look",
                 "name": "night_look",
-                "config": {
-                  "warmth": 0.3
-                },
                 "stream": "night-show-main-3fa2b1"
               }
             }
@@ -1669,7 +1665,7 @@
     {
       "name": "set_node_input_value",
       "summary": "Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.",
-      "description": "Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A config field takes a link once `set_exposed_config_fields` exposes it as an input. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the family the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.",
+      "description": "Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A setting takes no link: a node type takes a link only on an input it declares as a port. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1746,7 +1742,7 @@
     {
       "name": "rename_node",
       "summary": "Give a node another name, a label, as one transaction.",
-      "description": "Give a node another name, a label, as one transaction; the node keeps its UUID, which every address names it by. Refused while another node's config names it by its name.",
+      "description": "Give a node another name, a label, as one transaction; the node keeps its UUID, which every address names it by. Refused while a setting of another node names it by its name.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1903,8 +1899,8 @@
     },
     {
       "name": "set_exposed_config_fields",
-      "summary": "Replace the config fields a node takes as inputs, as one transaction.",
-      "description": "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value.",
+      "summary": "Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.",
+      "description": "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value. Replaced by `set_node_input_value`: a typed node declares each input that takes a link as a port, and every setting is set by `set_node_input_value`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1961,24 +1957,7 @@
       ],
       "x-effect": "changes",
       "x-agent-tool-listing": "reached_through_call_operation",
-      "examples": [
-        {
-          "name": "set_exposed_config_fields_example",
-          "params": [
-            {
-              "name": "params",
-              "value": {
-                "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
-                "exposed_config_fields": [
-                  "width",
-                  "height"
-                ],
-                "stream": "night-show-main-3fa2b1"
-              }
-            }
-          ]
-        }
-      ]
+      "x-replaced-by": "set_node_input_value"
     },
     {
       "name": "add_group",
@@ -2139,7 +2118,7 @@
     {
       "name": "collapse_selection_into_subgraph",
       "summary": "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.",
-      "description": "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction with `mode` `commit`: the nodes and the links between them are saved as a new stream of the project, `streams/<name>.graph.json`, and placed by reference where they were, so editing inside the subgraph edits that stream everywhere it is placed, and it runs only where it is placed. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` of the new stream, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`) and the UUID its placement gives it. Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document and takes the new stream out again, refused while another stream places it.",
+      "description": "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction with `mode` `commit`: the nodes and the links between them are saved as a new stream of the project, `streams/<name>.graph.json`, and placed by reference where they were, so editing inside the subgraph edits that stream everywhere it is placed, and it runs only where it is placed. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` of the new stream, named `<node>-<port>` and carrying what the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`) and the UUID its placement gives it. Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document and takes the new stream out again, refused while another stream places it.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -4834,7 +4813,7 @@
     {
       "name": "remove_dependency",
       "summary": "Take an imported project out of a project, as one transaction.",
-      "description": "Stop importing a project, as one transaction by `author`: its folder leaves `imports/` and its entry `tatolab-project.json`; undo puts both back as they were. Answers the `dependency` as it was. Once it applies, a project with a `pyproject.toml` has its `.venv` made current on its stream action queue, a `make_venv_current` action that touches no stream, and its change feed carries `venv_made_current` once that is done, so its node types list without the import's. Refused, nothing changed, while a node of any of this project's streams — a fragment holding one of its streams, or a config holding `{\"asset\", \"from\"}` naming it, at any depth — still references it, naming each such node. Refused for a project not imported.",
+      "description": "Stop importing a project, as one transaction by `author`: its folder leaves `imports/` and its entry `tatolab-project.json`; undo puts both back as they were. Answers the `dependency` as it was. Once it applies, a project with a `pyproject.toml` has its `.venv` made current on its stream action queue, a `make_venv_current` action that touches no stream, and its change feed carries `venv_made_current` once that is done, so its node types list without the import's. Refused, nothing changed, while a node of any of this project's streams — a fragment holding one of its streams, or an input value holding `{\"asset\", \"from\"}` naming it, at any depth — still references it, naming each such node. Refused for a project not imported.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -4909,7 +4888,7 @@
     {
       "name": "use_dependency_stream",
       "summary": "Place an imported project's stream in a loaded stream's graph as a fragment node, as one transaction.",
-      "description": "Place a stream of an imported project in a loaded stream's graph, as one committed transaction: a fragment node of type `tatolab.project:StreamFragment` whose config `{\"stream\": {\"asset\", \"from\"}}` references the stream. The graph document stores the reference alone; each load, and each change to the stream or its import, places the stream's nodes and links as its graph document under `imports/<folder>/` is on disk, each node under the UUID UUIDv5(fragment node's UUID, its own). Its Graph Input and Output nodes are the fragment's ports. Answers as `transact` does. Refused for a name a node of the graph already holds, and for a stream that holds the stream it is placed in, naming each stream of the cycle.",
+      "description": "Place a stream of an imported project in a loaded stream's graph, as one committed transaction: a fragment node of type `tatolab.project:StreamFragment` whose setting `stream`, `{\"asset\", \"from\"}`, references the stream. The graph document stores the reference alone; each load, and each change to the stream or its import, places the stream's nodes and links as its graph document under `imports/<folder>/` is on disk, each node under the UUID UUIDv5(fragment node's UUID, its own). Its Graph Input and Output nodes are the fragment's ports. Answers as `transact` does. Refused for a name a node of the graph already holds, and for a stream that holds the stream it is placed in, naming each stream of the cycle.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5160,7 +5139,7 @@
     {
       "name": "create_node_file",
       "summary": "Create a node file in a project from the template, as one transaction.",
-      "description": "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a `@node.process` class in the current `tatolab.stream` idiom, named after the file, with one Image input `video_in` whose frames it hands on unchanged to one Image output `video_out`, each with its description. It loads as a node type of the project with no edits and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.",
+      "description": "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a `@node.process` class in the current `tatolab.stream` idiom, named after the file, with one input `video_in` taking frames, which it hands on unchanged to one output `video_out`, each with its description. It loads as a node type of the project with no edits and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5448,7 +5427,7 @@
     {
       "name": "check_project_code",
       "summary": "Check a project's code on disk without running a stream, answering each finding as data.",
-      "description": "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by the older `family` field is a `warning` coded `port_declared_by_family` whose words name the `pin_type` to write, or the types an older family may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` a `warning` coded `not_written_in_ts`. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.",
+      "description": "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by its older field is a `warning` whose words name the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` a `warning` coded `not_written_in_ts`. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5833,7 +5812,7 @@
     {
       "name": "describe_node_types",
       "summary": "Describe the inputs and outputs of the node types named, each with its pin type.",
-      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`), its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow` and states its `family`, and a function or shader port read from source its `annotation`; its settings are listed after its ports as `setting_only` inputs, and those `set_exposed_config_fields` takes as `exposable_config_fields`. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
+      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`), its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and states what it carries in the older fields its schema marks `x-removed-in`; its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -6066,7 +6045,7 @@
     {
       "name": "list_project_views",
       "summary": "List the Tato Studio views a project brings.",
-      "description": "List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project name>:<view folder>`, which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, a `family`, a `description` and an Array port's `range`; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists.",
+      "description": "List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project name>:<view folder>`, which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, its `pin_type`, a `description` and the `range` its manifest states; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -6537,7 +6516,7 @@
     {
       "name": "open_viewer",
       "summary": "Open a viewer of a node's output port, held open for the connection that opened it.",
-      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. The answer's `viewer_reads` says which messages the viewer reads: `every_message` for a Channels port, in order as far back as the channel holds them for it, so a viewer can play the sound, and `latest_message` for every other family, skipping what it falls behind on; either way the channel overwrites what the viewer has not read, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
+      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. The answer's `viewer_reads` says which messages the viewer reads: `every_message` for a port carrying samples, such as audio, in order as far back as the channel holds them for it, so a viewer can play the sound, and `latest_message` for every other port, skipping what it falls behind on; either way the channel overwrites what the viewer has not read, so it never slows the stream; a Texture message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -7812,7 +7791,8 @@
               "string",
               "null"
             ],
-            "description": "The node's input or config field the refused operation names."
+            "description": "The node's input or config field the refused operation names.",
+            "x-removed-in": 4
           },
           "refused_params_pointer": {
             "type": [
@@ -9020,7 +9000,7 @@
             "items": {
               "$ref": "#/components/schemas/ConfigNodeReferenceEdgeOnTheWire"
             },
-            "description": "Every reference edge: a node's config key naming another node. A live key, read back\nfrom the configs; absent when the graph holds none."
+            "description": "Every reference edge: a node's setting naming another node, read back live from the\nnodes' settings; absent when the graph holds none."
           },
           "machine": {
             "type": "string",
@@ -9192,14 +9172,16 @@
             "description": "The node's name, unique in its graph and cast to lowercase URL-safe: what a link end, an\nexposure and a port address name it by."
           },
           "config": {
-            "description": "The input values a node type not yet typed takes whole as its config, the rest of\n`input_values` being its `pins`. Served for a client that reads no `input_values`."
+            "description": "The input values a node type not yet typed takes whole as its config, the rest of\n`input_values` being its `pins`. Served for a client that reads no `input_values`.",
+            "x-removed-in": 4
           },
           "config_checksum": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0,
             "description": "A checksum of `config`, for change detection.",
-            "default": 0
+            "default": 0,
+            "x-removed-in": 4
           },
           "ports": {
             "$ref": "#/components/schemas/GraphNodePortsOnTheWire",
@@ -9215,14 +9197,16 @@
             "type": "object",
             "additionalProperties": true,
             "description": "The input values that are no config field, by input name; empty when none is saved.\nServed for a client that reads no `input_values`.",
-            "default": {}
+            "default": {},
+            "x-removed-in": 4
           },
           "exposed_config_fields": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The config fields the node takes as inputs too, each an input of the field's name."
+            "description": "The config fields the node takes as inputs too, each an input of the field's name.",
+            "x-removed-in": 4
           },
           "studio": {
             "type": "object",
@@ -9369,17 +9353,18 @@
             "description": "The window contract an audio input port declares, tagged by `resolved_from`; absent on\na port that declares none."
           },
           "stream_facts": {
-            "description": "The stream facts this output port carries now, tagged by `family`; absent on a port that\nstates none."
+            "description": "The stream facts this output port carries now; absent on a port that states none."
           },
           "values_checked": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "`false` on a Records port, whose values no type checks; absent on every other family."
+            "description": "`false` on a port whose values no pin type checks; absent on every other port."
           },
           "family": {
-            "description": "The port family this port declares and its family's keys. Absent on a graph variable's\nvalue port, which keeps the family of the setter's source port. Served for a client that\nreads no `pin_type`."
+            "description": "The port family this port declares and its family's keys. Absent on a graph variable's\nvalue port, which keeps the family of the setter's source port. Served for a client that\nreads no `pin_type`.",
+            "x-removed-in": 4
           },
           "pin_default": {
             "description": "The value this input reads while nothing is linked into it and no value is set on its\nnode, null when it declares a null default; absent on a port that declares none."
@@ -10106,7 +10091,7 @@
                 "type": "null"
               }
             ],
-            "description": "The frame rate a Texture output's stream has, stated or read from a config key."
+            "description": "The frame rate a Texture output's stream has, stated or read from one of its node's\nsettings."
           },
           "sample_rate": {
             "anyOf": [
@@ -10117,7 +10102,7 @@
                 "type": "null"
               }
             ],
-            "description": "The sample rate an Audio output's stream has, stated or read from a config key."
+            "description": "The sample rate an Audio output's stream has, stated or read from one of its node's\nsettings."
           },
           "sample_type": {
             "anyOf": [
@@ -10212,10 +10197,11 @@
             "required": [
               "from_config"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "x-removed-in": 4
           }
         ],
-        "description": "The frame rate an Image output states, written on the class or read from its node's config."
+        "description": "The frame rate a Texture output states, written on the class or read from one of its node's settings."
       },
       "ImageStreamFrameRate": {
         "type": "object",
@@ -10236,7 +10222,7 @@
           "denominator"
         ],
         "additionalProperties": false,
-        "description": "An Image stream's frame rate, as a rational number of frames per second."
+        "description": "A Texture stream's frame rate, as a rational number of frames per second."
       },
       "ChannelsOutputPortSampleRate": {
         "oneOf": [
@@ -10274,10 +10260,11 @@
             "required": [
               "from_config"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "x-removed-in": 4
           }
         ],
-        "description": "The sample rate a Channels output states, written on the class or read from its node's config."
+        "description": "The sample rate an Audio output states, written on the class or read from one of its node's settings."
       },
       "ChannelsOutputPortSampleType": {
         "oneOf": [
@@ -10290,7 +10277,7 @@
             "const": "f64"
           }
         ],
-        "description": "The sample type of a Channels output."
+        "description": "The sample type of an Audio output."
       },
       "ArrayOutputPortResidency": {
         "oneOf": [
@@ -10303,7 +10290,7 @@
             "const": "cpu"
           }
         ],
-        "description": "Where an Array output's attributes live."
+        "description": "Where a Tensor output's attributes live."
       },
       "PinProjectAssetAnnotation": {
         "type": "object",
@@ -10924,7 +10911,8 @@
               "string",
               "null"
             ],
-            "description": "The port family the port carries; null while the runtime waits for a link to settle it."
+            "description": "The port family the port carries; null while the runtime waits for a link to settle it.",
+            "x-removed-in": 4
           },
           "pin_type": {
             "anyOf": [
@@ -10935,7 +10923,7 @@
                 "type": "null"
               }
             ],
-            "description": "The pin type the port carries: the one its node's `pin_type` setting chooses, else the\none its family states exactly, as an Image port is a Texture. Absent on any other port."
+            "description": "The pin type the port carries: the one its node's `pin_type` setting chooses, else the\none the port's older field states exactly, as a port carrying frames is a Texture.\nAbsent on any other port."
           },
           "current_value": {
             "description": "On a `GraphInput` node, the value its `value` input reads now: the one set live, else its\nsaved one. Absent elsewhere, and where it reads none."
@@ -11419,11 +11407,12 @@
         "properties": {
           "node": {
             "type": "string",
-            "description": "The name of the node whose config holds the reference."
+            "description": "The name of the node whose setting holds the reference."
           },
           "config_key": {
             "type": "string",
-            "description": "The config key the reference sits under."
+            "description": "The setting the reference sits under, by its key in the node's settings.",
+            "x-removed-in": 4
           },
           "referenced_node": {
             "type": "string",
@@ -11435,7 +11424,7 @@
           "config_key",
           "referenced_node"
         ],
-        "description": "One reference edge: the config key `config_key` of node `node` names node\n`referenced_node`. It carries no data and is never a link."
+        "description": "One reference edge: a setting of node `node` names node `referenced_node`. It carries no\ndata and is never a link."
       },
       "MachineWideGraphOnTheWire": {
         "type": "object",
@@ -11467,7 +11456,7 @@
             "items": {
               "$ref": "#/components/schemas/StreamGraphAction"
             },
-            "description": "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_input_value`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+            "description": "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_input_value`, `rename_node`, `set_studio_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
           },
           "mode": {
             "anyOf": [
@@ -11539,7 +11528,8 @@
                   "null"
                 ],
                 "additionalProperties": true,
-                "description": "The node's config, as the keys its type's schema declares. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is."
+                "description": "The node's config, as the keys its type's schema declares. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is.",
+                "x-removed-in": 4
               },
               "pins": {
                 "type": [
@@ -11547,7 +11537,8 @@
                   "null"
                 ],
                 "additionalProperties": true,
-                "description": "The value on each unlinked input, by input name."
+                "description": "The value on each unlinked input, by input name.",
+                "x-removed-in": 4
               },
               "exposed_config_fields": {
                 "type": [
@@ -11557,7 +11548,8 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
+                "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.",
+                "x-removed-in": 4
               },
               "studio": {
                 "type": [
@@ -11728,7 +11720,8 @@
               "node",
               "config"
             ],
-            "description": "Replace a node's config whole."
+            "description": "Replace a node's config whole.",
+            "x-removed-in": 4
           },
           {
             "type": "object",
@@ -11768,7 +11761,8 @@
               "node",
               "input"
             ],
-            "description": "Set the value on one of a node's inputs."
+            "description": "Set the value on one of a node's inputs.",
+            "x-removed-in": 4
           },
           {
             "type": "object",
@@ -11870,7 +11864,8 @@
                   "null"
                 ],
                 "additionalProperties": true,
-                "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults."
+                "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.",
+                "x-removed-in": 4
               },
               "as": {
                 "type": [
@@ -11929,7 +11924,8 @@
               "node",
               "exposed_config_fields"
             ],
-            "description": "Replace the config fields a node takes as inputs whole."
+            "description": "Replace the config fields a node takes as inputs whole.",
+            "x-removed-in": 4
           },
           {
             "type": "object",
@@ -12763,7 +12759,8 @@
               "null"
             ],
             "additionalProperties": true,
-            "description": "The node's config, as the keys its type's schema declares. Omit for none. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is."
+            "description": "The node's config, as the keys its type's schema declares. Omit for none. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is.",
+            "x-removed-in": 4
           },
           "pins": {
             "type": [
@@ -12771,7 +12768,8 @@
               "null"
             ],
             "additionalProperties": true,
-            "description": "The value on each unlinked input, by input name."
+            "description": "The value on each unlinked input, by input name.",
+            "x-removed-in": 4
           },
           "exposed_config_fields": {
             "type": [
@@ -12781,7 +12779,8 @@
             "items": {
               "type": "string"
             },
-            "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
+            "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.",
+            "x-removed-in": 4
           },
           "studio": {
             "type": [
@@ -13285,7 +13284,8 @@
               "null"
             ],
             "additionalProperties": true,
-            "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults."
+            "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.",
+            "x-removed-in": 4
           },
           "mode": {
             "anyOf": [
@@ -17226,7 +17226,7 @@
           {
             "type": "string",
             "const": "extension_manifest",
-            "description": "Each `tatolab_view.json` of the project's own views, read as the runtime reads it when\nthe view opens: each one that does not open, and each port still declared by the older\n`family` field, with the `pin_type` to write. And the project's own\n`node_ui/tatolab_node_ui.json`: one that does not read, and each entry that registers what\nonly another module may."
+            "description": "Each `tatolab_view.json` of the project's own views, read as the runtime reads it when\nthe view opens: each one that does not open, and each port still declared by its older\nfield, with the `pin_type` to write. And the project's own\n`node_ui/tatolab_node_ui.json`: one that does not read, and each entry that registers what\nonly another module may."
           },
           {
             "type": "string",
@@ -17272,7 +17272,7 @@
           },
           "finding_code": {
             "type": "string",
-            "description": "What was found, for a caller to branch on: the code the declaration reader refused with,\nsuch as `value_input_has_no_default`, `module_does_not_import` for a module that does not\nimport, `declaration_retired` for a node declared in a retired form, or\n`port_declared_by_family` for a view's port its manifest declares by `family` alone."
+            "description": "What was found, for a caller to branch on: the code the declaration reader refused with,\nsuch as `value_input_has_no_default`, `module_does_not_import` for a module that does not\nimport, `declaration_retired` for a node declared in a retired form, or the manifest\ncheck's own code for a view's port its manifest declares by its older field alone."
           },
           "severity": {
             "$ref": "#/components/schemas/ProjectCodeCheckSeverity",
@@ -17631,7 +17631,8 @@
               "string",
               "null"
             ],
-            "description": "The port family's wire name, `None` where source alone does not say."
+            "description": "The port family's wire name, `None` where source alone does not say.",
+            "x-removed-in": 4
           },
           "description": {
             "type": "string",
@@ -18355,7 +18356,7 @@
           {
             "type": "string",
             "const": "source",
-            "description": "Its declaration, read from source without running it; a port's pin type is not read\nthere, so its ports state their family alone."
+            "description": "Its declaration, read from source without running it; a port's pin type is not read\nthere, so its ports state none."
           },
           {
             "type": "string",
@@ -18530,7 +18531,8 @@
             "items": {
               "type": "string"
             },
-            "description": "The settings of a node type not yet typed that `set_exposed_config_fields` still takes;\nabsent when it takes none. Served until the contract's version changes."
+            "description": "The settings of a node type not yet typed that `set_exposed_config_fields` still takes;\nabsent when it takes none. Served until the contract's version changes.",
+            "x-removed-in": 4
           }
         },
         "required": [
@@ -18652,14 +18654,16 @@
             "description": "What it states besides its type, none of which decides a link."
           },
           "family": {
-            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`."
+            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`.",
+            "x-removed-in": 4
           },
           "annotation": {
             "type": [
               "string",
               "null"
             ],
-            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes."
+            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes.",
+            "x-removed-in": 4
           },
           "mode": {
             "anyOf": [
@@ -18853,7 +18857,7 @@
             "description": "Forgotten at Stop: its live value is dropped, and the next Play reads its saved value, or\nits declared default where it has none."
           }
         ],
-        "description": "How long a value set live on an input lives, as the input declares it, or a `GraphInput`'s\nconfig for the value it publishes."
+        "description": "How long a value set live on an input lives, as the input declares it, or as a `GraphInput`\nstates it for the value it publishes."
       },
       "NodeTypePortDescribed": {
         "type": "object",
@@ -18879,14 +18883,16 @@
             "description": "What it states besides its type, none of which decides a link."
           },
           "family": {
-            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`."
+            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`.",
+            "x-removed-in": 4
           },
           "annotation": {
             "type": [
               "string",
               "null"
             ],
-            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes."
+            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes.",
+            "x-removed-in": 4
           }
         },
         "required": [
@@ -19233,7 +19239,8 @@
           },
           "family": {
             "type": "string",
-            "description": "The port family's wire name: the family its pin type's messages belong to, where it\nnames one. Served until the contract's version changes, for a client that reads no\n`pin_type`."
+            "description": "The port family's wire name: the family its pin type's messages belong to, where it\nnames one. Served until the contract's version changes, for a client that reads no\n`pin_type`.",
+            "x-removed-in": 4
           },
           "pin_type": {
             "anyOf": [
@@ -19244,7 +19251,7 @@
                 "type": "null"
               }
             ],
-            "description": "The pin type the port carries; absent on a port its manifest declares by `family` alone."
+            "description": "The pin type the port carries; absent on a port its manifest declares by its older field\nalone."
           },
           "description": {
             "type": [
@@ -19264,7 +19271,7 @@
             },
             "minItems": 2,
             "maxItems": 2,
-            "description": "The lowest and highest value an Array port carries."
+            "description": "The lowest and highest value the port carries, where its manifest states them."
           }
         },
         "required": [
@@ -19758,7 +19765,7 @@
             ],
             "format": "uint32",
             "minimum": 0,
-            "description": "The process id of the viewer that imports the port's Image frames. On macOS the surface-sharing service admits only that process, a running process of the runtime's user, to new connections while the viewer stays open, and without it the answer names no `surface_share_address`; Linux admits whoever may open its socket.",
+            "description": "The process id of the viewer that imports the port's Texture frames. On macOS the surface-sharing service admits only that process, a running process of the runtime's user, to new connections while the viewer stays open, and without it the answer names no `surface_share_address`; Linux admits whoever may open its socket.",
             "default": null
           }
         },
@@ -19806,14 +19813,14 @@
           },
           "viewer_reads": {
             "$ref": "#/components/schemas/OutputPortViewerReads",
-            "description": "Which of the port's messages the viewer reads, by the port's family."
+            "description": "Which of the port's messages the viewer reads, by what the port carries."
           },
           "surface_share_address": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Where the viewer imports an Image frame's surface: the surface-sharing socket's path on\nLinux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open\nnamed no `viewer_process_id`, since the service admits only a named process."
+            "description": "Where the viewer imports a Texture frame's surface: the surface-sharing socket's path on\nLinux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open\nnamed no `viewer_process_id`, since the service admits only a named process."
           }
         },
         "required": [
@@ -19834,12 +19841,12 @@
           {
             "type": "string",
             "const": "latest_message",
-            "description": "The latest message the node wrote; the viewer's ring is one message deep, so the channel\noverwrites what the viewer falls behind on. Every family but Channels."
+            "description": "The latest message the node wrote; the viewer's ring is one message deep, so the channel\noverwrites what the viewer falls behind on. Every port but one carrying samples."
           },
           {
             "type": "string",
             "const": "every_message",
-            "description": "Every message, in order, as far back as the channel's depth holds them for a reader; the\nchannel overwrites the oldest past that. A Channels port, so a viewer can play its sound."
+            "description": "Every message, in order, as far back as the channel's depth holds them for a reader; the\nchannel overwrites the oldest past that. A port carrying samples, such as audio, so a\nviewer can play its sound."
           }
         ],
         "description": "Which messages of an output port a viewer reads off the channel's reserved slot."
@@ -20377,7 +20384,7 @@
           {
             "type": "string",
             "const": "edited",
-            "description": "A node or a link was added, removed or reconfigured; or an input's value changed, told\nat most once each 500 ms for each stream to a connection not subscribed to the stream's\ninput value changes."
+            "description": "A node or a link was added, removed or changed; or an input's value changed, told\nat most once each 500 ms for each stream to a connection not subscribed to the stream's\ninput value changes."
           },
           {
             "type": "string",

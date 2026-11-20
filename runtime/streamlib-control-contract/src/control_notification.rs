@@ -144,7 +144,7 @@ impl ControlNotification for ProjectChanged {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamGraphChangeKindOnTheWire {
-    /// A node or a link was added, removed or reconfigured; or an input's value changed, told
+    /// A node or a link was added, removed or changed; or an input's value changed, told
     /// at most once each 500 ms for each stream to a connection not subscribed to the stream's
     /// input value changes.
     Edited,

@@ -3,8 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// How long a value set live on an input lives, as the input declares it, or a `GraphInput`'s
-/// config for the value it publishes.
+/// How long a value set live on an input lives, as the input declares it, or as a `GraphInput`
+/// states it for the value it publishes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "contract-json-schema",

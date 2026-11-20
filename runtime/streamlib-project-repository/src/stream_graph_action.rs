@@ -188,15 +188,18 @@ pub enum StreamGraphAction<Stream = Uuid> {
             )
         )]
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
         config: Option<Map<String, Value>>,
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
             schemars(description = "The value on each unlinked input, by input name.")
         )]
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
         pins: Option<Map<String, Value>>,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
         exposed_config_fields: Option<Vec<String>>,
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
@@ -264,6 +267,7 @@ pub enum StreamGraphAction<Stream = Uuid> {
         target: StreamGraphActionLinkEnd,
     },
     /// Replace a node's config whole.
+    #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
     SetNodeConfig {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Stream,
@@ -281,6 +285,7 @@ pub enum StreamGraphAction<Stream = Uuid> {
         config: Map<String, Value>,
     },
     /// Set the value on one of a node's inputs.
+    #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
     SetPinValue {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Stream,
@@ -351,6 +356,7 @@ pub enum StreamGraphAction<Stream = Uuid> {
         name: Option<String>,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
         config: Option<Map<String, Value>>,
         #[serde(rename = "as")]
         #[cfg_attr(
@@ -363,6 +369,7 @@ pub enum StreamGraphAction<Stream = Uuid> {
         label: Option<String>,
     },
     /// Replace the config fields a node takes as inputs whole.
+    #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
     SetExposedConfigFields {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Stream,

@@ -390,6 +390,7 @@ pub struct ProjectActionRefusalOnTheWire {
     pub refused_link: Option<Box<RefusedGraphLinkOnTheWire>>,
     /// The node's input or config field the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub refused_field: Option<String>,
     /// The JSON pointer, into the params the caller sent, of the value refused; absent when no
     /// one value inside them is.
@@ -800,13 +801,15 @@ pub struct ProjectViewDeclaredPort {
     /// The port family's wire name: the family its pin type's messages belong to, where it
     /// names one. Served until the contract's version changes, for a client that reads no
     /// `pin_type`.
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub family: String,
-    /// The pin type the port carries; absent on a port its manifest declares by `family` alone.
+    /// The pin type the port carries; absent on a port its manifest declares by its older field
+    /// alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type: Option<PinType>,
     /// What the port carries.
     pub description: Option<String>,
-    /// The lowest and highest value an Array port carries.
+    /// The lowest and highest value the port carries, where its manifest states them.
     pub range: Option<[f64; 2]>,
 }
 
@@ -918,6 +921,7 @@ pub struct NodeTypePortReadFromSource {
     /// The port's name, cast as every exposed name is.
     pub name: String,
     /// The port family's wire name, `None` where source alone does not say.
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub family: Option<String>,
     /// The port's declared description.
     pub description: String,

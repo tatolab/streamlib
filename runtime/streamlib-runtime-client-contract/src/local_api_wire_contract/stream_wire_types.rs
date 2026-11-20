@@ -390,10 +390,11 @@ pub struct DescribeStreamActionToolResultStream {
 #[serde(rename_all = "snake_case")]
 pub enum OutputPortViewerReads {
     /// The latest message the node wrote; the viewer's ring is one message deep, so the channel
-    /// overwrites what the viewer falls behind on. Every family but Channels.
+    /// overwrites what the viewer falls behind on. Every port but one carrying samples.
     LatestMessage,
     /// Every message, in order, as far back as the channel's depth holds them for a reader; the
-    /// channel overwrites the oldest past that. A Channels port, so a viewer can play its sound.
+    /// channel overwrites the oldest past that. A port carrying samples, such as audio, so a
+    /// viewer can play its sound.
     EveryMessage,
 }
 
@@ -419,9 +420,9 @@ pub struct OpenViewerToolResult {
     /// The iceoryx2 notify service the port's node notifies on each write, whose one listener the
     /// viewer takes, so it waits for a message rather than reading on a timer.
     pub wake_service: String,
-    /// Which of the port's messages the viewer reads, by the port's family.
+    /// Which of the port's messages the viewer reads, by what the port carries.
     pub viewer_reads: OutputPortViewerReads,
-    /// Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
+    /// Where the viewer imports a Texture frame's surface: the surface-sharing socket's path on
     /// Linux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open
     /// named no `viewer_process_id`, since the service admits only a named process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
