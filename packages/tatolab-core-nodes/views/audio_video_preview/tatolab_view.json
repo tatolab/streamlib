@@ -1,0 +1,26 @@
+{
+  "contract": "1.1",
+  "title": "Audio Video Preview",
+  "description": "Watch and listen to what the stream makes: wire a picture into video and a sound into audio. Either can be left unwired.",
+  "entry": "index.html",
+  "placement": "node",
+  "inputs": [
+    {
+      "name": "video",
+      "pin_type": { "type": "texture" },
+      "description": "The picture to watch, letterboxed to the area, with its size, frame rate and timecode."
+    },
+    {
+      "name": "audio",
+      "pin_type": { "type": "audio" },
+      "description": "The sound to hear, played on the default output device and drawn as one meter per channel."
+    }
+  ],
+  "settings": {
+    "type": "object",
+    "properties": {
+      "fit": { "type": "string", "enum": ["fit", "actual_size"], "default": "fit", "description": "Fit the picture to the area, or show it at its own size." },
+      "safe_areas": { "type": "boolean", "default": false, "description": "Draw the action and title safe areas over the picture." }
+    }
+  }
+}
