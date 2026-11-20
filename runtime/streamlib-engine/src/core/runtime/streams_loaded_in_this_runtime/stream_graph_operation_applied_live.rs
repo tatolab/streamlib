@@ -668,9 +668,9 @@ impl LoadedStreamInThisRuntime {
             PortDirection::Output => ALinkEndTheGraphHolds::Output(
                 OutputLinkPortRef::new(node_run_id, &held.port).at_member(held.member.clone()),
             ),
-            PortDirection::Input => {
-                ALinkEndTheGraphHolds::Input(InputLinkPortRef::new(node_run_id, &held.port))
-            }
+            PortDirection::Input => ALinkEndTheGraphHolds::Input(
+                InputLinkPortRef::new(node_run_id, &held.port).at_member(held.member.clone()),
+            ),
         };
         let node_types = self.node_types_this_stream_resolves();
         let mut answers = Vec::with_capacity(node_types_ports.len());
@@ -728,7 +728,8 @@ impl LoadedStreamInThisRuntime {
             InputLinkPortRef::new(
                 self.the_node_of_the_node(link.target.node)?,
                 &link.target.port,
-            ),
+            )
+            .at_member(link.target.member.clone()),
         ))
     }
 
@@ -738,11 +739,16 @@ impl LoadedStreamInThisRuntime {
         link: &StreamGraphDocumentLink,
     ) -> Option<RunningLinkBetweenTwoNodesByUuid> {
         RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
-            link.source.node,
-            &link.source.port,
-            link.source.member.as_deref(),
-            link.target.node,
-            &link.target.port,
+            (
+                link.source.node,
+                &link.source.port,
+                link.source.member.as_deref(),
+            ),
+            (
+                link.target.node,
+                &link.target.port,
+                link.target.member.as_deref(),
+            ),
         )
         .ok()
     }
@@ -758,11 +764,16 @@ impl LoadedStreamInThisRuntime {
         self.the_node_of_the_node(link.source.node)?;
         self.the_node_of_the_node(link.target.node)?;
         let link_as_given = RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
-            link.source.node,
-            &link.source.port,
-            link.source.member.as_deref(),
-            link.target.node,
-            &link.target.port,
+            (
+                link.source.node,
+                &link.source.port,
+                link.source.member.as_deref(),
+            ),
+            (
+                link.target.node,
+                &link.target.port,
+                link.target.member.as_deref(),
+            ),
         )?;
         Ok(self
             .the_live_links_by_node_uuid()

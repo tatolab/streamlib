@@ -6,10 +6,11 @@
 
 use std::collections::HashSet;
 
+use super::super::bundle_member_link_ends::what_a_link_end_at_a_port_carries;
 use super::super::pin_type_resolution::{PinTypeInItsGraph, the_pin_type_of_a_port_in_its_graph};
 use super::super::port_family_link_checks::the_named_type_among;
 use super::super::{Graph, GraphEdgeWithComponents, GraphNode, Link, PendingDeletionComponent};
-use super::{TypedEnd, is_typed, verdict_between, what_a_link_from_a_port_carries};
+use super::{TypedEnd, is_typed, verdict_between, what_the_input_end_of_a_link_carries};
 use crate::core::PortDirection;
 use crate::core::descriptors::{DeclaredPinType, PinConversion};
 
@@ -47,27 +48,32 @@ pub(super) fn the_first_wired_link_past_an_input_refused(
                 else {
                     continue;
                 };
-                let downstream_pin_type = the_pin_type_of_a_port_in_its_graph(
-                    graph,
-                    downstream_node,
-                    downstream_input,
-                    PortDirection::Input,
+                let (downstream_member, downstream_pin_type) = what_the_input_end_of_a_link_carries(
+                    link_out.to_port(),
+                    the_pin_type_of_a_port_in_its_graph(
+                        graph,
+                        downstream_node,
+                        downstream_input,
+                        PortDirection::Input,
+                    ),
                 );
-                let (member, carried_on) =
-                    match what_a_link_from_a_port_carries(link_out.source(), carried.clone()) {
-                        Ok(what_it_carries) => what_it_carries,
-                        Err(member) => {
-                            return Some(format!(
-                                "output `{}` of `{}` takes the type linked into `{input_name}`, \
+                let (member, carried_on) = match what_a_link_end_at_a_port_carries(
+                    link_out.source().member(),
+                    carried.clone(),
+                ) {
+                    Ok(what_it_carries) => what_it_carries,
+                    Err(member) => {
+                        return Some(format!(
+                            "output `{}` of `{}` takes the type linked into `{input_name}`, \
                                  and under it holds no member `{member}`, which the wired link \
                                  {} → {} starts at",
-                                following_output.name,
-                                node.display_name,
-                                link_out.source(),
-                                link_out.to_port(),
-                            ));
-                        }
-                    };
+                            following_output.name,
+                            node.display_name,
+                            link_out.source(),
+                            link_out.to_port(),
+                        ));
+                    }
+                };
                 if is_typed(&downstream_pin_type) {
                     let verdict = verdict_between(
                         TypedEnd {
@@ -79,7 +85,7 @@ pub(super) fn the_first_wired_link_past_an_input_refused(
                         TypedEnd {
                             node: downstream_node,
                             port: downstream_input,
-                            member: None,
+                            member: downstream_member.as_ref(),
                             pin_type: &downstream_pin_type,
                         },
                         conversions,

@@ -26,7 +26,7 @@ use crate::core::graph::{
     OutputLinkPortRef, ReadOfALinkByTheReaderOfAFunctionNodeIsland,
 };
 use crate::core::nodes::{NodeInstance, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope};
-use crate::iceoryx2::Iceoryx2Node;
+use crate::iceoryx2::{Iceoryx2Node, WhatTheMembersArePutInto};
 use channel_service_naming_and_sizing::{
     RoomForAWindowedReaderTheSourcesGraphCannotSee, audio_windowing_declared_by_input_port_of,
     channel_service_name, delivery_resolution_of_input_port, destination_max_notifiers,
@@ -163,6 +163,7 @@ pub(crate) fn open_a_read_of_a_link_by_the_reader_of_a_function_node_island(
         &reader_input_port,
         &to_port,
         &wiring_link_id,
+        WhatTheMembersArePutInto::TheMembersTheLinksCarried,
     )?;
     let opened_source_side = open_the_source_side_of_a_link(
         graph,
@@ -327,8 +328,14 @@ fn open_iceoryx2_service_read_at(
         (link.source().clone(), link.to_port().clone())
     };
 
-    let destination =
-        read_the_destination_of_a_link(graph, &from_port, read_at, &to_port, link_id)?;
+    let destination = read_the_destination_of_a_link(
+        graph,
+        &from_port,
+        read_at,
+        &to_port,
+        link_id,
+        WhatTheMembersArePutInto::TheWholeBundle,
+    )?;
     let opened_source_side =
         open_the_source_side_of_a_link(graph, &from_port, link_id, &destination, iceoryx2_node)?;
     let wire_reply_awaited_from_the_destination =

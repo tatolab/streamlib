@@ -211,3 +211,61 @@ fn the_tensor_member_an_array_frame_carries(
         payload,
     })
 }
+
+/// `held`, some members of the bundle `pin_type` by name, as the Records message of those members
+/// alone, each read as its member's type reads it; or why one is no member the bundle declares,
+/// or its member's type does not take it.
+pub fn the_records_message_of_members_of_a_bundle(
+    pin_type: &PinType,
+    held: &Map<String, Value>,
+) -> Result<PackedPinValue, String> {
+    the_records_message_of_a_record(&Value::Object(the_members_read_as(pin_type, held)?))
+}
+
+/// The members of the bundle `pin_type` the Records message `message` of some of its members
+/// carries, by name, each read as its member's type reads it; or why it carries none so.
+pub fn the_members_of_a_bundle_a_records_message_carries(
+    pin_type: &PinType,
+    message: PackedPinValueRef<'_>,
+) -> Result<Map<String, Value>, String> {
+    if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)
+        != Some(DataChannelPayloadDescriptorKind::RecordsMessage)
+    {
+        return Err(format!(
+            "the members of a {pin_type} travel as a Records message, and the message is none"
+        ));
+    }
+    let record: Value = rmp_serde::from_slice(message.payload)
+        .map_err(|why| format!("the Records message does not decode: {why}"))?;
+    let Value::Object(held) = record else {
+        return Err("the Records message holds no map".to_owned());
+    };
+    the_members_read_as(pin_type, &held)
+}
+
+/// `held`, some members of the bundle `pin_type` by name, each read as its member's type reads it
+/// and checked as a set value is; or why one is no member the bundle declares, or is refused.
+fn the_members_read_as(
+    pin_type: &PinType,
+    held: &Map<String, Value>,
+) -> Result<Map<String, Value>, String> {
+    let PinType::Bundle { members } = pin_type else {
+        return Err(format!("a {pin_type} holds no members"));
+    };
+    held.iter()
+        .map(|(name, value)| {
+            let member = members
+                .iter()
+                .find(|member| &member.name == name)
+                .ok_or_else(|| format!("a {pin_type} has no member `{name}`"))?;
+            let read = the_value_read_as(&member.member_type, value)?;
+            member.member_type.check_value(&read).map_err(|not_taken| {
+                format!(
+                    "member `{name}` takes {}, and `{read}` is none",
+                    not_taken.takes
+                )
+            })?;
+            Ok((name.clone(), read))
+        })
+        .collect()
+}

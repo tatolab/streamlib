@@ -24,7 +24,7 @@ pub struct GraphLinkEndOnTheWire {
     pub node: String,
     /// The port's name.
     pub port: String,
-    /// The member of a bundle port the link starts at; absent for the whole port.
+    /// The member of a bundle port the link starts or ends at; absent for the whole port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
 }

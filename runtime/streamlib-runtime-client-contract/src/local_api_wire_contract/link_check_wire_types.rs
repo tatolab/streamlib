@@ -85,7 +85,7 @@ pub enum LinkCandidateEnd {
         node: String,
         /// The port's name, as `graph` lists it under the node's `ports`.
         port: String,
-        /// The member of the bundle an output port carries that the end is, by name; absent for
+        /// The member of the bundle the port carries that the end is, by name; absent for
         /// the whole port.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         member: Option<String>,
@@ -97,7 +97,7 @@ pub enum LinkCandidateEnd {
         node_type: String,
         /// The port's name, as the node type declares it.
         port: String,
-        /// The member of the bundle an output port carries that the end is, by name; absent for
+        /// The member of the bundle the port carries that the end is, by name; absent for
         /// the whole port.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         member: Option<String>,

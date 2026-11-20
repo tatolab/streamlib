@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod bundle_member_link_ends;
 mod components;
 mod config_node_reference_edges;
 mod config_schema_value_checks;
@@ -30,6 +31,10 @@ mod graph_tests;
 mod renamed_port_tests;
 
 // top level
+pub(crate) use bundle_member_link_ends::{
+    WhatTheLinksIntoAnInputFeed, the_bundle_member_a_link_ends_at,
+    the_bundle_member_a_link_starts_at,
+};
 pub(crate) use config_node_reference_edges::{
     config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
     refuse_a_live_config_naming_a_node_the_graph_does_not_hold,
@@ -51,8 +56,8 @@ pub(crate) use pin_type_link_checks::{
     refuse_a_link_its_pin_types_or_families_refuse,
     refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
     refuse_the_names_and_codec_the_links_through_a_convert_node_refuse,
-    the_bundle_member_a_link_starts_at, the_ends_a_link_is_judged_by,
-    the_verdict_of_a_link_between_declared_ports, the_verdict_on_a_link_between_typed_ends,
+    the_ends_a_link_is_judged_by, the_verdict_of_a_link_between_declared_ports,
+    the_verdict_on_a_link_between_typed_ends,
 };
 pub(crate) use pin_type_resolution::the_pin_a_port_resolves_to;
 pub(crate) use port_family_link_checks::{

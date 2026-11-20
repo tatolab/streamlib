@@ -17,7 +17,7 @@ fn a_disconnected_links_count_goes_with_the_link() {
         "L-departing",
         &InboundLinkName::from("pdeparting/out"),
         subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     for _ in 0..3 {
         publish_one_frame(&publisher, "src_out", b"body");
@@ -79,14 +79,14 @@ fn remove_channel_link_reclaims_per_link_then_drops_port_and_listener() {
         "L-link-a",
         &InboundLinkName::from("plink-a/out"),
         open_subscriber("reclaim/a"),
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     inner.add_channel_subscriber(
         "in",
         "L-link-b",
         &InboundLinkName::from("plink-b/out"),
         open_subscriber("reclaim/b"),
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     inner.set_listener(listener);
     assert!(inner.has_port("in"));
@@ -321,7 +321,7 @@ fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_node_mute
                     open_the_rewired_channel()
                         .create_subscriber(MAX_QUEUED_MESSAGES)
                         .unwrap(),
-                    None,
+                    crate::iceoryx2::BundleMembersAtTheRead::default(),
                 );
                 if !mailboxes.has_listener() {
                     mailboxes.set_listener(

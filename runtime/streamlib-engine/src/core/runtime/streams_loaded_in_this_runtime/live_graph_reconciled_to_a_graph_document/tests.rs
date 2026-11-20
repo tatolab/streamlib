@@ -548,6 +548,7 @@ fn a_reconcile_compares_a_link_carried_through_the_pool_as_the_link_it_was_given
             source_member: None,
             target_node: node_uuid_of(&reader),
             target_port: "in1".to_string(),
+            target_member: None,
         }
     );
     assert_eq!(

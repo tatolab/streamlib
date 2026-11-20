@@ -14,6 +14,7 @@ mod function_node_islands;
 mod inbound_link_named_on_each_read;
 mod link_removal_and_payload_bounds;
 mod listener_fan_in_and_link_losses;
+mod member_of_a_bundle_put_at_the_read;
 mod member_of_a_bundle_taken_at_the_read;
 mod reads_borrows_and_quotas;
 mod trigger_fires_queued_while_unlinked;
@@ -109,7 +110,7 @@ fn a_test_link_into(
         &format!("L-test-{port}"),
         &InboundLinkName::from("psource/out"),
         subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     publisher
 }
@@ -202,7 +203,7 @@ fn a_port_read_as_fed_by_a_native_writer(
         "L-declared",
         &InboundLinkName::from("psource/out"),
         channel.create_subscriber(16).unwrap(),
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     (mailboxes, output_writer_publishing_onto(&channel, "out"))
 }

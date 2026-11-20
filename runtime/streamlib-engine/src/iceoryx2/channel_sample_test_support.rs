@@ -152,7 +152,7 @@ impl TestLinkIntoAnInputPort {
             &format!("L-test-{port}"),
             &super::InboundLinkName::from("psource/out"),
             subscriber,
-            None,
+            crate::iceoryx2::BundleMembersAtTheRead::default(),
         );
         Self {
             publisher,

@@ -32,13 +32,16 @@ fn a_port_reading_a_member(
 ) -> TestChannelPublisherNumberingItsSends {
     let (publisher, subscriber) = open_channel_for_one_link(&format!("member/{member}"), 4);
     mailboxes.add_port("in", 16, ReadMode::ReadNextInOrder);
-    let member_taken_at_the_read = Some(MemberTakenAtTheRead::of(&a_reading(), member).unwrap());
+    let bundle_members_at_the_read = BundleMembersAtTheRead {
+        taken_from_its_output: Some(MemberTakenAtTheRead::of(&a_reading(), member).unwrap()),
+        put_into_its_input: None,
+    };
     mailboxes.add_channel_subscriber(
         "in",
         "L-member",
         &InboundLinkName::from("psensor/reading"),
         subscriber,
-        member_taken_at_the_read,
+        bundle_members_at_the_read,
     );
     publisher
 }

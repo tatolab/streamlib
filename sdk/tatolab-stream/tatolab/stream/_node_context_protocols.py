@@ -364,6 +364,7 @@ class NodeLinkDataAccess(Protocol):
         wiring_generation: int | None = None,
         input_port_borrow_quota: int | None = None,
         member_taken_at_the_read: dict[str, Any] | None = None,
+        member_put_at_the_read: dict[str, Any] | None = None,
     ) -> None:
         """Open this node's subscriber for one link into `port_name`.
 
@@ -376,7 +377,8 @@ class NodeLinkDataAccess(Protocol):
         `input_port_borrow_quota` is what each link's reader may hold beyond the
         mailbox, the engine's default when `None`. `member_taken_at_the_read`
         names the member of a bundle a link that starts at one takes from each
-        message.
+        message, and `member_put_at_the_read` the member of the input's bundle a
+        link that ends at one puts each value into.
         """
         ...
 

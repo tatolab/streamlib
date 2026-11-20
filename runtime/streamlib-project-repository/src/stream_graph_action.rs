@@ -62,7 +62,7 @@ pub const NOTE_SIZE_ARGUMENT_DESCRIPTION: &str =
     "The note's width and height on the canvas, a `[width, height]` pair of numbers.";
 
 /// One end of a link a graph action names: a node, one of its ports, and the member of a bundle
-/// port it starts at, if any.
+/// port it starts or ends at, if any.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp-tool-json-schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -77,7 +77,7 @@ pub struct StreamGraphActionLinkEnd {
     #[cfg_attr(
         feature = "mcp-tool-json-schema",
         schemars(
-            description = "The member of a bundle port the link starts at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. Only a link's `source` names one."
+            description = "The member of a bundle port the link starts or ends at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. A bundle input is fed either whole or member by member, and the node reads one bundle built from the newest value of each member."
         )
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
