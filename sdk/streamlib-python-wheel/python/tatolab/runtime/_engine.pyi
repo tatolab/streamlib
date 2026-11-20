@@ -101,7 +101,7 @@ def feed_an_input_port_from_a_function_node_island(
             str,
             int,
             int | object,
-            list[tuple[tuple[int, int] | None, float]],
+            list[tuple[tuple[int, int] | None, float | None]],
             list[float],
             list[float],
             int,

@@ -45,6 +45,7 @@ fn an_island_reversing_the_bytes(
 ) {
     let queued: Arc<Mutex<Vec<MessageReadFromInputPort>>> = Arc::default();
     let read_by_the_island = Arc::clone(&queued);
+    Python::initialize();
     let nothing = Python::attach(|python| PyNone::get(python).to_owned().unbind());
     let island =
         FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(

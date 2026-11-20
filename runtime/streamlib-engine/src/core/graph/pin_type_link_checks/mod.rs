@@ -3,8 +3,6 @@
 
 //! The judgement of a link by its two ends' pin types, or by their families when one is untyped.
 
-use std::collections::HashSet;
-
 use super::pin_type_resolution::{
     PinTypeInItsGraph, states_one_type_exactly, the_conversion_whose_output_follows_a_setting,
     the_pin_type_it_states, the_pin_type_of_a_port_in_its_graph,
@@ -26,6 +24,12 @@ use crate::core::descriptors::{
 };
 use crate::core::error::AMemberTheOutputDoesNotHold;
 use crate::core::{Error, PortDirection, Result};
+
+mod wired_links_past_an_input;
+
+use wired_links_past_an_input::{
+    the_first_wired_link_past_an_input_refused, the_wired_links_out_of,
+};
 
 /// Whose link a connect makes, which decides how leniently its pin types are judged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -776,118 +780,6 @@ fn refuse_a_link_made_now_a_wired_link_past_its_input_refuses(
         Some(refused) => Err(Error::InvalidLink(refused)),
         None => Ok(()),
     }
-}
-
-/// Why the first wired link an output following input `input_name` of `node` feeds, or an
-/// output following an input such a link feeds, on downstream, is refused once `carried` is what
-/// arrives at that input, among `conversions`; `None` when each connects under it.
-fn the_first_wired_link_past_an_input_refused(
-    graph: &Graph,
-    node: &GraphNode,
-    input_name: &str,
-    carried: &PinTypeInItsGraph,
-    conversions: &[PinConversion],
-) -> Option<String> {
-    let mut inputs_passed = HashSet::from([(node.id.clone(), input_name.to_owned())]);
-    let mut inputs_to_pass = vec![(node, input_name.to_owned(), carried.clone())];
-    while let Some((node, input_name, carried)) = inputs_to_pass.pop() {
-        let outputs_following_the_input = node.ports.outputs.iter().filter(|output| {
-            matches!(
-                output.declared_pin_type.as_ref().map(|declared| &declared.pin_type),
-                Some(DeclaredPinType::SameAsInput { input_port_name })
-                    if *input_port_name == input_name
-            )
-        });
-        for following_output in outputs_following_the_input {
-            for link_out in the_wired_links_out_of(graph, node, &following_output.name) {
-                let Some(downstream_node) = graph
-                    .traversal()
-                    .v(link_out.to_port().node_run_id())
-                    .first()
-                else {
-                    continue;
-                };
-                let Some(downstream_input) =
-                    downstream_node.input_port(link_out.to_port().port_name())
-                else {
-                    continue;
-                };
-                let downstream_pin_type = the_pin_type_of_a_port_in_its_graph(
-                    graph,
-                    downstream_node,
-                    downstream_input,
-                    PortDirection::Input,
-                );
-                let (member, carried_on) =
-                    match what_a_link_from_a_port_carries(link_out.source(), carried.clone()) {
-                        Ok(what_it_carries) => what_it_carries,
-                        Err(member) => {
-                            return Some(format!(
-                                "output `{}` of `{}` takes the type linked into `{input_name}`, \
-                                 and under it holds no member `{member}`, which the wired link \
-                                 {} → {} starts at",
-                                following_output.name,
-                                node.display_name,
-                                link_out.source(),
-                                link_out.to_port(),
-                            ));
-                        }
-                    };
-                if is_typed(&downstream_pin_type) {
-                    let verdict = verdict_between(
-                        TypedEnd {
-                            node,
-                            port: following_output,
-                            member: member.as_ref(),
-                            pin_type: &carried_on,
-                        },
-                        TypedEnd {
-                            node: downstream_node,
-                            port: downstream_input,
-                            member: None,
-                            pin_type: &downstream_pin_type,
-                        },
-                        conversions,
-                    );
-                    if let Some(refusal) = verdict.refusal_of_the_link_made_as_it_is() {
-                        return Some(format!(
-                            "output `{}` of `{}` takes the type linked into `{input_name}`, and \
-                             under it the wired link {} → {} is refused: {refusal}",
-                            following_output.name,
-                            node.display_name,
-                            link_out.source(),
-                            link_out.to_port(),
-                        ));
-                    }
-                }
-                if inputs_passed.insert((downstream_node.id.clone(), downstream_input.name.clone()))
-                {
-                    inputs_to_pass.push((
-                        downstream_node,
-                        downstream_input.name.clone(),
-                        carried_on,
-                    ));
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Each link wired out of output `output_name` of `node` in `graph`, none being taken off.
-fn the_wired_links_out_of<'graph>(
-    graph: &'graph Graph,
-    node: &GraphNode,
-    output_name: &'graph str,
-) -> impl Iterator<Item = &'graph super::Link> + 'graph {
-    graph
-        .traversal()
-        .v(&node.id)
-        .out_e()
-        .iter()
-        .filter(move |link| {
-            link.source().port_name() == output_name && !link.has::<PendingDeletionComponent>()
-        })
 }
 
 /// Refuse the type the setting `setting_name` of the node `node_run_id` now holds when a link

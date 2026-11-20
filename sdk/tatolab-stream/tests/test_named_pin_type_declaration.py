@@ -8,7 +8,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Buffer
 from dataclasses import dataclass
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, NamedTuple, Self
 
 import pytest
 
@@ -43,6 +43,19 @@ class FaceBox:
     def to_bytes(self) -> bytes:
         return struct.pack("<3d", self.x, self.y, self.score)
 
+
+
+@named_pin_type(description="A span between two levels, packed as two doubles.")
+class Span(NamedTuple):
+    low: float
+    high: float
+
+    @classmethod
+    def from_bytes(cls, payload: Buffer) -> Self:
+        return cls(*struct.unpack("<2d", bytes(payload)))
+
+    def to_bytes(self) -> bytes:
+        return struct.pack("<2d", self.low, self.high)
 
 class Detector:
     @named_pin_type(description="What a detector saw, as one byte.")
@@ -183,3 +196,16 @@ def test_a_named_type_input_with_a_default_is_refused_as_it_holds_no_value() -> 
 
     assert refused.value.finding_code == "wire_only_input_with_a_default"
     assert refused.value.pin == "face"
+
+
+def Spread(low: float = 0.0, high: float = 1.0) -> Span:
+    return Span(low, high)
+
+
+def test_a_named_type_that_is_a_named_tuple_is_one_output_not_one_per_field() -> None:
+    (result,) = getattr(node(Spread), NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    assert result["name"] == "result"
+    assert result["pin_declaration"]["pin_type"] == {
+        "kind": "is",
+        "pin_type": {"type": "named", "named_pin_type": f"{__name__}:Span"},
+    }
