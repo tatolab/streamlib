@@ -271,6 +271,7 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
             let held_node_name = match value {
                 ValueASetVariableHolds::PortOutput(source) => &source.node,
                 ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
+                ValueASetVariableHolds::Nothing => continue,
             };
             let Some(held_node) = node_named(held_node_name)? else {
                 if let Some(interface_node) = self
@@ -296,12 +297,14 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
                          `{held_node_name}`, which the graph does not hold. The graph holds: {}",
                         the_names_the_graph_holds()
                     ),
-                    ValueASetVariableHolds::NodeReference(_) => format!(
-                        "input `{SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY}` of `SetVariable` node \
-                         `{set_variable_node}` names node `{held_node_name}`, which the graph \
-                         does not hold. The graph holds: {}",
-                        the_names_the_graph_holds()
-                    ),
+                    ValueASetVariableHolds::NodeReference(_) | ValueASetVariableHolds::Nothing => {
+                        format!(
+                            "input `{SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY}` of `SetVariable` \
+                             node `{set_variable_node}` names node `{held_node_name}`, which the \
+                             graph does not hold. The graph holds: {}",
+                            the_names_the_graph_holds()
+                        )
+                    }
                 }));
             };
             if let ValueASetVariableHolds::PortOutput(source) = value {

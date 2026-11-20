@@ -194,7 +194,8 @@ pub struct NodeTypeListed {
     /// Who filed it under `category`; null when nothing files it.
     #[serde(default)]
     pub category_from: Option<NodeTypeCategoryFrom>,
-    /// How its code runs; null for an entry point whose declaration source does not show it.
+    /// How its code runs; null for an entry point whose declaration source does not show it,
+    /// and for a node type the graph resolves itself, which no node code runs.
     pub kind: Option<NodeTypeKind>,
     /// Where the runtime's description of it comes from.
     pub described_from: NodeTypeDescribedFrom,
@@ -314,7 +315,8 @@ pub struct NodeTypeDescription {
     /// Who filed it under `category`; null when nothing files it.
     #[serde(default)]
     pub category_from: Option<NodeTypeCategoryFrom>,
-    /// How its code runs; null where its declaration source does not show it.
+    /// How its code runs; null where its declaration source does not show it, and for a node
+    /// type the graph resolves itself, which no node code runs.
     pub kind: Option<NodeTypeKind>,
     /// Where it is declared, its path relative to its source's root; absent on a built-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
