@@ -16,7 +16,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 # Engine substrate — runtime context and node traits.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.82" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.69.164" }
 
 
 # Serialization (config dataclass ships as serde-derived).
@@ -28,7 +28,7 @@ serde_json.workspace = true
 
 [build-dependencies]
 # Compiles the fixtures' shaders for `include_bytes!`.
-streamlib-slang-shader-compiler = { path = "../../runtime/streamlib-slang-shader-compiler", version = "0.68.82" }
+streamlib-slang-shader-compiler = { path = "../../runtime/streamlib-slang-shader-compiler", version = "0.69.164" }
 
 [lints]
 workspace = true
