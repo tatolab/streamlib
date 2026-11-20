@@ -6,7 +6,7 @@ use streamlib_ipc_types::{
     ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, ChannelsBlockDescriptorBody,
     ChannelsBlockSampleType, DataChannelPayloadDescriptorKind, array_frame_attribute_table_of,
 };
-use streamlib_node_schema::pin_type::VectorComponentCount;
+use streamlib_node_schema::pin_type::{BundleMember, VectorComponentCount};
 
 use super::*;
 
@@ -594,4 +594,175 @@ fn an_asset_takes_only_the_object_form() {
     });
     let packed = pack_pin_value(&asset, &imported, 0).unwrap();
     assert_eq!(unpack_pin_value(&asset, packed.as_ref()), Ok(imported));
+}
+
+fn a_member(name: &str, member_type: PinType) -> BundleMember {
+    BundleMember {
+        name: name.to_owned(),
+        member_type,
+        meaning: None,
+        default_value: None,
+    }
+}
+
+/// A placement of `x`, `y` and `opacity`, `opacity` 1 when a stored value leaves it out.
+fn a_placement() -> PinType {
+    PinType::Bundle {
+        members: vec![
+            a_member("x", PinType::Float { exact_size: None }),
+            a_member("y", PinType::Float { exact_size: None }),
+            BundleMember {
+                default_value: Some(json!(1.0)),
+                ..a_member("opacity", PinType::Float { exact_size: None })
+            },
+        ],
+    }
+}
+
+/// The msgpack bytes of `key`, a str of fewer than 32 bytes, then the f64 `number`.
+fn golden_float_entry(key: &str, number: f64) -> Vec<u8> {
+    let mut bytes = vec![0xa0 | key.len() as u8];
+    bytes.extend_from_slice(key.as_bytes());
+    bytes.push(0xcb);
+    bytes.extend_from_slice(&number.to_be_bytes());
+    bytes
+}
+
+/// A bundle of small members packs as one Records message whose map holds each member by name,
+/// in the order the bundle declares them, a member the value leaves out holding its default.
+///
+/// Mental-revert: packing the bundle as `{"value": ...}`, as a String travels, makes its message
+/// a map of one entry that no reader of members finds `x` in.
+#[test]
+fn a_bundle_of_small_members_packs_as_one_records_map_of_its_members_made_whole() {
+    let packed = pack_pin_value(&a_placement(), &json!({"y": 0.25, "x": 0.5}), 0).unwrap();
+    assert_eq!(
+        DataChannelPayloadDescriptorKind::from_wire(packed.payload_descriptor.kind),
+        Some(DataChannelPayloadDescriptorKind::RecordsMessage)
+    );
+    let mut golden = vec![0x83];
+    golden.extend(golden_float_entry("x", 0.5));
+    golden.extend(golden_float_entry("y", 0.25));
+    golden.extend(golden_float_entry("opacity", 1.0));
+    assert_eq!(packed.payload, golden);
+    assert_eq!(
+        unpack_pin_value(&a_placement(), packed.as_ref()),
+        Ok(json!({"x": 0.5, "y": 0.25, "opacity": 1.0}))
+    );
+}
+
+/// An input asking for fewer members than the bundle it is sent reads those members alone, and
+/// one asking for a member the message does not hold is refused by the member's name.
+///
+/// Mental-revert: checking the message against the input's bundle whole refuses `y`, which the
+/// input does not name.
+#[test]
+fn an_input_asking_for_fewer_members_reads_those_members_of_the_bundle_sent() {
+    let packed = pack_pin_value(&a_placement(), &json!({"x": 0.5, "y": 0.25}), 0).unwrap();
+    let x_and_opacity = PinType::Bundle {
+        members: vec![
+            a_member("opacity", PinType::Float { exact_size: None }),
+            a_member("x", PinType::Float { exact_size: None }),
+        ],
+    };
+    assert_eq!(
+        unpack_pin_value(&x_and_opacity, packed.as_ref()),
+        Ok(json!({"opacity": 1.0, "x": 0.5}))
+    );
+    let with_gain = PinType::Bundle {
+        members: vec![
+            a_member("x", PinType::Float { exact_size: None }),
+            a_member("gain", PinType::Float { exact_size: None }),
+        ],
+    };
+    let refusal = unpack_pin_value(&with_gain, packed.as_ref()).unwrap_err();
+    assert!(refusal.contains("`gain`"), "{refusal}");
+
+    let placements = pack_pin_value(
+        &a_list_of(a_placement()),
+        &json!([{"x": 0.5, "y": 0.25}, {"x": 1.0, "y": 2.0, "opacity": 0.5}]),
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        unpack_pin_value(&a_list_of(x_and_opacity), placements.as_ref()),
+        Ok(json!([{"opacity": 1.0, "x": 0.5}, {"opacity": 0.5, "x": 1.0}]))
+    );
+}
+
+/// A bundle value that leaves out a member with no default, or holds a key that is no member,
+/// does not pack, and the refusal names the bundle's members.
+#[test]
+fn a_bundle_value_missing_a_member_or_holding_another_does_not_pack() {
+    for value in [json!({"x": 0.5}), json!({"x": 0.5, "y": 0.25, "gain": 2.0})] {
+        let refusal = pack_pin_value(&a_placement(), &value, 0).unwrap_err();
+        assert!(
+            refusal.contains("`x`, `y`, `opacity`"),
+            "{value}: {refusal}"
+        );
+    }
+}
+
+/// A bundle of Tensors packs as one Array frame with an attribute named for each member, in the
+/// order the bundle declares them, and a value missing a member or holding another is refused
+/// by its name.
+///
+/// Mental-revert: packing it as a Records message puts tensors into msgpack, which an Array
+/// reader cannot take.
+#[test]
+fn a_bundle_of_tensors_packs_as_one_array_frame_of_an_attribute_for_each_member() {
+    let detections = PinType::Bundle {
+        members: vec![
+            a_member("boxes", PinType::Tensor {}),
+            a_member("scores", PinType::Tensor {}),
+        ],
+    };
+    assert_eq!(
+        message_kind_of(&detections),
+        Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+    );
+    let packed = pack_pin_value(
+        &detections,
+        &json!({"scores": [0.5, 0.25], "boxes": [[0, 0, 1, 1], [2, 2, 3, 3]]}),
+        0,
+    )
+    .unwrap();
+    let body = ArrayFrameDescriptorBody::from_descriptor_body(&packed.payload_descriptor.body);
+    let rows = array_frame_attribute_table_of(body, &packed.payload).unwrap();
+    let attributes: Vec<(&str, &[u64], &[u8])> = rows
+        .iter()
+        .map(|row| {
+            let ArrayFrameAttributeResidency::Cpu {
+                payload_byte_offset,
+                byte_len,
+            } = row.residency
+            else {
+                panic!("a bundle a client writes is packed on the CPU");
+            };
+            (
+                row.name.as_str(),
+                row.shape.as_slice(),
+                &packed.payload[payload_byte_offset as usize..][..byte_len as usize],
+            )
+        })
+        .collect();
+    let boxes = golden_bytes(&[0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]);
+    let scores = golden_bytes(&[0.5, 0.25]);
+    assert_eq!(
+        attributes,
+        vec![
+            ("boxes", &[2, 4][..], boxes.as_slice()),
+            ("scores", &[2][..], scores.as_slice()),
+        ]
+    );
+    for (value, named) in [
+        (json!({"boxes": [1.0]}), "`scores`"),
+        (
+            json!({"boxes": [1.0], "scores": [1.0], "labels": [1.0]}),
+            "`labels`",
+        ),
+    ] {
+        let refusal = pack_pin_value(&detections, &value, 0).unwrap_err();
+        assert!(refusal.contains(named), "{value}: {refusal}");
+    }
 }
