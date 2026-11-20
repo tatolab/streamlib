@@ -10,6 +10,9 @@ mod empty_config;
 mod graph_interface_node_types;
 #[cfg(test)]
 mod graph_interface_node_types_tests;
+mod graph_variable_node_types;
+#[cfg(test)]
+mod graph_variable_node_types_tests;
 mod node_instance_factory;
 mod node_spec;
 mod node_type_ports_described_on_the_wire;
@@ -17,6 +20,7 @@ mod node_type_ports_described_on_the_wire;
 mod node_type_ports_described_on_the_wire_tests;
 mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;
+mod placed_stream_node_type;
 mod project_view_node;
 pub use crate::core::graph::{NodeState, NodeStateComponent};
 
@@ -40,6 +44,7 @@ pub(crate) use graph_interface_node_types::{
     the_family_a_graph_interface_value_port_declares, the_node_type_of_a_graph_input,
     the_settings_of_a_graph_input, the_settings_of_a_graph_output,
 };
+pub(crate) use graph_variable_node_types::the_settings_of_a_graph_variable_node;
 pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
 };
@@ -51,6 +56,7 @@ pub(crate) use node_types_one_stream_resolves::{
 pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOneStreamResolves};
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+pub(crate) use placed_stream_node_type::the_settings_of_a_placed_stream;
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 pub(crate) use project_view_node::{
     is_the_input_of_an_output_a_panel_writes,

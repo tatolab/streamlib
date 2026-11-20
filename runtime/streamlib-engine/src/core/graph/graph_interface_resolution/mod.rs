@@ -18,13 +18,13 @@ use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, the_ports_of_a_graph_document_node,
 };
 use crate::core::graph::input_values::{
-    the_read_of_an_input_a_link_feeds, the_read_of_an_unfed_input,
+    the_read_of_an_input_a_link_feeds, the_settings_rendered_reading_the_values_held,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
 use crate::core::graph::{
-    GraphNodePorts, PortAnnotations, PortInfo, cast_exposed_name_to_url_safe,
+    GraphNodePorts, PortAnnotations, cast_exposed_name_to_url_safe,
     the_refusal_of_a_link_into_a_setting, the_values_port_facts_read,
 };
 use crate::core::json_schema::{
@@ -35,7 +35,6 @@ use crate::core::json_schema::{
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
 use streamlib_node_schema::output_port_family_resolved_against_config;
-use streamlib_runtime_client_contract::local_api_wire_contract::InputValueComesFromOnTheWire;
 
 pub(crate) use what_a_value_port_carries::{
     an_interface_node_states_what_its_value_port_carries, carry_on_every_value_port,
@@ -290,33 +289,17 @@ impl GraphInterfaceNodeAsDrawn {
     /// The settings the interface node takes, as its type declares them, each reading the value
     /// the node holds, else the default it declares.
     fn its_settings_rendered(&self) -> Vec<GraphNodePortOnTheWire> {
-        match self.declared_port.direction {
-            GraphInterfacePortDirection::Input => {
-                crate::core::nodes::the_settings_of_a_graph_input()
-            }
-            GraphInterfacePortDirection::Output => {
-                crate::core::nodes::the_settings_of_a_graph_output()
-            }
-        }
-        .iter()
-        .map(|setting| {
-            let mut rendered = GraphNodePortOnTheWire::from(&PortInfo::from(setting));
-            let read = self
-                .node
-                .input_values
-                .get(&setting.name)
-                .filter(|held| !held.is_null())
-                .map(|held| (held.clone(), InputValueComesFromOnTheWire::Saved))
-                .or_else(|| {
-                    setting
-                        .pin_default
-                        .clone()
-                        .map(|default| (default, InputValueComesFromOnTheWire::Default))
-                });
-            rendered.value_read = Some(the_read_of_an_unfed_input(read));
-            rendered
-        })
-        .collect()
+        the_settings_rendered_reading_the_values_held(
+            match self.declared_port.direction {
+                GraphInterfacePortDirection::Input => {
+                    crate::core::nodes::the_settings_of_a_graph_input()
+                }
+                GraphInterfacePortDirection::Output => {
+                    crate::core::nodes::the_settings_of_a_graph_output()
+                }
+            },
+            &self.node.input_values,
+        )
     }
 }
 

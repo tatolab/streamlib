@@ -8,7 +8,8 @@ use std::collections::HashSet;
 use crate::core::graph::graph_fragment_flattening::GraphFragmentsAsDrawn;
 use crate::core::graph::graph_interface_resolution::GraphInterfaceAsDrawn;
 use crate::core::graph::graph_variable_resolution::{
-    GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
+    GraphVariablesAsDrawn, SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY, SetVariableAndTheValueItHolds,
+    ValueASetVariableHolds,
 };
 use crate::core::graph::{cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal};
 use crate::core::json_schema::{GraphResponse, LabelledNodeGroup, LinkPortRefOutput};
@@ -289,11 +290,19 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
                     }
                     continue;
                 }
-                return Err(Error::GraphError(format!(
-                    "`SetVariable` node `{set_variable_node}` holds node `{held_node_name}`, \
-                     which the graph does not hold. The graph holds: {}",
-                    the_names_the_graph_holds()
-                )));
+                return Err(Error::GraphError(match value {
+                    ValueASetVariableHolds::PortOutput(_) => format!(
+                        "`SetVariable` node `{set_variable_node}` holds node \
+                         `{held_node_name}`, which the graph does not hold. The graph holds: {}",
+                        the_names_the_graph_holds()
+                    ),
+                    ValueASetVariableHolds::NodeReference(_) => format!(
+                        "input `{SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY}` of `SetVariable` node \
+                         `{set_variable_node}` names node `{held_node_name}`, which the graph \
+                         does not hold. The graph holds: {}",
+                        the_names_the_graph_holds()
+                    ),
+                }));
             };
             if let ValueASetVariableHolds::PortOutput(source) = value {
                 refuse_a_port_the_node_does_not_have(

@@ -139,9 +139,7 @@ from ._port_family_declaration import from_config as from_config
 from ._graph_interface_nodes import GraphInput as GraphInput
 from ._graph_interface_nodes import GraphOutput as GraphOutput
 from ._graph_variable_nodes import GetVariable as GetVariable
-from ._graph_variable_nodes import GetVariableConfig as GetVariableConfig
 from ._graph_variable_nodes import SetVariable as SetVariable
-from ._graph_variable_nodes import SetVariableConfig as SetVariableConfig
 from ._stream_graph_builder import GraphFragmentReference as GraphFragmentReference
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
@@ -206,7 +204,6 @@ __all__ = [
     "ComputeKernel",
     "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
     "GetVariable",
-    "GetVariableConfig",
     "GraphFragmentReference",
     "GraphInput",
     "GraphOutput",
@@ -309,7 +306,6 @@ __all__ = [
     "RuntimeContextLimitedAccess",
     "ScaledStreamClock",
     "SetVariable",
-    "SetVariableConfig",
     "SteppedStreamClock",
     "StoreScopedToThisNode",
     "StreamBuilder",
