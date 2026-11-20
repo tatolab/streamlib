@@ -56,3 +56,26 @@ impl fmt::Display for PinType {
         }
     }
 }
+
+impl PinType {
+    /// What makes this a type that travels as one Bundle frame, in the words a refusal names it
+    /// by: each heavy member of a bundle, as "member `picture` is a Texture", or the heavy
+    /// element of a List; `None` for any other type.
+    pub fn its_heavy_members_in_words(&self) -> Option<String> {
+        if !self.holds_a_heavy_member() {
+            return None;
+        }
+        match self {
+            Self::Bundle { members } => {
+                let heavy: Vec<String> = members
+                    .iter()
+                    .filter(|member| member.member_type.is_a_heavy_type())
+                    .map(|member| format!("member `{}` is a {}", member.name, member.member_type))
+                    .collect();
+                Some(heavy.join(" and "))
+            }
+            Self::ListOf { element_type } => Some(format!("each element is a {element_type}")),
+            _ => None,
+        }
+    }
+}
