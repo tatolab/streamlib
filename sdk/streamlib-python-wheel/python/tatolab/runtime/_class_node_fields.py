@@ -12,6 +12,7 @@ to one rebuilds the node.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any, Optional
 
 from tatolab.stream._class_node_construction import assign_live_field_values
@@ -72,11 +73,17 @@ class ClassNodeFields:
             {port: value for port, value in taken.items() if port not in self._each_held_from_its_wire},
         )
 
-    def take_each_new_value_a_wire_gives(self, node_instance: object) -> None:
-        """Assign each field a wire feeds the newest value its wire gave, before the node's next `process`."""
+    def take_each_new_value_a_wire_gives(
+        self, node_instance: object, *, fed_by_an_island: "Collection[str]" = ()
+    ) -> None:
+        """Assign each field a wire feeds the newest value its wire gave, before the node's next `process`.
+
+        A wire is a link, or the island of function nodes that `fed_by_an_island` names its
+        port of, which is evaluated where the field is read.
+        """
         given: "dict[str, Any]" = {}
         for port, read in self._read_from_its_wire.items():
-            if not self._inputs.inbound_link_names(port):
+            if not self._a_wire_feeds(port, fed_by_an_island):
                 continue
             value = read()
             if value is not None:
@@ -85,14 +92,19 @@ class ClassNodeFields:
         if given:
             assign_live_field_values(node_instance, given)
 
-    def hand_back_the_set_value_of(self, node_instance: object, port: str) -> None:
+    def hand_back_the_set_value_of(
+        self, node_instance: object, port: str, *, fed_by_an_island: "Collection[str]" = ()
+    ) -> None:
         """Assign the field of `port` its set value again, once the last wire feeding it is gone."""
-        if port not in self._each_held_from_its_wire or self._inputs.inbound_link_names(port):
+        if port not in self._each_held_from_its_wire or self._a_wire_feeds(port, fed_by_an_island):
             return
         self._each_held_from_its_wire.discard(port)
         member = self._fields[port]
         value = self._set_values.get(port, member.default)
         assign_live_field_values(node_instance, {port: value})
+
+    def _a_wire_feeds(self, port: str, fed_by_an_island: "Collection[str]") -> bool:
+        return port in fed_by_an_island or bool(self._inputs.inbound_link_names(port))
 
     def _python_forms_of(self, stored_input_values: "dict[str, Any]") -> "dict[str, Any]":
         """Each of `stored_input_values` that names a field, in that field's Python form."""

@@ -101,6 +101,7 @@ def test_a_field_is_a_value_input_with_its_type_annotations_and_default() -> Non
             "annotations": {"range": {"minimum": 0.0, "maximum": 64.0}, "meaning": "radius"},
         },
         "pin_default": 4.0,
+        "input_mode": {"mode": "wire_or_value"},
     }
 
 
@@ -113,9 +114,11 @@ def test_a_setting_only_field_takes_no_wire_and_is_read_at_setup() -> None:
 
 
 def test_a_field_states_wire_only_and_its_lifetime() -> None:
+    """A field stating no mode states it takes a wire or a value, so the runtime sets it any value
+    of its type and not only what a Channels input carries."""
     assert input_port(Blur, "wet")["input_mode"] == {"mode": "wire_only"}
     assert input_port(Blur, "nudge")["lifetime"] == "reset"
-    assert "input_mode" not in input_port(Blur, "radius")
+    assert input_port(Blur, "radius")["input_mode"] == {"mode": "wire_or_value"}
     assert "lifetime" not in input_port(Blur, "radius")
 
 

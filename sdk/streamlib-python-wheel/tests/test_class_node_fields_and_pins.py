@@ -227,6 +227,42 @@ def test_a_field_holds_its_wires_newest_value_and_its_set_value_again_once_the_w
     assert tinter.node.gain == 5.0
 
 
+def test_a_field_an_island_of_function_nodes_feeds_holds_the_value_the_island_evaluates():
+    """An island is a wire with no link: drop the island's arm from `_a_wire_feeds` and the gain
+    keeps its set value, as Oscillator's frequency did under a Constant on the rig."""
+    from tatolab.runtime._function_node_compilation import (
+        feed_each_input_port_from_its_function_node_island,
+    )
+
+    from function_node_test_nodes import an_island_of_one_node, measure_its_own_spelling
+
+    tinter = LevelTinterOnARealDataPlane({"gain": 2.0})
+    import_path = f"{measure_its_own_spelling.__module__}:{measure_its_own_spelling.__qualname__}"
+    islands = feed_each_input_port_from_its_function_node_island(
+        tinter.data_plane,
+        [an_island_of_one_node("gain", import_path, None)],
+        {import_path: measure_its_own_spelling}.__getitem__,
+    )
+    assert islands.input_ports_fed == frozenset({"gain"})
+
+    tinter.fields.take_each_new_value_a_wire_gives(
+        tinter.node, fed_by_an_island=islands.input_ports_fed
+    )
+    assert tinter.node.gain == 3.0, "`2.0` is three letters long"
+
+    tinter.fields.take_set_values(tinter.node, {"gain": 5.0})
+    tinter.fields.hand_back_the_set_value_of(
+        tinter.node, "gain", fed_by_an_island=islands.input_ports_fed
+    )
+    assert tinter.node.gain == 3.0, "the island still feeds the field"
+
+    islands.stop_feeding_an_input_port("gain")
+    tinter.fields.hand_back_the_set_value_of(
+        tinter.node, "gain", fed_by_an_island=islands.input_ports_fed
+    )
+    assert tinter.node.gain == 5.0
+
+
 def test_a_field_set_live_holds_its_value_in_its_python_form():
     tinter = LevelTinterOnARealDataPlane({})
     assert tinter.node.tint == Color(1.0, 0.5, 0.25), "a field with no set value holds its default"
