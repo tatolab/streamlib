@@ -3,17 +3,16 @@
 
 """CRT tube simulation and film grain, as one fullscreen pass.
 
-Every dial is a `CrtFilmGrainConfig` field with an ordinary Python default, so
-setting the node's `barrel_curve` to 0.0 in the graph document flattens the
-tube without touching the shader.
+Every dial is a field read each frame, so dragging `barrel_curve` to 0.0 in the
+Studio flattens the tube while the stream plays, without touching the shader.
 """
 
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from typing import Annotated, ClassVar
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Description, ImageFrame, NumberRange, node
 
 from ..single_pass_video_effect import SinglePassVideoEffect
 
@@ -22,42 +21,55 @@ CRT_PUSH_CONSTANT_FORMAT = "<10f"
 CRT_PUSH_CONSTANT_SIZE = struct.calcsize(CRT_PUSH_CONSTANT_FORMAT)
 
 
-@dataclass
-class CrtFilmGrainConfig:
-    """CrtFilmGrain's settings, as its node's config in the graph document spells them."""
-
-    barrel_curve: float = 0.35
-    scanline_intensity: float = 0.5
-    chromatic_aberration: float = 0.0025
-    grain_intensity: float = 0.12
-    grain_speed: float = 1.0
-    vignette_intensity: float = 0.6
-    brightness: float = 1.05
-
-
 @node.meta(description="80s CRT tube and film grain over the whole frame")
-@node.process
+@node
 class CrtFilmGrain(SinglePassVideoEffect):
     """Barrel curve, scanlines, aberration, vignette and 24 fps grain."""
 
-    fragment_shader_file_name = "crt_film_grain_fragment.slang"
-    push_constant_size = CRT_PUSH_CONSTANT_SIZE
+    fragment_shader_file_name: ClassVar[str] = "crt_film_grain_fragment.slang"
+    push_constant_size: ClassVar[int] = CRT_PUSH_CONSTANT_SIZE
 
-    def __init__(self, config: CrtFilmGrainConfig) -> None:
-        self.crt_film_grain_config = config
+    barrel_curve: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("How far the tube bulges; 0 is a flat screen."),
+    ] = 0.35
+    scanline_intensity: Annotated[
+        float, NumberRange(minimum=0.0, maximum=1.0), Description("How dark the scanlines are.")
+    ] = 0.5
+    chromatic_aberration: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=0.02),
+        Description("How far red and blue split from green, as a fraction of the frame."),
+    ] = 0.0025
+    grain_intensity: Annotated[
+        float, NumberRange(minimum=0.0, maximum=1.0), Description("How strong the film grain is.")
+    ] = 0.12
+    grain_speed: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=4.0),
+        Description("How fast the grain changes; 1 is 24 grain frames a second."),
+    ] = 1.0
+    vignette_intensity: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("How much the corners darken."),
+    ] = 0.6
+    brightness: Annotated[
+        float, NumberRange(minimum=0.0, maximum=2.0), Description("The picture's overall gain.")
+    ] = 1.05
 
     def push_constants_for(self, frame: ImageFrame, elapsed_seconds: float) -> bytes:
-        dials = self.crt_film_grain_config
         return struct.pack(
             CRT_PUSH_CONSTANT_FORMAT,
             float(frame.width),
             float(frame.height),
             elapsed_seconds,
-            dials.barrel_curve,
-            dials.scanline_intensity,
-            dials.chromatic_aberration,
-            dials.grain_intensity,
-            dials.grain_speed,
-            dials.vignette_intensity,
-            dials.brightness,
+            self.barrel_curve,
+            self.scanline_intensity,
+            self.chromatic_aberration,
+            self.grain_intensity,
+            self.grain_speed,
+            self.vignette_intensity,
+            self.brightness,
         )
