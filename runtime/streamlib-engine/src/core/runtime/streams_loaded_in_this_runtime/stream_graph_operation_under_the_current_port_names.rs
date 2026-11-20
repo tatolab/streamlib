@@ -148,11 +148,13 @@ pub(crate) fn the_operation_under_the_current_port_names(
         StreamGraphOperation::SetNodeInputValue {
             node,
             input,
+            member,
             from,
             to,
         } => StreamGraphOperation::SetNodeInputValue {
             input: current_name(node, input, PortDirection::Input),
             node,
+            member,
             from,
             to,
         },

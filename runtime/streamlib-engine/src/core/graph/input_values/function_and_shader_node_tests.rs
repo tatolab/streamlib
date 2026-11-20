@@ -135,6 +135,7 @@ fn the_refusal_of(
             input_values_after_the_set: &input_values_after_the_set,
         },
         input,
+        None,
         value.as_ref(),
     )
 }
@@ -259,6 +260,7 @@ fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_h
         tokio_runtime
             .block_on(stream.apply_a_stream_graph_operation_live(
                 StreamGraphOperation::SetNodeInputValue {
+                    member: None,
                     node,
                     input: input.to_owned(),
                     from: None,
@@ -270,6 +272,7 @@ fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_h
         tokio_runtime
             .block_on(stream.apply_a_stream_graph_operation_live(
                 StreamGraphOperation::SetNodeInputValue {
+                    member: None,
                     node,
                     input: input.to_owned(),
                     from: Some(value),
@@ -323,6 +326,7 @@ fn a_live_set_on_a_function_node_and_on_a_shader_node_is_held_apart_from_the_gra
     let set_live = |node, input: &str, value| {
         stream
             .set_input_values_live(&[InputValueToSetLive {
+                member: None,
                 node,
                 input: input.to_owned(),
                 value: Some(value),
@@ -452,6 +456,7 @@ fn a_saved_set_on_a_shader_or_function_node_input_announces_no_graph_change() {
         tokio_runtime
             .block_on(stream.apply_a_stream_graph_operation_live(
                 StreamGraphOperation::SetNodeInputValue {
+                    member: None,
                     node,
                     input: input.to_owned(),
                     from: None,

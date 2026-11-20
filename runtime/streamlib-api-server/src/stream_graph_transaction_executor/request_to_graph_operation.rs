@@ -334,12 +334,17 @@ pub(super) fn graph_operation_for_the_request(
             )?)
         }
         StreamGraphAction::SetNodeInputValue {
-            node, input, value, ..
+            node,
+            input,
+            member,
+            value,
+            ..
         } => {
             let node = the_node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::set_node_input_value_of(
                 &the_node_the_document_holds(staged_graph, node)?,
                 input,
+                member,
                 value,
             ))
         }
