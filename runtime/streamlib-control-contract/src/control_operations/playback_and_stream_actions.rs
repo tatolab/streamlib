@@ -71,7 +71,7 @@ impl ControlOperation for PausePlayback {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ListedAsATool;
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::PAUSE_PLAYBACK);
 }
 
@@ -90,7 +90,7 @@ impl ControlOperation for ResumePlayback {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ListedAsATool;
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::RESUME_PLAYBACK);
 }
 
