@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -265,10 +264,7 @@ impl VulkanComputeKernelInner {
                 format!("Compute kernel '{}'", descriptor.label),
             ),
             immutable_sampler_bindings: immutable_samplers.iter().map(|(b, _)| *b).collect(),
-            pending: Mutex::new(PendingState {
-                bindings: HashMap::new(),
-                push_constants: Vec::new(),
-            }),
+            pending: Mutex::new(PendingState::default()),
         })
     }
 }

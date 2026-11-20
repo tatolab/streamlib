@@ -1,21 +1,21 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::sync::atomic::Ordering;
+
+use parking_lot::{Mutex, MutexGuard};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use crate::core::rhi::ComputeBindingKind;
 use crate::core::{Error, Result};
 
-use std::sync::atomic::Ordering;
-
-use parking_lot::MutexGuard;
-
 use super::{BindingResource, ComputeDispatchSlot, PendingState, VulkanComputeKernelInner};
 
 impl VulkanComputeKernelInner {
     /// Run the kernel: write all staged descriptors, record bind+push+dispatch,
-    /// submit to the device queue, and wait on the kernel fence before returning.
+    /// submit to the device queue, and wait on its dispatch slot's fence before
+    /// returning.
     ///
     /// Every binding declared at construction must have been set since the last
     /// dispatch (unset bindings are an error — Vulkan's behavior in that case
@@ -95,20 +95,19 @@ impl VulkanComputeKernelInner {
     }
 
     /// A dispatch slot no other dispatch holds, waiting for one when every
-    /// slot is in flight. Each held slot's fence is signaled: a dispatch keeps
-    /// its slot until its own fence signals.
+    /// slot is in flight. A free slot's fence is signaled, because a dispatch
+    /// keeps its slot until its own fence signals; only a failed wait, which
+    /// means the device is lost, releases a slot whose work may still run.
     fn take_a_dispatch_slot(&self) -> MutexGuard<'_, ComputeDispatchSlot> {
-        let first =
-            self.next_dispatch_slot.fetch_add(1, Ordering::Relaxed) % self.dispatch_slots.len();
-        let in_order = self.dispatch_slots[first..]
+        let slot_count = self.dispatch_slots.len();
+        let first = self.next_dispatch_slot.fetch_add(1, Ordering::Relaxed) % slot_count;
+        self.dispatch_slots
             .iter()
-            .chain(&self.dispatch_slots[..first]);
-        for slot in in_order {
-            if let Some(free) = slot.try_lock() {
-                return free;
-            }
-        }
-        self.dispatch_slots[first].lock()
+            .cycle()
+            .skip(first)
+            .take(slot_count)
+            .find_map(Mutex::try_lock)
+            .unwrap_or_else(|| self.dispatch_slots[first].lock())
     }
 
     /// Record bind + push-constants + dispatch into a caller-owned
@@ -124,8 +123,11 @@ impl VulkanComputeKernelInner {
     /// **Caller contract:** no other `record` on this kernel may be in
     /// flight — every `record` writes the one descriptor set kept for it,
     /// and Vulkan disallows updating an in-use descriptor set. A
-    /// `dispatch` uses its own slot's set, so it may run alongside. For per-frame use, the recorder's own
-    /// timeline-semaphore wait between frames satisfies this.
+    /// [`super::ComputeKernelDispatch`] uses its own slot's set and its own
+    /// staging, so it may run alongside; a plain `set_*` then `dispatch`
+    /// shares this staging with `record`, so it may not. For
+    /// per-frame use, the recorder's own timeline-semaphore wait between
+    /// frames satisfies this.
     pub(crate) fn record(
         &self,
         command_buffer: vk::CommandBuffer,
@@ -146,11 +148,7 @@ impl VulkanComputeKernelInner {
     }
 
     fn drain_pending(&self) -> PendingState {
-        let mut guard = self.pending.lock();
-        PendingState {
-            bindings: std::mem::take(&mut guard.bindings),
-            push_constants: std::mem::take(&mut guard.push_constants),
-        }
+        std::mem::take(&mut *self.pending.lock())
     }
 
     fn refuse_bindings_left_unset(&self, pending: &PendingState) -> Result<()> {

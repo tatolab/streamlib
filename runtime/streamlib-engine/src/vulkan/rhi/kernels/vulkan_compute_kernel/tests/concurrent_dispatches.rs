@@ -89,6 +89,52 @@ fn two_threads_dispatching_one_kernel_each_read_their_own_output() {
             });
         }
     });
+    assert_no_validation_errors(&device);
+}
+
+fn assert_no_validation_errors(device: &HostVulkanDevice) {
+    if let Some(counts) = device.validation_layer_message_counts() {
+        assert_eq!(
+            counts.error_count, 0,
+            "the dispatches raised validation errors"
+        );
+    }
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
+fn a_dispatch_runs_on_another_slot_while_one_slot_is_held() {
+    let device = vulkan_device_for_dispatch_tests();
+    let kernel = double_plus_one_kernel(&device);
+    let held_slot = kernel.host_inner().dispatch_slots[0].lock();
+    let (finished, finished_signal) = std::sync::mpsc::channel();
+    let dispatching_thread = {
+        let device = Arc::clone(&device);
+        let kernel = kernel.clone();
+        std::thread::spawn(move || {
+            let buffer = make_storage_buffer(&device, ELEMENT_COUNT);
+            let mut dispatch = kernel.begin_dispatch();
+            dispatch
+                .set_storage_buffer_pixel(0, &buffer)
+                .expect("the input binds");
+            dispatch
+                .set_storage_buffer_pixel(1, &buffer)
+                .expect("the output binds");
+            let outcome = dispatch.dispatch(ELEMENT_COUNT / 64, 1, 1);
+            let _ = finished.send(outcome);
+        })
+    };
+    let outcome = finished_signal.recv_timeout(std::time::Duration::from_secs(10));
+    drop(held_slot);
+    outcome
+        .expect("a dispatch waited on the held slot instead of taking the free one")
+        .expect("the dispatch runs");
+    dispatching_thread
+        .join()
+        .expect("the dispatching thread ends");
 }
 
 #[cfg_attr(
@@ -119,6 +165,7 @@ fn a_thousand_dispatches_in_a_row_each_complete() {
             "round {round}"
         );
     }
+    assert_no_validation_errors(&device);
 }
 
 #[cfg_attr(
@@ -149,5 +196,5 @@ fn a_dispatch_with_a_binding_left_unset_is_refused_and_leaves_the_kernel_usable(
         .expect("the output binds");
     complete
         .dispatch(ELEMENT_COUNT / 64, 1, 1)
-        .expect("a refused dispatch holds no slot");
+        .expect("the kernel still dispatches after a refusal");
 }

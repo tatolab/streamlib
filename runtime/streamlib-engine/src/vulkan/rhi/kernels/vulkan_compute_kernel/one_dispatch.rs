@@ -4,11 +4,10 @@
 //! One dispatch's own bindings, staged apart from every other dispatch on the
 //! same kernel.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::core::Result;
 use crate::core::rhi::Texture;
+use crate::vulkan::rhi::SampledImageReadLayout;
+use vulkanalia::vk;
 
 use super::{PendingState, VulkanComputeKernelInner};
 
@@ -18,19 +17,17 @@ use super::{PendingState, VulkanComputeKernelInner};
 ///
 /// The kernel runs [`COMPUTE_DISPATCH_SLOTS`](super::COMPUTE_DISPATCH_SLOTS)
 /// dispatches at once; a dispatch past that waits for a slot to finish.
-pub struct ComputeKernelDispatch {
-    kernel: Arc<VulkanComputeKernelInner>,
+#[must_use = "a dispatch runs nothing until its `dispatch` is called"]
+pub struct ComputeKernelDispatch<'kernel> {
+    kernel: &'kernel VulkanComputeKernelInner,
     staged: PendingState,
 }
 
-impl ComputeKernelDispatch {
-    pub(super) fn of(kernel: Arc<VulkanComputeKernelInner>) -> Self {
+impl<'kernel> ComputeKernelDispatch<'kernel> {
+    pub(super) fn of(kernel: &'kernel VulkanComputeKernelInner) -> Self {
         Self {
             kernel,
-            staged: PendingState {
-                bindings: HashMap::new(),
-                push_constants: Vec::new(),
-            },
+            staged: PendingState::default(),
         }
     }
 
@@ -74,6 +71,25 @@ impl ComputeKernelDispatch {
     pub fn set_storage_image(&mut self, binding: u32, texture: &Texture) -> Result<()> {
         self.kernel
             .stage_storage_image(&mut self.staged, binding, texture)
+    }
+
+    /// Bind a raw `vk::ImageView` to a sampled-image slot, in `layout` at
+    /// dispatch time.
+    pub fn set_sampled_image_view(
+        &mut self,
+        binding: u32,
+        view: vk::ImageView,
+        layout: SampledImageReadLayout,
+    ) -> Result<()> {
+        self.kernel
+            .stage_sampled_image_view(&mut self.staged, binding, view, layout)
+    }
+
+    /// Bind a raw `vk::ImageView` to a storage-image slot, in `GENERAL` at
+    /// dispatch time.
+    pub fn set_storage_image_view(&mut self, binding: u32, view: vk::ImageView) -> Result<()> {
+        self.kernel
+            .stage_storage_image_view(&mut self.staged, binding, view)
     }
 
     pub fn set_push_constants(&mut self, bytes: &[u8]) -> Result<()> {
