@@ -6,7 +6,7 @@
 A pin is a name, an annotation and an optional default. `read_pin_declaration` reads the
 annotation's type through the one table in `_pin_types`, its annotations through the classes
 of `_pin_annotations`, the names it had through `FormerlyNamed`, and checks the default against
-both; `refuse_former_names_that_find_no_one_pin` checks those names across a node's pins. Each
+both; `_former_name_check` checks those names across a node's pins. Each
 mistake is refused at decoration as a `NodeDeclarationRefusal`, a `TypeError` that carries a
 finding code, the node and the pin, so the declaration check can answer it as data.
 
@@ -43,6 +43,8 @@ from ._input_declaration_annotations import (
 from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._number_range import NumberRange
 from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
+from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
+from ._pin_typed_by_a_setting import declaration_of_a_pin_a_setting_types
 from ._pin_value_stored_form import (
     PIN_TYPE_DESCRIPTION_BY_NAME as _PIN_TYPE_DESCRIPTION_BY_NAME,
     PinValueNotTaken,
@@ -69,7 +71,6 @@ __all__ = [
     "PinForm",
     "PinValueNotTaken",
     "read_pin_declaration",
-    "refuse_former_names_that_find_no_one_pin",
     "stored_form_of_a_pin_value",
 ]
 
@@ -160,8 +161,8 @@ class DeclaredPin:
 
     default_value: object
     """An input's default in its stored JSON form, `None` for an input that may be unset, and
-    `NO_DEFAULT` on an output, on a wire only input that may not be unset and on a class node's
-    `InputPin`, which reads what its wire carries."""
+    `NO_DEFAULT` on an output, on a wire only input that may not be unset, on a class node's
+    `InputPin`, which reads what its wire carries, and on a built-in's setting a graph must set."""
 
     type_parameter: Optional[typing.TypeVar] = None
     """The type parameter that types it, whose value its node can only hand on; `None` for a
@@ -199,6 +200,8 @@ def read_pin_declaration(
     direction: PinDirection,
     form: PinForm = "function",
     input_ports_of_each_type_parameter: "Mapping[typing.TypeVar, Sequence[str]]" = {},  # noqa: B006
+    of_the_runtimes_own_node: bool = False,
+    a_setting: bool = False,
 ) -> DeclaredPin:
     """Read the pin `pin_name` of the node `node` from its annotation and default.
 
@@ -208,61 +211,41 @@ def read_pin_declaration(
     output and a pin. `form` is how the pin is written, which decides its flow and the types
     it takes. `input_ports_of_each_type_parameter` names, by port, the node's inputs each type
     parameter types, which an output typed by one follows.
+
+    A pin `of_the_runtimes_own_node`, a built-in's, may say three things an author's may not: a
+    setting, `a_setting`, with no default, which a graph must set; a `PinTypeChoice` field; and
+    a pin written `Annotated[object, PinTypeFromSetting("...")]`, typed by that setting.
     """
-    reading = _PinReading(node, pin_name, direction, form)
+    reading = _PinReading(
+        node,
+        pin_name,
+        direction,
+        form,
+        of_the_runtimes_own_node=of_the_runtimes_own_node,
+        a_setting=a_setting,
+    )
     return reading.read(annotation, default, input_ports_of_each_type_parameter)
-
-
-def refuse_former_names_that_find_no_one_pin(
-    node: str, pins: "Sequence[tuple[str, str, PinDeclarationOnTheWire]]"
-) -> None:
-    """Refuse a name a pin of `node` had that would not find that pin alone.
-
-    `pins` is each pin of the node, inputs and outputs, as its name as written, its port name
-    and its declaration. A former name is refused when it is a pin's name now, its own pin's
-    included, or when two pins list it, as the runtime refuses it at registration.
-    """
-    written_name_of_each_port = {port_name: written_name for written_name, port_name, _ in pins}
-    written_name_listing_each_former_name: dict[str, str] = {}
-    for written_name, _, declaration in pins:
-        for former_name in declaration.get("former_names", []):
-            holder = written_name_of_each_port.get(former_name)
-            if holder == written_name:
-                words = (
-                    f"`{node}`'s pin `{written_name}` lists `{former_name}` as a name it had, "
-                    f"and it is named that now. To fix: drop `{former_name}` from its "
-                    f"`FormerlyNamed`."
-                )
-            elif holder is not None:
-                words = (
-                    f"`{node}`'s pin `{written_name}` lists `{former_name}` as a name it had, "
-                    f"and pin `{holder}` is named that now, so a project saved under "
-                    f"`{former_name}` would not find one pin. To fix: drop `{former_name}` "
-                    f"from its `FormerlyNamed`, or rename `{holder}`."
-                )
-            elif former_name in written_name_listing_each_former_name:
-                other = written_name_listing_each_former_name[former_name]
-                words = (
-                    f"`{node}`'s pins `{other}` and `{written_name}` both list `{former_name}` "
-                    f"as a name they had, so a project saved under it would not find one pin. "
-                    f"To fix: keep `{former_name}` on the pin that had it."
-                )
-            else:
-                written_name_listing_each_former_name[former_name] = written_name
-                continue
-            raise NodeDeclarationRefusal(
-                words, finding_code="former_name_finds_no_one_pin", node=node, pin=written_name
-            )
 
 
 class _PinReading:
     """One pin's annotation and default, read once."""
 
-    def __init__(self, node: str, pin_name: str, direction: PinDirection, form: PinForm) -> None:
+    def __init__(
+        self,
+        node: str,
+        pin_name: str,
+        direction: PinDirection,
+        form: PinForm,
+        *,
+        of_the_runtimes_own_node: bool = False,
+        a_setting: bool = False,
+    ) -> None:
         self._node = node
         self._pin_name = pin_name
         self._direction = direction
         self._form = form
+        self._of_the_runtimes_own_node = of_the_runtimes_own_node
+        self._a_setting = a_setting
 
     @property
     def _pin_named(self) -> str:
@@ -280,6 +263,11 @@ class _PinReading:
         input_ports_of_each_type_parameter: "Mapping[typing.TypeVar, Sequence[str]]",
     ) -> DeclaredPin:
         written_type, metadata, optional = self._written_type_metadata_and_optional(annotation)
+        type_settings = [entry for entry in metadata if isinstance(entry, PinTypeFromSetting)]
+        if type_settings:
+            return self._read_a_pin_a_setting_types(
+                written_type, metadata, type_settings, optional, default
+            )
         if written_type is typing.Any:
             raise self._refusal(
                 f"{self._pin_named} is typed `Any`, which checks nothing. To fix: "
@@ -326,6 +314,38 @@ class _PinReading:
             return self._read_an_input_holding_no_value(declaration, row, optional, default)
         default_value = self._default_value(default, pin_type, row, annotations, optional)
         return DeclaredPin(declaration, optional=optional, default_value=default_value)
+
+    def _read_a_pin_a_setting_types(
+        self,
+        written_type: object,
+        metadata: "list[object]",
+        type_settings: "list[PinTypeFromSetting]",
+        optional: bool,
+        default: object,
+    ) -> DeclaredPin:
+        """A pin written `Annotated[object, PinTypeFromSetting("...")]`, of the type that setting
+        chooses: a value, whose default, if any, is `None`."""
+        if not self._of_the_runtimes_own_node:
+            raise self._refusal(
+                f"{self._pin_named} carries `{type_settings[0]!r}`, which only the runtime's own "
+                f"nodes declare yet. To fix: type it as one of {_spellings_read_today()}.",
+                "pin_type_not_read_yet",
+            )
+        declaration = declaration_of_a_pin_a_setting_types(
+            pin_named=self._pin_named,
+            written_type=written_type,
+            metadata=metadata,
+            type_settings=type_settings,
+            an_output=self._direction == "output",
+            optional=optional,
+            default=default,
+            refusal=self._refusal,
+        )
+        self._state_former_names(declaration, metadata)
+        takes_none = self._direction != "output" and optional
+        return DeclaredPin(
+            declaration, optional=optional, default_value=None if takes_none else NO_DEFAULT
+        )
 
     def _read_an_input_holding_no_value(
         self,
@@ -569,7 +589,7 @@ class _PinReading:
         row = _PIN_TYPE_DESCRIPTION_BY_NAME[spelling.pin_type_name]
         if spelling.only_a_pin_carries and (self._form != "pin" or as_an_element):
             raise self._refusal_of_a_type_only_a_pin_carries(row, as_an_element=as_an_element)
-        if spelling.not_read_yet_because is not None:
+        if spelling.not_read_yet_because is not None and not self._reads_a_type_choice(written_form):
             typed_as = (
                 f"{_name_of(written_type)}, a dataclass, so"
                 if written_form == "dataclass"
@@ -603,6 +623,15 @@ class _PinReading:
         if exact_size.size in INTEGER_BOUNDS_OF_EACH_SIZE:
             return {"type": "integer", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
         return {"type": "float", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
+
+    def _reads_a_type_choice(self, written_form: str) -> bool:
+        """Whether the pin is a `PinTypeChoice` setting of the runtime's own node, the one place
+        a type choice is read yet."""
+        return (
+            written_form == "PinTypeChoice"
+            and self._of_the_runtimes_own_node
+            and self._form == "field"
+        )
 
     def _refusal_of_a_type_only_a_pin_carries(
         self, row: PinTypeDescription, *, as_an_element: bool
@@ -717,6 +746,8 @@ class _PinReading:
             return written_type.__name__  # pyright: ignore[reportAttributeAccessIssue]
         if named_pin_type_declared_by(written_type) is not None:
             return "named_pin_type"
+        if written_type is PinTypeChoice:
+            return "PinTypeChoice"
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
         )
@@ -818,6 +849,8 @@ class _PinReading:
                     "unset_input_with_a_default",
                 )
             return None
+        if default is NO_DEFAULT and self._a_setting and self._of_the_runtimes_own_node:
+            return NO_DEFAULT
         if default is NO_DEFAULT:
             raise self._refusal(
                 f"{self._pin_named} has no default and takes typed values, so it would read "

@@ -23,7 +23,6 @@ from ._contract_pin_types import (
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP, NODE_DECLARATION_OUTPUT_PORTS_STAMP
 from ._pin_declaration import PinValueNotTaken, stored_form_of_a_pin_value
-from ._port_family_declaration import PortFamily
 
 __all__ = ["TypedNodePins"]
 
@@ -113,8 +112,6 @@ class TypedNodePins:
             )
         else:
             pin_type = pin_type_declared["pin_type"]
-        if isinstance(value, PortFamily) and pin_type["type"] == "menu":
-            value = value._wire_name  # pyright: ignore[reportPrivateUsage]
         if pin_type["type"] not in _PIN_TYPES_HOLDING_A_STORED_VALUE:
             raise TypeError(
                 f"`{self.node}`'s input `{port.name}` carries a stream and holds no value, so "

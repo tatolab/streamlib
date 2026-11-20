@@ -310,10 +310,11 @@ fn a_value_set_live_on_a_graph_input_reaches_each_reader_and_leaves_the_saved_va
         "{rendered}"
     );
     assert_eq!(
-        rendered["config"]["default"],
+        rendered["input_values"][VALUE],
         json!({ "track": "intro" }),
         "{rendered}"
     );
+    assert!(rendered["config"].get("default").is_none(), "{rendered}");
     assert_eq!(
         the_saved_value_of(&stream, cue),
         Some(json!({ "track": "intro" }))
@@ -367,15 +368,11 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
     );
     let rendered = the_rendered_node(&stream, fader);
     assert_eq!(
-        rendered["config"]["default"],
-        json!({ "level": 0.75 }),
-        "{rendered}"
-    );
-    assert_eq!(
         rendered["input_values"][VALUE],
         json!({ "level": 0.75 }),
-        "a saved edit renders on the `value` input the `default` its config renders: {rendered}"
+        "a saved edit renders on the `value` input: {rendered}"
     );
+    assert!(rendered["config"].get("default").is_none(), "{rendered}");
     let value_input = rendered["ports"]["inputs"]
         .as_array()
         .and_then(|inputs| inputs.iter().find(|input| input["name"] == VALUE))
@@ -775,7 +772,8 @@ fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_stud
     );
     assert_eq!(
         lights["config"],
-        json!({"port": "lights", "family": "records", "default": {"level": 0.0}})
+        json!({"port": "lights", "family": "records"}),
+        "a `GraphInput`'s config renders no saved value, under `value` or `default`"
     );
     assert_eq!(
         lights["components"]["graph_interface"]["current_value"],

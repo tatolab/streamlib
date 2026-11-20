@@ -8,8 +8,9 @@ use super::{
     GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_VALUE_FORMER_NAME,
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PIN_TYPE_SETTING,
     GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
-    GraphInterfaceLevel, a_top_level_graph_input_runs, the_pin_type_an_interface_node_chooses,
+    GraphInterfaceLevel, a_top_level_graph_input_runs,
     the_value_lifetime_a_graph_input_config_declares,
+    what_the_value_port_of_an_interface_node_carries,
 };
 use crate::core::descriptors::{PinType, PortFamily};
 use crate::core::graph::graph_snapshot::GraphSnapshotNode;
@@ -29,8 +30,7 @@ pub(super) struct WhatAnInterfaceNodeDeclares {
     /// The port's name, as its `port` setting wrote it.
     pub(super) port: String,
     /// The family the port carries: the one its chosen pin type travels on, else the one its
-    /// `family` setting names; `None` when it states neither, or chooses a type no family
-    /// carries.
+    /// `family` setting names; `None` when it states neither.
     pub(super) family: Option<PortFamily>,
     /// The pin type its `pin_type` setting chooses; `None` while it holds none.
     pub(super) pin_type: Option<PinType>,
@@ -45,35 +45,11 @@ impl WhatAnInterfaceNodeDeclares {
 
 /// What an interface node's settings declare: the port it names, the pin type it chooses, and
 /// the family that type travels on, else the one its `family` setting names, `None` when it
-/// leaves `family` out or `null`.
+/// leaves `family` out or `null`. Refused, naming the node, for a pin type no family carries, as
+/// [`what_the_value_port_of_an_interface_node_carries`] refuses it.
 pub(super) fn what_an_interface_nodes_settings_declare(
     node: &GraphSnapshotNode,
 ) -> Result<WhatAnInterfaceNodeDeclares> {
-    let (port, named_family) = port_and_family_an_interface_nodes_config_declares(node)?;
-    let pin_type =
-        the_pin_type_an_interface_node_chooses(Some(&node.input_values)).map_err(|why| {
-            Error::GraphError(format!(
-                "`{}` node `{}`: {why}",
-                interface_node_kind(node),
-                node.name
-            ))
-        })?;
-    let family = match &pin_type {
-        Some(pin_type) => PortFamily::carrying(pin_type),
-        None => named_family,
-    };
-    Ok(WhatAnInterfaceNodeDeclares {
-        port,
-        family,
-        pin_type,
-    })
-}
-
-/// The port an interface node's config names, and the family it names, `None` when it leaves
-/// `family` out or `null`.
-fn port_and_family_an_interface_nodes_config_declares(
-    node: &GraphSnapshotNode,
-) -> Result<(String, Option<PortFamily>)> {
     let kind = interface_node_kind(node);
     let port = node
         .input_values
@@ -87,26 +63,19 @@ fn port_and_family_an_interface_nodes_config_declares(
                 node.name
             ))
         })?;
-    let family = match node.input_values.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY) {
-        None | Some(serde_json::Value::Null) => None,
-        Some(named) => {
-            let family_wire_name = named.as_str();
-            Some(
-                family_wire_name
-                    .and_then(PortFamily::of_wire_name)
-                    .ok_or_else(|| {
-                        Error::GraphError(format!(
-                            "`{kind}` node `{}` declares its port of family {named}, and its \
-                             config's `{GRAPH_INTERFACE_FAMILY_CONFIG_KEY}` is one of {}, or \
-                             left out for the family of the first port linked to it",
-                            node.name,
-                            PortFamily::ALL.map(|family| family.wire_name()).join(", ")
-                        ))
-                    })?,
-            )
-        }
-    };
-    Ok((port.to_string(), family))
+    let (pin_type, family) = what_the_value_port_of_an_interface_node_carries(Some(
+        &serde_json::Value::Object(node.input_values.clone()),
+    ))
+    .map_err(|why| Error::GraphError(format!("`{kind}` node `{}`: {why}", node.name)))?;
+    let names_a_family = node
+        .input_values
+        .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
+        .is_some_and(|family| !family.is_null());
+    Ok(WhatAnInterfaceNodeDeclares {
+        port: port.to_string(),
+        family: (pin_type.is_some() || names_a_family).then_some(family),
+        pin_type,
+    })
 }
 
 /// Refuse a setting `node` does not take at `level` with `family` and `pin_type`, and on a
@@ -123,10 +92,7 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
     let kind = interface_node_kind(node);
     let may_run_as_a_source_node = kind == "GraphInput"
         && level == GraphInterfaceLevel::TheStreamsTopLevel
-        && match pin_type {
-            Some(_) => a_top_level_graph_input_runs(family, pin_type),
-            None => family.is_none_or(|family| a_top_level_graph_input_runs(Some(family), None)),
-        };
+        && (family.is_none() || a_top_level_graph_input_runs(family, pin_type));
     let keys_it_takes: &[&str] = if may_run_as_a_source_node {
         &[
             GRAPH_INTERFACE_PORT_CONFIG_KEY,
@@ -149,15 +115,31 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
         .keys()
         .find(|key| !keys_it_takes.contains(&key.as_str()))
     {
-        let where_it_would_be_taken = if kind == "GraphInput"
+        let a_key_a_client_writes = kind == "GraphInput"
             && [
                 GRAPH_INTERFACE_VALUE_PORT_NAME,
                 GRAPH_INPUT_VALUE_FORMER_NAME,
                 GRAPH_INPUT_RANGE_CONFIG_KEY,
                 GRAPH_INPUT_LIFETIME_CONFIG_KEY,
             ]
-            .contains(&unread_key.as_str())
-        {
+            .contains(&unread_key.as_str());
+        if a_key_a_client_writes && level == GraphInterfaceLevel::TheStreamsTopLevel {
+            let what_it_carries = match (pin_type, family) {
+                (Some(pin_type), _) => pin_type.to_string(),
+                (None, Some(family)) => family.declaration_name().to_string(),
+                (None, None) => "nothing yet".to_string(),
+            };
+            return Err(Error::GraphError(format!(
+                "`GraphInput` node `{}` carries {what_it_carries}, which a client does not \
+                 write, and holds `{unread_key}`: a stream's top-level Input takes a \
+                 `{GRAPH_INTERFACE_VALUE_PORT_NAME}`, a `{GRAPH_INPUT_RANGE_CONFIG_KEY}` and a \
+                 `{GRAPH_INPUT_LIFETIME_CONFIG_KEY}` only of a type or family a client writes: a \
+                 type that holds a value, or array, channels or records. To fix: choose such a \
+                 type, or clear `{unread_key}`",
+                node.name
+            )));
+        }
+        let where_it_would_be_taken = if a_key_a_client_writes {
             " A `GraphInput` takes it on a stream's top level, of a type or family a client \
              writes: a type that holds a value, or array, channels or records"
         } else {

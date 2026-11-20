@@ -1,10 +1,12 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use super::graph_interface_node_types::{
+    the_node_type_of_a_graph_input, the_node_type_of_a_graph_output,
+};
 use crate::core::descriptors::{
     DeclaredPinType, NodeDescriptor, NodeInputMode, PinType, SettingReadTime,
 };
-use crate::core::nodes::{the_node_type_of_a_graph_input, the_node_type_of_a_graph_output};
 
 fn the_setting_names(descriptor: &NodeDescriptor) -> Vec<&str> {
     descriptor

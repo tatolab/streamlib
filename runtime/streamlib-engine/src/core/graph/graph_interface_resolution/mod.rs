@@ -14,18 +14,19 @@
 use std::collections::HashMap;
 
 use crate::core::descriptors::{
-    NodeClassImportPath, NodeValueLifetime, PinFlow, PinNumberRange, PinType, PortFamily,
-    PortFamilyDeclaration, ResolvedPin,
+    NodeClassImportPath, NodeValueLifetime, PinNumberRange, PinType, PortFamily,
 };
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, the_ports_of_a_graph_document_node,
 };
-use crate::core::graph::input_values::the_read_of_an_input_a_link_feeds;
+use crate::core::graph::input_values::{
+    the_read_of_an_input_a_link_feeds, the_read_of_an_unfed_input,
+};
 use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
 use crate::core::graph::{
-    GraphNodePorts, InputNumberRange, cast_exposed_name_to_url_safe,
+    GraphNodePorts, InputNumberRange, PortInfo, cast_exposed_name_to_url_safe,
     the_refusal_of_a_link_into_a_setting, the_values_port_facts_read,
 };
 use crate::core::json_schema::{
@@ -36,8 +37,10 @@ use crate::core::json_schema::{
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
 use streamlib_node_schema::output_port_family_resolved_against_config;
-use streamlib_runtime_client_contract::local_api_wire_contract::{
-    InputValueComesFromOnTheWire, InputValueReadOnTheWire,
+use streamlib_runtime_client_contract::local_api_wire_contract::InputValueComesFromOnTheWire;
+
+pub(crate) use what_a_value_port_carries::{
+    carry_on_every_value_port, what_the_value_port_of_an_interface_node_carries,
 };
 
 use interface_node_config::{
@@ -58,50 +61,6 @@ pub const GRAPH_INPUT_VALUE_FORMER_NAME: &str = "default";
 /// The setting of a `GraphInput` and a `GraphOutput` that chooses the pin type of its `value`
 /// port; unset, its `family` setting decides it.
 pub const GRAPH_INTERFACE_PIN_TYPE_SETTING: &str = "pin_type";
-
-/// The pin type the interface node holding `input_values` chooses with its `pin_type` setting;
-/// `None` while it holds none. Refused when it holds no pin type, or one only a setting takes,
-/// which no link carries.
-pub fn the_pin_type_an_interface_node_chooses(
-    input_values: Option<&serde_json::Map<String, serde_json::Value>>,
-) -> std::result::Result<Option<PinType>, String> {
-    let Some(held) = input_values
-        .and_then(|input_values| input_values.get(GRAPH_INTERFACE_PIN_TYPE_SETTING))
-        .filter(|held| !held.is_null())
-    else {
-        return Ok(None);
-    };
-    let chosen: PinType = serde_json::from_value(held.clone()).map_err(|why| {
-        format!(
-            "its `{GRAPH_INTERFACE_PIN_TYPE_SETTING}` is {held}, and a pin type choice holds a \
-             pin type, `{{\"type\": \"<name>\"}}`: {why}"
-        )
-    })?;
-    if matches!(
-        chosen,
-        PinType::NodeReference { .. } | PinType::PinTypeChoice { .. }
-    ) {
-        return Err(format!(
-            "its `{GRAPH_INTERFACE_PIN_TYPE_SETTING}` chooses {chosen}, which only a setting \
-             holds, and a stream's port carries what a link carries"
-        ));
-    }
-    Ok(Some(chosen))
-}
-
-/// The family a port of the chosen `pin_type` travels on; refused for a type no family's
-/// message carries, such as a List or a bundle.
-pub fn the_family_a_chosen_pin_type_travels_on(
-    pin_type: &PinType,
-) -> std::result::Result<PortFamily, String> {
-    PortFamily::carrying(pin_type).ok_or_else(|| {
-        format!(
-            "its `{GRAPH_INTERFACE_PIN_TYPE_SETTING}` chooses {pin_type}, which no stream's port \
-             carries yet. To fix: choose a type a single message carries, such as a Float, a \
-             String or a Texture"
-        )
-    })
-}
 
 /// The config key of a top-level `GraphInput` holding `[lowest, highest]`, the span a control
 /// moves its number in.
@@ -161,6 +120,40 @@ pub enum GraphInterfacePortDirection {
     Output,
 }
 
+impl GraphInterfacePortDirection {
+    /// `GraphInput` or `GraphOutput`, the kind of node that declares a port of this direction.
+    pub fn interface_node_kind(self) -> &'static str {
+        match self {
+            Self::Input => "GraphInput",
+            Self::Output => "GraphOutput",
+        }
+    }
+
+    /// Of a linked node's `inputs` and `outputs`, the side a port linked to an interface port of
+    /// this direction is on: a `GraphInput`'s readers' inputs, a `GraphOutput`'s source's outputs.
+    pub fn linked_side<'ports, Port>(
+        self,
+        inputs: &'ports [Port],
+        outputs: &'ports [Port],
+    ) -> &'ports [Port] {
+        match self {
+            Self::Input => inputs,
+            Self::Output => outputs,
+        }
+    }
+}
+
+/// The direction of the port linked to an interface port of `direction`: an input for a
+/// `GraphInput`'s reader, an output for a `GraphOutput`'s source.
+impl From<GraphInterfacePortDirection> for crate::core::PortDirection {
+    fn from(direction: GraphInterfacePortDirection) -> Self {
+        match direction {
+            GraphInterfacePortDirection::Input => Self::Input,
+            GraphInterfacePortDirection::Output => Self::Output,
+        }
+    }
+}
+
 /// One port a graph's interface declares.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphInterfacePort {
@@ -170,8 +163,7 @@ pub struct GraphInterfacePort {
     pub port: String,
     /// The port's family: the one its chosen pin type travels on, else the one its `family`
     /// setting names, else the one the first port linked to it carries; `None` while it states
-    /// none and nothing is linked, when the node runs nothing, and for a chosen type no family
-    /// carries.
+    /// none and nothing is linked.
     pub family: Option<PortFamily>,
     /// The pin type its `pin_type` setting chooses; `None` while it chooses none.
     pub pin_type: Option<PinType>,
@@ -221,8 +213,8 @@ impl GraphInterfaceNodeAsDrawn {
         }
     }
 
-    /// The interface node as `graph` renders it: its settings `port`, `pin_type` and `family`
-    /// as inputs, each reading the value it holds, and its one port of the type and family it
+    /// The interface node as `graph` renders it: each setting its type declares as an input,
+    /// reading the value it holds, and its one port of the type and family it
     /// declares; a `GraphOutput`'s reads from a wire once a link feeds it.
     pub fn rendered_as_a_node(&self) -> GraphNodeOutput {
         let declared = &self.declared_port;
@@ -277,109 +269,62 @@ impl GraphInterfaceNodeAsDrawn {
 }
 
 impl GraphInterfaceNodeAsDrawn {
-    /// The settings every interface node takes, `port`, `pin_type` and `family`, as its type
-    /// declares them, each reading the value the node holds, else the default it declares.
+    /// The settings the interface node takes, as its type declares them, each reading the value
+    /// the node holds, else the default it declares.
     fn its_settings_rendered(&self) -> Vec<GraphNodePortOnTheWire> {
-        let descriptor = match self.declared_port.direction {
+        match self.declared_port.direction {
             GraphInterfacePortDirection::Input => {
-                crate::core::nodes::the_node_type_of_a_graph_input()
+                crate::core::nodes::the_settings_of_a_graph_input()
             }
             GraphInterfacePortDirection::Output => {
-                crate::core::nodes::the_node_type_of_a_graph_output()
+                crate::core::nodes::the_settings_of_a_graph_output()
             }
-        };
-        let Ok(descriptor) = descriptor else {
-            return Vec::new();
-        };
-        descriptor
-            .inputs
-            .iter()
-            .filter(|setting| {
-                [
-                    GRAPH_INTERFACE_PORT_CONFIG_KEY,
-                    GRAPH_INTERFACE_PIN_TYPE_SETTING,
-                    GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-                ]
-                .contains(&setting.name.as_str())
-            })
-            .map(|setting| {
-                let mut rendered =
-                    GraphNodePortOnTheWire::from(&crate::core::graph::PortInfo::from(setting));
-                let read = self
-                    .node
-                    .input_values
-                    .get(&setting.name)
-                    .filter(|held| !held.is_null())
-                    .map(|held| (held.clone(), InputValueComesFromOnTheWire::Saved))
-                    .or_else(|| {
-                        setting
-                            .pin_default
-                            .clone()
-                            .map(|default| (default, InputValueComesFromOnTheWire::Default))
-                    });
-                rendered.value_read = Some(match read {
-                    Some((value, comes_from)) => InputValueReadOnTheWire {
-                        value: Some(value),
-                        value_comes_from: Some(comes_from),
-                        member_values: None,
-                    },
-                    None => InputValueReadOnTheWire {
-                        value: Some(serde_json::Value::Null),
-                        value_comes_from: None,
-                        member_values: None,
-                    },
+        }
+        .iter()
+        .map(|setting| {
+            let mut rendered = GraphNodePortOnTheWire::from(&PortInfo::from(setting));
+            let read = self
+                .node
+                .input_values
+                .get(&setting.name)
+                .filter(|held| !held.is_null())
+                .map(|held| (held.clone(), InputValueComesFromOnTheWire::Saved))
+                .or_else(|| {
+                    setting
+                        .pin_default
+                        .clone()
+                        .map(|default| (default, InputValueComesFromOnTheWire::Default))
                 });
-                rendered
-            })
-            .collect()
+            rendered.value_read = Some(the_read_of_an_unfed_input(read));
+            rendered
+        })
+        .collect()
     }
 }
 
-/// The config an interface node of `node_type` holding `config` renders: a `GraphInput`'s saved
-/// `value`, else the `default` a config written before its value was an input holds, under
-/// `default`, as [`render_the_saved_value_of_a_graph_input_as_its_default`] puts it.
+/// The config an interface node of `node_type` holding `config` renders: a `GraphInput`'s with no
+/// saved value, which renders on its `value` input alone, as
+/// [`leave_the_saved_value_out_of_a_graph_input_config`] leaves it.
 pub(crate) fn the_config_a_graph_interface_node_renders(
     node_type: &NodeClassImportPath,
     mut config: serde_json::Value,
 ) -> serde_json::Value {
-    if !is_the_graph_input_type(node_type) {
-        return config;
-    }
-    if let Some(config) = config.as_object_mut() {
-        let saved_value = config
-            .remove(GRAPH_INTERFACE_VALUE_PORT_NAME)
-            .or_else(|| config.remove(GRAPH_INPUT_VALUE_FORMER_NAME));
-        render_the_saved_value_of_a_graph_input_as_its_default(config, saved_value);
+    if is_the_graph_input_type(node_type)
+        && let Some(config) = config.as_object_mut()
+    {
+        leave_the_saved_value_out_of_a_graph_input_config(config);
     }
     config
 }
 
-/// Render `saved_value`, the saved value of a `GraphInput`'s `value` input, in its rendered
-/// `config` under `default`, the key a published Tato Studio reads it by; a `GraphInput` saving
-/// none renders no `default`.
-pub(crate) fn render_the_saved_value_of_a_graph_input_as_its_default(
+/// Leave the saved value of a `GraphInput`'s `value` input out of its rendered `config`, under
+/// `value` and under `default`, the name it had: it renders on the `value` input alone, so a
+/// graph drawn back from the rendering reads a cleared value as cleared.
+pub(crate) fn leave_the_saved_value_out_of_a_graph_input_config(
     config: &mut serde_json::Map<String, serde_json::Value>,
-    saved_value: Option<serde_json::Value>,
 ) {
-    match saved_value {
-        Some(saved_value) => {
-            config.insert(GRAPH_INPUT_VALUE_FORMER_NAME.to_string(), saved_value);
-        }
-        None => {
-            config.remove(GRAPH_INPUT_VALUE_FORMER_NAME);
-        }
-    }
-}
-
-/// The family a `GraphInput`'s `config` names; `None` when it names none, or a name no family
-/// has.
-pub(crate) fn the_family_a_graph_input_config_names(
-    config: Option<&serde_json::Value>,
-) -> Option<PortFamily> {
-    config?
-        .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)?
-        .as_str()
-        .and_then(PortFamily::of_wire_name)
+    config.remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
+    config.remove(GRAPH_INPUT_VALUE_FORMER_NAME);
 }
 
 /// The range a `GraphInput`'s `config` declares a number of its `value` takes, as
@@ -401,35 +346,26 @@ fn the_range_a_graph_input_config_declares(
 }
 
 /// Resolve the `value` ports among `ports`, of a `GraphInput` whose settings are `settings`,
-/// against what those settings declare of them: the pin type it chooses and the family that type
-/// travels on, else the family it names; and on its `value` input, the range a number takes and
-/// the lifetime of a value set live. Settings choosing no type and naming no valid family give
-/// both the family the `GraphInput` type declares, so each settings resolve them alike.
+/// against what those settings declare of them, as
+/// [`what_the_value_port_of_an_interface_node_carries`] reads it; and on its `value` input, the
+/// range a number takes and the lifetime of a value set live. Settings it refuses give both the
+/// family the `value` ports declare and no pin type, so each settings resolve them alike.
 pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
     ports: &mut GraphNodePorts,
     settings: Option<&serde_json::Value>,
 ) {
-    let chosen =
-        the_pin_type_an_interface_node_chooses(settings.and_then(serde_json::Value::as_object))
-            .ok()
-            .flatten();
-    let family = chosen
-        .as_ref()
-        .and_then(PortFamily::carrying)
-        .or_else(|| the_family_a_graph_input_config_names(settings))
-        .unwrap_or(crate::core::nodes::THE_FAMILY_A_GRAPH_INPUT_DECLARES);
-    for value in ports
-        .inputs
-        .iter_mut()
-        .chain(&mut ports.outputs)
-        .filter(|port| port.name == GRAPH_INTERFACE_VALUE_PORT_NAME)
-    {
-        value.family = PortFamilyDeclaration::of_family(family);
-        value.pin = chosen.clone().map(|pin_type| ResolvedPin {
-            pin_type,
-            flow: PinFlow::Value,
+    let (chosen, family) = what_the_value_port_of_an_interface_node_carries(settings)
+        .unwrap_or_else(|_| {
+            (
+                None,
+                crate::core::nodes::the_family_a_graph_interface_value_port_declares().family,
+            )
         });
-    }
+    carry_on_every_value_port(
+        ports.inputs.iter_mut().chain(&mut ports.outputs),
+        family,
+        chosen.as_ref(),
+    );
     if let Some(value) = ports
         .inputs
         .iter_mut()
@@ -606,12 +542,9 @@ impl GraphSnapshot {
                 runtime_nodes.push(node.clone());
                 continue;
             };
-            let WhatAnInterfaceNodeDeclares {
-                port,
-                family: _,
-                pin_type,
-            } = what_an_interface_nodes_settings_declare(node)?;
-            let states_what_it_carries = pin_type.is_some() || node_names_a_family(node);
+            let declared = what_an_interface_nodes_settings_declare(node)?;
+            let states_what_it_carries = declared.states_what_the_port_carries();
+            let WhatAnInterfaceNodeDeclares { port, pin_type, .. } = declared;
             let family = family_of_each_interface_node_by_cast
                 .get(&node_cast)
                 .copied()
@@ -644,11 +577,7 @@ impl GraphSnapshot {
                 return Err(Error::GraphError(format!(
                     "`{}` node `{}` names no family, and `{}/{}` linked to it states none for \
                      it to take; name one in its config's `{GRAPH_INTERFACE_FAMILY_CONFIG_KEY}`",
-                    if is_an_output {
-                        "GraphOutput"
-                    } else {
-                        "GraphInput"
-                    },
+                    direction.interface_node_kind(),
                     node.name,
                     linked_port.node,
                     linked_port.port
@@ -791,13 +720,6 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
             .source
             .clone();
     }
-}
-
-/// Whether `node`, an interface node, names a family in its `family` setting.
-fn node_names_a_family(node: &GraphSnapshotNode) -> bool {
-    node.input_values
-        .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
-        .is_some_and(|family| !family.is_null())
 }
 
 /// `node`, a top-level `GraphInput` whose config names no family, with `resolved_family` in its
@@ -980,6 +902,7 @@ fn cast_or_as_written(name: &str) -> String {
 
 mod graph_interface_port;
 mod interface_node_config;
+mod what_a_value_port_carries;
 
 #[cfg(test)]
 mod tests;

@@ -15,7 +15,9 @@ from ._contract_pin_types import (
     PinType,
     PinTypeDescription,
 )
+from ._pin_type_choice import PinTypeChoice
 from ._pin_types import INTEGER_BOUNDS_OF_EACH_SIZE, PIN_VALUE_CLASSES, Asset, PinValueOfParts
+from ._port_family_declaration import PortFamily
 
 __all__ = [
     "PIN_TYPE_DESCRIPTION_BY_NAME",
@@ -116,6 +118,9 @@ def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
                 raise not_of_its_type
             return value
         case {"type": "menu", "option_names": option_names}:
+            if isinstance(value, PortFamily):
+                # A family is written by its name, as a Menu of the family names holds it.
+                value = value._wire_name  # pyright: ignore[reportPrivateUsage]
             if value not in option_names:
                 raise PinValueNotTaken(
                     value,
@@ -137,8 +142,6 @@ def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
                 for element in value  # pyright: ignore[reportUnknownVariableType]
             ]
         case {"type": "pin_type_choice"}:
-            from ._pin_type_choice import PinTypeChoice
-
             if not isinstance(value, PinTypeChoice):
                 raise not_of_its_type
             among = pin_type.get("among", [])

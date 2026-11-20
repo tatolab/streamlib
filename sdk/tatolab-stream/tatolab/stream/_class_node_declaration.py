@@ -25,6 +25,7 @@ from ._description import description_and_annotation_without_it
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._input_declaration_annotations import (
     InputValueLifetime,
+    PublishedOnAnOutput,
     SettingOnly,
     StreamDelivery,
     WireOnly,
@@ -36,8 +37,8 @@ from ._pin_declaration import (
     NodeDeclarationRefusal,
     PinDirection,
     read_pin_declaration,
-    refuse_former_names_that_find_no_one_pin,
 )
+from ._former_name_check import refuse_former_names_that_find_no_one_pin
 from ._pin_family import family_a_pin_travels_on, family_declaration_of_a_typed_output
 from ._port_family_declaration import Input, Output
 
@@ -61,17 +62,23 @@ def read_class_node_ports(
     Refuses, as a `NodeDeclarationRefusal`, a port declared with `Input(...)` or `Output(...)`,
     an `__init__` that takes a parameter when the class is `constructed_in_python`, and each field
     or pin `read_pin_declaration` refuses. A built-in node, which the runtime implements, is never
-    constructed in Python, so its `__init__` is not read.
+    constructed in Python, so its `__init__` is not read, and its fields say what the runtime
+    declares: a setting with no default, which a graph must set, a `PinTypeChoice` setting, a
+    pin typed `Annotated[object, PinTypeFromSetting("...")]`, a setting read each run, and a field
+    `PublishedOnAnOutput()`, which declares an output of its name as well.
     """
-    return _ClassNodeReading(node_class).ports(constructed_in_python=constructed_in_python)
+    return _ClassNodeReading(node_class, of_the_runtimes_own_node=not constructed_in_python).ports(
+        constructed_in_python=constructed_in_python
+    )
 
 
 class _ClassNodeReading:
     """One class's fields and pins, read once."""
 
-    def __init__(self, node_class: type) -> None:
+    def __init__(self, node_class: type, *, of_the_runtimes_own_node: bool) -> None:
         self._node_class = node_class
         self._node = node_class.__name__
+        self._of_the_runtimes_own_node = of_the_runtimes_own_node
         self._port_spelling_by_cast_name: dict[str, str] = {}
 
     def ports(self, *, constructed_in_python: bool) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
@@ -89,8 +96,10 @@ class _ClassNodeReading:
             )
             pin_form, pin_type_annotation = self._pin_form_and_its_type(attribute_name, annotation)
             if pin_form is None:
-                port = self._field(attribute_name, annotation, description)
+                port, published_on = self._field(attribute_name, annotation, description)
                 input_ports.append(port)
+                if published_on is not None:
+                    output_ports.append(published_on)
             elif _DIRECTION_OF_EACH_PIN_FORM[pin_form] == "input":
                 port = self._input_pin(attribute_name, pin_type_annotation, description)
                 input_ports.append(port)
@@ -202,9 +211,15 @@ class _ClassNodeReading:
     def _declares_a_value(self, attribute_name: str) -> bool:
         return any(attribute_name in vars(ancestor) for ancestor in self._node_class.__mro__)
 
-    def _field(self, attribute_name: str, annotation: Any, description: Optional[str]) -> DeclaredPort:
+    def _field(
+        self, attribute_name: str, annotation: Any, description: Optional[str]
+    ) -> tuple[DeclaredPort, Optional[DeclaredPort]]:
+        """The input port a field declares, and the output of its name it is published on when
+        it is `PublishedOnAnOutput()`."""
         input_modes, annotation = _taken_off(annotation, (SettingOnly, WireOnly))
         lifetimes, annotation = _taken_off(annotation, (InputValueLifetime,))
+        published, annotation = _taken_off(annotation, (PublishedOnAnOutput,))
+        self._refuse_what_only_the_runtimes_own_node_declares(attribute_name, input_modes, published)
         if len(input_modes) > 1:
             raise self._refusal(
                 f"`{self._node}`'s field `{attribute_name}` carries "
@@ -221,24 +236,65 @@ class _ClassNodeReading:
                 pin=attribute_name,
             )
         default = getattr(self._node_class, attribute_name, NO_DEFAULT)
-        declared = self._read_field(attribute_name, annotation, default)
+        a_setting = bool(input_modes) and isinstance(input_modes[0], SettingOnly)
+        declared = self._read_field(attribute_name, annotation, default, a_setting=a_setting)
         port: DeclaredPort = {
             "name": self._cast_port_name(attribute_name),
             "description": description or "",
-            "family": {"family": family_a_pin_travels_on(declared.declaration)},
+            "family": {"family": _family_a_declared_pin_travels_on(declared.declaration)},
             "pin_declaration": declared.declaration,
-            "pin_default": declared.default_value,
         }
+        if declared.default_value is not NO_DEFAULT:
+            port["pin_default"] = declared.default_value
         if input_modes:
             port["input_mode"] = input_modes[0].input_mode()  # pyright: ignore[reportAttributeAccessIssue]
+        elif _chooses_a_pin_type(declared.declaration):
+            port["input_mode"] = SettingOnly().input_mode()
         if lifetimes:
             port["lifetime"] = lifetimes[0].lifetime  # pyright: ignore[reportAttributeAccessIssue]
-        return port
+        if not published:
+            return port, None
+        output_declaration: PinDeclarationOnTheWire = {
+            "pin_type": declared.declaration["pin_type"],
+            "flow": declared.declaration["flow"],
+        }
+        return port, {
+            "name": port["name"],
+            "description": port["description"],
+            "family": dict(port["family"]),
+            "pin_declaration": output_declaration,
+        }
 
-    def _read_field(self, attribute_name: str, annotation: Any, default: object) -> DeclaredPin:
+    def _refuse_what_only_the_runtimes_own_node_declares(
+        self, attribute_name: str, input_modes: list[object], published: list[object]
+    ) -> None:
+        if self._of_the_runtimes_own_node:
+            return
+        only_the_runtimes = [*published] + [
+            mode for mode in input_modes if isinstance(mode, SettingOnly) and mode.read != "at_setup"
+        ]
+        if only_the_runtimes:
+            raise self._refusal(
+                f"`{self._node}`'s field `{attribute_name}` carries `{only_the_runtimes[0]!r}`, "
+                f"which only the runtime's own nodes declare. To fix: drop it; a class node's "
+                f"setting is `SettingOnly()`, read at setup.",
+                "pin_annotation_not_taken",
+                pin=attribute_name,
+            )
+
+    def _read_field(
+        self, attribute_name: str, annotation: Any, default: object, *, a_setting: bool
+    ) -> DeclaredPin:
         try:
             return read_pin_declaration(
-                self._node, attribute_name, annotation, default=default, direction="input", form="field"
+                self._node,
+                attribute_name,
+                annotation,
+                default=default,
+                direction="input",
+                form="field",
+                of_the_runtimes_own_node=self._of_the_runtimes_own_node,
+                a_setting=a_setting,
             )
         except NodeDeclarationRefusal as refusal:
             if refusal.finding_code != "pin_type_unknown":
@@ -270,13 +326,18 @@ class _ClassNodeReading:
                     pin=attribute_name,
                 )
         declared = read_pin_declaration(
-            self._node, attribute_name, pin_type_annotation, direction="input", form="pin"
+            self._node,
+            attribute_name,
+            pin_type_annotation,
+            direction="input",
+            form="pin",
+            of_the_runtimes_own_node=self._of_the_runtimes_own_node,
         )
         port_name = self._cast_port_name(attribute_name)
         port: DeclaredPort = {
             "name": port_name,
             "description": description or "",
-            "family": {"family": family_a_pin_travels_on(declared.declaration)},
+            "family": {"family": _family_a_declared_pin_travels_on(declared.declaration)},
             "pin_declaration": declared.declaration,
         }
         delivery: Optional[StreamDelivery] = deliveries[0] if deliveries else None  # pyright: ignore[reportAssignmentType]
@@ -335,13 +396,22 @@ class _ClassNodeReading:
                 pin_type_annotation, f"`{self._node}`'s pin `{attribute_name}`"
             )
         declared = read_pin_declaration(
-            self._node, attribute_name, pin_type_annotation, direction="output", form="pin"
+            self._node,
+            attribute_name,
+            pin_type_annotation,
+            direction="output",
+            form="pin",
+            of_the_runtimes_own_node=self._of_the_runtimes_own_node,
         )
         port_name = self._cast_port_name(attribute_name)
         return {
             "name": port_name,
             "description": description or "",
-            "family": family_declaration_of_a_typed_output(port_name, declared.declaration),
+            "family": (
+                family_declaration_of_a_typed_output(port_name, declared.declaration)
+                if declared.declaration["pin_type"]["kind"] == "is"
+                else {"family": _family_a_declared_pin_travels_on(declared.declaration)}
+            ),
             "pin_declaration": declared.declaration,
         }
 
@@ -358,6 +428,23 @@ class _ClassNodeReading:
             )
         self._port_spelling_by_cast_name[port_name] = spelling
         return port_name
+
+
+# The family a pin whose type a setting chooses declares until the runtime resolves the choice.
+_FAMILY_OF_A_PIN_A_SETTING_TYPES: Final = "records"
+
+
+def _family_a_declared_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
+    """The family of a pin of one type, or of the Records family for one a setting types."""
+    if declaration["pin_type"]["kind"] == "set_by_input":
+        return _FAMILY_OF_A_PIN_A_SETTING_TYPES
+    return family_a_pin_travels_on(declaration)
+
+
+def _chooses_a_pin_type(declaration: PinDeclarationOnTheWire) -> bool:
+    """Whether a field is a `PinTypeChoice`, a setting by its type."""
+    declared_pin_type = declaration["pin_type"]
+    return declared_pin_type["kind"] == "is" and declared_pin_type["pin_type"]["type"] == "pin_type_choice"
 
 
 def _is_a_class_variable(annotation: Any) -> bool:

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::descriptors::PortFamilyDeclaration;
 
 fn the_family_no_linked_port_states(
     _linked_port: &LinkPortRefOutput,
@@ -602,20 +603,20 @@ fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none(
     assert_eq!(value_input(&node).family.family, PortFamily::Channels);
 }
 
-/// A `GraphInput` renders its saved `value` under `default`, and a config written before its
-/// value was an input, holding `default` and no `value`, renders that `default`.
+/// A `GraphInput`'s rendered config holds no saved value, under `value` or under `default`, the
+/// name it had, so a graph drawn back from the rendering reads a cleared value as cleared.
 ///
-/// Mental-revert: rendering only `value` drops the `default` a legacy config holds, which its
-/// validation took as the saved value.
+/// Mental-revert: rendering the saved value under `default` keeps a value a client cleared in the
+/// config, and a graph drawn back from it holds that value again.
 #[test]
-fn a_graph_input_renders_its_saved_value_else_its_legacy_default_as_its_default() {
+fn a_graph_input_renders_no_saved_value_in_its_config() {
     let graph_input = NodeClassImportPath::new(GRAPH_INPUT_NODE_TYPE.to_string()).unwrap();
     assert_eq!(
         the_config_a_graph_interface_node_renders(
             &graph_input,
             serde_json::json!({ "port": "cue", "default": { "track": "intro" } }),
         ),
-        serde_json::json!({ "port": "cue", "default": { "track": "intro" } })
+        serde_json::json!({ "port": "cue" })
     );
     assert_eq!(
         the_config_a_graph_interface_node_renders(
@@ -623,7 +624,7 @@ fn a_graph_input_renders_its_saved_value_else_its_legacy_default_as_its_default(
             serde_json::json!({ "port": "cue", "value": { "track": "drop" },
                                 "default": { "track": "intro" } }),
         ),
-        serde_json::json!({ "port": "cue", "default": { "track": "drop" } })
+        serde_json::json!({ "port": "cue" })
     );
 }
 
@@ -793,13 +794,10 @@ fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to(
             },
         )),
     );
-    let refusal = declared[0]
-        .refusal_of_a_linked_port_by_the_chosen_type(
-            &[],
-            std::slice::from_ref(&camera_video),
-            &declared[0].linked_ports[0],
-        )
+    let (chosen, refusal) = declared[0]
+        .refusal_of_a_linked_port_by_the_chosen_type(&camera_video, &declared[0].linked_ports[0])
         .expect("a Texture does not connect to a Float");
+    assert_eq!(chosen, &PinType::Float { exact_size: None });
     assert!(refusal.contains("camera"), "{refusal}");
 
     let float_source = crate::core::graph::PortInfo::from(
@@ -815,9 +813,8 @@ fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to(
     );
     assert_eq!(
         declared[0].refusal_of_a_linked_port_by_the_chosen_type(
-            &[],
-            std::slice::from_ref(&float_source),
-            &declared[0].linked_ports[0],
+            &float_source,
+            &declared[0].linked_ports[0]
         ),
         None
     );
@@ -848,4 +845,100 @@ fn a_graph_input_saved_with_a_family_alone_declares_the_port_it_declared() {
     let declared: Vec<&GraphInterfacePort> = channels.interface_as_drawn.declared_ports().collect();
     assert!(declared[0].runs_as_a_source_node);
     assert_eq!(declared[0].the_pin_type_it_carries(), None);
+}
+
+/// A Graph Input choosing a Texture carries it in a Texture's default flow, a stream, on its
+/// node's `value` ports and on the port the interface renders.
+///
+/// Mental-revert: writing the chosen type onto the `value` ports in the value flow a stored
+/// value takes renders a Texture Input's port as a value, which no Texture output feeds.
+#[test]
+fn a_graph_input_choosing_a_texture_carries_it_as_a_stream() {
+    let descriptor =
+        crate::core::nodes::the_node_type_of_a_graph_input().expect("the GraphInput type builds");
+    let node = crate::core::graph::GraphNode::new(
+        descriptor.node_class_import_path.clone(),
+        None,
+        "picture",
+        Some(serde_json::json!({ "port": "picture", "pin_type": {"type": "texture"} })),
+        descriptor
+            .inputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+        descriptor
+            .outputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+    );
+    let value_output = node
+        .output_port(GRAPH_INTERFACE_VALUE_PORT_NAME)
+        .expect("a GraphInput has a `value` output");
+    assert_eq!(value_output.family.family, PortFamily::Image);
+    assert_eq!(
+        value_output.pin.as_ref().map(|pin| pin.flow),
+        Some(crate::core::descriptors::PinFlow::Stream)
+    );
+
+    let resolution = resolved_on_the_streams_top_level(a_records_input_read_by_two_nodes(
+        serde_json::json!({"port": "cue", "pin_type": {"type": "texture"}}),
+    ))
+    .expect("a Graph Input choosing a Texture resolves");
+    let declared: Vec<&GraphInterfacePort> =
+        resolution.interface_as_drawn.declared_ports().collect();
+    assert_eq!(
+        declared[0]
+            .rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME)
+            .pin
+            .map(|pin| pin.flow),
+        Some(crate::core::descriptors::PinFlow::Stream)
+    );
+}
+
+/// A top-level Graph Input choosing a List, which no family's message carries, is refused naming
+/// the node.
+///
+/// Mental-revert: leaving the family of a chosen type no family carries unset resolves the Input
+/// as one waiting for a link, and the List is taken.
+#[test]
+fn a_top_level_graph_input_choosing_a_type_no_family_carries_is_refused_naming_it() {
+    let refusal = resolved_on_the_streams_top_level(a_records_input_read_by_two_nodes(
+        serde_json::json!({"port": "cue", "pin_type": {
+            "type": "list_of", "element_type": {"type": "float"}
+        }}),
+    ))
+    .expect_err("a List Input is refused")
+    .to_string();
+    assert!(refusal.contains("`GraphInput` node `"), "{refusal}");
+    assert!(
+        refusal.contains("which no stream's port carries yet"),
+        "{refusal}"
+    );
+}
+
+/// A Graph Input saved with a Channels family and a `reset` lifetime renders its `lifetime`
+/// setting reading `reset`, saved.
+///
+/// Mental-revert: rendering only the settings every interface node takes drops `lifetime` from a
+/// Graph Input's inputs.
+#[test]
+fn a_graph_input_renders_the_lifetime_it_saves() {
+    let resolution = resolved_on_the_streams_top_level(a_records_input_read_by_two_nodes(
+        serde_json::json!({"port": "cue", "family": "channels", "lifetime": "reset"}),
+    ))
+    .expect("a saved Channels Input resolves");
+    let rendered = resolution.interface_as_drawn.interface_nodes[0].rendered_as_a_node();
+    let lifetime = rendered
+        .ports
+        .inputs
+        .iter()
+        .find(|input| input.name == GRAPH_INPUT_LIFETIME_CONFIG_KEY)
+        .and_then(|input| input.value_read.as_ref())
+        .expect("`lifetime` renders reading its value");
+    assert_eq!(lifetime.value, Some(serde_json::json!("reset")));
+    assert_eq!(
+        lifetime.value_comes_from,
+        Some(InputValueComesFromOnTheWire::Saved)
+    );
 }

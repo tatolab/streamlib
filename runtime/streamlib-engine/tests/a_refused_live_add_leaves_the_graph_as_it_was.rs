@@ -115,7 +115,8 @@ fn an_add_whose_node_the_running_stream_cannot_build_leaves_no_node() {
     .to_string();
 
     assert!(
-        refusal.contains("`leak_probe` declares its port of family \"Channels\""),
+        refusal.contains("`GraphInput` node `leak_probe`")
+            && refusal.contains("names family \"Channels\""),
         "{refusal}"
     );
     assert_eq!(the_node_names_the_graph_answers(&stream), before);

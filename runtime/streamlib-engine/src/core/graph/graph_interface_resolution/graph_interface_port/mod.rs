@@ -8,12 +8,14 @@ use crate::core::descriptors::{
     PinLinkEnd, PinLinkInputEnd, PinType, PortFamilyDeclaration, PortFamilyLinkEndpoint,
     ResolvedPin, pin_link_verdict, refusal_of_a_link_between_port_families,
 };
+use crate::core::graph::PortInfo;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshotNode, refuse_a_port_the_node_does_not_have, the_ports_of_a_graph_document_node,
 };
+use crate::core::graph::pin_type_resolution::states_one_type_exactly;
 use crate::core::json_schema::{GraphNodePortOnTheWire, LinkPortRefOutput, PortKindOnTheWire};
 use crate::core::nodes::NodeTypesOneStreamResolves;
-use crate::core::{Error, PortDirection, Result};
+use crate::core::{Error, Result};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphInterfacePortDirectionOnTheWire, GraphInterfacePortOnTheWire,
 };
@@ -35,16 +37,12 @@ impl GraphInterfacePort {
         linked_port: &LinkPortRefOutput,
         linked_node_config: &serde_json::Value,
     ) -> Result<()> {
-        let direction_of_the_linked_port = match self.direction {
-            GraphInterfacePortDirection::Output => PortDirection::Output,
-            GraphInterfacePortDirection::Input => PortDirection::Input,
-        };
         refuse_a_port_the_node_does_not_have(
             node_types,
             &linked_port.node,
             linked_node,
             &linked_port.port,
-            direction_of_the_linked_port,
+            self.direction.into(),
         )?;
         let port_cast = cast_of(&linked_port.port)?;
         let Some((inputs, outputs)) =
@@ -52,34 +50,32 @@ impl GraphInterfacePort {
         else {
             return Ok(());
         };
-        let linked_declaration = match self.direction {
-            GraphInterfacePortDirection::Output => &outputs,
-            GraphInterfacePortDirection::Input => &inputs,
-        }
-        .iter()
-        .find(|port| port.name == port_cast)
-        .map(|port| port.family.clone())
-        .map(|declaration| match self.direction {
-            GraphInterfacePortDirection::Output => declaration,
-            GraphInterfacePortDirection::Input => {
-                the_input_without_what_only_the_graphs_producer_can_meet(declaration)
-            }
-        });
-        if let Some(refusal) =
-            self.refusal_of_a_linked_port_by_the_chosen_type(&inputs, &outputs, linked_port)
+        let Some(linked) = self
+            .direction
+            .linked_side(&inputs, &outputs)
+            .iter()
+            .find(|port| port.name == port_cast)
+        else {
+            return Ok(());
+        };
+        if let Some((chosen, refusal)) =
+            self.refusal_of_a_linked_port_by_the_chosen_type(linked, linked_port)
         {
             return Err(Error::GraphError(format!(
-                "`{}` node `{}` chooses {} for `{}`, and the link rules refuse it: {refusal}",
-                self.interface_node_kind(),
+                "`{}` node `{}` chooses {chosen} for `{}`, and the link rules refuse it: \
+                 {refusal}",
+                self.direction.interface_node_kind(),
                 self.interface_node,
-                self.pin_type
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_default(),
                 self.port
             )));
         }
-        let (Some(linked_declaration), Some(family)) = (linked_declaration, self.family) else {
+        let linked_declaration = match self.direction {
+            GraphInterfacePortDirection::Output => linked.family.clone(),
+            GraphInterfacePortDirection::Input => {
+                the_input_without_what_only_the_graphs_producer_can_meet(linked.family.clone())
+            }
+        };
+        let Some(family) = self.family else {
             return Ok(());
         };
         let declared_family = PortFamilyDeclaration::of_family(family);
@@ -106,23 +102,12 @@ impl GraphInterfacePort {
         match refusal {
             Some(refusal) => Err(Error::GraphError(format!(
                 "`{}` node `{}` declares `{}` as {}, and the link rules refuse it: {refusal}",
-                match self.direction {
-                    GraphInterfacePortDirection::Output => "GraphOutput",
-                    GraphInterfacePortDirection::Input => "GraphInput",
-                },
+                self.direction.interface_node_kind(),
                 self.interface_node,
                 self.port,
                 family
             ))),
             None => Ok(()),
-        }
-    }
-
-    /// `GraphInput` or `GraphOutput`, the kind of node that declares this port.
-    fn interface_node_kind(&self) -> &'static str {
-        match self.direction {
-            GraphInterfacePortDirection::Output => "GraphOutput",
-            GraphInterfacePortDirection::Input => "GraphInput",
         }
     }
 
@@ -136,24 +121,18 @@ impl GraphInterfacePort {
         })
     }
 
-    /// Why the link rules refuse `linked_port`, among `inputs` and `outputs`, the ports of its
-    /// node, against the type this port chooses; `None` when it chooses none, the linked port
-    /// states no one type exactly, or the link connects as it is.
-    pub(super) fn refusal_of_a_linked_port_by_the_chosen_type(
-        &self,
-        inputs: &[crate::core::graph::PortInfo],
-        outputs: &[crate::core::graph::PortInfo],
+    /// The type this port chooses, and why the link rules refuse `linked_port`, whose port is
+    /// `linked`, against it; `None` when it chooses none, the linked port states no one type
+    /// exactly, or the link connects as it is.
+    pub(super) fn refusal_of_a_linked_port_by_the_chosen_type<'port>(
+        &'port self,
+        linked: &PortInfo,
         linked_port: &LinkPortRefOutput,
-    ) -> Option<String> {
+    ) -> Option<(&'port PinType, String)> {
         let chosen = self.pin_type.as_ref()?;
-        let port_cast = cast_of(&linked_port.port).ok()?;
-        let linked = match self.direction {
-            GraphInterfacePortDirection::Output => outputs,
-            GraphInterfacePortDirection::Input => inputs,
+        if !states_one_type_exactly(linked) {
+            return None;
         }
-        .iter()
-        .find(|port| port.name == port_cast)
-        .filter(|port| crate::core::graph::pin_type_resolution::states_one_type_exactly(port))?;
         let linked_pin = linked.pin.as_ref()?;
         let linked_end = PinLinkEnd {
             node_name: &linked_port.node,
@@ -189,7 +168,7 @@ impl GraphInterfacePort {
         };
         verdict
             .refusal_of_the_link_made_as_it_is()
-            .map(ToString::to_string)
+            .map(|refusal| (chosen, refusal.to_string()))
     }
 
     /// Why `output` is not this port's own output, the `value` of a
@@ -219,12 +198,7 @@ impl GraphInterfacePort {
                 flow: pin_type.default_flow(),
             }),
             None => family.clone().and_then(|family| {
-                crate::core::graph::PortInfo::declaring_only_a_family(
-                    port_name,
-                    String::new(),
-                    family,
-                )
-                .pin
+                PortInfo::declaring_only_a_family(port_name, String::new(), family).pin
             }),
         };
         GraphNodePortOnTheWire {

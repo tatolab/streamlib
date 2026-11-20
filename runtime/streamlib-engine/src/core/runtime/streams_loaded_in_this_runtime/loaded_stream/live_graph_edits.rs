@@ -756,7 +756,7 @@ impl SavedSetToPutBack {
     /// nothing.
     fn put_back(&self, graph: &mut Graph) -> Option<UnlinkedInputValuesDelivery> {
         let node = graph.traversal_mut().v(&self.node_run_id).first_mut()?;
-        set_the_pin(node, &self.input, self.saved_value_before.clone());
+        node.set_pin(&self.input, self.saved_value_before.clone());
         graph.live_input_values().set(
             self.node_uuid,
             &self.input,
@@ -823,7 +823,7 @@ fn set_the_saved_value(
     if let Some(value) = &value {
         refuse_a_pin_value_a_process_node_cannot_read(node, input, value)?;
     }
-    let saved_value_before = set_the_pin(node, input, value);
+    let saved_value_before = node.set_pin(input, value);
     if let Err(refused) =
         crate::core::graph::refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
             graph,
@@ -832,7 +832,7 @@ fn set_the_saved_value(
         )
     {
         if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
-            set_the_pin(node, input, saved_value_before);
+            node.set_pin(input, saved_value_before);
         }
         return Err(refused);
     }
@@ -850,13 +850,4 @@ fn set_the_saved_value(
         saved_value_before,
         live_value_before,
     })
-}
-
-/// Set the pin `input` of `node` to `value`, `None` taking it off; answers the pin it held.
-fn set_the_pin(
-    node: &mut crate::core::graph::GraphNode,
-    input: &str,
-    value: Option<serde_json::Value>,
-) -> Option<serde_json::Value> {
-    node.set_pin(input, value)
 }

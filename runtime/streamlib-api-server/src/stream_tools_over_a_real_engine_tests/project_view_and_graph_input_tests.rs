@@ -247,10 +247,11 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
     let cue = the_node_named(&live_graph, "cue");
     assert_eq!(cue["id"], CUE_GRAPH_INPUT_NODE_UUID, "{cue}");
     assert_eq!(
-        cue["config"]["default"],
+        cue["input_values"]["value"],
         json!({ "track": "intro" }),
         "{cue}"
     );
+    assert!(cue["config"].get("default").is_none(), "{cue}");
     assert_eq!(
         cue["components"]["graph_interface"],
         json!({
@@ -361,10 +362,11 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
     );
     let cue = the_node_named(&engine.the_live_graph_of(&stream_id), "cue");
     assert_eq!(
-        cue["config"]["default"],
+        cue["input_values"]["value"],
         json!({ "track": "drop" }),
         "{cue}"
     );
+    assert!(cue["config"].get("default").is_none(), "{cue}");
     let document_before = project.the_graph_document_of("main");
 
     let refusal = engine

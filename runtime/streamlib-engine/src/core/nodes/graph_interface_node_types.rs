@@ -4,6 +4,8 @@
 //! What a `GraphInput` and a `GraphOutput` declare: each of their settings as an input, and their
 //! one `value` port, whose type the `pin_type` setting chooses.
 
+use std::sync::LazyLock;
+
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
     NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
@@ -17,9 +19,45 @@ use crate::core::graph::graph_interface_resolution::{
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
 };
 
-/// The family the `value` ports of a `GraphInput` declare, which they carry while it chooses no
-/// pin type and names no family.
-pub(crate) const THE_FAMILY_A_GRAPH_INPUT_DECLARES: PortFamily = PortFamily::Records;
+/// The settings of the `GraphInput` node type, built once.
+static THE_SETTINGS_OF_A_GRAPH_INPUT: LazyLock<Vec<PortDescriptor>> =
+    LazyLock::new(|| the_settings_of(the_node_type_of_a_graph_input()));
+
+/// The settings of the `GraphOutput` node type, built once.
+static THE_SETTINGS_OF_A_GRAPH_OUTPUT: LazyLock<Vec<PortDescriptor>> =
+    LazyLock::new(|| the_settings_of(the_node_type_of_a_graph_output()));
+
+/// The settings a `GraphInput` takes, as its type declares them: `port`, `pin_type`, `family`,
+/// `range` and `lifetime`.
+pub(crate) fn the_settings_of_a_graph_input() -> &'static [PortDescriptor] {
+    &THE_SETTINGS_OF_A_GRAPH_INPUT
+}
+
+/// The settings a `GraphOutput` takes, as its type declares them: `port`, `pin_type` and
+/// `family`.
+pub(crate) fn the_settings_of_a_graph_output() -> &'static [PortDescriptor] {
+    &THE_SETTINGS_OF_A_GRAPH_OUTPUT
+}
+
+/// The inputs of the interface node type `descriptor` other than its `value`: the settings it
+/// reads at setup.
+fn the_settings_of(descriptor: Result<NodeDescriptor>) -> Vec<PortDescriptor> {
+    descriptor
+        .expect("an interface node type's names are valid")
+        .inputs
+        .into_iter()
+        .filter(|input| input.name != GRAPH_INTERFACE_VALUE_PORT_NAME)
+        .collect()
+}
+
+/// The family declaration of the `value` ports of a `GraphInput` and a `GraphOutput`: Records
+/// while they choose no pin type and name no family, else the family their `family` setting
+/// names.
+pub(crate) fn the_family_a_graph_interface_value_port_declares() -> PortFamilyDeclaration {
+    let mut family = PortFamilyDeclaration::of_family(PortFamily::Records);
+    family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
+    family
+}
 
 /// The descriptor of the `GraphInput` node type: its settings `port`, `pin_type`, `family`,
 /// `range` and `lifetime`, each read at setup; its `value` input, a setting read each run that
@@ -43,8 +81,8 @@ pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
             PinType::ListOf {
                 element_type: Box::new(PinType::Float { exact_size: None }),
             },
+            true,
             None,
-            SettingReadTime::AtSetup,
         ),
         setting(
             GRAPH_INPUT_LIFETIME_CONFIG_KEY,
@@ -55,10 +93,10 @@ pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
                     .map(|lifetime| lifetime.wire_name().to_string())
                     .to_vec(),
             },
+            false,
             Some(serde_json::Value::String(
                 NodeValueLifetime::Kept.wire_name().to_string(),
             )),
-            SettingReadTime::AtSetup,
         ),
         value_port(
             "What a client sets on the Input; it takes no wire.",
@@ -106,17 +144,16 @@ fn interface_node_type(
     ))
 }
 
-/// A setting named `name` of `pin_type`, stating `description`, read at `read`, reading
-/// `pin_default` while it holds no value; one with no default may be unset.
+/// A setting named `name` of `pin_type`, stating `description`, read at setup, reading
+/// `pin_default` while it holds no value, and unset only when `may_be_unset` says so.
 fn setting(
     name: &str,
     description: &str,
     pin_type: PinType,
+    may_be_unset: bool,
     pin_default: Option<serde_json::Value>,
-    read: SettingReadTime,
 ) -> PortDescriptor {
     let family = PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records);
-    let may_be_unset = pin_default.is_none();
     let port = PortDescriptor::new(
         name,
         description,
@@ -127,7 +164,9 @@ fn setting(
         may_be_unset,
         ..PinDeclaration::exactly(pin_type)
     })
-    .with_input_mode(NodeInputMode::SettingOnly { read });
+    .with_input_mode(NodeInputMode::SettingOnly {
+        read: SettingReadTime::AtSetup,
+    });
     match pin_default {
         Some(pin_default) => port.with_pin_default(pin_default),
         None => port,
@@ -136,17 +175,13 @@ fn setting(
 
 /// The `port` setting: the name the interface node declares, a String every node holds.
 fn port_setting(description: &str) -> PortDescriptor {
-    let mut port = setting(
+    setting(
         GRAPH_INTERFACE_PORT_CONFIG_KEY,
         description,
         PinType::String {},
+        false,
         None,
-        SettingReadTime::AtSetup,
-    );
-    if let Some(declaration) = port.pin_declaration.as_mut() {
-        declaration.may_be_unset = false;
-    }
-    port
+    )
 }
 
 /// The `pin_type` setting: a pin type choice that may choose any type, unset until one is chosen.
@@ -155,8 +190,8 @@ fn pin_type_setting(description: &str) -> PortDescriptor {
         GRAPH_INTERFACE_PIN_TYPE_SETTING,
         description,
         PinType::PinTypeChoice { among: Vec::new() },
+        true,
         None,
-        SettingReadTime::AtSetup,
     )
 }
 
@@ -172,24 +207,28 @@ fn family_setting() -> PortDescriptor {
                 .map(|family| family.wire_name().to_string())
                 .to_vec(),
         },
+        true,
         None,
-        SettingReadTime::AtSetup,
     )
 }
 
 /// A `value` port stating `description` and `former_names`, carried as a value of the type the
-/// `pin_type` setting chooses, of the family a `GraphInput` declares until it is resolved.
+/// `pin_type` setting chooses, of the family
+/// [`the_family_a_graph_interface_value_port_declares`] until it is resolved.
 fn value_port(description: &str, former_names: Vec<String>) -> PortDescriptor {
-    let mut family = PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
-    family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
-    PortDescriptor::new(GRAPH_INTERFACE_VALUE_PORT_NAME, description, false, family)
-        .with_pin_declaration(PinDeclaration {
-            pin_type: DeclaredPinType::SetByInput {
-                input_name: GRAPH_INTERFACE_PIN_TYPE_SETTING.to_string(),
-            },
-            flow: PinFlow::Value,
-            annotations: PinAnnotations::default(),
-            former_names,
-            may_be_unset: false,
-        })
+    PortDescriptor::new(
+        GRAPH_INTERFACE_VALUE_PORT_NAME,
+        description,
+        false,
+        the_family_a_graph_interface_value_port_declares(),
+    )
+    .with_pin_declaration(PinDeclaration {
+        pin_type: DeclaredPinType::SetByInput {
+            input_name: GRAPH_INTERFACE_PIN_TYPE_SETTING.to_string(),
+        },
+        flow: PinFlow::Value,
+        annotations: PinAnnotations::default(),
+        former_names,
+        may_be_unset: false,
+    })
 }

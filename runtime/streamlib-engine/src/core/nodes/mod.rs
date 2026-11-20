@@ -37,8 +37,8 @@ pub(crate) use __generated_private::{
 };
 pub use empty_config::EmptyConfig;
 pub(crate) use graph_interface_node_types::{
-    THE_FAMILY_A_GRAPH_INPUT_DECLARES, the_node_type_of_a_graph_input,
-    the_node_type_of_a_graph_output,
+    the_family_a_graph_interface_value_port_declares, the_node_type_of_a_graph_input,
+    the_settings_of_a_graph_input, the_settings_of_a_graph_output,
 };
 pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
