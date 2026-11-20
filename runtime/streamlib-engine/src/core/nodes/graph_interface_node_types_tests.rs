@@ -66,7 +66,10 @@ fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin
             }
         );
     }
-    assert_eq!(descriptor.refusal_of_a_port_whose_type_no_input_finds(), None);
+    assert_eq!(
+        descriptor.refusal_of_a_port_whose_type_no_input_finds(),
+        None
+    );
 }
 
 fn the_output_value_type(descriptor: &NodeDescriptor) -> DeclaredPinType {
@@ -94,7 +97,10 @@ fn a_graph_output_declares_its_settings_and_a_value_that_takes_a_wire() {
         .expect("a GraphOutput has a `value` input");
     assert!(value.input_mode.is_none_or(NodeInputMode::takes_a_wire));
     assert!(descriptor.outputs.is_empty());
-    assert_eq!(descriptor.refusal_of_a_port_whose_type_no_input_finds(), None);
+    assert_eq!(
+        descriptor.refusal_of_a_port_whose_type_no_input_finds(),
+        None
+    );
 }
 
 /// Mental-revert: a `lifetime` declared with no default reads nothing on a Graph Input that

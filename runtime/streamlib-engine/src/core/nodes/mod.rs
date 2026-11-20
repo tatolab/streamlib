@@ -36,6 +36,10 @@ pub(crate) use __generated_private::{
     FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use empty_config::EmptyConfig;
+pub(crate) use graph_interface_node_types::{
+    THE_FAMILY_A_GRAPH_INPUT_DECLARES, the_node_type_of_a_graph_input,
+    the_node_type_of_a_graph_output,
+};
 pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
 };
@@ -48,10 +52,6 @@ pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOn
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
-pub(crate) use graph_interface_node_types::{
-    THE_FAMILY_A_GRAPH_INPUT_DECLARES, the_node_type_of_a_graph_input,
-    the_node_type_of_a_graph_output,
-};
 pub(crate) use project_view_node::{
     is_the_input_of_an_output_a_panel_writes,
     refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes, the_names_listed,

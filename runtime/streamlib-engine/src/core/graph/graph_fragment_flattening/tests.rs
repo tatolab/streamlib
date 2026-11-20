@@ -355,8 +355,14 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
         Some(the_read_of_an_input_a_link_feeds()),
         "`look`'s `source` feeds `soft`: {soft:?}"
     );
+    let out_value = soft_holds.nodes[3]
+        .ports
+        .inputs
+        .iter()
+        .find(|input| input.name == "value")
+        .expect("the `GraphOutput` `out` renders its `value`");
     assert_eq!(
-        soft_holds.nodes[3].ports.inputs[0].value_read,
+        out_value.value_read,
         Some(the_read_of_an_input_a_link_feeds()),
         "`tint` feeds the `GraphOutput` `out`"
     );

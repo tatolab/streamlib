@@ -6,14 +6,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Annotated, Any, ClassVar, Final, Literal
 
-from ._built_in_node import BuiltInNode
+from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode, StatedPorts
 from ._contract_pin_types import PinDeclarationOnTheWire, PinType
 from ._formerly_named import FormerlyNamed
 from ._input_declaration_annotations import SettingOnly
-from ._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP, NODE_DECLARATION_OUTPUT_PORTS_STAMP
 from ._pin_type_choice import PinTypeChoice
 from ._port_family_declaration import PortFamily
 
@@ -48,8 +46,24 @@ _PORT: Final = _setting("port", {"type": "string"}, may_be_unset=False)
 _PIN_TYPE: Final = _setting("pin_type", {"type": "pin_type_choice"}, may_be_unset=True)
 _FAMILY: Final = _setting("family", {"type": "menu", "option_names": _FAMILY_NAMES}, may_be_unset=True)
 
+_GRAPH_OUTPUT_PORTS: Final[StatedPorts] = ([_PORT, _PIN_TYPE, _FAMILY, _value_port([])], [])
 
-class GraphOutput(BuiltInNode[Mapping[str, Any]]):
+_GRAPH_INPUT_PORTS: Final[StatedPorts] = (
+    [
+        _PORT,
+        _PIN_TYPE,
+        _FAMILY,
+        _setting("range", {"type": "list_of", "element_type": {"type": "float"}}, may_be_unset=True),
+        _setting("lifetime", {"type": "menu", "option_names": ["kept", "reset"]}, may_be_unset=False),
+        _value_port(["default"]),
+    ],
+    [_value_port([])],
+)
+
+
+class GraphOutput(
+    BuiltInNode[InputValuesOfATypedBuiltInNode], ports_the_runtime_declares=_GRAPH_OUTPUT_PORTS
+):
     """Declares one Output of the graph: the port linked into `value`. A stream's top-level
     Outputs are what Tato Studio displays. It runs nothing and sends nothing off the machine.
 
@@ -69,11 +83,10 @@ class GraphOutput(BuiltInNode[Mapping[str, Any]]):
     into it, and runs nothing until one is."""
 
 
-setattr(GraphOutput, NODE_DECLARATION_INPUT_PORTS_STAMP, [_PORT, _PIN_TYPE, _FAMILY, _value_port([])])
-setattr(GraphOutput, NODE_DECLARATION_OUTPUT_PORTS_STAMP, [])
 
-
-class GraphInput(BuiltInNode[Mapping[str, Any]]):
+class GraphInput(
+    BuiltInNode[InputValuesOfATypedBuiltInNode], ports_the_runtime_declares=_GRAPH_INPUT_PORTS
+):
     """Declares one Input of the graph: every port `value` is linked to reads what enters it.
     A stream's top-level Input of a type that holds a value, or of the Array, Channels or
     Records family, runs, and carries the value a client sets with `set_node_input_value`
@@ -105,17 +118,3 @@ class GraphInput(BuiltInNode[Mapping[str, Any]]):
     Stop, Play and a restart; `reset` returns to the saved `value` at Stop. A stream's
     top-level Input only."""
 
-
-setattr(
-    GraphInput,
-    NODE_DECLARATION_INPUT_PORTS_STAMP,
-    [
-        _PORT,
-        _PIN_TYPE,
-        _FAMILY,
-        _setting("range", {"type": "list_of", "element_type": {"type": "float"}}, may_be_unset=True),
-        _setting("lifetime", {"type": "menu", "option_names": ["kept", "reset"]}, may_be_unset=False),
-        _value_port(["default"]),
-    ],
-)
-setattr(GraphInput, NODE_DECLARATION_OUTPUT_PORTS_STAMP, [_value_port([])])

@@ -206,7 +206,10 @@ async fn an_interface_node_added_with_no_family_takes_the_family_of_its_first_li
     let linked_output = the_graph_output_in(&live);
     assert_eq!(
         linked_output["components"]["graph_interface"],
-        json!({ "direction": "output", "port": "output1", "family": "image" }),
+        json!({
+            "direction": "output", "port": "output1", "family": "image",
+            "pin_type": { "type": "texture" },
+        }),
         "{linked_output}"
     );
     assert_eq!(linked_output["config"], json!({ "port": "output1" }));

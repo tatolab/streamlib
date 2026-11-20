@@ -568,8 +568,8 @@ fn a_node_whose_name_casts_like_an_interface_nodes_is_refused_as_a_name_taken() 
 /// `array` family and the range it named.
 #[test]
 fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none() {
-    let descriptor = crate::core::nodes::the_node_type_of_a_graph_input()
-        .expect("the GraphInput type builds");
+    let descriptor =
+        crate::core::nodes::the_node_type_of_a_graph_input().expect("the GraphInput type builds");
     let mut node = crate::core::graph::GraphNode::new(
         descriptor.node_class_import_path.clone(),
         None,
@@ -663,7 +663,13 @@ fn a_graph_input_choosing_a_pin_type_carries_it_on_its_port_and_on_the_interface
         serde_json::json!({"port": "cue", "pin_type": {"type": "texture"}}),
     ))
     .expect("a Graph Input choosing a Texture resolves");
-    assert!(texture.graph_the_runtime_runs.nodes.iter().all(|node| node.name != "cue"));
+    assert!(
+        texture
+            .graph_the_runtime_runs
+            .nodes
+            .iter()
+            .all(|node| node.name != "cue")
+    );
 }
 
 /// A Graph Input choosing a type refuses a saved value its type does not hold, and a choice that
@@ -691,7 +697,10 @@ fn a_graph_input_choosing_a_pin_type_refuses_a_value_or_a_choice_it_does_not_tak
     let a_setting_type = refusal_on_the_top_level(serde_json::json!({
         "port": "cue", "pin_type": {"type": "pin_type_choice"}
     }));
-    assert!(a_setting_type.contains("only a setting"), "{a_setting_type}");
+    assert!(
+        a_setting_type.contains("only a setting"),
+        "{a_setting_type}"
+    );
 }
 
 /// A Graph Output and a Graph Input render their settings as inputs, each reading the value it
@@ -726,7 +735,10 @@ fn an_interface_node_renders_its_settings_as_inputs_reading_their_values() {
         pin_type.pin.as_ref().map(|pin| pin.pin_type.clone()),
         Some(PinType::PinTypeChoice { among: Vec::new() })
     );
-    let read = pin_type.value_read.as_ref().expect("a setting reads its value");
+    let read = pin_type
+        .value_read
+        .as_ref()
+        .expect("a setting reads its value");
     assert_eq!(read.value, Some(serde_json::json!({"type": "texture"})));
     assert_eq!(
         read.value_comes_from,
@@ -738,7 +750,10 @@ fn an_interface_node_renders_its_settings_as_inputs_reading_their_values() {
         .expect("a setting reads its value");
     assert_eq!(family.value, Some(serde_json::Value::Null));
     assert_eq!(
-        output.ports.inputs[3].pin.as_ref().map(|pin| pin.pin_type.clone()),
+        output.ports.inputs[3]
+            .pin
+            .as_ref()
+            .map(|pin| pin.pin_type.clone()),
         Some(PinType::Texture {
             pixel_formats: Vec::new()
         })
@@ -764,8 +779,7 @@ fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to(
         ],
     }))
     .expect("the interface resolves");
-    let declared: Vec<&GraphInterfacePort> =
-        resolved.interface_as_drawn.declared_ports().collect();
+    let declared: Vec<&GraphInterfacePort> = resolved.interface_as_drawn.declared_ports().collect();
     let camera_video = crate::core::graph::PortInfo::from(
         &crate::core::descriptors::PortDescriptor::new(
             "video",
@@ -831,8 +845,7 @@ fn a_graph_input_saved_with_a_family_alone_declares_the_port_it_declared() {
         serde_json::json!({"port": "cue", "family": "channels", "lifetime": "reset"}),
     ))
     .expect("a saved Channels Input resolves");
-    let declared: Vec<&GraphInterfacePort> =
-        channels.interface_as_drawn.declared_ports().collect();
+    let declared: Vec<&GraphInterfacePort> = channels.interface_as_drawn.declared_ports().collect();
     assert!(declared[0].runs_as_a_source_node);
     assert_eq!(declared[0].the_pin_type_it_carries(), None);
 }

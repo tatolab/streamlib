@@ -50,15 +50,14 @@ pub(super) fn what_an_interface_nodes_settings_declare(
     node: &GraphSnapshotNode,
 ) -> Result<WhatAnInterfaceNodeDeclares> {
     let (port, named_family) = port_and_family_an_interface_nodes_config_declares(node)?;
-    let pin_type = the_pin_type_an_interface_node_chooses(Some(&node.input_values)).map_err(
-        |why| {
+    let pin_type =
+        the_pin_type_an_interface_node_chooses(Some(&node.input_values)).map_err(|why| {
             Error::GraphError(format!(
                 "`{}` node `{}`: {why}",
                 interface_node_kind(node),
                 node.name
             ))
-        },
-    )?;
+        })?;
     let family = match &pin_type {
         Some(pin_type) => PortFamily::carrying(pin_type),
         None => named_family,
@@ -204,8 +203,7 @@ fn refuse_a_default_or_range_its_family_does_not_take(
             "`GraphInput` node `{}` holds its `{GRAPH_INTERFACE_VALUE_PORT_NAME}`, its \
              `{GRAPH_INPUT_VALUE_FORMER_NAME}` before it was an input, as {value}, and it \
              carries {pin_type}, which takes {}",
-            node.name,
-            not_taken.takes
+            node.name, not_taken.takes
         )));
     }
     if let Some(value) = saved_value.filter(|_| pin_type.is_none())

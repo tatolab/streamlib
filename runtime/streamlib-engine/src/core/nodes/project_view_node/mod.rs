@@ -22,7 +22,6 @@ use crate::core::descriptors::{
     NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
     PortFamily, PortFamilyDeclaration, SettingReadTime,
 };
-use crate::core::nodes::{THE_FAMILY_A_GRAPH_INPUT_DECLARES, the_node_type_of_a_graph_input};
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::graph_interface_resolution::{
@@ -33,6 +32,7 @@ use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode}
 use crate::core::graph::{GraphNode, GraphNodePorts};
 use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
 use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
+use crate::core::nodes::{THE_FAMILY_A_GRAPH_INPUT_DECLARES, the_node_type_of_a_graph_input};
 pub use crate::core::pin_value_packing::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 use crate::core::pin_value_packing::{
     PackedPinValue, pack_pin_value, the_message_a_value_written_onto_an_output_is,
@@ -279,12 +279,15 @@ impl ValueSourceNode {
         };
         let settings = JsonValue::Object(node.input_values());
         let mut descriptor = the_node_type_of_a_graph_input()?;
-        let chosen = the_pin_type_an_interface_node_chooses(settings.as_object())
-            .map_err(&refused)?;
+        let chosen =
+            the_pin_type_an_interface_node_chooses(settings.as_object()).map_err(&refused)?;
         let family = match &chosen {
-            Some(pin_type) => the_family_a_chosen_pin_type_travels_on(pin_type).map_err(&refused)?,
+            Some(pin_type) => {
+                the_family_a_chosen_pin_type_travels_on(pin_type).map_err(&refused)?
+            }
             None => {
-                let mut declared = PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
+                let mut declared =
+                    PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
                 declared.family_from_config_key =
                     Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
                 streamlib_node_schema::output_port_family_resolved_against_config(

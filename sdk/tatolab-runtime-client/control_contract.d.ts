@@ -1230,6 +1230,11 @@ export interface GraphInterfacePortOnTheWire {
    */
   family?: string | null;
   /**
+   * The pin type the port carries: the one its node's `pin_type` setting chooses, else the
+   * one its family states exactly, as an Image port is a Texture. Absent on any other port.
+   */
+  pin_type?: PinType | null;
+  /**
    * On a `GraphInput` node, the value its `value` input reads now: the one set live, else its
    * saved one. Absent elsewhere, and where it reads none.
    */
@@ -8136,7 +8141,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 28;
+export declare const CONTROL_CONTRACT_REVISION: 29;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

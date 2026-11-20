@@ -879,7 +879,14 @@ fn is_a_graph_interface_node_naming_no_family(
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> bool {
     is_a_graph_interface_node_type(node_type)
-        && [GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PIN_TYPE_SETTING]
-            .iter()
-            .all(|setting| input_values.get(*setting).is_none_or(serde_json::Value::is_null))
+        && [
+            GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+            GRAPH_INTERFACE_PIN_TYPE_SETTING,
+        ]
+        .iter()
+        .all(|setting| {
+            input_values
+                .get(*setting)
+                .is_none_or(serde_json::Value::is_null)
+        })
 }

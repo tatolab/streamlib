@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, NoReturn, TypeVar
 from ._class_node_declaration import read_class_node_ports
 from ._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP, NODE_DECLARATION_OUTPUT_PORTS_STAMP
 
-__all__ = ["BuiltInNode", "ConfigTypeOfTheBuiltInNode", "InputValuesOfATypedBuiltInNode"]
+__all__ = [
+    "BuiltInNode",
+    "ConfigTypeOfTheBuiltInNode",
+    "InputValuesOfATypedBuiltInNode",
+    "StatedPorts",
+]
 
 # Contravariant so that pyright, solving a config's type from the class a call
 # passes, reports a wrong config key against the config rather than the class.
@@ -27,23 +32,38 @@ _CLASS_VARIABLE_SPELLINGS = ("ClassVar", "typing.ClassVar")
 InputValuesOfATypedBuiltInNode = Mapping[str, Any]
 """The input values a typed built-in takes, each checked against the field or pin it names."""
 
+type StatedPorts = tuple[list[dict[str, Any]], list[dict[str, Any]]]
+"""A built-in's input ports and output ports as the runtime declares them, each a name and the
+`pin_declaration` it carries: what a class whose fields say more than a class node can, such as
+a setting with no default or a pin another setting types, states in place of reading them."""
+
 
 class BuiltInNode(Generic[ConfigTypeOfTheBuiltInNode]):
     """A node the runtime implements: passed to `stream_builder.add`, never built.
 
     A typed built-in declares each of its inputs and outputs as a class node does, each value
     input a field with its default and each stream a pin, so `stream_builder.add` checks the
-    values it is given against them. A built-in that still takes a config declares neither.
+    values it is given against them. One whose fields say what a class node cannot passes
+    `ports_the_runtime_declares=` and is checked against those. A built-in that still takes a
+    config declares neither.
     """
 
     type: ClassVar[str]
     """The path the runtime registers this node under: the `type` a graph names."""
 
-    def __init_subclass__(cls, **keyword_arguments: Any) -> None:
+    def __init_subclass__(
+        cls,
+        *,
+        ports_the_runtime_declares: StatedPorts | None = None,
+        **keyword_arguments: Any,
+    ) -> None:
         super().__init_subclass__(**keyword_arguments)
-        if not _declares_a_field_or_pin(cls):
+        if ports_the_runtime_declares is not None:
+            input_ports, output_ports = ports_the_runtime_declares
+        elif not _declares_a_field_or_pin(cls):
             return
-        input_ports, output_ports = read_class_node_ports(cls, constructed_in_python=False)
+        else:
+            input_ports, output_ports = read_class_node_ports(cls, constructed_in_python=False)
         setattr(cls, NODE_DECLARATION_INPUT_PORTS_STAMP, input_ports)
         setattr(cls, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
 

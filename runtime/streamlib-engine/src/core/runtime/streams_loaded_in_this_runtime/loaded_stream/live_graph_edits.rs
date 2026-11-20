@@ -771,7 +771,10 @@ impl SavedSetToPutBack {
 
 /// Hold each value set live on an input of `node` in `graph` under the lifetime the input
 /// declares now, which a setting just set may have changed, as a `GraphInput`'s `lifetime` does.
-fn hold_each_live_value_of_the_node_under_the_lifetime_it_declares(graph: &Graph, node: &GraphNode) {
+fn hold_each_live_value_of_the_node_under_the_lifetime_it_declares(
+    graph: &Graph,
+    node: &GraphNode,
+) {
     graph
         .live_input_values()
         .hold_each_value_of_the_node_whose_lifetime_changed(node.node_uuid, |input| {

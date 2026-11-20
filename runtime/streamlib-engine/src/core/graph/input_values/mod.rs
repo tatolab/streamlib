@@ -102,15 +102,12 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     }
     let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
     let config = legacy_config.config_of(node.input_values_after_the_set);
-    let Some(ports) = node_types
-        .port_info(node_type)
-        .map(|ports| {
-            ports.resolved_against_the_config(
-                node_type,
-                Some(&Value::Object(node.input_values_after_the_set.clone())),
-            )
-        })
-    else {
+    let Some(ports) = node_types.port_info(node_type).map(|ports| {
+        ports.resolved_against_the_config(
+            node_type,
+            Some(&Value::Object(node.input_values_after_the_set.clone())),
+        )
+    }) else {
         return Ok(());
     };
     let config_schema = node_types

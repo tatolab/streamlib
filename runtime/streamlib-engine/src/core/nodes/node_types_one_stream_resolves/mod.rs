@@ -38,8 +38,8 @@ struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
 static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
     Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>,
 > = std::sync::LazyLock::new(|| {
-    let descriptor = the_node_type_of_a_graph_input()
-        .expect("the GraphInput node type's names are valid");
+    let descriptor =
+        the_node_type_of_a_graph_input().expect("the GraphInput node type's names are valid");
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
         input_and_output_port_info: GraphNodePorts {
             inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
