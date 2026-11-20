@@ -244,7 +244,8 @@ impl StreamGraphTransactionExecutor<'_> {
     /// `set_node_config` sets each input value it names and, on a node type that
     /// takes a config, takes off each config field it does not name; a `set_exposed_config_fields`
     /// on a node type that takes no config records nothing; a `disconnect` closes the gap it
-    /// leaves in a pin group.
+    /// leaves in a pin group; a `set_node_input_value` choosing another type for a `GraphInput`
+    /// carries its saved value into that type.
     pub(super) fn apply_one_action(
         &self,
         request: StreamGraphAction,
@@ -307,6 +308,9 @@ impl StreamGraphTransactionExecutor<'_> {
             StreamGraphAction::Disconnect { .. } => {
                 return self
                     .apply_a_disconnect_closing_the_gap_it_leaves(request, stream_id, staged);
+            }
+            StreamGraphAction::SetNodeInputValue { .. } => {
+                return self.apply_a_set_carrying_a_retyped_saved_value(request, stream_id, staged);
             }
             _ => {}
         }

@@ -2084,6 +2084,10 @@ export interface GraphTransactionToolResult {
    * Each input it set a value on that a link feeds, whose messages the node reads instead.
    */
   overridden_by_links?: Array<GraphTransactionInputOverriddenByALink>;
+  /**
+   * Each saved value of a `GraphInput` it carried into the pin type it chose for it.
+   */
+  saved_values_retyped?: Array<GraphTransactionSavedValueRetyped>;
 }
 
 /**
@@ -2237,6 +2241,44 @@ export interface GraphTransactionInputOverriddenByALink {
    * The output port the link carries from.
    */
   from_output: string;
+}
+
+/**
+ * The saved value of a top-level `GraphInput` that a graph transaction carried into the pin
+ * type it chose for it: cast by the one conversion that fits the two types, or given up for the
+ * new type's default, which is no saved value.
+ */
+export interface GraphTransactionSavedValueRetyped {
+  /**
+   * The stream the `GraphInput` is in, by stream id.
+   */
+  stream: string;
+  /**
+   * The `GraphInput`'s UUID.
+   */
+  node: string;
+  /**
+   * The value it saved under its former type.
+   */
+  value_before: unknown;
+  /**
+   * The value it saves under its new type, held within its `range`; absent when it gave way to
+   * the new type's default.
+   */
+  value?: unknown;
+  /**
+   * The node type of the conversion that cast it; absent when none did.
+   */
+  cast_by?: string | null;
+  /**
+   * Why it gave way to the new type's default; absent when it was cast.
+   */
+  default_because?: string | null;
+  /**
+   * The node type of each conversion that fits the two types, when it gave way to the default
+   * though one or more fit.
+   */
+  conversions_that_fit?: Array<string>;
 }
 
 /**
@@ -6982,6 +7024,7 @@ export interface ControlContractComponents {
   GraphTransactionAddedNote: GraphTransactionAddedNote;
   GraphTransactionRebuiltNode: GraphTransactionRebuiltNode;
   GraphTransactionInputOverriddenByALink: GraphTransactionInputOverriddenByALink;
+  GraphTransactionSavedValueRetyped: GraphTransactionSavedValueRetyped;
   AddNodeRequest: AddNodeRequest;
   OneLinkGraphEditRequest: OneLinkGraphEditRequest;
   CheckLinkRequest: CheckLinkRequest;
@@ -7423,7 +7466,7 @@ export interface ControlOperations {
   /**
    * Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.
    *
-   * Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A set on a setting read at setup that a link feeds is kept and answered there too, its node built with the value the link last carried. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.
+   * Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A set on a setting read at setup that a link feeds is kept and answered there too, its node built with the value the link last carried. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A set of the `pin_type` of a top-level `GraphInput` that saves a value carries that value into the new type in the same commit, which one undo reverses whole: when exactly one conversion the stream registers takes the former type and gives the new one, the value is cast by it and then held within the Input's `range`, among them the built-in `FloatToInteger`, which truncates toward zero within an Integer's range, `IntegerToFloat`, exact, and `BooleanToInteger`, `IntegerToBoolean`, `BooleanToFloat` and `FloatToBoolean`, 0 and 1; with none, a value the new type takes as it is is kept; otherwise the value gives way to the new type's default, no saved value, as it does when more than one conversion fits or the one that fits is a module's, a node body that converts only inside a started stream. Each such value is answered under `saved_values_retyped`: its `value_before`, the `value` it now saves and the conversion under `cast_by`, or why it took the default under `default_because` with each conversion that fits under `conversions_that_fit`. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.
    *
    * Since contract version 3, experimental.
    */
@@ -8225,7 +8268,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 33;
+export declare const CONTROL_CONTRACT_REVISION: 34;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

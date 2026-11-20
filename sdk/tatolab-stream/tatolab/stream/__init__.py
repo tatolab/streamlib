@@ -73,8 +73,14 @@ from ._pin_types import Vector4 as Vector4
 from ._project_asset_uuid import ProjectAssetMedia as ProjectAssetMedia
 from ._project_asset_uuid import ProjectAssetUuid as ProjectAssetUuid
 from ._built_in_nodes import AudioToTensor as AudioToTensor
+from ._built_in_nodes import BooleanToFloat as BooleanToFloat
+from ._built_in_nodes import BooleanToInteger as BooleanToInteger
 from ._built_in_nodes import ChannelsToRecords as ChannelsToRecords
 from ._built_in_nodes import ChannelsToRecordsConfig as ChannelsToRecordsConfig
+from ._built_in_nodes import FloatToBoolean as FloatToBoolean
+from ._built_in_nodes import FloatToInteger as FloatToInteger
+from ._built_in_nodes import IntegerToBoolean as IntegerToBoolean
+from ._built_in_nodes import IntegerToFloat as IntegerToFloat
 from ._built_in_nodes import RecordsToChannels as RecordsToChannels
 from ._built_in_nodes import RecordsToChannelsConfig as RecordsToChannelsConfig
 from ._built_in_nodes import TensorToAudio as TensorToAudio
@@ -194,6 +200,12 @@ __all__ = [
     "ArrayFrameCpuAttribute",
     "ArrayFrameGpuAttribute",
     "AudioToTensor",
+    "BooleanToFloat",
+    "BooleanToInteger",
+    "FloatToBoolean",
+    "FloatToInteger",
+    "IntegerToBoolean",
+    "IntegerToFloat",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",
     "Channels",

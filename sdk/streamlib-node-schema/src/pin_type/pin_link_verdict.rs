@@ -571,6 +571,13 @@ impl DirectPinLink {
     }
 }
 
+/// Whether a value of `output` is a value of `input` with nothing converted: a link between them
+/// connects as it is, or both are numbers of one type, whatever size each states.
+pub(super) fn takes_as_it_is(output: &PinType, input: &PinType) -> bool {
+    (output.is_a_number() && output.built_in_name() == input.built_in_name())
+        || direct_link_between(output, input).is_some_and(|direct| direct.free_conversion.is_none())
+}
+
 /// How an output of `output` connects to an input of `input` with nothing between them.
 fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLink> {
     use FreePinConversion::{

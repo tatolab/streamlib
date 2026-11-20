@@ -19,8 +19,14 @@ from ._pin_types import Audio, Tensor, Texture, UInt32
 
 __all__ = [
     "AudioToTensor",
+    "BooleanToFloat",
+    "BooleanToInteger",
     "ChannelsToRecords",
     "ChannelsToRecordsConfig",
+    "FloatToBoolean",
+    "FloatToInteger",
+    "IntegerToBoolean",
+    "IntegerToFloat",
     "RecordsToChannels",
     "RecordsToChannelsConfig",
     "TensorToAudio",
@@ -62,6 +68,64 @@ class AudioToTensor(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
+class BooleanToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Casts each Boolean on `value` into a Float on `cast`: false becomes 0.0 and true
+    becomes 1.0.
+
+    Inputs:
+        `value` (ordered): The Booleans to cast.
+
+    Outputs:
+        `cast`: Each Boolean as 0.0 or 1.0.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:BooleanToFloat"
+
+    value: InputPin[
+        Annotated[
+            bool,
+            StreamDelivery("ordered"),
+            Description("The Booleans to cast"),
+        ]
+    ]
+
+    cast: OutputPin[
+        Annotated[
+            float,
+            Description("Each Boolean as 0.0 or 1.0"),
+        ]
+    ]
+
+
+class BooleanToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Casts each Boolean on `value` into an Integer on `cast`: false becomes 0 and true
+    becomes 1.
+
+    Inputs:
+        `value` (ordered): The Booleans to cast.
+
+    Outputs:
+        `cast`: Each Boolean as 0 or 1.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:BooleanToInteger"
+
+    value: InputPin[
+        Annotated[
+            bool,
+            StreamDelivery("ordered"),
+            Description("The Booleans to cast"),
+        ]
+    ]
+
+    cast: OutputPin[
+        Annotated[
+            int,
+            Description("Each Boolean as 0 or 1"),
+        ]
+    ]
+
+
 class ChannelsToRecordsConfig(TypedDict, total=False):
     """`ChannelsToRecords`'s config: the keys `stream_builder.add` takes."""
 
@@ -90,6 +154,123 @@ class ChannelsToRecords(BuiltInNode[ChannelsToRecordsConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:ChannelsToRecords"
+
+
+class FloatToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Casts each Float on `value` into a Boolean on `cast`: 0.0 becomes false and any
+    other value true.
+
+    Inputs:
+        `value` (ordered): The Floats to cast.
+
+    Outputs:
+        `cast`: Each Float as false when it is 0, true otherwise.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:FloatToBoolean"
+
+    value: InputPin[
+        Annotated[
+            float,
+            StreamDelivery("ordered"),
+            Description("The Floats to cast"),
+        ]
+    ]
+
+    cast: OutputPin[
+        Annotated[
+            bool,
+            Description("Each Float as false when it is 0, true otherwise"),
+        ]
+    ]
+
+
+class FloatToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Casts each Float on `value` into an Integer on `cast`, truncated toward zero and
+    held to the range an Integer holds: 2.9 becomes 2 and -2.9 becomes -2. A link from a
+    Float into an Integer rounds half away from zero instead.
+
+    Inputs:
+        `value` (ordered): The Floats to cast.
+
+    Outputs:
+        `cast`: Each Float truncated toward zero, held to an Integer's range.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:FloatToInteger"
+
+    value: InputPin[
+        Annotated[
+            float,
+            StreamDelivery("ordered"),
+            Description("The Floats to cast"),
+        ]
+    ]
+
+    cast: OutputPin[
+        Annotated[
+            int,
+            Description("Each Float truncated toward zero, held to an Integer's range"),
+        ]
+    ]
+
+
+class IntegerToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Casts each Integer on `value` into a Boolean on `cast`: 0 becomes false and any
+    other value true.
+
+    Inputs:
+        `value` (ordered): The Integers to cast.
+
+    Outputs:
+        `cast`: Each Integer as false when it is 0, true otherwise.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:IntegerToBoolean"
+
+    value: InputPin[
+        Annotated[
+            int,
+            StreamDelivery("ordered"),
+            Description("The Integers to cast"),
+        ]
+    ]
+
+    cast: OutputPin[
+        Annotated[
+            bool,
+            Description("Each Integer as false when it is 0, true otherwise"),
+        ]
+    ]
+
+
+class IntegerToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Casts each Integer on `value` into the Float of the same value on `cast`: 2
+    becomes 2.0. Every value an Integer holds is a Float exactly.
+
+    Inputs:
+        `value` (ordered): The Integers to cast.
+
+    Outputs:
+        `cast`: Each Integer as the Float of the same value.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:IntegerToFloat"
+
+    value: InputPin[
+        Annotated[
+            int,
+            StreamDelivery("ordered"),
+            Description("The Integers to cast"),
+        ]
+    ]
+
+    cast: OutputPin[
+        Annotated[
+            float,
+            Description("Each Integer as the Float of the same value"),
+        ]
+    ]
 
 
 class RecordsToChannelsConfig(TypedDict, total=False):
