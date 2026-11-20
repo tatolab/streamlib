@@ -373,6 +373,8 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
         outputs_that_may_hand_out_nothing = Vec::new(),
         inputs_carrying_an_unread_message = Vec::new(),
         outputs_carrying_an_unread_message = Vec::new(),
+        inputs_carried_in_parts = Vec::new(),
+        outputs_carried_in_parts = Vec::new(),
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -390,6 +392,8 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
         outputs_that_may_hand_out_nothing: Vec<usize>,
         inputs_carrying_an_unread_message: Vec<usize>,
         outputs_carrying_an_unread_message: Vec<usize>,
+        inputs_carried_in_parts: Vec<(usize, String)>,
+        outputs_carried_in_parts: Vec<(usize, String)>,
     ) -> PyResult<Self> {
         let breadcrumb_number =
             BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE;
@@ -419,6 +423,8 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
                 outputs_that_may_hand_out_nothing,
                 inputs_carrying_an_unread_message,
                 outputs_carrying_an_unread_message,
+                inputs_carried_in_parts,
+                outputs_carried_in_parts,
                 ..HowAFunctionNodeCarriesValuesBeyondNumbers::default()
             },
         )

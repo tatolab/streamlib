@@ -11,6 +11,7 @@ use tatolab_module_sdk::module_host_table_abi::{
 };
 
 use super::function_node_raises_in_this_helper::FunctionNodeRaiseDescribed;
+use super::function_node_values_carried_in_parts::SlotsOfEachValue;
 use super::*;
 
 /// Why a function node's call answered no outputs.
@@ -67,6 +68,10 @@ pub(super) struct FunctionNodeCalledThroughItsEvaluateEntry {
     /// the outputs where each output that may hand out nothing says whether it
     /// handed one out.
     values_carried_as_tokens: FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry,
+    /// The slots of each of its own inputs among `input_values`, and of each
+    /// output among `output_values`.
+    slots_of_each_input: SlotsOfEachValue,
+    slots_of_each_output: SlotsOfEachValue,
     config_values: Vec<f64>,
     /// The index among `config_values` each input past the node's own sets: a
     /// config field it exposes as an input, linked.
@@ -80,11 +85,13 @@ pub(super) struct FunctionNodeCalledThroughItsEvaluateEntry {
 /// The inputs and outputs of a compiled call that carry a message as a token,
 /// and the slot of each output's handed-out flag.
 ///
-/// ABI contract with the evaluate entry the bootstrap compiles: a message input
-/// carries `input_index + 1`, or `0.0` when it holds none; a message output
-/// carries the token of the input it hands on, or `0.0`; and each output that
-/// may hand out nothing has a slot past every output, in output order, holding
-/// `1.0` when it handed one out and `0.0` when it did not.
+/// ABI contract with the evaluate entry the bootstrap compiles: each input and
+/// output takes one slot, and a Color, a Vector, a Rectangle or a Transform one
+/// slot per part, in port order; a message input carries `input_index + 1`, or
+/// `0.0` when it holds none; a message output carries the token of the input it
+/// hands on, or `0.0`; and each output that may hand out nothing has a slot
+/// past every output's, in output order, holding `1.0` when it handed one out
+/// and `0.0` when it did not.
 #[derive(Debug, Default)]
 pub(super) struct FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry {
     inputs_carrying_an_unread_message: Vec<usize>,
@@ -104,9 +111,10 @@ pub(super) struct FunctionNodeCalledAsPython {
     state_values: Vec<f64>,
 }
 
-/// How one function node is called.
+/// How one function node is called. A compiled call holds the buffers of every slot it hands
+/// its entry, so it lives boxed: it is built once per node and read through on every call.
 pub(super) enum HowAFunctionNodeIsCalled {
-    ThroughItsEvaluateEntry(FunctionNodeCalledThroughItsEvaluateEntry),
+    ThroughItsEvaluateEntry(Box<FunctionNodeCalledThroughItsEvaluateEntry>),
     AsPython(FunctionNodeCalledAsPython),
 }
 
@@ -171,29 +179,44 @@ impl HowAFunctionNodeIsCalled {
                             config_value_indices_set_by_the_inputs_past_its_own.len()
                         )
                     })?;
+                let slots_of_each_input = SlotsOfEachValue::of(
+                    node_id,
+                    "input",
+                    own_input_count,
+                    &how_it_carries_its_values.inputs_carried_in_parts,
+                )?;
+                let slots_of_each_output = SlotsOfEachValue::of(
+                    node_id,
+                    "output",
+                    output_count,
+                    &how_it_carries_its_values.outputs_carried_in_parts,
+                )?;
                 let values_carried_as_tokens =
                     FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry::of(
                         node_id,
                         how_it_carries_its_values,
                         own_input_count,
                         output_count,
+                        slots_of_each_output.slot_count(),
                     )?;
-                let output_slot_count = output_count
+                let output_slot_count = slots_of_each_output.slot_count()
                     + how_it_carries_its_values
                         .outputs_that_may_hand_out_nothing
                         .len();
-                return Ok(Self::ThroughItsEvaluateEntry(
+                return Ok(Self::ThroughItsEvaluateEntry(Box::new(
                     FunctionNodeCalledThroughItsEvaluateEntry {
                         evaluate_entry,
                         values_carried_as_tokens,
                         config_values,
                         config_value_indices_set_by_the_inputs_past_its_own,
-                        input_values: vec![0.0; own_input_count],
+                        input_values: vec![0.0; slots_of_each_input.slot_count()],
+                        slots_of_each_input,
+                        slots_of_each_output,
                         state_values_of_the_call_under_way: vec![0.0; state_values.len()],
                         state_values,
                         output_values: vec![0.0; output_slot_count],
                     },
-                ));
+                )));
             }
             if resumes_from_the_state_its_stream_carries {
                 called_through
@@ -216,7 +239,7 @@ impl HowAFunctionNodeIsCalled {
     pub(super) fn input_count(&self) -> usize {
         match self {
             Self::ThroughItsEvaluateEntry(compiled) => {
-                compiled.input_values.len()
+                compiled.own_input_count()
                     + compiled
                         .config_value_indices_set_by_the_inputs_past_its_own
                         .len()
@@ -247,8 +270,21 @@ impl HowAFunctionNodeIsCalled {
     ) -> std::result::Result<(), FunctionNodeCallFailure> {
         match self {
             Self::ThroughItsEvaluateEntry(compiled) => {
-                let own_input_count = compiled.input_values.len();
+                let own_input_count = compiled.own_input_count();
                 for (input_index, input_value) in input_values.iter().enumerate() {
+                    if input_index < own_input_count
+                        && let Some(parts) =
+                            compiled.slots_of_each_input.carried_in_parts(input_index)
+                    {
+                        let first_slot = compiled.slots_of_each_input.first_slot_of(input_index);
+                        parts.read_into(
+                            &mut compiled.input_values[first_slot..first_slot + parts.part_count()],
+                            input_value,
+                            node_id,
+                            input_index,
+                        )?;
+                        continue;
+                    }
                     let input_number = if compiled
                         .values_carried_as_tokens
                         .inputs_carrying_an_unread_message
@@ -263,7 +299,11 @@ impl HowAFunctionNodeIsCalled {
                         input_value.as_a_number_for_an_input_of(node_id, input_index)?
                     };
                     match input_index.checked_sub(own_input_count) {
-                        None => compiled.input_values[input_index] = input_number,
+                        None => {
+                            let first_slot =
+                                compiled.slots_of_each_input.first_slot_of(input_index);
+                            compiled.input_values[first_slot] = input_number;
+                        }
                         Some(past_its_own) => {
                             if let Some(config_value_index) = compiled
                                 .config_value_indices_set_by_the_inputs_past_its_own
@@ -301,6 +341,7 @@ impl FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry {
         how_it_carries_its_values: &HowAFunctionNodeCarriesValuesBeyondNumbers,
         own_input_count: usize,
         output_count: usize,
+        slot_count_of_every_output: usize,
     ) -> std::result::Result<Self, String> {
         let refusal = |what: &str, index: usize, count: usize| {
             format!(
@@ -329,7 +370,7 @@ impl FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry {
             .enumerate()
         {
             handed_out_slot_of_each_output[*output_index] =
-                Some(output_count + handed_out_slot_index);
+                Some(slot_count_of_every_output + handed_out_slot_index);
         }
         Ok(Self {
             inputs_carrying_an_unread_message: how_it_carries_its_values
@@ -344,6 +385,11 @@ impl FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry {
 }
 
 impl FunctionNodeCalledThroughItsEvaluateEntry {
+    /// The inputs the node declares, before those that set its config values.
+    fn own_input_count(&self) -> usize {
+        self.slots_of_each_input.count()
+    }
+
     /// The value output `output_index` took at the call just made: nothing
     /// when its handed-out slot says so, the input its token names for a
     /// message output, and the number it wrote otherwise.
@@ -363,7 +409,13 @@ impl FunctionNodeCalledThroughItsEvaluateEntry {
         if !handed_one_out {
             return Ok(FunctionNodeValue::Nothing);
         }
-        let written = self.output_values[output_index];
+        let first_slot = self.slots_of_each_output.first_slot_of(output_index);
+        if let Some(parts) = self.slots_of_each_output.carried_in_parts(output_index) {
+            return Ok(FunctionNodeValue::Parts(
+                self.output_values[first_slot..first_slot + parts.part_count()].to_vec(),
+            ));
+        }
+        let written = self.output_values[first_slot];
         if !tokens
             .outputs_carrying_an_unread_message
             .contains(&output_index)
@@ -394,9 +446,9 @@ impl FunctionNodeCalledThroughItsEvaluateEntry {
         self.state_values_of_the_call_under_way
             .copy_from_slice(&self.state_values);
         // SAFETY: the entry was compiled for this node's signature, so it reads
-        // exactly `input_values.len()` inputs and `config_values.len()` config
+        // exactly `input_values.len()` input slots and `config_values.len()` config
         // values and writes at most `state_values.len()` state values and
-        // `output_values.len()` outputs, each buffer that long and live across
+        // `output_values.len()` output slots, each buffer that long and live across
         // the call.
         let status = unsafe {
             (self.evaluate_entry)(

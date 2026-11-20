@@ -36,6 +36,7 @@ use crate::python_node_link_data_access::PythonNodeLinkDataAccess;
 mod function_node_call_shapes;
 mod function_node_island_evaluators;
 mod function_node_raises_in_this_helper;
+mod function_node_values_carried_in_parts;
 mod messages_read_off_links_from_outside_the_island;
 mod ports_of_a_function_node_run_standalone;
 
@@ -106,6 +107,18 @@ impl FunctionNodeValue {
                 "function node `{node_id}` takes a number on input {input_index}, and no value \
                  reached it"
             ))),
+        }
+    }
+
+    /// What this value is, as a refusal names it.
+    fn what_it_is(&self) -> String {
+        match self {
+            Self::Number(number) => format!("the number {number}"),
+            Self::Record(_) => "a dict".to_owned(),
+            Self::Parts(parts) => format!("a value of {} parts", parts.len()),
+            Self::Bytes(_) => "a value of a named type".to_owned(),
+            Self::MessageHandedOnUnread(_) => "a message to hand on unread".to_owned(),
+            Self::Nothing => "no value".to_owned(),
         }
     }
 
@@ -323,10 +336,13 @@ impl UnreadMessageAFunctionNodeHandsOn {
 /// take `None`, and the inputs and outputs that carry a message handed on
 /// unread or may carry nothing.
 ///
-/// Wire contract with the helper bootstrap: a dict of these seven keys, the
-/// first `[(input_index, reader_input_port, value_type)]`, the last two
-/// `[(index, pin_type_as_json)]` of each String, Menu, Asset or List input and
-/// output, the rest input or output indices.
+/// Wire contract with the helper bootstrap: a dict of these nine keys, the
+/// first `[(input_index, reader_input_port, value_type)]`, the two
+/// `*_carrying_a_stored_value` `[(index, pin_type_as_json)]` of each String,
+/// Menu, Asset or List input and output, the two `*_carried_in_parts`
+/// `[(index, value_type)]` of each Color, Vector, Rectangle or Transform input
+/// and output a compiled call carries in one slot per part, the rest input or
+/// output indices.
 #[derive(Debug, Default, FromPyObject)]
 pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
     #[pyo3(item)]
@@ -343,6 +359,10 @@ pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
     inputs_carrying_a_stored_value: Vec<(usize, String)>,
     #[pyo3(item)]
     outputs_carrying_a_stored_value: Vec<(usize, String)>,
+    #[pyo3(item)]
+    inputs_carried_in_parts: Vec<(usize, String)>,
+    #[pyo3(item)]
+    outputs_carried_in_parts: Vec<(usize, String)>,
 }
 
 impl HowAFunctionNodeCarriesValuesBeyondNumbers {

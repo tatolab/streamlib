@@ -198,6 +198,12 @@ class _FunctionNodeRunAsAStandaloneNode:
             outputs_carrying_an_unread_message=list(
                 prepared.how_its_values_are_carried["outputs_carrying_an_unread_message"]
             ),
+            inputs_carried_in_parts=list(
+                prepared.how_its_values_are_carried["inputs_carried_in_parts"]
+            ),
+            outputs_carried_in_parts=list(
+                prepared.how_its_values_are_carried["outputs_carried_in_parts"]
+            ),
         )
 
     def configure(self, config: Any) -> None:
