@@ -555,7 +555,13 @@ impl HostVulkanDevice {
             .shader_storage_image_write_without_format(true)
             .shader_int64(served_device_features.shader_int64 == vk::TRUE)
             .shader_float64(served_device_features.shader_float64 == vk::TRUE)
+            .sampler_anisotropy(served_device_features.sampler_anisotropy == vk::TRUE)
             .build();
+        let sampler_anisotropy_limit = if served_device_features.sampler_anisotropy == vk::TRUE {
+            device_props.limits.max_sampler_anisotropy as u32
+        } else {
+            1
+        };
 
         let device_create_info = {
             #[cfg_attr(
@@ -877,6 +883,7 @@ impl HostVulkanDevice {
             has_ray_tracing_pipeline,
             ray_tracing_properties,
             subgroup_operation_support,
+            sampler_anisotropy_limit,
             compute_queue_family_index,
             compute_queue,
             allocator: Some(allocator),

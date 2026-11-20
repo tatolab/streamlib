@@ -14,7 +14,10 @@ use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::{Error, Result};
 
-use super::{ShaderSpecializationConstant, refuse_an_array_sized_by_a_specialization_constant};
+use super::{
+    SamplerDescriptor, ShaderSpecializationConstant,
+    refuse_an_array_sized_by_a_specialization_constant,
+};
 
 use super::kernel_binding_names::{
     quote_declared_shader_binding_names, reflect_spirv_without_what_rspirv_refuses,
@@ -66,11 +69,16 @@ pub enum SurfaceBoundKernelBindingKind {
 /// `Some` on every spec the RHI has reconciled against the shader: the
 /// numeric binding is what the descriptor set is built from, the name is
 /// what a by-name dispatch resolves against.
+///
+/// `sampler` is how a [`ComputeBindingKind::SampledTexture`] binding samples,
+/// [`SamplerDescriptor::LINEAR_CLAMP`] when `None`; a kernel refuses one on
+/// any other kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComputeBindingSpec {
     pub binding: u32,
     pub kind: ComputeBindingKind,
     pub name: Option<Cow<'static, str>>,
+    pub sampler: Option<SamplerDescriptor>,
 }
 
 /// What a caller asserts about one binding before reflection has assigned it
@@ -139,6 +147,7 @@ impl ComputeBindingSpec {
             binding,
             kind: ComputeBindingKind::StorageBuffer,
             name: None,
+            sampler: None,
         }
     }
 
@@ -147,6 +156,7 @@ impl ComputeBindingSpec {
             binding,
             kind: ComputeBindingKind::UniformBuffer,
             name: None,
+            sampler: None,
         }
     }
 
@@ -155,6 +165,7 @@ impl ComputeBindingSpec {
             binding,
             kind: ComputeBindingKind::SampledTexture,
             name: None,
+            sampler: None,
         }
     }
 
@@ -163,6 +174,7 @@ impl ComputeBindingSpec {
             binding,
             kind: ComputeBindingKind::SampledImage,
             name: None,
+            sampler: None,
         }
     }
 
@@ -171,6 +183,7 @@ impl ComputeBindingSpec {
             binding,
             kind: ComputeBindingKind::StorageImage,
             name: None,
+            sampler: None,
         }
     }
 
@@ -178,6 +191,13 @@ impl ComputeBindingSpec {
     #[must_use]
     pub fn with_name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Sample this binding's texture with `sampler`.
+    #[must_use]
+    pub const fn with_sampler(mut self, sampler: SamplerDescriptor) -> Self {
+        self.sampler = Some(sampler);
         self
     }
 }
@@ -259,6 +279,7 @@ pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>
                 binding,
                 kind,
                 name: Some(Cow::Owned(name)),
+                sampler: None,
             });
         }
     }

@@ -115,4 +115,10 @@ impl HostVulkanDevice {
     pub(crate) fn subgroup_operation_support(&self) -> &VulkanSubgroupOperationSupport {
         &self.subgroup_operation_support
     }
+
+    /// The most samples an anisotropic kernel sampler may take, 1 when the
+    /// device serves no anisotropic filtering.
+    pub(crate) fn sampler_anisotropy_limit(&self) -> u32 {
+        self.sampler_anisotropy_limit
+    }
 }
