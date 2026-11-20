@@ -7,6 +7,7 @@
 //! on. A rebuild that fails is answered with the node's own words. A value a Value wire carries
 //! into such a setting rebuilds its node the same way, once for a burst of them.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,27 +40,66 @@ struct NodeRebuilt {
     state: Arc<ObservableNodeState>,
 }
 
-/// How one node's rebuild went: the node, and whether it built, or why not in its own words.
+/// How one node's rebuild went: the node, and whether it built, or why not.
 struct HowANodesRebuildWent {
     node_run_id: NodeRunId,
     node_uuid: Uuid,
-    built: std::result::Result<(), String>,
+    built: std::result::Result<(), ARebuildRefused>,
 }
 
-/// Why `node` did not build, settled as `settled` after its rebuild, in its own words.
-fn the_refusal_of_a_rebuild(node: &NodeRebuilt, settled: NodeState) -> String {
-    let why = match (settled, node.state.failure_reason()) {
-        (NodeState::Error, Some(reason)) => reason,
-        (settled, _) if settled.is_before_setup_completed() => format!(
-            "it had not finished its setup within {}s",
-            LONGEST_WAIT_FOR_A_REBUILT_NODE_TO_SET_UP.as_secs()
-        ),
-        (settled, _) => format!("it reads {settled} after its setup"),
-    };
-    format!(
-        "`{}` was rebuilt to read the settings set, and did not build with them: {why}",
-        node.display_name
-    )
+/// A node rebuilt that did not build with the settings set, and why.
+struct ARebuildRefused {
+    display_name: String,
+    why: WhyARebuiltNodeDidNotBuild,
+}
+
+/// Why a node rebuilt did not build.
+enum WhyARebuiltNodeDidNotBuild {
+    /// Its setup failed, in its own words.
+    ItsSetupFailed(String),
+    /// Its setup had not finished within the rebuild's wait.
+    ItsSetupDidNotFinishInTime,
+    /// It reads this state after its setup.
+    ItReadsAfterItsSetup(NodeState),
+}
+
+impl ARebuildRefused {
+    /// Why `node` did not build, settled as `settled` after its rebuild; `None` when it built.
+    fn of(node: &NodeRebuilt, settled: NodeState) -> Option<Self> {
+        let why = match (settled, node.state.failure_reason()) {
+            (NodeState::Running | NodeState::Paused, _) => return None,
+            (NodeState::Error, Some(reason)) => WhyARebuiltNodeDidNotBuild::ItsSetupFailed(reason),
+            (settled, _) if settled.is_before_setup_completed() => {
+                WhyARebuiltNodeDidNotBuild::ItsSetupDidNotFinishInTime
+            }
+            (settled, _) => WhyARebuiltNodeDidNotBuild::ItReadsAfterItsSetup(settled),
+        };
+        Some(Self {
+            display_name: node.display_name.clone(),
+            why,
+        })
+    }
+}
+
+impl std::fmt::Display for ARebuildRefused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "`{}` was rebuilt to read the settings set, and did not build with them: ",
+            self.display_name
+        )?;
+        match &self.why {
+            WhyARebuiltNodeDidNotBuild::ItsSetupFailed(reason) => write!(formatter, "{reason}"),
+            WhyARebuiltNodeDidNotBuild::ItsSetupDidNotFinishInTime => write!(
+                formatter,
+                "it had not finished its setup within {}s",
+                LONGEST_WAIT_FOR_A_REBUILT_NODE_TO_SET_UP.as_secs()
+            ),
+            WhyARebuiltNodeDidNotBuild::ItReadsAfterItsSetup(settled) => {
+                write!(formatter, "it reads {settled} after its setup")
+            }
+        }
+    }
 }
 
 impl LoadedStreamInThisRuntime {
@@ -100,8 +140,8 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<Vec<Uuid>> {
         let node_run_ids = std::mem::take(&mut *self.nodes_a_setting_read_at_setup_rebuilds.lock());
         let rebuilt = self.rebuild_the_nodes(node_run_ids).await?;
-        if let Some(refusal) = rebuilt.iter().find_map(|node| node.built.clone().err()) {
-            return Err(Error::Configuration(refusal));
+        if let Some(refusal) = rebuilt.iter().find_map(|node| node.built.as_ref().err()) {
+            return Err(Error::Configuration(refusal.to_string()));
         }
         Ok(rebuilt.iter().map(|node| node.node_uuid).collect())
     }
@@ -113,10 +153,7 @@ impl LoadedStreamInThisRuntime {
         &self,
         node_run_ids: Vec<NodeRunId>,
     ) -> Result<Vec<HowANodesRebuildWent>> {
-        if node_run_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        if self.live_commit_context().is_none() {
+        if node_run_ids.is_empty() || self.live_commit_context().is_none() {
             return Ok(Vec::new());
         }
         // Logged and compiled holding the stream's one writer, so no other edit's commit takes
@@ -178,11 +215,7 @@ impl LoadedStreamInThisRuntime {
             .map(|(node, settled)| HowANodesRebuildWent {
                 node_run_id: node.node_run_id.clone(),
                 node_uuid: node.node_uuid,
-                built: if matches!(settled, NodeState::Running | NodeState::Paused) {
-                    Ok(())
-                } else {
-                    Err(the_refusal_of_a_rebuild(node, settled))
-                },
+                built: ARebuildRefused::of(node, settled).map_or(Ok(()), Err),
             })
             .collect())
     }
@@ -218,18 +251,22 @@ impl LoadedStreamInThisRuntime {
                 return;
             }
         };
-        let (built, refused): (Vec<_>, Vec<_>) =
-            rebuilt.into_iter().partition(|node| node.built.is_ok());
-        for node in &refused {
-            if let Err(refusal) = &node.built {
-                tracing::warn!(
-                    node = %node.node_uuid,
-                    "{refusal}; it is built again from the values it had"
-                );
+        let mut nodes_built = 0;
+        let mut refused: HashMap<Uuid, NodeRunId> = HashMap::new();
+        for node in rebuilt {
+            match node.built {
+                Ok(()) => nodes_built += 1,
+                Err(refusal) => {
+                    tracing::warn!(
+                        node = %node.node_uuid,
+                        "{refusal}; it is built again from the values it had"
+                    );
+                    refused.insert(node.node_uuid, node.node_run_id);
+                }
             }
         }
         tracing::info!(
-            nodes_rebuilt = built.len(),
+            nodes_rebuilt = nodes_built,
             nodes_refused = refused.len(),
             "rebuilt each node a wire into its settings carried a new value into"
         );
@@ -238,10 +275,10 @@ impl LoadedStreamInThisRuntime {
         }
         let values_refused: Vec<ValueAWireCarriedIntoASetting> = values
             .into_iter()
-            .filter(|carried| refused.iter().any(|node| node.node_uuid == carried.node))
+            .filter(|carried| refused.contains_key(&carried.node))
             .collect();
         carried.put_back(&values_refused);
-        let node_run_ids = refused.into_iter().map(|node| node.node_run_id).collect();
+        let node_run_ids = refused.into_values().collect();
         match self.rebuild_the_nodes(node_run_ids).await {
             Ok(rebuilt) => {
                 for refusal in rebuilt.iter().filter_map(|node| node.built.as_ref().err()) {
@@ -263,16 +300,12 @@ impl LoadedStreamInThisRuntime {
         &self,
         values: &[ValueAWireCarriedIntoASetting],
     ) -> Vec<NodeRunId> {
+        let nodes: HashSet<Uuid> = values.iter().map(|carried| carried.node).collect();
         self.compiler.scope(|graph, _tx| {
-            let mut node_run_ids: Vec<NodeRunId> = Vec::new();
-            for carried in values {
-                if let Some(node) = graph.node_by_uuid(carried.node)
-                    && !node_run_ids.contains(&node.id)
-                {
-                    node_run_ids.push(node.id.clone());
-                }
-            }
-            node_run_ids
+            nodes
+                .into_iter()
+                .filter_map(|node| graph.node_by_uuid(node).map(|node| node.id.clone()))
+                .collect()
         })
     }
 }

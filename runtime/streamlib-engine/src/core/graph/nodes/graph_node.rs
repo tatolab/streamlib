@@ -275,7 +275,7 @@ impl GraphNode {
     /// Whether this node is a `GraphInput`; one in a graph that runs is at its stream's top
     /// level, since a fragment's own are flattened away.
     pub fn is_a_graph_input(&self) -> bool {
-        crate::core::graph::graph_interface_resolution::is_the_graph_input_type(&self.node_type)
+        self.node_type.is_the_graph_input_type()
     }
 
     pub fn node_type(&self) -> &NodeClassImportPath {

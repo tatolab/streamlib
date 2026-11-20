@@ -621,7 +621,7 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &NodeClassImportPath,
     ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
-        if crate::core::graph::graph_interface_resolution::is_the_graph_input_type(node_type) {
+        if node_type.is_the_graph_input_type() {
             return Some(Arc::clone(&THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS));
         }
         self.view_types_this_streams_project_brings

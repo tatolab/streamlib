@@ -6,7 +6,7 @@
 //! a burst of them on one setting waiting as its last, and each node is built with the value its
 //! wire last carried that it built with.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -146,15 +146,20 @@ impl ValuesWiresCarryIntoSettings {
     /// Hold each value waiting for a rebuild of one of `nodes` as what it is built with, as
     /// those nodes are about to be built: they are built with it, and rebuild for nothing.
     pub(crate) fn build_each_of_the_nodes_with_what_waits(&self, nodes: &[Uuid]) {
+        let nodes: HashSet<&Uuid> = nodes.iter().collect();
         let mut held = self.held.lock();
-        let waiting = std::mem::take(&mut held.waiting);
-        for ((node, setting), value) in waiting {
-            if nodes.contains(&node) {
-                held.built_with.insert((node, setting), value);
-            } else {
-                held.waiting.insert((node, setting), value);
+        let ValuesHeld {
+            built_with,
+            waiting,
+            ..
+        } = &mut *held;
+        waiting.retain(|(node, setting), value| {
+            if !nodes.contains(node) {
+                return true;
             }
-        }
+            built_with.insert((*node, setting.clone()), value.clone());
+            false
+        });
     }
 
     /// Put back what each of `refused` was built with before, the value its node was refused
@@ -215,12 +220,15 @@ pub(crate) fn forget_what_a_link_into_a_setting_carried(graph: &Graph, link_id: 
     else {
         return;
     };
-    if !graph.is_a_setting_read_at_setup(to.node_run_id(), to.port_name()) {
-        return;
-    }
     let Some(node) = graph.traversal().v(to.node_run_id()).first() else {
         return;
     };
+    if !node
+        .input_port(to.port_name())
+        .is_some_and(crate::core::graph::PortInfo::is_a_setting_read_at_setup)
+    {
+        return;
+    }
     let read_with_no_wire = the_value_a_setting_reads_with_no_wire(graph, node, to.port_name());
     graph.values_wires_carry_into_settings().its_wire_left(
         node.node_uuid,

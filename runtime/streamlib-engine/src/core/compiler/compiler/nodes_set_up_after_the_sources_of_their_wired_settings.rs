@@ -35,37 +35,56 @@ const LONGEST_WAIT_FOR_THE_SOURCES_OF_WIRES_INTO_SETTINGS: Duration = Duration::
 /// and the refusal is answered as the compile's; the nodes of earlier waves are set up already.
 pub(super) fn let_each_node_set_up_after_the_sources_of_the_wires_into_its_settings(
     graph_arc: &RwLock<Graph>,
-    mut barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)>,
+    barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)>,
 ) -> Result<()> {
     let deadline = Instant::now() + LONGEST_WAIT_FOR_THE_SOURCES_OF_WIRES_INTO_SETTINGS;
-    let mut a_wave_has_set_up = false;
-    while !barrier_handles.is_empty() {
-        let waiting_on_a_source =
-            the_nodes_a_wire_into_a_setting_waits_on_among(&graph_arc.read(), &barrier_handles);
-        let (mut later, mut now): (Vec<_>, Vec<_>) = barrier_handles
-            .into_iter()
-            .partition(|(node, _)| waiting_on_a_source.contains(node));
-        if now.is_empty() {
-            now = std::mem::take(&mut later);
-        }
-        let set_up_now: Vec<NodeRunId> = now.iter().map(|(node, _)| node.clone()).collect();
-        if a_wave_has_set_up {
-            build_each_with_what_the_wires_into_its_settings_carried(graph_arc, &set_up_now);
-            deliver_the_unlinked_input_values_of_each_node(graph_arc, &set_up_now)?;
-        }
-        for (node, handle) in now {
+    let (first_wave, mut later) = the_next_wave(graph_arc, barrier_handles);
+    let mut set_up_last = let_each_set_up(first_wave);
+    while !later.is_empty() {
+        wait_until_each_has_set_up(graph_arc, &set_up_last, deadline);
+        let (wave, after_it) = the_next_wave(graph_arc, later);
+        let nodes: Vec<NodeRunId> = wave.iter().map(|(node, _)| node.clone()).collect();
+        build_each_with_what_the_wires_into_its_settings_carried(graph_arc, &nodes);
+        deliver_the_unlinked_input_values_of_each_node(graph_arc, &nodes)?;
+        set_up_last = let_each_set_up(wave);
+        later = after_it;
+    }
+    Ok(())
+}
+
+/// The nodes of `barrier_handles` to set up next, none of which a wire into one of its settings
+/// waits on another of them for, and the rest; all of them together when each waits on another.
+type TheNextWaveAndTheRest = (
+    Vec<(NodeRunId, NodeReadyBarrierHandle)>,
+    Vec<(NodeRunId, NodeReadyBarrierHandle)>,
+);
+fn the_next_wave(
+    graph_arc: &RwLock<Graph>,
+    barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)>,
+) -> TheNextWaveAndTheRest {
+    let waiting_on_a_source =
+        the_nodes_a_wire_into_a_setting_waits_on_among(&graph_arc.read(), &barrier_handles);
+    let (later, now): TheNextWaveAndTheRest = barrier_handles
+        .into_iter()
+        .partition(|(node, _)| waiting_on_a_source.contains(node));
+    if now.is_empty() {
+        (later, Vec::new())
+    } else {
+        (now, later)
+    }
+}
+
+/// Signal each node of `wave` to set up, answering the nodes signalled.
+fn let_each_set_up(wave: Vec<(NodeRunId, NodeReadyBarrierHandle)>) -> Vec<NodeRunId> {
+    wave.into_iter()
+        .map(|(node, handle)| {
             tracing::trace!("[{}] Signaling CONTINUE", node);
             if handle.continue_sender.send(()).is_err() {
                 tracing::warn!("[{}] Failed to signal CONTINUE", node);
             }
-        }
-        if !later.is_empty() {
-            wait_until_each_has_set_up(graph_arc, &set_up_now, deadline);
-        }
-        a_wave_has_set_up = true;
-        barrier_handles = later;
-    }
-    Ok(())
+            node
+        })
+        .collect()
 }
 
 /// Hold each value the wires into the settings of `nodes` carried, each reader handing over

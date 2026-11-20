@@ -39,6 +39,9 @@ pub const BUILT_IN_NODE_CLASS_MODULE: &str = "tatolab.stream";
 /// The import path a graph names `GraphInput` by, in the built-in node module.
 pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
 
+/// The import path a graph names `GraphOutput` by, in the built-in node module.
+pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
+
 /// What ends the import folder leading a node type that names a class in an
 /// import's own node code; neither a Python nor a Rust import path holds it.
 pub const IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR: char = '/';
@@ -47,6 +50,11 @@ impl NodeClassImportPath {
     /// Whether this is `GraphInput`.
     pub fn is_the_graph_input_type(&self) -> bool {
         self.0 == GRAPH_INPUT_NODE_TYPE
+    }
+
+    /// The import path of `GraphOutput`.
+    pub fn graph_output() -> Self {
+        Self(GRAPH_OUTPUT_NODE_TYPE.to_owned())
     }
 
     /// Build a path, refusing one that names no class.

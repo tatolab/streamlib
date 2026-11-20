@@ -154,14 +154,12 @@ impl GraphInterfacePort {
             meaning: None,
             flow: None,
         };
-        let graph_output_type = NodeClassImportPath::new(super::GRAPH_OUTPUT_NODE_TYPE)
-            .expect("`GraphOutput`'s type is an import path");
         let verdict = match self.direction {
             GraphInterfacePortDirection::Output => pin_link_verdict(
                 linked_end,
                 PinLinkInputEnd {
                     end: interface_end,
-                    node_type: &graph_output_type,
+                    node_type: &NodeClassImportPath::graph_output(),
                     input_mode: None,
                 },
                 &[],
