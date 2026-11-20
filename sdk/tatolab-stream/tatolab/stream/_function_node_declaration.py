@@ -32,7 +32,7 @@ import dataclasses
 import functools
 import inspect
 import typing
-from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
+from typing import Any, Callable, Final, Generic, Optional, ParamSpec, TypeVar
 
 from ._contract_pin_types import PinDeclarationOnTheWire
 from ._description import description_and_annotation_without_it
@@ -44,6 +44,7 @@ from ._node_config_schema import (
 )
 from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._node_meta_declaration import (
+    NodeDeclaredBy,
     take_node_meta_held_for_the_kind_decorator,
     the_conversion_a_node_states,
 )
@@ -76,7 +77,7 @@ type State[StateRecord] = StateRecord
 type Stateful[FunctionNodeOutput, StateRecord] = tuple[FunctionNodeOutput, StateRecord]
 """What a stateful function node returns: its output, then the state its next call takes."""
 
-FUNCTION_NODE_KIND = "function"
+FUNCTION_NODE_KIND: Final = "function"
 PYTHON_FUNCTION_NODE_LANGUAGE = "python"
 
 # Wire contract with the runtime's reader: how the signature is called, stamped
@@ -150,7 +151,7 @@ def declare_function_node(
     typed grammar of bare `@node`, where each pin declares its pin type and a mistake is a
     `NodeDeclarationRefusal`; otherwise it reads the family grammar of `@node.function`.
     """
-    decorator = "@node" if reads_pin_types else "@node.function"
+    decorator: NodeDeclaredBy = "@node" if reads_pin_types else "@node.function"
     _refuse_what_is_not_a_plain_module_level_function(function, decorator)
     declared_meta = take_node_meta_held_for_the_kind_decorator(function)
     signature_reading = _FunctionNodeSignatureReading(function, reads_pin_types=reads_pin_types)
@@ -179,6 +180,7 @@ def declare_function_node(
             input_ports=signature_reading.input_ports,
             output_ports=signature_reading.output_ports,
         ),
+        declaration_stamps["declared_by"]: decorator,
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,

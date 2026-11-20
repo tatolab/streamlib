@@ -264,16 +264,6 @@ impl NodeTypesOneStreamResolves {
         descriptors
     }
 
-    /// Register `descriptor`, which this stream's interpreter described, its nodes run as
-    /// `how_its_nodes_run`, with the conversion it states.
-    pub(crate) fn register_a_type_described_in_this_streams_node_interpreter(
-        &self,
-        descriptor: NodeDescriptor,
-        how_its_nodes_run: HowANodeOfADescribedTypeRuns,
-    ) -> Result<()> {
-        self.register_a_described_type(descriptor, how_its_nodes_run)
-    }
-
     /// Register `descriptor` as a type this stream's interpreter described, for a test in
     /// another crate: a function node runs inside the read of each node it feeds, and any other
     /// node, driven as `execution` says, is built by nothing. Neither runs a node.
@@ -318,12 +308,17 @@ impl NodeTypesOneStreamResolves {
         installed_module: InstalledModuleOfANodeType,
     ) -> Result<()> {
         let node_type = descriptor.node_class_import_path.clone();
-        self.register_a_described_type(descriptor, how_its_nodes_run)?;
+        self.register_a_type_described_in_this_streams_node_interpreter(
+            descriptor,
+            how_its_nodes_run,
+        )?;
         self.record_the_installed_module_declaring(node_type, installed_module);
         Ok(())
     }
 
-    fn register_a_described_type(
+    /// Register `descriptor`, which this stream's interpreter described, its nodes run as
+    /// `how_its_nodes_run`, with the conversion it states.
+    pub(crate) fn register_a_type_described_in_this_streams_node_interpreter(
         &self,
         descriptor: NodeDescriptor,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns,
@@ -835,17 +830,23 @@ impl NodeTypesOneStreamResolves {
 
     /// The conversion each node type this stream resolves states, the native types', the
     /// installed modules' and the project's, sorted by node type: the native list itself when no
-    /// described type states one. A described type whose name a view of the project also has
-    /// resolves as the view, which states none, so its conversion is left out.
-    pub(crate) fn pin_conversions(&self) -> Arc<[PinConversion]> {
+    /// described type states one. Each described type's is read from the type its name resolves
+    /// to, so one a view of the project shadows, which states none, is left out.
+    pub fn pin_conversions(&self) -> Arc<[PinConversion]> {
         let native = NODE_REGISTRY.pin_conversions();
-        let view_types = self.view_types_this_streams_project_brings.read();
-        let described: Vec<PinConversion> = self
+        let described_types: Vec<NodeClassImportPath> = self
             .described_in_this_streams_node_interpreter
             .read()
+            .keys()
+            .cloned()
+            .collect();
+        let described: Vec<PinConversion> = described_types
             .iter()
-            .filter(|(node_type, _)| !view_types.contains_key(*node_type))
-            .filter_map(|(_, described)| described.conversion.clone())
+            .filter_map(|node_type| {
+                self.the_type_this_stream_resolves_beyond_the_native_ones(node_type)?
+                    .conversion
+                    .clone()
+            })
             .collect();
         if described.is_empty() {
             return native;

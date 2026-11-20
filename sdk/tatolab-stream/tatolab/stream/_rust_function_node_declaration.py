@@ -279,6 +279,7 @@ def declare_rust_function_node(
         declaration_stamps["description"]: declaration.description,
         declaration_stamps["category"]: declaration.category,
         declaration_stamps["conversion"]: False,
+        declaration_stamps["declared_by"]: "node.rust_function",
         declaration_stamps["input_ports"]: input_ports,
         declaration_stamps["output_ports"]: [
             {

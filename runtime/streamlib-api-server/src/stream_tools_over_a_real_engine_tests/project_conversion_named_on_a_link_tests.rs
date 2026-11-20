@@ -7,14 +7,6 @@
 //! interpreter describes them: `SweepAt` gives the sample's named type `Sweep`, `SweepPosition`
 //! states `conversion=True` from a `Sweep` to a Float, and `Warmth` takes a Float on `base`.
 
-use streamlib::sdk::descriptors::{
-    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeKind, PinDeclaration,
-    PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
-use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, SuggestedOperationCall,
-};
-
 use super::*;
 
 const SWEEP_AT_TYPE: &str = "nodes.sweep:SweepAt";
@@ -28,40 +20,6 @@ fn a_sweep() -> PinType {
 
 fn a_float() -> PinType {
     PinType::Float { exact_size: None }
-}
-
-fn a_port_of(name: &str, pin_type: PinType) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(
-            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
-        ),
-    )
-    .with_delivery_profile("newest")
-    .with_pin_declaration(PinDeclaration::exactly(pin_type))
-}
-
-/// The Python function node type `node_type` taking `inputs` and giving `outputs`.
-fn a_python_function_node_type(
-    node_type: &str,
-    inputs: Vec<PortDescriptor>,
-    outputs: Vec<PortDescriptor>,
-) -> NodeDescriptor {
-    let node_type = NodeClassImportPath::new(node_type).expect("a node type");
-    let short_name = node_type.as_str().rsplit(':').next().expect("a short name");
-    let mut descriptor = NodeDescriptor::new(
-        NodeClassShortName::new(short_name).expect("a short name"),
-        node_type,
-        "a node type of the every-pin-kind sample",
-    );
-    descriptor.node_kind = NodeKind::Function {
-        language: FunctionNodeLanguage::Python,
-    };
-    descriptor.inputs = inputs;
-    descriptor.outputs = outputs;
-    descriptor
 }
 
 /// A loaded stream `main` of a project, holding a `sweep` of `SweepAt` and a `warmth` of
@@ -83,21 +41,21 @@ async fn a_stream_holding_a_sweep_and_a_warmth(
         a_python_function_node_type(
             SWEEP_AT_TYPE,
             vec![
-                a_port_of("position", a_float()),
-                a_port_of("width", a_float()),
+                a_typed_port("position", a_float()),
+                a_typed_port("width", a_float()),
             ],
-            vec![a_port_of("result", a_sweep())],
+            vec![a_typed_port("result", a_sweep())],
         ),
         a_python_function_node_type(
             SWEEP_POSITION_TYPE,
-            vec![a_port_of("sweep", a_sweep())],
-            vec![a_port_of("result", a_float())],
+            vec![a_typed_port("sweep", a_sweep())],
+            vec![a_typed_port("result", a_float())],
         )
         .stating_a_conversion(),
         a_python_function_node_type(
             WARMTH_TYPE,
-            vec![a_port_of("base", a_float())],
-            vec![a_port_of("result", a_float())],
+            vec![a_typed_port("base", a_float())],
+            vec![a_typed_port("result", a_float())],
         ),
     ] {
         node_types
@@ -140,67 +98,60 @@ async fn a_stream_holding_a_sweep_and_a_warmth(
 async fn a_link_only_a_projects_conversion_bridges_is_refused_naming_it_with_the_call_placing_it() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let (stream_id, project, sweep, warmth) = a_stream_holding_a_sweep_and_a_warmth(&engine).await;
-    let link = json!({
-        "stream": project.stream_asset_of("main"),
-        "source": { "node": sweep, "port": "result" },
-        "target": { "node": warmth, "port": "base" },
-    });
 
-    let mut connect = link.clone();
-    connect["author"] = an_agent_named("alice");
-    let refusal = engine
-        .the_answer_or_the_refusal_of("connect", connect)
-        .await
-        .expect_err("connect never places a project's conversion");
+    engine
+        .the_call_placing_the_conversion_a_refused_link_names(
+            &stream_id,
+            &json!({
+                "stream": project.stream_asset_of("main"),
+                "source": { "node": sweep, "port": "result" },
+                "target": { "node": warmth, "port": "base" },
+            }),
+            ConversionToPlace {
+                node_type: SWEEP_POSITION_TYPE,
+                input_port: "sweep",
+                output_port: "result",
+            },
+        )
+        .await;
 
-    assert_eq!(
-        refusal.refusal_code,
-        ControlOperationRefusalCode::LinkNeedsAModuleConversion,
-        "{refusal:?}"
-    );
-    assert!(
-        refusal
-            .runtime_words
-            .contains(&format!("`{SWEEP_POSITION_TYPE}`")),
-        "{refusal:?}"
-    );
-    let Some(SuggestedOperationCall { operation, params }) = refusal.suggested_call.clone() else {
-        panic!("the refusal suggests the call that places the conversion: {refusal:?}");
-    };
-    assert_eq!(operation, "transact");
-    assert_eq!(
-        Value::Object(params),
-        json!({ "operations": [
-            { "operation": "add_node", "stream": stream_id,
-              "type": SWEEP_POSITION_TYPE, "as": "conversion" },
-            { "operation": "connect", "stream": stream_id,
-              "source": { "node": sweep, "port": "result" },
-              "target": { "node": "conversion", "port": "sweep" } },
-            { "operation": "connect", "stream": stream_id,
-              "source": { "node": "conversion", "port": "result" },
-              "target": { "node": warmth, "port": "base" } },
-        ]})
-    );
-
-    let checked = engine
-        .the_answer_or_the_refusal_of("check_link", link)
-        .await
-        .unwrap_or_else(|refusal| panic!("check_link answers: {refusal:?}"));
-    assert_eq!(checked["outcome"], "refused", "{checked}");
-    assert_eq!(
-        checked["refusal"]["refusal_code"], "link_needs_a_module_conversion",
-        "{checked}"
-    );
-    assert_eq!(
-        checked["refusal"]["suggested_call"],
-        serde_json::to_value(&refusal.suggested_call).unwrap(),
-        "check_link suggests the call connect suggests"
-    );
     assert_eq!(
         project.the_graph_document_of("main")["nodes"]
             .as_array()
             .map(Vec::len),
         Some(2),
         "neither the refused connect nor the check placed a node"
+    );
+}
+
+/// `list_pin_types` lists the conversion a project's node type states beside the built-in ones,
+/// read from the conversions the project's loaded stream resolves.
+///
+/// Mental-revert: listing the native conversions alone leaves `SweepPosition` out of the named
+/// type's row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversion_a_projects_loaded_stream_resolves_is_listed_among_the_pin_types() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let (_, project, _, _) = a_stream_holding_a_sweep_and_a_warmth(&engine).await;
+
+    let listed = engine
+        .the_answer_or_the_refusal_of(
+            "list_pin_types",
+            json!({ "project_directory": project.path() }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the pin types are listed: {refusal:?}"));
+
+    let converts_to: Vec<Value> = listed["pin_types"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|row| row["converts_to"].as_array().cloned().unwrap_or_default())
+        .collect();
+    assert!(
+        converts_to
+            .iter()
+            .any(|conversion| conversion["node_type"] == SWEEP_POSITION_TYPE),
+        "{listed}"
     );
 }

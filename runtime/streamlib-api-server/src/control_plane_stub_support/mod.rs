@@ -494,6 +494,17 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 )?;
                 Ok(Vec::new())
             }
+            fn pin_conversions_of_the_stream_a_call_names(
+                &self,
+                stream_id: &str,
+            ) -> ::streamlib::sdk::error::Result<
+                ::std::sync::Arc<[::streamlib::sdk::descriptors::PinConversion]>,
+            > {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_id,
+                )?;
+                Ok(::streamlib::sdk::nodes::NODE_REGISTRY.pin_conversions())
+            }
             fn run_a_graph_generator_in_the_interpreter_of_the_stream_a_call_names(
                 &self,
                 stream_id: &str,

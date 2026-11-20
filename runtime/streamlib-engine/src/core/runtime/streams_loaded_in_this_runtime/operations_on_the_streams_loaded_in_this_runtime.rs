@@ -15,6 +15,7 @@ use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit:
     ExtensionCodeCheck, ExtensionSdkKitTemplate,
 };
 use crate::core::context::StreamClockReading;
+use crate::core::descriptors::PinConversion;
 use crate::core::error::Result;
 use crate::core::nodes::InstalledModuleOfANodeType;
 use crate::core::pubsub::LoadedStreamIdentity;
@@ -85,6 +86,14 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         &self,
         stream_id: &str,
     ) -> Result<Vec<(NodeDescriptor, InstalledModuleOfANodeType)>>;
+
+    /// The conversion each node type the loaded stream `stream_id` names resolves states, as
+    /// its link verdict reads them, with the same
+    /// [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
+    fn pin_conversions_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<Arc<[PinConversion]>>;
 
     /// Run the project's graph generator `generator` over `promoted_settings` as a fragment
     /// named `fragment_name`, or its own name, in the own interpreter of the loaded stream
@@ -274,6 +283,14 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
                 .node_types_this_stream_resolves()
                 .node_types_installed_modules_declare()
         })
+    }
+
+    fn pin_conversions_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<Arc<[PinConversion]>> {
+        self.loaded_stream_of_the_id(stream_id)
+            .map(|stream| stream.node_types_this_stream_resolves().pin_conversions())
     }
 
     fn run_a_graph_generator_in_the_interpreter_of_the_stream_a_call_names(

@@ -20,7 +20,7 @@ from __future__ import annotations
 import inspect
 import re
 from collections.abc import Callable
-from typing import Any, NoReturn, ParamSpec, TypeVar
+from typing import Any, Final, NoReturn, ParamSpec, TypeVar
 
 from ._function_node_declaration import FunctionNode, _FunctionNodeSignatureReading
 from ._node_meta_declaration import (
@@ -33,7 +33,7 @@ __all__ = ["ShaderNode"]
 _ShaderNodeParameters = ParamSpec("_ShaderNodeParameters")
 _ShaderNodeReturn = TypeVar("_ShaderNodeReturn", covariant=True)
 
-SHADER_NODE_KIND = "shader"
+SHADER_NODE_KIND: Final = "shader"
 
 # Wire contract with the runtime's reader, stamped beside the declaration
 # stamps every node carries.
@@ -99,6 +99,7 @@ def declare_shader_node(
             input_ports=signature_reading.input_ports,
             output_ports=signature_reading.output_ports,
         ),
+        declaration_stamps["declared_by"]: "@node.shader",
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_SHADER_SOURCE_STAMP: shader_source,

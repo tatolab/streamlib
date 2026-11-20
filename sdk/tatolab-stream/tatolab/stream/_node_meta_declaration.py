@@ -12,12 +12,15 @@ decorator takes it; above, it stamps a node already declared.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Final, Literal, Optional, TypedDict
+from typing import Any, Final, Literal, NoReturn, Optional, TypedDict
 
 from ._description import refuse_a_description_that_is_not_a_string
 from ._pin_declaration import NodeDeclarationRefusal
 
 __all__ = [
+    "PROCESS_NODE_KIND",
+    "NodeDeclaredBy",
+    "NodeKindDeclared",
     "NodeMeta",
     "hold_node_meta_for_the_kind_decorator",
     "read_node_meta",
@@ -30,11 +33,20 @@ NODE_META_HELD_FOR_THE_KIND_DECORATOR_ATTRIBUTE = "__tatolab_node_meta_held_for_
 # What a category path's levels are separated by, as `Effects/Stylize`.
 NODE_CATEGORY_PATH_SEPARATOR = "/"
 
-# The decorators whose pins each state a pin type, which a conversion is judged by.
-_DECORATORS_DECLARING_PIN_TYPES: Final = ("@node", "@node.shader")
+# The kind a class node is: it runs in a process of its own.
+PROCESS_NODE_KIND: Final = "process"
 
-# How each counted thing is said, from none to nine.
-_COUNT_IN_WORDS: Final = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+NodeDeclaredBy = Literal["@node", "@node.shader", "@node.process", "@node.function", "node.rust_function"]
+"""The decorator that read a node's ports."""
+
+NodeKindDeclared = Literal["process", "function", "shader"]
+"""The kind a node is declared as."""
+
+# The decorators whose pins each state a pin type, which a conversion is judged by.
+_DECORATORS_DECLARING_PIN_TYPES: "tuple[NodeDeclaredBy, ...]" = ("@node", "@node.shader")
+
+# How each count of two or more is said, up to nine.
+_COUNT_OF_TWO_OR_MORE_IN_WORDS: Final = ("two", "three", "four", "five", "six", "seven", "eight", "nine")
 
 
 class NodeMeta(TypedDict, total=False):
@@ -42,11 +54,14 @@ class NodeMeta(TypedDict, total=False):
 
     category: str
     description: str
-    conversion: bool
+    conversion: Literal[True]
 
 
 def read_node_meta(
-    *, category: Optional[str], description: Optional[str], conversion: Optional[bool] = None
+    *,
+    category: Optional[str],
+    description: Optional[str],
+    conversion: Optional[Literal[True]] = None,
 ) -> NodeMeta:
     """The keys a `@node.meta(...)` was given, each refused unless it is what its key takes."""
     declared: NodeMeta = {}
@@ -76,8 +91,8 @@ def the_conversion_a_node_states(
     node: str,
     declared_meta: NodeMeta,
     *,
-    declared_by: str,
-    kind: str,
+    declared_by: NodeDeclaredBy,
+    kind: NodeKindDeclared,
     input_ports: "Sequence[dict[str, Any]]",
     output_ports: "Sequence[dict[str, Any]]",
 ) -> bool:
@@ -100,45 +115,74 @@ def the_conversion_a_node_states(
             finding_code="conversion_under_a_family_grammar",
             node=node,
         )
-    wired_inputs = [port["name"] for port in input_ports if _takes_a_wire(port)]
-    if len(wired_inputs) != 1:
-        raise NodeDeclarationRefusal(
-            f"`{node}` states `conversion=True` and has "
-            + (
-                "no input that takes a wire. To fix: give it the one input it converts"
-                if not wired_inputs
-                else f"{_counted(wired_inputs, 'input')} that take a wire, "
-                f"{_listed(wired_inputs)}. To fix: "
-                + _how_to_take_no_wire_on(wired_inputs[1:], kind, input_ports)
-            )
-            + ", or leave `conversion=True` out.",
-            finding_code="conversion_not_one_input_to_one_output",
-            node=node,
-            pin=wired_inputs[1] if wired_inputs else None,
-        )
+    wired_inputs = [port for port in input_ports if _takes_a_wire(port)]
+    if not wired_inputs:
+        _refuse_the_shape(node, "no input that takes a wire", "give it the one input it converts")
+    if len(wired_inputs) > 1:
+        _refuse_more_than_one_input_taking_a_wire(node, kind, wired_inputs)
     outputs = [port["name"] for port in output_ports]
-    if len(outputs) != 1:
-        raise NodeDeclarationRefusal(
-            f"`{node}` states `conversion=True` and has "
-            + (
-                "no output. To fix: give it the one output it converts to"
-                if not outputs
-                else f"{_counted(outputs, 'output')}, {_listed(outputs)}. To fix: keep only the "
-                f"output it converts to"
-            )
-            + ", or leave `conversion=True` out.",
-            finding_code="conversion_not_one_input_to_one_output",
-            node=node,
-            pin=outputs[1] if outputs else None,
+    if not outputs:
+        _refuse_the_shape(node, "no output", "give it the one output it converts to")
+    if len(outputs) > 1:
+        _refuse_the_shape(
+            node,
+            f"{_counted(outputs, 'output')}, {_listed(outputs)}",
+            "keep only the output it converts to",
+            pin=outputs[1],
         )
     return True
+
+
+def _refuse_more_than_one_input_taking_a_wire(
+    node: str, kind: NodeKindDeclared, wired_inputs: "Sequence[dict[str, Any]]"
+) -> NoReturn:
+    """Refuse `node`, of `kind`, for the two or more `wired_inputs` it has, naming the fix.
+
+    A class node's field takes a wire until it is marked `SettingOnly()`: its streams are
+    named first and its fields after them, and the fields are the ones to mark, whatever
+    order they are declared in. Every input of a function or shader node takes a wire.
+    """
+    if kind == PROCESS_NODE_KIND:
+        fields = [port["name"] for port in wired_inputs if "pin_default" in port]
+        streams = [port["name"] for port in wired_inputs if "pin_default" not in port]
+        named = [*streams, *fields]
+        if len(streams) > 1:
+            to_fix = "keep one input that takes a wire, a field marked `SettingOnly()` for each setting"
+            pin = streams[1]
+        else:
+            to_mark = fields if streams else fields[1:]
+            to_fix = f"mark {_listed(to_mark)} as `SettingOnly()`"
+            pin = to_mark[0]
+    else:
+        named = [port["name"] for port in wired_inputs]
+        to_fix = (
+            f"drop {_listed(named[1:])}, as every input of a {kind} node takes a wire and a "
+            f"setting is a class node's field marked `SettingOnly()`"
+        )
+        pin = named[1]
+    _refuse_the_shape(
+        node,
+        f"{_counted(named, 'input')} that take a wire, {_listed(named)}",
+        to_fix,
+        pin=pin,
+    )
+
+
+def _refuse_the_shape(node: str, has: str, to_fix: str, *, pin: Optional[str] = None) -> NoReturn:
+    raise NodeDeclarationRefusal(
+        f"`{node}` states `conversion=True` and has {has}. To fix: {to_fix}, or leave "
+        f"`conversion=True` out.",
+        finding_code="conversion_not_one_input_to_one_output",
+        node=node,
+        pin=pin,
+    )
 
 
 def _takes_a_wire(input_port: "dict[str, Any]") -> bool:
     return input_port.get("input_mode", {}).get("mode") != "setting_only"
 
 
-def _how_bare_node_writes_what(declared_by: str) -> str:
+def _how_bare_node_writes_what(declared_by: NodeDeclaredBy) -> str:
     if declared_by == "@node.process":
         return (
             "its streams as `InputPin[...]` and `OutputPin[...]` and its settings as fields "
@@ -147,27 +191,15 @@ def _how_bare_node_writes_what(declared_by: str) -> str:
     return "each pin typed by its pin type"
 
 
-def _how_to_take_no_wire_on(
-    extra_inputs: "Sequence[str]", kind: str, input_ports: "Sequence[dict[str, Any]]"
-) -> str:
-    """How the inputs `extra_inputs` of a node of `kind` stop taking a wire."""
-    if kind == "process":
-        fields = {port["name"] for port in input_ports if "pin_default" in port}
-        if all(name in fields for name in extra_inputs):
-            return f"mark {_listed(extra_inputs)} as `SettingOnly()`"
-        return (
-            "keep one input that takes a wire, a field marked `SettingOnly()` for each setting"
-        )
-    return (
-        f"drop {_listed(extra_inputs)}, as every input of a {kind} node takes a wire and a "
-        f"setting is a class node's field marked `SettingOnly()`"
-    )
-
-
 def _counted(names: "Sequence[str]", what: Literal["input", "output"]) -> str:
+    """Two or more `names`, counted as `what`s."""
     count = len(names)
-    in_words = _COUNT_IN_WORDS[count] if count < len(_COUNT_IN_WORDS) else str(count)
-    return f"{in_words} {what}{'' if count == 1 else 's'}"
+    in_words = (
+        _COUNT_OF_TWO_OR_MORE_IN_WORDS[count - 2]
+        if count - 2 < len(_COUNT_OF_TWO_OR_MORE_IN_WORDS)
+        else str(count)
+    )
+    return f"{in_words} {what}s"
 
 
 def _listed(names: "Sequence[str]") -> str:

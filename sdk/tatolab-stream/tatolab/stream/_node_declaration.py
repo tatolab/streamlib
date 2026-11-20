@@ -31,13 +31,15 @@ from ._exposed_name_cast import (
 from ._class_node_declaration import read_class_node_ports
 from ._function_node_declaration import FunctionNode, declare_function_node
 from ._node_meta_declaration import (
+    PROCESS_NODE_KIND,
+    NodeDeclaredBy,
     hold_node_meta_for_the_kind_decorator,
     read_node_meta,
     take_node_meta_held_for_the_kind_decorator,
     the_conversion_a_node_states,
 )
 from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
-from ._shader_node_declaration import SHADER_NODE_KIND, ShaderNode, declare_shader_node
+from ._shader_node_declaration import ShaderNode, declare_shader_node
 from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
     derive_node_config_json_schema_refusing_a_key_with_no_default,
@@ -59,13 +61,13 @@ NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
 NODE_DECLARATION_CATEGORY_STAMP = "__tatolab_node_category__"
 NODE_DECLARATION_CONVERSION_STAMP = "__tatolab_node_conversion__"
+# The decorator that read the node's ports, which `@node.meta` above it reads; never described.
+NODE_DECLARATION_DECLARED_BY_STAMP = "__tatolab_node_declared_by__"
 NODE_DECLARATION_EXECUTION_STAMP = "__tatolab_node_execution__"
 NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority__"
 NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP = "__tatolab_node_paced_by_real_time__"
 NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
 NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
-
-PROCESS_NODE_KIND = "process"
 
 # Every kind stamps these, by the role each plays in the declaration.
 _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
@@ -76,6 +78,7 @@ _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
     "description": NODE_DECLARATION_DESCRIPTION_STAMP,
     "category": NODE_DECLARATION_CATEGORY_STAMP,
     "conversion": NODE_DECLARATION_CONVERSION_STAMP,
+    "declared_by": NODE_DECLARATION_DECLARED_BY_STAMP,
     "input_ports": NODE_DECLARATION_INPUT_PORTS_STAMP,
     "output_ports": NODE_DECLARATION_OUTPUT_PORTS_STAMP,
 }
@@ -427,19 +430,21 @@ class NodeDeclarationDecorator:
 
         def apply_to_node(node_under_declaration: _NodeUnderDeclaration) -> _NodeUnderDeclaration:
             if vars(node_under_declaration).get(NODE_DECLARATION_DECLARED_STAMP) is True:
-                the_conversion_a_node_states(
-                    getattr(node_under_declaration, "__name__"),
-                    declared,
-                    declared_by=_the_decorator_that_declared(node_under_declaration),
-                    kind=getattr(node_under_declaration, NODE_DECLARATION_KIND_STAMP),
-                    input_ports=getattr(node_under_declaration, NODE_DECLARATION_INPUT_PORTS_STAMP),
-                    output_ports=getattr(node_under_declaration, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
-                )
-                for meta_key, declared_value in declared.items():
+                stamped: "dict[str, Any]" = dict(declared)
+                if "conversion" in declared:
+                    stamped["conversion"] = the_conversion_a_node_states(
+                        getattr(node_under_declaration, "__name__"),
+                        declared,
+                        declared_by=getattr(node_under_declaration, NODE_DECLARATION_DECLARED_BY_STAMP),
+                        kind=getattr(node_under_declaration, NODE_DECLARATION_KIND_STAMP),
+                        input_ports=getattr(node_under_declaration, NODE_DECLARATION_INPUT_PORTS_STAMP),
+                        output_ports=getattr(node_under_declaration, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+                    )
+                for meta_key, stamped_value in stamped.items():
                     setattr(
                         node_under_declaration,
                         _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES[meta_key],
-                        declared_value,
+                        stamped_value,
                     )
             else:
                 hold_node_meta_for_the_kind_decorator(node_under_declaration, declared)
@@ -635,7 +640,7 @@ def _declare_node(
 def _stamp_a_class_node(
     node_class: NodeClassUnderDeclaration,
     *,
-    declared_by: str,
+    declared_by: NodeDeclaredBy,
     input_ports: "list[dict[str, Any]]",
     output_ports: "list[dict[str, Any]]",
     config_class: "Optional[type]",
@@ -671,6 +676,7 @@ def _stamp_a_class_node(
     setattr(node_class, NODE_DECLARATION_DESCRIPTION_STAMP, declared_meta.get("description", ""))
     setattr(node_class, NODE_DECLARATION_CATEGORY_STAMP, declared_meta.get("category"))
     setattr(node_class, NODE_DECLARATION_CONVERSION_STAMP, conversion)
+    setattr(node_class, NODE_DECLARATION_DECLARED_BY_STAMP, declared_by)
     setattr(
         node_class,
         NODE_DECLARATION_EXECUTION_STAMP,
@@ -692,27 +698,6 @@ def _stamp_a_class_node(
     setattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
 
     return node_class
-
-
-def _the_decorator_that_declared(declared_node: object) -> str:
-    """The decorator that read the ports of `declared_node`, a node already declared.
-
-    A shader is `@node.shader`, and a Rust function node `node.rust_function`. A function or
-    class whose every port states a pin type was read by bare `@node`, and one whose ports
-    declare families by `@node.function` or `@node.process`, which never stamp a pin type.
-    """
-    kind = getattr(declared_node, NODE_DECLARATION_KIND_STAMP)
-    if kind == SHADER_NODE_KIND:
-        return "@node.shader"
-    if isinstance(declared_node, RustFunctionNode):
-        return "node.rust_function"
-    ports = [
-        *getattr(declared_node, NODE_DECLARATION_INPUT_PORTS_STAMP),
-        *getattr(declared_node, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
-    ]
-    if all("pin_declaration" in port for port in ports):
-        return "@node"
-    return "@node.process" if kind == PROCESS_NODE_KIND else "@node.function"
 
 
 def _config_class_named_by_the_init_annotation(

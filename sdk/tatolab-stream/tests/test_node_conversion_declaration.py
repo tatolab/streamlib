@@ -22,7 +22,10 @@ from tatolab.stream import (
     Texture,
     node,
 )
-from tatolab.stream._node_declaration import NODE_DECLARATION_CONVERSION_STAMP
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_CONVERSION_STAMP,
+    NODE_DECLARATION_DECLARED_BY_STAMP,
+)
 
 
 def _slang_passing_the_image_on(function_name: str) -> str:
@@ -135,6 +138,36 @@ def test_a_class_with_a_second_input_taking_a_wire_is_refused_naming_it_and_the_
     assert refused.value.finding_code == "conversion_not_one_input_to_one_output"
     assert refused.value.node == "H264Encoder"
     assert refused.value.pin == "bitrate_bps"
+
+
+def test_a_class_whose_field_comes_before_its_stream_is_refused_naming_the_field_to_mark():
+    with pytest.raises(NodeDeclarationRefusal) as refused:
+
+        @node.meta(conversion=True)
+        @node(execution="manual")
+        class H264Encoder:
+            bitrate_bps: int = 4_000_000
+            video: InputPin[Texture]
+            encoded_video: OutputPin[EncodedVideo]
+
+    assert str(refused.value) == (
+        "`H264Encoder` states `conversion=True` and has two inputs that take a wire, `video` and "
+        "`bitrate_bps`. To fix: mark `bitrate_bps` as `SettingOnly()`, or leave "
+        "`conversion=True` out."
+    )
+    assert refused.value.pin == "bitrate_bps"
+
+
+@pytest.mark.parametrize(
+    ("declared", "declared_by"),
+    [
+        (H264EncoderStatingItsMetaAbove, "@node"),
+        (level_as_text_stating_its_meta_above, "@node"),
+        (picture_passed_on_stating_its_meta_above, "@node.shader"),
+    ],
+)
+def test_each_kind_stamps_the_decorator_that_read_its_ports(declared: Any, declared_by: str):
+    assert getattr(declared, NODE_DECLARATION_DECLARED_BY_STAMP) == declared_by
 
 
 def test_a_class_with_two_streams_in_is_refused_with_no_setting_to_mark():

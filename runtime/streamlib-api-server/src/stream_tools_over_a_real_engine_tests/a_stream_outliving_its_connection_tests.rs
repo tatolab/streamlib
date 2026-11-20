@@ -79,6 +79,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         self.engine
             .node_types_installed_modules_declare_in_the_stream_a_call_names(stream_id)
     }
+    fn pin_conversions_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<std::sync::Arc<[streamlib::sdk::descriptors::PinConversion]>> {
+        self.engine
+            .pin_conversions_of_the_stream_a_call_names(stream_id)
+    }
     fn run_a_graph_generator_in_the_interpreter_of_the_stream_a_call_names(
         &self,
         stream_id: &str,

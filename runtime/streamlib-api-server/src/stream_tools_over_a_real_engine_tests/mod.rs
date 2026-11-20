@@ -23,7 +23,10 @@ use rmcp::RoleClient;
 use rmcp::service::RunningService;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::descriptors::NodeDescriptor;
+use streamlib::sdk::descriptors::{
+    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
+    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY};
@@ -635,6 +638,120 @@ async fn the_next_answer_but_its_notifications(
             return message;
         }
     }
+}
+
+/// A conversion a refused link names to place between its two ends: its node type, and the input
+/// and output the link would run through.
+#[derive(Clone, Copy)]
+struct ConversionToPlace<'names> {
+    node_type: &'names str,
+    input_port: &'names str,
+    output_port: &'names str,
+}
+
+impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
+    /// The params of the `transact` placing `conversion` between the two ends of `link`, in the
+    /// loaded stream `stream_id`: `connect` refuses `link` with `link_needs_a_module_conversion`,
+    /// naming `conversion`, and suggests that call, and `check_link` answers the same refusal and
+    /// call. Each end of `link` is a node's UUID.
+    async fn the_call_placing_the_conversion_a_refused_link_names(
+        &self,
+        stream_id: &str,
+        link: &Value,
+        conversion: ConversionToPlace<'_>,
+    ) -> Value {
+        use streamlib_runtime_client_contract::local_api_wire_contract::{
+            ControlOperationRefusalCode, SuggestedOperationCall,
+        };
+        let mut connect = link.clone();
+        connect["author"] = an_agent_named("alice");
+        let refusal = self
+            .the_answer_or_the_refusal_of("connect", connect)
+            .await
+            .expect_err("connect never places a conversion a module or a project states");
+
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::LinkNeedsAModuleConversion,
+            "{refusal:?}"
+        );
+        assert!(
+            refusal
+                .runtime_words
+                .contains(&format!("`{}`", conversion.node_type)),
+            "{refusal:?}"
+        );
+        let Some(SuggestedOperationCall { operation, params }) = refusal.suggested_call.clone()
+        else {
+            panic!("the refusal suggests the call that places the conversion: {refusal:?}");
+        };
+        assert_eq!(operation, "transact");
+        let params = Value::Object(params);
+        assert_eq!(
+            params,
+            json!({ "operations": [
+                { "operation": "add_node", "stream": stream_id,
+                  "type": conversion.node_type, "as": "conversion" },
+                { "operation": "connect", "stream": stream_id,
+                  "source": link["source"],
+                  "target": { "node": "conversion", "port": conversion.input_port } },
+                { "operation": "connect", "stream": stream_id,
+                  "source": { "node": "conversion", "port": conversion.output_port },
+                  "target": link["target"] },
+            ]})
+        );
+
+        let checked = self
+            .the_answer_or_the_refusal_of("check_link", link.clone())
+            .await
+            .unwrap_or_else(|refusal| panic!("check_link answers: {refusal:?}"));
+        assert_eq!(checked["outcome"], "refused", "{checked}");
+        assert_eq!(
+            checked["refusal"]["refusal_code"], "link_needs_a_module_conversion",
+            "{checked}"
+        );
+        assert_eq!(
+            checked["refusal"]["suggested_call"],
+            serde_json::to_value(&refusal.suggested_call).unwrap(),
+            "check_link suggests the call connect suggests"
+        );
+        params
+    }
+}
+
+/// The port `name`, typed `pin_type`, on the family that carries it.
+fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
+    PortDescriptor::new(
+        name,
+        "",
+        true,
+        PortFamilyDeclaration::of_family(
+            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
+        ),
+    )
+    .with_delivery_profile("newest")
+    .with_pin_declaration(PinDeclaration::exactly(pin_type))
+}
+
+/// The Python function node type `node_type` taking `inputs` and giving `outputs`.
+fn a_python_function_node_type(
+    node_type: &str,
+    inputs: Vec<PortDescriptor>,
+    outputs: Vec<PortDescriptor>,
+) -> NodeDescriptor {
+    let node_type = NodeClassImportPath::new(node_type).expect("a node type");
+    let short_name = node_type.as_str().rsplit(':').next().expect("a short name");
+    let mut descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(short_name).expect("a short name"),
+        node_type,
+        "a Python function node type a test registers",
+    );
+    descriptor.node_kind = NodeKind::Function {
+        language: FunctionNodeLanguage::Python,
+    };
+    descriptor.inputs = inputs;
+    descriptor.outputs = outputs;
+    descriptor
 }
 
 /// The node named `name` of the graph document or render `graph`.
