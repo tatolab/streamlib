@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Color, Texture, node
 
 
 @node.meta(
@@ -28,7 +28,7 @@ float4 Blur(ImageInput image, float radius)
 }
 """,
 )
-def Blur(image: ImageFrame, radius: float = 0.01) -> ImageFrame: ...  # noqa: N802
+def Blur(image: Texture, radius: float = 0.01) -> Texture: ...  # noqa: N802
 
 
 @node.meta(category="Filters", description="Crisp up edges and fine detail.")
@@ -45,8 +45,8 @@ float4 Sharpen(ImageInput image, float amount, float radius)
 """,
 )
 def Sharpen(  # noqa: N802
-    image: ImageFrame, amount: float = 1.0, radius: float = 0.002
-) -> ImageFrame: ...
+    image: Texture, amount: float = 1.0, radius: float = 0.002
+) -> Texture: ...
 
 
 @node.meta(
@@ -73,8 +73,8 @@ float4 EdgeDetect(ImageInput image, float strength, float radius)
 """,
 )
 def EdgeDetect(  # noqa: N802
-    image: ImageFrame, strength: float = 4.0, radius: float = 0.002
-) -> ImageFrame: ...
+    image: Texture, strength: float = 4.0, radius: float = 0.002
+) -> Texture: ...
 
 
 @node.meta(
@@ -90,7 +90,7 @@ float4 Pixelate(ImageInput image, float cells_across)
 }
 """,
 )
-def Pixelate(image: ImageFrame, cells_across: float = 64.0) -> ImageFrame: ...  # noqa: N802
+def Pixelate(image: Texture, cells_across: float = 64.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -106,7 +106,7 @@ float4 Displace(ImageInput image, ImageInput map, float amount)
 }
 """,
 )
-def Displace(image: ImageFrame, map: ImageFrame, amount: float = 0.1) -> ImageFrame: ...  # noqa: N802, A002
+def Displace(image: Texture, map: Texture, amount: float = 0.1) -> Texture: ...  # noqa: N802, A002
 
 
 @node.meta(
@@ -124,7 +124,7 @@ float4 RgbSplit(ImageInput image, float amount, float angle)
 }
 """,
 )
-def RgbSplit(image: ImageFrame, amount: float = 0.005, angle: float = 0.0) -> ImageFrame: ...  # noqa: N802
+def RgbSplit(image: Texture, amount: float = 0.005, angle: float = 0.0) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -142,8 +142,8 @@ float4 Vignette(ImageInput image, float amount, float size, float softness)
 """,
 )
 def Vignette(  # noqa: N802
-    image: ImageFrame, amount: float = 0.6, size: float = 0.5, softness: float = 0.5
-) -> ImageFrame: ...
+    image: Texture, amount: float = 0.6, size: float = 0.5, softness: float = 0.5
+) -> Texture: ...
 
 
 @node.meta(
@@ -152,9 +152,8 @@ def Vignette(  # noqa: N802
 )
 @node.shader(
     """
-float4 ChromaKey(ImageInput image, float key_red, float key_green, float key_blue, float tolerance, float softness)
+float4 ChromaKey(ImageInput image, float4 key, float tolerance, float softness)
 {
-    float3 key = float3(key_red, key_green, key_blue);
     float2 pixel_chroma = image.pixel.rg - image.pixel.b;
     float2 key_chroma = key.rg - key.b;
     float distance_from_key = length(pixel_chroma - key_chroma);
@@ -164,13 +163,11 @@ float4 ChromaKey(ImageInput image, float key_red, float key_green, float key_blu
 """,
 )
 def ChromaKey(  # noqa: N802
-    image: ImageFrame,
-    key_red: float = 0.0,
-    key_green: float = 1.0,
-    key_blue: float = 0.0,
+    image: Texture,
+    key: Color = Color(0.0, 1.0, 0.0, 1.0),
     tolerance: float = 0.4,
     softness: float = 0.1,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -188,5 +185,5 @@ float4 LumaKey(ImageInput image, float threshold, float softness)
 """,
 )
 def LumaKey(  # noqa: N802
-    image: ImageFrame, threshold: float = 0.2, softness: float = 0.1
-) -> ImageFrame: ...
+    image: Texture, threshold: float = 0.2, softness: float = 0.1
+) -> Texture: ...

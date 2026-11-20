@@ -280,6 +280,7 @@ fn a_node_placed_on_its_own_takes_the_merged_value_of_what_it_saved() {
 
 const CORE_TINT: &str = "imports/core-nodes/core_nodes.color:Tint";
 const CORE_DUOTONE: &str = "imports/core-nodes/core_nodes.color:Duotone";
+const CORE_CIRCLE: &str = "core_nodes.generators:Circle";
 
 fn a_core_node(node_type: &str, input_values: Value) -> Value {
     json!({
@@ -329,7 +330,10 @@ fn a_core_duotone_opens_with_its_dark_and_light_colors_and_a_wire_kept_on_a_comb
     );
     let combining_id = the_combining_node_id(TINT, "light");
     let combining_node = the_combining_node_of(&upgraded, "light");
-    assert_eq!(combining_node["type"], COMBINE_COLOR_NODE_TYPE);
+    assert_eq!(
+        combining_node["type"],
+        "imports/core-nodes/core_nodes.combine_and_separate:CombineColor"
+    );
     assert_eq!(
         combining_node["input_values"],
         json!({"red": 0.7, "blue": 0.4, "alpha": 1.0})
@@ -349,5 +353,80 @@ fn a_core_tint_or_duotone_saved_with_no_numbers_is_left_as_written() {
     for node_type in [CORE_TINT, CORE_DUOTONE] {
         let document = json!({"nodes": [a_core_node(node_type, json!({}))]});
         assert_eq!(upgraded_as_shipped(&document), None, "{node_type}");
+    }
+}
+
+#[test]
+fn a_core_circle_in_its_own_project_keeps_a_wired_centre_through_a_combine_vector_it_names_alike() {
+    let mut circle = a_core_node(CORE_CIRCLE, json!({"center_y": 0.4, "green": 0.9}));
+    circle["studio"] = json!({"contract": 1, "position": [520, 0]});
+    let document = json!({
+        "nodes": [circle, an_lfo()],
+        "links": [a_link((LFO, "value"), (TINT, "center_x"))]
+    });
+    let upgraded = upgraded_as_shipped(&document).expect("Circle's numbers merge");
+    assert_eq!(
+        upgraded["nodes"][0]["input_values"],
+        json!({"color": {"red": 1.0, "green": 0.9, "blue": 1.0, "alpha": 1.0}})
+    );
+    let combining_id = the_combining_node_id(TINT, "center");
+    assert_eq!(
+        the_combining_node_of(&upgraded, "center"),
+        json!({
+            "id": combining_id,
+            "name": "look_center",
+            "type": COMBINE_VECTOR_NODE_TYPE,
+            "input_values": {"y": 0.4},
+            "studio": {"contract": 1, "position": [280.0, 0.0]}
+        })
+    );
+    assert_eq!(
+        upgraded["links"],
+        json!([
+            a_link((LFO, "value"), (&combining_id, "x")),
+            a_link((&combining_id, COMBINED_OUTPUT), (TINT, "center")),
+        ])
+    );
+}
+
+#[test]
+fn a_node_type_under_a_folder_that_is_no_import_is_another_type_and_left_as_written() {
+    for node_type in [
+        "nodes/core_nodes.generators:Circle",
+        "imports/a/b/core_nodes.generators:Circle",
+        "imports//core_nodes.generators:Circle",
+        "my_core_nodes.generators:Circle",
+    ] {
+        let document = json!({"nodes": [a_core_node(node_type, json!({"red": 0.5}))]});
+        assert_eq!(upgraded_as_shipped(&document), None, "{node_type}");
+    }
+}
+
+#[test]
+fn every_core_node_row_names_parts_its_merged_value_holds_and_feeds_each_from_an_input_once() {
+    for row in MERGED_INPUTS {
+        let parts = match row.merged_into {
+            MergedInto::Color => 4..=4,
+            MergedInto::Vector => 2..=4,
+        };
+        assert!(
+            parts.contains(&row.parts.len()),
+            "{}.{}",
+            row.node_type,
+            row.input
+        );
+        let mut old_inputs: Vec<_> = row
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                MergedPart::FedBy { old_input, .. } => Some(*old_input),
+                MergedPart::Fixed(_) => None,
+            })
+            .collect();
+        let fed = old_inputs.len();
+        old_inputs.sort_unstable();
+        old_inputs.dedup();
+        assert_eq!(old_inputs.len(), fed, "{}.{}", row.node_type, row.input);
+        assert!(!row.node_type.starts_with("imports/"), "{}", row.node_type);
     }
 }
