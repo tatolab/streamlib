@@ -143,6 +143,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             _node_name: &str,
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
+            _member: ::std::option::Option<&str>,
             _value: ::std::option::Option<&::serde_json::Value>,
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             Ok(())
@@ -186,6 +187,14 @@ macro_rules! graph_mutation_ops_record_the_call {
             Ok(::std::boxed::Box::new(
                 $crate::control_plane_stub_support::GraphEditsOfAStubAppliedOneByOne(self),
             ))
+        }
+        fn rebuild_each_node_a_setting_read_at_setup_changed(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::std::vec::Vec<::uuid::Uuid>>,
+        > {
+            ::std::boxed::Box::pin(::std::future::ready(Ok(::std::vec::Vec::new())))
         }
         fn hold_an_edit_its_document_holds_not_live(
             &self,

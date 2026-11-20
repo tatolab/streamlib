@@ -30,6 +30,23 @@
   ],
   "description": "What a module's `node_ui/tatolab_node_ui.json` registers.",
   "$defs": {
+    "NamedPinTypeImportPath": {
+      "type": "string",
+      "description": "The class that declares a named pin type, `module:QualifiedClassName`."
+    },
+    "NodeUiControlPinType": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BuiltInPinTypeName",
+          "description": "A built-in type, whose default control only the Studio's own module registers."
+        },
+        {
+          "$ref": "#/$defs/NamedPinTypeImportPath",
+          "description": "A module's named type, whose default control only the module that declares it registers."
+        }
+      ],
+      "description": "The pin type a control is registered for: a built-in type by its name, as `float`, or a\nmodule's named type by the import path of the class that declares it, as\n`nodes.sensor:SensorReading`."
+    },
     "BuiltInPinTypeName": {
       "oneOf": [
         {
@@ -145,7 +162,7 @@
       "additionalProperties": false,
       "properties": {
         "type": {
-          "$ref": "#/$defs/BuiltInPinTypeName",
+          "$ref": "#/$defs/NodeUiControlPinType",
           "description": "The pin type whose inputs the control edits or shows."
         },
         "control": {

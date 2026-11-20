@@ -146,10 +146,12 @@ fn a_link(
         source: StreamGraphDocumentLinkEnd {
             node: source.id,
             port: "video".to_owned(),
+            member: None,
         },
         target: StreamGraphDocumentLinkEnd {
             node: target.id,
             port: "video_in".to_owned(),
+            member: None,
         },
     }
 }
@@ -235,11 +237,13 @@ fn a_set_of_one_input_value_is_undone_to_the_value_it_replaced() {
     let set = StreamGraphOperation::set_node_input_value_of(
         &held_node(&project, effect.id),
         "strength".to_owned(),
+        None,
         Some(json!(0.75)),
     );
     assert_eq!(
         set,
         StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: effect.id,
             input: "strength".to_owned(),
             from: Some(json!(0.5)),
@@ -262,6 +266,7 @@ fn a_set_of_one_input_value_is_undone_to_the_value_it_replaced() {
     let cleared = StreamGraphOperation::set_node_input_value_of(
         &held_node(&project, effect.id),
         "strength".to_owned(),
+        None,
         Some(serde_json::Value::Null),
     );
     project
@@ -271,6 +276,98 @@ fn a_set_of_one_input_value_is_undone_to_the_value_it_replaced() {
         held_node(&project, effect.id).input_values,
         Map::new(),
         "`null` takes the value off"
+    );
+}
+
+/// A set naming one member of a bundle input changes that member of the saved object alone,
+/// and its undo puts back that member alone, so a member set since on another member stays.
+///
+/// Mental-revert: an undo restoring the whole object it replaced takes `label` back to
+/// `kitchen`.
+#[test]
+fn a_set_of_one_member_is_undone_to_the_member_it_replaced() {
+    let mut project = ProjectHoldingOneStream::new();
+    let person = an_author(ProjectTransactionAuthorKind::Person, "Jonathan");
+    let agent = an_author(ProjectTransactionAuthorKind::Agent, "rig agent");
+    let meter = a_node(
+        "meter",
+        json!({ "reading": { "level": 0.2, "label": "kitchen" } }),
+    );
+    project
+        .apply(&person, vec![project.on_the_stream(add(&meter))])
+        .unwrap();
+
+    let level_set = StreamGraphOperation::set_node_input_value_of(
+        &held_node(&project, meter.id),
+        "reading".to_owned(),
+        Some("level".to_owned()),
+        Some(json!(1.0)),
+    );
+    assert_eq!(
+        level_set,
+        StreamGraphOperation::SetNodeInputValue {
+            node: meter.id,
+            input: "reading".to_owned(),
+            member: Some("level".to_owned()),
+            from: Some(json!(0.2)),
+            to: Some(json!(1.0)),
+        }
+    );
+    project
+        .apply(&agent, vec![project.on_the_stream(level_set)])
+        .unwrap();
+    let label_set = StreamGraphOperation::set_node_input_value_of(
+        &held_node(&project, meter.id),
+        "reading".to_owned(),
+        Some("label".to_owned()),
+        Some(json!("hall")),
+    );
+    project
+        .apply(&person, vec![project.on_the_stream(label_set)])
+        .unwrap();
+    assert_eq!(
+        held_node(&project, meter.id).input_values["reading"],
+        json!({ "level": 1.0, "label": "hall" })
+    );
+
+    project.undo(&agent).unwrap();
+    assert_eq!(
+        held_node(&project, meter.id).input_values["reading"],
+        json!({ "level": 0.2, "label": "hall" })
+    );
+}
+
+/// A member set on an input holding a value that is no object of members replaces that whole
+/// value, so its undo puts the whole value back.
+///
+/// Mental-revert: recording the member alone, which the value held none of, undoes to no value.
+#[test]
+fn a_member_set_over_a_value_holding_no_members_is_undone_to_that_value() {
+    let mut project = ProjectHoldingOneStream::new();
+    let person = an_author(ProjectTransactionAuthorKind::Person, "Jonathan");
+    let meter = a_node("meter", json!({ "reading": 7 }));
+    project
+        .apply(&person, vec![project.on_the_stream(add(&meter))])
+        .unwrap();
+
+    let level_set = StreamGraphOperation::set_node_input_value_of(
+        &held_node(&project, meter.id),
+        "reading".to_owned(),
+        Some("level".to_owned()),
+        Some(json!(1.0)),
+    );
+    project
+        .apply(&person, vec![project.on_the_stream(level_set)])
+        .unwrap();
+    assert_eq!(
+        held_node(&project, meter.id).input_values["reading"],
+        json!({ "level": 1.0 })
+    );
+
+    project.undo(&person).unwrap();
+    assert_eq!(
+        held_node(&project, meter.id).input_values["reading"],
+        json!(7)
     );
 }
 

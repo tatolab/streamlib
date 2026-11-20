@@ -11,6 +11,9 @@ use crate::core::graph::{LinkDirection, NodeRunId, cast_exposed_name_to_url_safe
 pub struct OutputLinkPortRef {
     node_run_id: NodeRunId,
     port_name: String,
+    /// The member of a bundle port the link starts at; `None` for the whole port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    member: Option<String>,
 }
 
 impl OutputLinkPortRef {
@@ -22,7 +25,14 @@ impl OutputLinkPortRef {
         Self {
             node_run_id: node_run_id.into(),
             port_name: port_name.into(),
+            member: None,
         }
+    }
+
+    /// This port's member `member`, which a link starting there carries alone; `None` names the
+    /// whole port.
+    pub fn at_member(self, member: Option<String>) -> Self {
+        Self { member, ..self }
     }
 
     pub fn direction(&self) -> LinkDirection {
@@ -37,18 +47,28 @@ impl OutputLinkPortRef {
         &self.port_name
     }
 
+    /// The member of a bundle port the link starts at; `None` for the whole port.
+    pub fn member(&self) -> Option<&str> {
+        self.member.as_deref()
+    }
+
     /// This reference with its port name cast, the way every port is named.
     pub fn with_its_port_name_cast(self) -> Result<Self> {
         Ok(Self {
             port_name: cast_exposed_name_to_url_safe(&self.port_name)?.into_owned(),
             node_run_id: self.node_run_id,
+            member: self.member,
         })
     }
 }
 
 impl fmt::Display for OutputLinkPortRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.node_run_id, self.port_name)
+        write!(f, "{}.{}", self.node_run_id, self.port_name)?;
+        match &self.member {
+            Some(member) => write!(f, ".{member}"),
+            None => Ok(()),
+        }
     }
 }
 
@@ -79,6 +99,18 @@ mod tests {
         let bytes = rmp_serde::to_vec_named(&port_ref).expect("encode");
         let back: OutputLinkPortRef = rmp_serde::from_slice(&bytes).expect("decode");
         assert_eq!(port_ref, back);
+    }
+
+    /// A reference to one member rides the map with its member, and renders after its port.
+    #[test]
+    fn a_reference_to_a_member_round_trips_and_renders_after_its_port() {
+        let port_ref = OutputLinkPortRef::new(NodeRunId::from("Pcam"), "placement")
+            .at_member(Some("opacity".to_owned()));
+        let bytes = rmp_serde::to_vec_named(&port_ref).expect("encode");
+        let back: OutputLinkPortRef = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(port_ref, back);
+        assert_eq!(back.member(), Some("opacity"));
+        assert_eq!(port_ref.to_string(), "Pcam.placement.opacity");
     }
 
     #[test]

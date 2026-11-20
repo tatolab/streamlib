@@ -157,10 +157,12 @@ impl GraphVariablesAsDrawn {
             drawn_link.source = LinkPortRefOutput {
                 node: source_cast,
                 port: drawn.source.port.clone(),
+                member: drawn.source.member.clone(),
             };
             drawn_link.target = LinkPortRefOutput {
                 node: target_cast,
                 port: drawn.target.port.clone(),
+                member: drawn.target.member.clone(),
             };
             drawn_link.components.graph_variable = Some(GraphVariableOnTheWire {
                 variable: Some(variable.to_string()),

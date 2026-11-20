@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use quote::quote;
-use streamlib_node_schema::NodeSchemaExecution;
+use streamlib_node_schema::{NodeSchemaExecution, OutputPortDeclaredNames};
 
 use super::*;
 
@@ -295,6 +295,41 @@ fn a_node_declaring_no_config_binds_no_config_type() {
         execution = manual,
     });
     assert!(parsed.config_type.is_none());
+}
+
+#[test]
+fn a_settings_key_binds_the_settings_type_and_no_config() {
+    let parsed = parse_ok(quote! {
+        execution = reactive,
+        settings = crate::blur::BlurSettings,
+        output("blurred", pin_type = Audio, names = from_setting("channel_names")),
+    });
+    assert!(parsed.settings_type.is_some());
+    assert!(parsed.config_type.is_none());
+    assert_eq!(
+        parsed.outputs[0].family.names,
+        Some(OutputPortDeclaredNames::FromConfig {
+            config_key: "channel_names".to_string()
+        })
+    );
+}
+
+#[test]
+fn settings_beside_a_config_are_refused() {
+    for beside in [
+        quote! { config = crate::BlurConfig },
+        quote! { config_field = "blur" },
+    ] {
+        let msg = parse_err(quote! {
+            execution = reactive,
+            settings = crate::blur::BlurSettings,
+            #beside,
+        });
+        assert!(
+            msg.contains("declares no `config` or `config_field`"),
+            "{beside}: {msg}"
+        );
+    }
 }
 
 #[test]

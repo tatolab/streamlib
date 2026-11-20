@@ -85,7 +85,7 @@ impl VulkanRayTracingKernelInner {
             use crate::host_rhi::HostTextureExt;
             texture.vulkan_inner().image_view()?
         };
-        let sampler = self.default_sampler()?;
+        let sampler = self.samplers.sampler_for(None)?;
         self.pending
             .lock()
             .bindings
@@ -151,33 +151,6 @@ impl VulkanRayTracingKernelInner {
             )));
         }
         Ok(())
-    }
-
-    fn default_sampler(&self) -> Result<vk::Sampler> {
-        let mut guard = self.default_sampler.lock();
-        if let Some(s) = *guard {
-            return Ok(s);
-        }
-        let info = vk::SamplerCreateInfo::builder()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .min_lod(0.0)
-            .max_lod(0.0)
-            .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
-            .unnormalized_coordinates(false)
-            .build();
-        let sampler = unsafe { self.device.create_sampler(&info, None) }.map_err(|e| {
-            Error::GpuError(format!(
-                "Ray-tracing kernel '{}': failed to create default sampler: {e}",
-                self.label
-            ))
-        })?;
-        *guard = Some(sampler);
-        Ok(sampler)
     }
 
     pub(super) fn flush_descriptor_writes(&self, pending: &PendingState) -> Result<()> {

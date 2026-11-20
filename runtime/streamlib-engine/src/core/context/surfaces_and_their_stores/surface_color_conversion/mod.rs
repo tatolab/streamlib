@@ -86,6 +86,8 @@ pub(crate) struct SurfaceColorConversionSession {
     sources_by_surface_id: HashMap<String, SurfaceColorConversionSource>,
     color_converters_by_source_format: HashMap<PixelFormat, RhiColorConverter>,
     rgba_or_bgra_texture_sources_by_surface_id: HashMap<String, TextureRegistration>,
+    image_to_image_color_converters:
+        Option<crate::vulkan::rhi::ImageToImageColorConvertersWithTheirKernelsBuilt>,
     #[cfg(target_os = "linux")]
     yuyv_pixel_buffer_destinations_by_surface_id: HashMap<String, PixelBuffer>,
     #[cfg(target_os = "linux")]

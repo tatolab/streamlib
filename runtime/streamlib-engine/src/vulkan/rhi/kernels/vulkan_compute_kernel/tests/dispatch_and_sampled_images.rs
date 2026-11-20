@@ -17,6 +17,7 @@ fn run_blend_kernel_for(
             spv: blend_spv(input_count),
             bindings: &bindings,
             push_constant_size: 4,
+            specialization_constants: &[],
         },
     )
     .expect("kernel creation");
@@ -127,6 +128,7 @@ fn dispatch_without_setting_bindings_fails_loud() {
             spv: blend_spv(2),
             bindings: &bindings,
             push_constant_size: 4,
+            specialization_constants: &[],
         },
     )
     .expect("kernel creation");
@@ -191,6 +193,7 @@ fn sampled_image_binding_dispatches_with_raw_view() {
             spv: SAMPLED_IMAGE_SPV,
             bindings: &bindings,
             push_constant_size: 0,
+            specialization_constants: &[],
         },
     )
     .expect("kernel construction with SampledImage binding");

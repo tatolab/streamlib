@@ -6,14 +6,15 @@
 //! output resolves from its node's config.
 
 use super::pin_type_link_checks::ALinkConnected;
+use super::pin_type_resolution::{PinTypeInItsGraph, the_pin_type_of_a_port_in_its_graph};
 use super::{Graph, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::descriptors::{
-    PortFamilyDeclaration, PortFamilyLinkEndpoint, PortFamilyLinkRefusal,
-    refusal_of_a_link_between_port_families,
+    NamedPinTypeImportPath, PinType, PortFamilyDeclaration, PortFamilyLinkEndpoint,
+    PortFamilyLinkRefusal, refusal_of_a_link_between_port_families,
 };
 use std::collections::HashSet;
 
-use crate::core::{Error, Result};
+use crate::core::{Error, PortDirection, Result};
 
 fn output_port_family<'node>(
     node: &'node GraphNode,
@@ -169,7 +170,7 @@ fn refusal_of_a_link_from_an_output(
             port_name: from_port_name,
             declaration: output_declaration,
         },
-        from_node.config.as_ref(),
+        from_node.the_values_its_port_facts_read().as_ref(),
         PortFamilyLinkEndpoint {
             node_name: &to_node.display_name,
             port_name: to_port_name,
@@ -237,6 +238,11 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     if output_port_family(from_node, from.port_name()).is_none() {
         return Ok(taken);
     }
+    refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(
+        graph,
+        (from_node, from),
+        (to_node, to),
+    )?;
     let inputs_carried_on_to = the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name());
     for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
         if let Some(refusal) =
@@ -254,6 +260,68 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
         )?;
     }
     Ok(taken)
+}
+
+/// Refuse a link from `from` to `to` when one end carries a named type and the other is
+/// untyped, naming the type and both ends: a named type travels as the bytes its class packs,
+/// which belong to no family, so only a typed pin reads them.
+fn refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(
+    graph: &Graph,
+    (from_node, from): (&GraphNode, &OutputLinkPortRef),
+    (to_node, to): (&GraphNode, &InputLinkPortRef),
+) -> Result<()> {
+    let pin_type_of = |node: &GraphNode, port_name: &str, direction: PortDirection| {
+        let port = match direction {
+            PortDirection::Input => node.input_port(port_name),
+            PortDirection::Output => node.output_port(port_name),
+        }?;
+        Some(the_pin_type_of_a_port_in_its_graph(
+            graph, node, port, direction,
+        ))
+    };
+    let (Some(output_pin_type), Some(input_pin_type)) = (
+        pin_type_of(from_node, from.port_name(), PortDirection::Output),
+        pin_type_of(to_node, to.port_name(), PortDirection::Input),
+    ) else {
+        return Ok(());
+    };
+    let output = format!("`{}.{}`", from_node.display_name, from.port_name());
+    let input = format!("`{}.{}`", to_node.display_name, to.port_name());
+    let refusal = match (&output_pin_type, &input_pin_type) {
+        (_, PinTypeInItsGraph::Untyped) => the_named_type_among(&output_pin_type).map(|named| {
+            let named = named.as_str();
+            format!(
+                "cannot link {output} to {input}: {output} carries the named type `{named}`, \
+                 whose bytes only a pin typed with it reads, and {input} states no pin type. \
+                 To fix: link it to an input typed `{named}`"
+            )
+        }),
+        (PinTypeInItsGraph::Untyped, _) => the_named_type_among(&input_pin_type).map(|named| {
+            let named = named.as_str();
+            format!(
+                "cannot link {output} to {input}: {input} reads the named type `{named}`, which \
+                 only a pin typed with it writes, and {output} states no pin type. To fix: link \
+                 it from an output typed `{named}`"
+            )
+        }),
+        _ => None,
+    };
+    refusal.map_or(Ok(()), |words| Err(Error::InvalidLink(words)))
+}
+
+/// The first named type among what a port carries in its graph; `None` when it carries none.
+pub(super) fn the_named_type_among(
+    pin_type: &PinTypeInItsGraph,
+) -> Option<&NamedPinTypeImportPath> {
+    let pin_types = match pin_type {
+        PinTypeInItsGraph::Is(pin_type) => std::slice::from_ref(pin_type),
+        PinTypeInItsGraph::OneOf(pin_types) => pin_types.as_slice(),
+        PinTypeInItsGraph::Any | PinTypeInItsGraph::Untyped => &[],
+    };
+    pin_types.iter().find_map(|pin_type| match pin_type {
+        PinType::Named { named_pin_type } => Some(named_pin_type),
+        _ => None,
+    })
 }
 
 /// Each input what arrives at an input is carried on to, with the following output it leaves

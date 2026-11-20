@@ -40,7 +40,20 @@ fn the_json_schema_holds_every_definition_it_names_and_no_contract_reference() {
     }
     assert_eq!(
         schema["$defs"]["NodeUiManifestControl"]["properties"]["type"]["$ref"],
-        json!("#/$defs/BuiltInPinTypeName")
+        json!("#/$defs/NodeUiControlPinType")
+    );
+    assert_eq!(
+        schema["$defs"]["NodeUiControlPinType"]["anyOf"]
+            .as_array()
+            .map(|either| either
+                .iter()
+                .map(|one| one["$ref"].clone())
+                .collect::<Vec<_>>()),
+        Some(vec![
+            json!("#/$defs/BuiltInPinTypeName"),
+            json!("#/$defs/NamedPinTypeImportPath")
+        ]),
+        "a control is registered for a built-in type or a named one"
     );
     assert!(
         schema["$defs"]["BuiltInPinTypeName"]["oneOf"][0]["description"].is_string(),
@@ -54,6 +67,8 @@ fn the_declarations_name_the_manifest_and_every_type_it_names() {
         node_ui_manifest_declarations(&component_schemas()).unwrap_or_else(|why| panic!("{why}"));
     for name in [
         "BuiltInPinTypeName",
+        "NamedPinTypeImportPath",
+        "NodeUiControlPinType",
         "NodeUiManifest",
         "NodeUiManifestControl",
         "NodeUiManifestNodeBody",

@@ -5,7 +5,6 @@
 //! declarations, its views' manifests and node UI manifest, and its views' and controls' code
 //! against the extension SDK kit.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,13 +16,14 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_control_contract::CheckProjectCodeRequest;
 use streamlib_project_repository::{
-    NodeUiManifestToCheck, ViewManifestsChecked, check_a_projects_view_manifests,
-    the_findings_of_a_node_ui_manifest, the_node_ui_manifest_a_check_reads,
+    NodeUiManifestToCheck, ViewManifestsChecked, WhatTheProjectsModulesDeclare,
+    check_a_projects_view_manifests, the_findings_of_a_node_ui_manifest,
+    the_node_ui_manifest_a_check_reads,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeTypeSourceOrigin, ProjectActionRefusalOnTheWire,
-    ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun,
-    ProjectCodeCheckSeverity, ProjectCodeCheckState, ProjectFileChecked, ProjectFilePlaceOnTheWire,
+    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire, ProjectCodeCheckFinding,
+    ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun, ProjectCodeCheckSeverity,
+    ProjectCodeCheckState, ProjectFileChecked, ProjectFilePlaceOnTheWire,
 };
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
@@ -111,35 +111,28 @@ impl ControlOperationDispatcher {
     }
 
     /// What the `extension_manifest` check finds in the project's own node UI manifest
-    /// `to_check`: its node bodies judged against the node types the project's own code declares,
-    /// listed only when it registers one.
+    /// `to_check`: its node bodies and named types' default controls judged against what the
+    /// project's modules declare, listed only when it registers one.
     async fn the_node_ui_manifest_checked(
         &self,
         to_check: NodeUiManifestToCheck,
         project_directory: PathBuf,
     ) -> NodeUiManifestChecked {
-        let node_types_the_project_brings = if to_check.registers_a_node_body() {
-            Some(
-                self.the_node_types_the_project_offers_read_from_source(
-                    CHECK_PROJECT_CODE,
-                    project_directory,
+        let what_the_projects_modules_declare =
+            if to_check.is_judged_against_what_the_projects_modules_declare() {
+                Some(
+                    self.the_node_types_the_project_offers_read_from_source(
+                        CHECK_PROJECT_CODE,
+                        project_directory,
+                    )
+                    .await
+                    .map(|listing| WhatTheProjectsModulesDeclare::read_off(&listing)),
                 )
-                .await
-                .map(|listing| {
-                    listing
-                        .sources
-                        .into_iter()
-                        .filter(|source| source.origin == NodeTypeSourceOrigin::Project)
-                        .flat_map(|source| source.node_types)
-                        .map(|read| read.node_type)
-                        .collect::<BTreeSet<String>>()
-                }),
-            )
-        } else {
-            None
-        };
-        let (node_types, node_bodies_not_judged_because) = match node_types_the_project_brings {
-            Some(Ok(node_types)) => (Some(node_types), None),
+            } else {
+                None
+            };
+        let (declared, not_judged_because) = match what_the_projects_modules_declare {
+            Some(Ok(declared)) => (Some(declared), None),
             Some(Err(refused)) => (
                 None,
                 Some(refused.into_the_refusal_on_the_wire(CHECK_PROJECT_CODE)),
@@ -147,9 +140,9 @@ impl ControlOperationDispatcher {
             None => (None, None),
         };
         NodeUiManifestChecked {
-            findings: the_findings_of_a_node_ui_manifest(&to_check, node_types.as_ref()),
+            findings: the_findings_of_a_node_ui_manifest(&to_check, declared.as_ref()),
             file_checked: to_check.file_checked,
-            node_bodies_not_judged_because,
+            not_judged_because,
         }
     }
 }
@@ -159,9 +152,9 @@ impl ControlOperationDispatcher {
 struct NodeUiManifestChecked {
     findings: Vec<ProjectCodeCheckFinding>,
     file_checked: Option<ProjectFileChecked>,
-    /// Why its node bodies were not judged: the refusal of the node type listing they are
-    /// judged against.
-    node_bodies_not_judged_because: Option<ProjectActionRefusalOnTheWire>,
+    /// Why its node bodies and named types' default controls were not judged: the refusal of
+    /// the node type listing they are judged against.
+    not_judged_because: Option<ProjectActionRefusalOnTheWire>,
 }
 
 /// The paths among `paths` the `python_node_declarations` check imports, or every module of the
@@ -197,7 +190,7 @@ fn the_answer_of_the_checks(
     if let Some(NodeUiManifestChecked {
         findings: node_ui_manifest_findings,
         file_checked,
-        node_bodies_not_judged_because,
+        not_judged_because,
     }) = node_ui_manifest_checked
     {
         if node_ui_manifest_findings
@@ -206,7 +199,7 @@ fn the_answer_of_the_checks(
         {
             extension_manifest_run.state = ProjectCodeCheckState::Failed;
         }
-        if let Some(refusal) = node_bodies_not_judged_because {
+        if let Some(refusal) = not_judged_because {
             extension_manifest_run.state = ProjectCodeCheckState::NotChecked;
             extension_manifest_run.not_checked_because = Some(refusal);
         }

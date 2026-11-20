@@ -33,6 +33,11 @@ mod bundle_packing;
 #[cfg(test)]
 mod tests;
 
+pub use bundle_packing::{
+    the_member_a_bundle_message_carries, the_members_of_a_bundle_a_records_message_carries,
+    the_records_message_of_members_of_a_bundle,
+};
+
 use bundle_packing::{
     is_a_bundle_of_tensors, the_array_frame_of_a_bundle_of_tensors,
     the_bundle_a_records_message_carries, the_records_message_of_a_bundle, the_value_read_as,
@@ -101,6 +106,9 @@ pub fn message_kind_of(pin_type: &PinType) -> Option<DataChannelPayloadDescripto
             DataChannelPayloadDescriptorKind::PacketsUnit
         }
         PinType::Tensor {} => DataChannelPayloadDescriptorKind::ArrayFrame,
+        PinType::ListOf { .. } | PinType::Bundle { .. } if pin_type.holds_a_heavy_member() => {
+            DataChannelPayloadDescriptorKind::BundleFrame
+        }
         PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
             DataChannelPayloadDescriptorKind::ArrayFrame
         }
@@ -152,6 +160,9 @@ pub fn pack_pin_value(
     next_start_sample: u64,
 ) -> Result<PackedPinValue, String> {
     match pin_type {
+        PinType::ListOf { .. } | PinType::Bundle { .. } if pin_type.holds_a_heavy_member() => {
+            Err(a_bundle_frame_holds_no_json_value(pin_type))
+        }
         PinType::Tensor {} => the_array_frame_of_attributes(&[the_array_attribute_of_a_value(
             VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
             value,
@@ -186,6 +197,9 @@ pub fn unpack_pin_value(
     message: PackedPinValueRef<'_>,
 ) -> Result<Value, String> {
     match pin_type {
+        PinType::ListOf { .. } | PinType::Bundle { .. } if pin_type.holds_a_heavy_member() => {
+            Err(a_bundle_frame_holds_no_json_value(pin_type))
+        }
         _ if channel_count_of(pin_type).is_some() => {
             let read = the_channel_values_a_pin_type_reads(
                 pin_type,
@@ -205,6 +219,16 @@ pub fn unpack_pin_value(
         | PinType::ListOf { .. } => the_stored_value_a_records_message_carries(pin_type, message),
         _ => Err(format!("a {pin_type} value does not unpack off a link yet")),
     }
+}
+
+/// Why a value of `pin_type`, a List or a bundle holding a Texture, Audio or an encoded unit,
+/// has no JSON form to pack or unpack: it holds no stored value, and travels only as the Bundle
+/// frame a node sends.
+fn a_bundle_frame_holds_no_json_value(pin_type: &PinType) -> String {
+    format!(
+        "a {pin_type} holds a Texture, Audio or encoded member, so it travels only as the Bundle \
+         frame a node sends and has no stored value to pack or unpack"
+    )
 }
 
 /// `value`, a stored value of `pin_type`, as the Records message `{"value": value}`, which a

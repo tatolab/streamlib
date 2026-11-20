@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The built-in nodes a person or an agent places between two ports whose types differ, so
-//! every conversion, and what it costs, is a node in the graph. The four named for the pin types
-//! they convert between state `conversion`, so the link verdict finds them.
+//! every conversion, and what it costs, is a node in the graph. The five named for the pin types
+//! or the formats they convert between state `conversion`, so the link verdict finds them.
 
 pub mod audio_to_tensor;
 #[cfg(test)]
@@ -27,6 +27,10 @@ mod tensor_to_audio_tests;
 pub mod tensor_to_texture;
 #[cfg(test)]
 mod tensor_to_texture_tests;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod texture_format_convert;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod texture_format_convert_tests;
 pub mod texture_to_tensor;
 #[cfg(test)]
 mod texture_to_tensor_tests;
@@ -34,6 +38,8 @@ mod texture_to_tensor_tests;
 pub use audio_to_tensor::AudioToTensor;
 pub use channels_to_records::{ChannelsToRecords, ChannelsToRecordsConfig};
 pub use records_to_channels::{RecordsToChannels, RecordsToChannelsConfig};
-pub use tensor_to_audio::{TensorToAudio, TensorToAudioConfig};
-pub use tensor_to_texture::{TensorToTexture, TensorToTextureConfig};
+pub use tensor_to_audio::{TensorToAudio, TensorToAudioSettings};
+pub use tensor_to_texture::{TensorToTexture, TensorToTextureSettings};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use texture_format_convert::TextureFormatConvert;
 pub use texture_to_tensor::TextureToTensor;

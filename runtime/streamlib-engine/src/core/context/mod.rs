@@ -92,6 +92,8 @@ pub use streamlib_ipc_types::{
     GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled,
     GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use surfaces_and_their_stores::rgba_or_bgra_image_frame_to_pooled_rgba_conversion_stage::RgbaOrBgraImageFrameToPooledRgbaConversionStage;
 pub use surfaces_and_their_stores::surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };

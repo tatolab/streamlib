@@ -5,35 +5,32 @@
 # built-in descriptors. Do not edit: CI fails when this file differs from a
 # regeneration.
 
-"""The runtime's built-in nodes, each with the shape of its config."""
+"""The runtime's built-in nodes, each with its fields and pins, or the shape of its config."""
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal, TypedDict
+from typing import Annotated, ClassVar, Literal, TypedDict
 
-from ._built_in_node import BuiltInNode
+from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
+from ._class_node_pins import InputPin, OutputPin
+from ._description import Description
+from ._input_declaration_annotations import SettingOnly, StreamDelivery
+from ._pin_types import Audio, Tensor, Texture, UInt32
 
 __all__ = [
     "AudioToTensor",
-    "AudioToTensorConfig",
     "ChannelsToRecords",
     "ChannelsToRecordsConfig",
     "RecordsToChannels",
     "RecordsToChannelsConfig",
     "TensorToAudio",
-    "TensorToAudioConfig",
     "TensorToTexture",
-    "TensorToTextureConfig",
+    "TextureFormatConvert",
     "TextureToTensor",
-    "TextureToTensorConfig",
 ]
 
 
-class AudioToTensorConfig(TypedDict, total=False):
-    """`AudioToTensor`'s config: the keys `stream_builder.add` takes."""
-
-
-class AudioToTensor(BuiltInNode[AudioToTensorConfig]):
+class AudioToTensor(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     """Converts each Channels block on `channels` into one Array frame on `array`, whose
     one CPU attribute `samples` holds the block's samples as a `[channels, samples]`
     tensor of the block's sample type, `float32` or `float64`. The samples are copied
@@ -45,11 +42,24 @@ class AudioToTensor(BuiltInNode[AudioToTensorConfig]):
 
     Outputs:
         `array`: One Array frame per block, its samples as the `samples` attribute.
-
-    Config: `AudioToTensorConfig`.
     """
 
     type: ClassVar[str] = "tatolab.stream:AudioToTensor"
+
+    channels: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            Description("The Channels blocks to convert"),
+        ]
+    ]
+
+    array: OutputPin[
+        Annotated[
+            Tensor,
+            Description("One Array frame per block, its samples as the `samples` attribute"),
+        ]
+    ]
 
 
 class ChannelsToRecordsConfig(TypedDict, total=False):
@@ -121,29 +131,7 @@ class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
     type: ClassVar[str] = "tatolab.stream:RecordsToChannels"
 
 
-class TensorToAudioConfig(TypedDict, total=False):
-    """`TensorToAudio`'s config: the keys `stream_builder.add` takes."""
-
-    attribute: str
-    """The attribute of each Array frame read as the block's samples.
-
-    Default: `"samples"`.
-    """
-
-    channel_names: list[str]
-    """The names of the channels `channels` carries, one per row of the attribute.
-
-    Default: `["value"]`.
-    """
-
-    sample_rate: int
-    """The sample rate `channels` states, in samples per second per channel.
-
-    Default: `48000`.
-    """
-
-
-class TensorToAudio(BuiltInNode[TensorToAudioConfig]):
+class TensorToAudio(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     """Converts one attribute of each Array frame on `array`, `attribute` (`samples` by
     default), into one Channels block on `channels`. The attribute is a CPU `[channels,
     samples]` tensor of `float32` or `float64`, one row per name in `channel_names`, and
@@ -158,30 +146,45 @@ class TensorToAudio(BuiltInNode[TensorToAudioConfig]):
     Outputs:
         `channels`: One Channels block per frame, one channel per name in
             `channel_names`.
-
-    Config: `TensorToAudioConfig`.
     """
 
     type: ClassVar[str] = "tatolab.stream:TensorToAudio"
 
+    array: InputPin[
+        Annotated[
+            Tensor,
+            StreamDelivery("ordered"),
+            Description("The Array frames whose `attribute` is converted"),
+        ]
+    ]
 
-class TensorToTextureConfig(TypedDict, total=False):
-    """`TensorToTexture`'s config: the keys `stream_builder.add` takes."""
+    attribute: Annotated[
+        str,
+        SettingOnly(),
+        Description("The attribute of each Array frame read as the block's samples."),
+    ] = "samples"
 
-    attribute: str
-    """The attribute of each Array frame read as the image.
+    channel_names: Annotated[
+        list[str],
+        SettingOnly(),
+        Description("The names of the channels `channels` carries, one per row of the attribute."),
+    ] = ["value"]
 
-    Default: `"image"`.
-    """
+    sample_rate: Annotated[
+        UInt32,
+        SettingOnly(),
+        Description("The sample rate `channels` states, in samples per second per channel."),
+    ] = 48000
 
-    format: str
-    """The texture format each Image frame states, by its wire name.
+    channels: OutputPin[
+        Annotated[
+            Audio,
+            Description("One Channels block per frame, one channel per name in `channel_names`"),
+        ]
+    ]
 
-    Default: `"rgba8_unorm"`.
-    """
 
-
-class TensorToTexture(BuiltInNode[TensorToTextureConfig]):
+class TensorToTexture(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     """Converts one attribute of each Array frame on `array`, `attribute` (`image` by
     default), into one Image frame on `image` stating `format` (`rgba8_unorm` by
     default; also `rgba8_unorm_srgb`, `bgra8_unorm`, `bgra8_unorm_srgb`, `rgba16_float`
@@ -199,18 +202,74 @@ class TensorToTexture(BuiltInNode[TensorToTextureConfig]):
 
     Outputs:
         `image`: One Image frame per Array frame.
-
-    Config: `TensorToTextureConfig`.
     """
 
     type: ClassVar[str] = "tatolab.stream:TensorToTexture"
 
+    array: InputPin[
+        Annotated[
+            Tensor,
+            StreamDelivery("newest"),
+            Description("The Array frames whose `attribute` is converted"),
+        ]
+    ]
 
-class TextureToTensorConfig(TypedDict, total=False):
-    """`TextureToTensor`'s config: the keys `stream_builder.add` takes."""
+    attribute: Annotated[
+        str,
+        SettingOnly(),
+        Description("The attribute of each Array frame read as the image."),
+    ] = "image"
+
+    format: Annotated[
+        Literal["rgba8_unorm", "rgba8_unorm_srgb", "bgra8_unorm", "bgra8_unorm_srgb", "rgba16_float", "rgba32_float"],
+        SettingOnly(),
+        Description("The texture format each Image frame states, by its wire name."),
+    ] = "rgba8_unorm"
+
+    image: OutputPin[
+        Annotated[
+            Texture,
+            Description("One Image frame per Array frame"),
+        ]
+    ]
 
 
-class TextureToTensor(BuiltInNode[TextureToTensorConfig]):
+class TextureFormatConvert(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Converts each `rgba8_unorm` or `bgra8_unorm` Image frame on `image` into one
+    `rgba8_unorm` Image frame on `rgba_image`, of the same size and colour, its channels
+    in RGBA order. One GPU dispatch samples the frame into a texture, which one copy
+    writes into a pixel buffer from this node's own output pool; a frame held in a pixel
+    buffer is first copied into a texture. Each frame is written by the time it is sent.
+    An sRGB frame would be decoded by the sampling, and any other format has no such
+    kernel, so `image` takes neither, and one that arrives is refused and writes
+    nothing.
+
+    Inputs:
+        `image` (newest): The 8-bit RGBA or BGRA Image frames to convert.
+
+    Outputs:
+        `rgba_image`: One rgba8_unorm Image frame per Image frame.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:TextureFormatConvert"
+
+    image: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description("The 8-bit RGBA or BGRA Image frames to convert"),
+        ]
+    ]
+
+    rgba_image: OutputPin[
+        Annotated[
+            Texture,
+            Description("One rgba8_unorm Image frame per Image frame"),
+        ]
+    ]
+
+
+class TextureToTensor(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     """Converts each Image frame on `image` into one Array frame on `array`, whose one
     GPU attribute `image` is the frame's own pool slot borrowed as an `[h, w, 4]`
     tensor: `uint8` for an `rgba8` or `bgra8` frame, `float16` for `rgba16_float` and
@@ -229,8 +288,21 @@ class TextureToTensor(BuiltInNode[TextureToTensorConfig]):
 
     Outputs:
         `array`: One Array frame per Image frame, its slot as the `image` attribute.
-
-    Config: `TextureToTensorConfig`.
     """
 
     type: ClassVar[str] = "tatolab.stream:TextureToTensor"
+
+    image: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description("The Image frames to borrow as tensors"),
+        ]
+    ]
+
+    array: OutputPin[
+        Annotated[
+            Tensor,
+            Description("One Array frame per Image frame, its slot as the `image` attribute"),
+        ]
+    ]

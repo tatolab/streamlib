@@ -104,6 +104,8 @@ pub struct ANodeTypesPort<'a> {
     pub node_type: &'a str,
     /// The port's name, as the node type declares it.
     pub port: &'a str,
+    /// The member of the bundle the port carries that the end is; `None` for the whole port.
+    pub member: Option<&'a str>,
 }
 
 /// One writer's batch of graph edits on one stream, from
@@ -189,6 +191,15 @@ pub trait RuntimeOperations: Send + Sync {
         &self,
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
+
+    /// Rebuild, once each, every running node whose setting read at setup a live operation set
+    /// since the last rebuild, and wait for each to finish its setup; the UUID of each rebuilt.
+    /// A stream not started rebuilds none, its nodes built from the values saved at its start.
+    /// Refused in the node's own words when one does not build with the values set, the node
+    /// left as its setup left it, for the caller to put its earlier values back and rebuild it.
+    fn rebuild_each_node_a_setting_read_at_setup_changed(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<uuid::Uuid>>>;
 
     /// Hold `graph_operation`, which this stream's graph document holds and its live graph
     /// refused in the runtime's words `refusal`, as an edit not live yet: listed among the
@@ -286,17 +297,18 @@ pub trait RuntimeOperations: Send + Sync {
         node_type: &str,
     ) -> Option<crate::core::GraphNodePorts>;
 
-    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`
-    /// and held on the graph, with `None` taking it off, when the input does not take it, as this
-    /// stream resolves the type: among them a value on the input of an output a panel writes,
-    /// which holds no saved value; `input_values_after_the_set` are every input value the node
-    /// holds once it is made.
+    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
+    /// or on its member `member` when one is named, and held on the graph, with `None` taking it
+    /// off, when the input does not take it, as this stream resolves the type: among them a value
+    /// on the input of an output a panel writes, which holds no saved value;
+    /// `input_values_after_the_set` are every input value the node holds once it is made.
     fn refuse_an_input_value_its_input_does_not_take(
         &self,
         node_type: &NodeClassImportPath,
         node_name: &str,
         input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
         input: &str,
+        member: Option<&str>,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
 

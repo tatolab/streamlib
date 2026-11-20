@@ -22,7 +22,9 @@ fn requested(import_path: &str) -> NodeClassImportPath {
 
 /// A described node type carrying what `@tatolab.stream.node.process` stamps,
 /// with `input_ports` as given.
-fn described_node_type_with_input_ports(input_ports: serde_json::Value) -> serde_json::Value {
+pub(super) fn described_node_type_with_input_ports(
+    input_ports: serde_json::Value,
+) -> serde_json::Value {
     serde_json::json!({
         "import_path": "my_app.audio:AudioConsumer",
         "short_name": "AudioConsumer",
@@ -43,14 +45,16 @@ fn described_node_type_with_output_ports(output_ports: serde_json::Value) -> ser
     described
 }
 
-fn read(described_node_type: &serde_json::Value) -> Result<PythonNodeDeclaration, String> {
+pub(super) fn read(
+    described_node_type: &serde_json::Value,
+) -> Result<PythonNodeDeclaration, String> {
     PythonNodeDeclaration::read_from_described_node_type(
         described_node_type,
         &requested("my_app.audio:AudioConsumer"),
     )
 }
 
-fn refusal_of(described_node_type: &serde_json::Value) -> String {
+pub(super) fn refusal_of(described_node_type: &serde_json::Value) -> String {
     match read(described_node_type) {
         Ok(_) => panic!("the described node type was accepted; a refusal was expected"),
         Err(refusal) => refusal,

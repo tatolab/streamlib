@@ -9,7 +9,10 @@ use sha2::{Digest, Sha256};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, Texture};
+use crate::core::rhi::{
+    ComputeBindingKind, ComputeBindingSpec, ShaderSpecializationConstant, ShaderSpecializationData,
+    Texture,
+};
 use crate::core::{Error, Result};
 use crate::vulkan::rhi::kernels::vulkan_pipeline_cache_on_disk::{
     PipelineCacheKernelKind, create_pipeline_cache_handle, persist_pipeline_cache,
@@ -124,11 +127,35 @@ pub(super) fn create_compute_pipeline_with_cache(
     pipeline_layout: vk::PipelineLayout,
     spv: &[u8],
     entry_point: &std::ffi::CStr,
+    specialization_constants: &[ShaderSpecializationConstant],
     label: &str,
     pipeline_cache_directory_of_its_stream: Option<&Path>,
 ) -> Result<vk::Pipeline> {
-    let cache_path =
-        pipeline_cache_file_path(spv, entry_point, pipeline_cache_directory_of_its_stream);
+    let specialization_data = ShaderSpecializationData::of_the_constants(specialization_constants);
+    let specialization_map_entries = specialization_data
+        .map_entries
+        .iter()
+        .map(|entry| {
+            let offset = u32::try_from(entry.offset).map_err(|_| {
+                Error::GpuError(format!(
+                    "Compute kernel '{label}': specialization constant {} sits past the 4 GiB \
+                     a specialization's data can span",
+                    entry.constant_id
+                ))
+            })?;
+            Ok(vk::SpecializationMapEntry {
+                constant_id: entry.constant_id,
+                offset,
+                size: entry.size,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let cache_path = pipeline_cache_file_path(
+        spv,
+        entry_point,
+        &specialization_data,
+        pipeline_cache_directory_of_its_stream,
+    );
     let initial_data = read_cache_blob(PipelineCacheKernelKind::Compute, &cache_path);
     tracing::debug!(
         label,
@@ -150,11 +177,17 @@ pub(super) fn create_compute_pipeline_with_cache(
 
     let cache_handle = pipeline_cache.unwrap_or(vk::PipelineCache::null());
 
-    let stage = vk::PipelineShaderStageCreateInfo::builder()
+    let specialization_info = vk::SpecializationInfo::builder()
+        .map_entries(&specialization_map_entries)
+        .data(&specialization_data.bytes);
+    let mut stage = vk::PipelineShaderStageCreateInfo::builder()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(shader_module)
-        .name(entry_point.to_bytes_with_nul())
-        .build();
+        .name(entry_point.to_bytes_with_nul());
+    if !specialization_map_entries.is_empty() {
+        stage = stage.specialization_info(&specialization_info);
+    }
+    let stage = stage.build();
     let info = vk::ComputePipelineCreateInfo::builder()
         .stage(stage)
         .layout(pipeline_layout)
@@ -183,15 +216,17 @@ pub(super) fn create_compute_pipeline_with_cache(
     Ok(pipelines.0[0])
 }
 
-/// The cache file path for a given SPIR-V blob and entry point.
+/// The cache file path for a given SPIR-V blob, entry point and
+/// specialization.
 ///
-/// File name is the SHA-256 of the SPIR-V bytes and the entry point in
-/// lowercase hex with a `.bin` suffix. Two SPIR-V blobs that differ by any byte produce
+/// File name is the SHA-256 of the SPIR-V bytes, the entry point and the
+/// specialization in lowercase hex with a `.bin` suffix. Two SPIR-V blobs that differ by any byte produce
 /// distinct file paths; identical blobs hit the same cache file across
 /// process restarts.
 pub(super) fn pipeline_cache_file_path(
     spv: &[u8],
     entry_point: &CStr,
+    specialization_data: &ShaderSpecializationData,
     pipeline_cache_directory_of_its_stream: Option<&Path>,
 ) -> PathBuf {
     let mut hasher = Sha256::new();
@@ -202,6 +237,14 @@ pub(super) fn pipeline_cache_file_path(
     // header and recompiles on a miss, but a cold recompile every alternate
     // run is not what a cache is for.
     hasher.update(entry_point.to_bytes());
+    // Each specialization is a pipeline of its own. An unspecialized kernel
+    // hashes only its SPIR-V and entry point.
+    for entry in &specialization_data.map_entries {
+        hasher.update(entry.constant_id.to_le_bytes());
+        hasher.update((entry.offset as u64).to_le_bytes());
+        hasher.update((entry.size as u64).to_le_bytes());
+    }
+    hasher.update(&specialization_data.bytes);
     pipeline_cache_file_path_keyed_by(
         PipelineCacheKernelKind::Compute,
         &format!("{:x}", hasher.finalize()),

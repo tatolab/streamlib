@@ -18,6 +18,7 @@ from tatolab.runtime._function_node_carried_values import (
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
     FunctionNodeReadyToEvaluate,
+    NAMED_VALUE_TYPE,
     PART_VALUE_TYPES,
     PinValueCarried,
     pin_value_carried,
@@ -338,12 +339,15 @@ def _where_each_input_takes_its_value(
     pin_values_by_input_port: "dict[str, Any]",
     node_index_by_node_id: "dict[str, int]",
     output_ports_by_node_id: "dict[str, tuple[str, ...]]",
-) -> "list[tuple[Optional[tuple[int, int]], PinValueCarried]]":
-    """Each input's earlier node output, or else its pin value, or else its declared default."""
+) -> "list[tuple[Optional[tuple[int, int]], Optional[PinValueCarried]]]":
+    """Each input's earlier node output, or else its pin value, or else its declared default.
+
+    A named type's input linked to nothing holds no value: `None`.
+    """
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
     value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
     pin_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_pin_types))
-    where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], PinValueCarried]]" = []
+    where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], Optional[PinValueCarried]]]" = []
     for input_port in prepared.input_ports:
         linked_from = linked_from_by_input_port.get(input_port)
         if linked_from is not None and _is_read_through_the_reader(linked_from):
@@ -376,6 +380,8 @@ def _where_each_input_takes_its_value(
             where_each_input_takes_its_value.append(
                 (None, prepared.pin_defaults_by_input_port[input_port])
             )
+        elif value_type_by_input_port.get(input_port) == NAMED_VALUE_TYPE:
+            where_each_input_takes_its_value.append((None, None))
         else:
             where_each_input_takes_its_value.append((None, _NOTHING_AS_AN_UNREAD_MESSAGE_TOKEN))
     return where_each_input_takes_its_value
@@ -412,6 +418,11 @@ def _a_pin_value_as_the_island_carries_it(
     pin_value: Any,
 ) -> PinValueCarried:
     what_it_is = f"function node `{node_id}`'s pin on input `{input_port}`"
+    if value_type == NAMED_VALUE_TYPE:
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is set to {pin_value!r}, and the input is a named type, which holds no "
+            f"value: it reads only what a link brings. To fix: clear the pin, and link the input."
+        )
     if value_type in PART_VALUE_TYPES or value_type in STORED_VALUE_TYPES:
         return pin_value_carried(value_type, pin_value, what_it_is, pin_type)
     if not isinstance(pin_value, (bool, int, float)):

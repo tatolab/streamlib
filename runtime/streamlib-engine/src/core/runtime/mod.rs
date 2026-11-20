@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #[cfg(any(test, feature = "test-support"))]
+pub mod a_node_reading_its_settings_at_setup_for_a_test;
+#[cfg(any(test, feature = "test-support"))]
 pub mod a_project_on_disk_for_a_test;
 pub(crate) mod address_chunk;
 #[cfg(any(test, feature = "test-support"))]
@@ -28,7 +30,7 @@ pub use crate::core::compiler::compiler_ops::extension_code_checked_against_the_
     EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE, ExtensionCodeCheck, ExtensionCodeCheckKind,
     ExtensionCodeCheckRun, ExtensionCodeCheckers, ExtensionCodeCheckersHeld, ExtensionCodeFinding,
     ExtensionCodeFindingSeverity, ExtensionCodeNotChecked, ExtensionCodeNotCheckedCode,
-    ExtensionFileChecked,
+    ExtensionFileChecked, ExtensionSdkKitTemplate,
 };
 pub use crate::core::compiler::compiler_ops::python_node_declarations_checked_in_the_projects_interpreter::{
     PYTHON_NODE_DECLARATION_CHECK_ENTRY_MODULE, PythonModuleChecked, PythonNodeDeclarationCheck,

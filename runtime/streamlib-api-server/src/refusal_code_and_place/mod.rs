@@ -80,6 +80,7 @@ impl RefusalCodeAndPlace {
             }
             ProjectRepositoryRefusal::ProjectFilePathRefused { path, .. }
             | ProjectRepositoryRefusal::ProjectFileAlreadyExists(path)
+            | ProjectRepositoryRefusal::NodeUiElementNotRegistered { path, .. }
             | ProjectRepositoryRefusal::ProjectFileWrittenByAnotherAction { path, .. }
             | ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRecorded { path }
             | ProjectRepositoryRefusal::ProjectFileAlreadyHoldsThisContent(path)
@@ -216,6 +217,7 @@ impl RefusalCodeAndPlace {
                 refused_node: Some(node.clone()),
                 ..Self::coded(PortNotFound)
             },
+            Error::PortHasNoMemberNamed(_) => Self::coded(PortNotFound),
             Error::NodeNotFound(_) => Self::coded(NodeNotFound),
             Error::UnknownNodeType { .. } | Error::BuiltInNodeTypeMovedToAModule { .. } => {
                 Self::coded(NodeTypeNotFound)

@@ -3,6 +3,15 @@
 
 use super::*;
 
+/// A file a transaction writes whole: its bytes, and what it holds on disk now.
+pub(super) struct FileToWrite<'content> {
+    pub(super) path: ProjectRelativeFilePath,
+    pub(super) content: &'content [u8],
+    /// Its bytes on disk now; `None` for a new file.
+    pub(super) bytes_on_disk_now: Option<Vec<u8>>,
+    pub(super) replaced_a_file: bool,
+}
+
 impl ProjectRepository {
     /// Every file of the project under `under`, or the whole project, as a listing shows it.
     /// A folder under the link to the core project the runtime carries is listed through it,
@@ -88,25 +97,59 @@ impl ProjectRepository {
                 ProjectRepositoryRefusal::ProjectFileAlreadyHoldsThisContent(path.to_string()),
             );
         }
-        self.record_the_file_when_history_holds_other_bytes(&path, bytes_on_disk_now.as_deref())?;
-        let staged_at = format!("{PROJECT_FILE_WRITE_STAGING_DIRECTORY}/{}", Uuid::new_v4());
-        let staged_copy = self.project_directory.join(&staged_at);
-        write_file_whole(&staged_copy, content)?;
-        let applied = self.apply_and_commit_project_operations(
+        self.write_project_files_as_one_transaction(
             author,
             idempotency_key,
-            Vec::new(),
-            vec![ProjectOperation::File(
+            vec![FileToWrite {
+                path,
+                content,
+                bytes_on_disk_now,
+                replaced_a_file,
+            }],
+        )
+    }
+
+    /// Write each of `files` as one transaction by `author`, whose inverse puts back what each
+    /// held or takes each new one out; the caller has refused what the file verbs never write.
+    pub(super) fn write_project_files_as_one_transaction(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        files: Vec<FileToWrite<'_>>,
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        let mut staged_copies = Vec::new();
+        let mut operations = Vec::new();
+        let staged = files.into_iter().try_for_each(|file| {
+            self.record_the_file_when_history_holds_other_bytes(
+                &file.path,
+                file.bytes_on_disk_now.as_deref(),
+            )?;
+            let staged_at = format!("{PROJECT_FILE_WRITE_STAGING_DIRECTORY}/{}", Uuid::new_v4());
+            let staged_copy = self.project_directory.join(&staged_at);
+            write_file_whole(&staged_copy, file.content)?;
+            staged_copies.push(staged_copy);
+            operations.push(ProjectOperation::File(
                 ProjectFileOperation::WriteProjectFile {
-                    path,
+                    path: file.path,
                     content: ProjectFileContent::StagedCopy { staged_at },
-                    replaced_a_file,
+                    replaced_a_file: file.replaced_a_file,
                 },
-            )],
-            ProjectTransactionLineage::NewEdit,
-        );
-        if staged_copy.exists() {
-            let _ = std::fs::remove_file(&staged_copy);
+            ));
+            Ok::<_, ProjectRepositoryRefusal>(())
+        });
+        let applied = staged.and_then(|()| {
+            self.apply_and_commit_project_operations(
+                author,
+                idempotency_key,
+                Vec::new(),
+                operations,
+                ProjectTransactionLineage::NewEdit,
+            )
+        });
+        for staged_copy in staged_copies {
+            if staged_copy.exists() {
+                let _ = std::fs::remove_file(&staged_copy);
+            }
         }
         applied.map(ProjectActionApplyOutcome::AppliedNow)
     }

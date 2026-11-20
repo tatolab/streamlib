@@ -146,6 +146,7 @@ fn link_end_of_a_port(
     LinkPortRefOutput {
         node: node_names.name_of(node_run_id),
         port: port_name.to_string(),
+        member: None,
     }
 }
 
@@ -438,7 +439,8 @@ pub struct PortDescriptorOutput {
     #[schema(value_type = Option<Object>)]
     pub input_mode: Option<NodeInputMode>,
     /// The value a setting reads while no value is set on its node, as its
-    /// schema states it. Absent on a port, and on a setting that states none.
+    /// schema or its declaration states it. Absent on an input that takes a
+    /// wire, and on a setting that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
     /// What it states besides its type: a port's range, step, unit, meaning and
@@ -665,11 +667,14 @@ pub(crate) fn rendered_link(
     render_the_state_component_as(&mut components, state);
     let mut rendered = LinkOutput {
         id: link.id.to_string(),
-        source: link_end_of_a_port(
-            link.source.node_run_id(),
-            link.source.port_name(),
-            node_names,
-        ),
+        source: LinkPortRefOutput {
+            member: link.source.member().map(str::to_owned),
+            ..link_end_of_a_port(
+                link.source.node_run_id(),
+                link.source.port_name(),
+                node_names,
+            )
+        },
         target: link_end_of_a_port(
             link.target.node_run_id(),
             link.target.port_name(),
@@ -877,7 +882,10 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
                 flow: declared.flow,
             }),
             input_mode: port.input_mode,
-            default_value: None,
+            default_value: port
+                .input_mode
+                .filter(|input_mode| !input_mode.takes_a_wire())
+                .and(port.pin_default.clone()),
             annotations,
         }
     }

@@ -6,7 +6,7 @@
 use crate::core::rhi::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingShaderStageFlags, ray_tracing_spirv_type_to_kind,
-    reflect_spirv_without_its_debug_source_strings, refuse_a_binding_the_shader_left_unnamed,
+    reflect_spirv_without_what_rspirv_refuses, refuse_a_binding_the_shader_left_unnamed,
     refuse_a_descriptor_set_other_than_set_0, refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
 };
@@ -31,13 +31,12 @@ pub(super) fn validate_bindings_against_spirv(
         BTreeMap::new();
 
     for stage in descriptor.stages {
-        let reflection =
-            reflect_spirv_without_its_debug_source_strings(stage.spv).map_err(|e| {
-                Error::GpuError(format!(
-                    "Ray-tracing kernel '{}': failed to reflect SPIR-V for stage {:?}: {e:?}",
-                    descriptor.label, stage.stage
-                ))
-            })?;
+        let reflection = reflect_spirv_without_what_rspirv_refuses(stage.spv).map_err(|e| {
+            Error::GpuError(format!(
+                "Ray-tracing kernel '{}': failed to reflect SPIR-V for stage {:?}: {e:?}",
+                descriptor.label, stage.stage
+            ))
+        })?;
         subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
             &kernel_kind_label,
             stage_to_vk(stage.stage),
@@ -156,7 +155,7 @@ pub(super) fn validate_push_constants_against_spirv(
 ) -> Result<()> {
     let mut max_size = 0u32;
     for stage in descriptor.stages {
-        let reflection = reflect_spirv_without_its_debug_source_strings(stage.spv).map_err(|e| {
+        let reflection = reflect_spirv_without_what_rspirv_refuses(stage.spv).map_err(|e| {
             Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to reflect SPIR-V (push) for stage {:?}: {e:?}",
                 descriptor.label, stage.stage

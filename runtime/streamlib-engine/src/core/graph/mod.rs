@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod bundle_member_link_ends;
 mod components;
 mod config_node_reference_edges;
 mod config_schema_value_checks;
@@ -23,6 +24,7 @@ mod port_family_link_checks;
 mod traits;
 mod traversal;
 mod validation;
+mod values_port_facts_read;
 
 #[cfg(test)]
 mod graph_tests;
@@ -30,6 +32,10 @@ mod graph_tests;
 mod renamed_port_tests;
 
 // top level
+pub(crate) use bundle_member_link_ends::{
+    WhatTheLinksIntoAnInputFeed, the_bundle_member_a_link_ends_at,
+    the_bundle_member_a_link_starts_at,
+};
 pub(crate) use config_node_reference_edges::{
     config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
     refuse_a_live_config_naming_a_node_the_graph_does_not_hold,
@@ -65,6 +71,7 @@ pub use streamlib_node_schema::{
 };
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
+pub(crate) use values_port_facts_read::the_values_port_facts_read;
 
 pub(crate) use components::HowOneReadersHelperRanEachFunctionNode;
 pub use components::{

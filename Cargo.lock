@@ -5725,12 +5725,16 @@ dependencies = [
  "objc2-io-surface",
  "objc2-video-toolbox",
  "png 0.17.16",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
  "streamlib",
  "streamlib-consumer-rhi",
  "streamlib-surface-client",
  "streamlib-video-bitstream",
  "streamlib-vulkan-video",
  "tatolab-module-sdk",
+ "tempfile",
  "tracing",
 ]
 
@@ -5774,6 +5778,7 @@ dependencies = [
  "pyo3",
  "rmp-serde",
  "rmpv",
+ "serde",
  "serde_json",
  "streamlib",
  "streamlib-adapter-cuda",
@@ -6240,6 +6245,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "tatolab-video-encode-host"
+version = "0.68.82"
+dependencies = [
+ "streamlib-owned-device-video-codec-nodes",
+ "streamlib-runtime-client-contract",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

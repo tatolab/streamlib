@@ -33,12 +33,12 @@ use streamlib_project_repository::{
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
     CloseViewerToolResult, ControlOperationRefusalCode, CreateNodeFileToolResult,
-    CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
-    DescribeAssetToolResult, DescribeNodeTypesToolResult, DescribeRuntimeToolResult,
-    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
-    ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
-    ListDependenciesToolResult, ListNodeTypesToolResult, ListPinTypesToolResult,
-    ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
+    CreateNodeUiElementToolResult, CreateProjectToolResult, DeleteProjectToolResult,
+    DependencyTransactionToolResult, DescribeAssetToolResult, DescribeNodeTypesToolResult,
+    DescribeRuntimeToolResult, DescribeStreamActionToolResult, DuplicateProjectToolResult,
+    GraphTransactionToolResult, ImportProjectToolResult, LinkCandidatesCheckResult,
+    LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult, ListNodeTypesToolResult,
+    ListPinTypesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
     ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
     ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
     PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectCodeCheckResult,
@@ -157,6 +157,8 @@ pub(crate) enum ControlOperationAnswer {
     ReadProjectFile(ReadProjectFileToolResult),
     /// `create_node_file`'s.
     CreateNodeFile(CreateNodeFileToolResult),
+    /// `create_node_ui_element`'s.
+    CreateNodeUiElement(CreateNodeUiElementToolResult),
     /// `write_project_file`'s.
     ProjectFileTransaction(ProjectFileTransactionToolResult),
     /// `check_project_code`'s.
@@ -646,6 +648,10 @@ impl ControlOperationDispatcher {
                 .create_node_file(request, request_origin)
                 .await
                 .map(ControlOperationAnswer::CreateNodeFile),
+            ControlOperationCall::CreateNodeUiElement(request) => self
+                .create_node_ui_element(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::CreateNodeUiElement),
             ControlOperationCall::WriteProjectFile(request) => self
                 .write_project_file(request, request_origin)
                 .await

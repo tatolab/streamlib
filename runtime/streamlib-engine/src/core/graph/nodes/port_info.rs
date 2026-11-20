@@ -162,6 +162,13 @@ impl PortInfo {
             .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_each_run)
     }
 
+    /// Whether this input is a setting a node reads once, when it is set up, so a value set on
+    /// it while the node runs rebuilds the node.
+    pub fn is_a_setting_read_at_setup(&self) -> bool {
+        self.input_mode
+            .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_at_setup)
+    }
+
     /// The value `value` taken as this input's stored value, or what it takes instead, by the
     /// pin it declares; `None` for a port that names no pin type.
     pub fn check_value(

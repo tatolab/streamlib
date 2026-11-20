@@ -11,6 +11,9 @@ use crate::core::graph::{LinkDirection, NodeRunId, cast_exposed_name_to_url_safe
 pub struct InputLinkPortRef {
     node_run_id: NodeRunId,
     port_name: String,
+    /// The member of a bundle input the link ends at; `None` for the whole port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    member: Option<String>,
 }
 
 impl InputLinkPortRef {
@@ -22,7 +25,14 @@ impl InputLinkPortRef {
         Self {
             node_run_id: node_run_id.into(),
             port_name: port_name.into(),
+            member: None,
         }
+    }
+
+    /// This port's member `member`, which a link ending there feeds alone; `None` names the
+    /// whole port.
+    pub fn at_member(self, member: Option<String>) -> Self {
+        Self { member, ..self }
     }
 
     pub fn direction(&self) -> LinkDirection {
@@ -37,18 +47,28 @@ impl InputLinkPortRef {
         &self.port_name
     }
 
+    /// The member of a bundle input the link ends at; `None` for the whole port.
+    pub fn member(&self) -> Option<&str> {
+        self.member.as_deref()
+    }
+
     /// This reference with its port name cast, the way every port is named.
     pub fn with_its_port_name_cast(self) -> Result<Self> {
         Ok(Self {
             port_name: cast_exposed_name_to_url_safe(&self.port_name)?.into_owned(),
             node_run_id: self.node_run_id,
+            member: self.member,
         })
     }
 }
 
 impl fmt::Display for InputLinkPortRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.node_run_id, self.port_name)
+        write!(f, "{}.{}", self.node_run_id, self.port_name)?;
+        match &self.member {
+            Some(member) => write!(f, ".{member}"),
+            None => Ok(()),
+        }
     }
 }
 

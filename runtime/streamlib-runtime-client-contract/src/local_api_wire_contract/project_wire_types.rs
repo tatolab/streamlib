@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use streamlib_node_schema::pin_type::PinType;
 
-use super::NodeTypeCategoryFrom;
 use super::graph_wire_types::RefusedGraphLinkOnTheWire;
+use super::{NamedPinTypeReadFromSource, NodeTypeCategoryFrom};
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,7 +387,7 @@ pub struct ProjectActionRefusalOnTheWire {
     pub refused_node: Option<String>,
     /// The link the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refused_link: Option<RefusedGraphLinkOnTheWire>,
+    pub refused_link: Option<Box<RefusedGraphLinkOnTheWire>>,
     /// The node's input or config field the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_field: Option<String>,
@@ -647,6 +647,23 @@ pub struct CreateNodeFileToolResult {
     pub commit: String,
 }
 
+/// The `create_node_ui_element` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CreateNodeUiElementToolResult {
+    /// The script created, relative to the project, as `node_ui/knob.ts`.
+    pub script_path: String,
+    /// The manifest that registers it, relative to the project.
+    pub manifest_path: String,
+    /// The kit the template was read from, with its version and where it was found; `null` when
+    /// the call was sent again under the key of one already applied, which reads no kit.
+    pub template_from: Option<String>,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+}
+
 /// A project this one imports, as a dependency tool answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -847,6 +864,9 @@ pub struct NodeTypeSourceReadWithoutRunningIt {
     pub node_types: Vec<NodeTypeReadFromSource>,
     /// Each `@graph_generator` declared, by import path.
     pub graph_generators: Vec<GraphGeneratorReadFromSource>,
+    /// Each `@named_pin_type` class declared, by import path.
+    #[serde(default)]
+    pub named_pin_types: Vec<NamedPinTypeReadFromSource>,
     /// Each module that does not parse, with why and where; the rest of the source still lists.
     pub unreadable_modules: Vec<NodeModuleNotReadable>,
 }

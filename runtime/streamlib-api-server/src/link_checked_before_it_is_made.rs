@@ -265,7 +265,11 @@ impl TheRunningGraphLinksAreCheckedOn {
         {
             return Err(port_not_found());
         }
-        Ok(StreamGraphDocumentLinkEnd { node, port })
+        Ok(StreamGraphDocumentLinkEnd {
+            node,
+            port,
+            member: held.member.clone(),
+        })
     }
 
     /// What `connect` would answer for the link from `source` to `target`: read as a

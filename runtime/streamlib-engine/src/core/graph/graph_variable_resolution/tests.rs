@@ -23,10 +23,12 @@ fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
         source: LinkPortRefOutput {
             node: source.0.to_string(),
             port: source.1.to_string(),
+            member: None,
         },
         target: LinkPortRefOutput {
             node: target.0.to_string(),
             port: target.1.to_string(),
+            member: None,
         },
     }
 }
@@ -686,14 +688,16 @@ fn the_render_carries_each_runtime_links_id_and_drops_a_drawn_link_whose_reader_
 
 #[test]
 fn a_drawn_link_read_through_a_variable_says_what_its_running_link_converts_and_warns_of() {
+    use streamlib_node_schema::pin_type::PinLinkWarning;
     use streamlib_runtime_client_contract::local_api_wire_contract::{
         PinLinkMarksOnTheWire, PinLinkWarningOnTheWire,
     };
+    let vector_read_as_a_color = PinLinkWarningOnTheWire::of(&PinLinkWarning::VectorReadAsAColor);
     let resolution = resolved(a_camera_variable_read_by_two_displays()).unwrap();
     let warned_running_link = LinkOutput {
         marks: PinLinkMarksOnTheWire {
             free_conversion: true,
-            warnings: vec![PinLinkWarningOnTheWire::VectorReadAsAColor],
+            warnings: vec![vector_read_as_a_color.clone()],
         },
         ..a_rendered_link("L2", ("camera", "video"), ("back", "video_in"))
     };
@@ -721,9 +725,5 @@ fn a_drawn_link_read_through_a_variable_says_what_its_running_link_converts_and_
         .find(|rendered| rendered.source.node == "get-camera-2")
         .expect("the get's drawn link renders");
     assert!(drawn.marks.free_conversion, "{drawn:?}");
-    assert_eq!(
-        drawn.marks.warnings,
-        [PinLinkWarningOnTheWire::VectorReadAsAColor],
-        "{drawn:?}"
-    );
+    assert_eq!(drawn.marks.warnings, [vector_read_as_a_color], "{drawn:?}");
 }

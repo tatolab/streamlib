@@ -70,6 +70,7 @@ pub(super) fn the_link_ends_under_their_current_port_names(
                 stream_operations,
             ),
             node: end.node,
+            member: end.member,
         };
     (
         current_end(source, PortDirection::Output),
@@ -116,12 +117,14 @@ pub(super) fn the_request_under_the_current_port_names(
             level,
             node,
             input,
+            member,
             value,
         } => StreamGraphAction::SetNodeInputValue {
             input: current_name(&node, input, PortDirection::Input),
             stream,
             level,
             node,
+            member,
             value,
         },
         StreamGraphAction::Connect {
@@ -207,6 +210,7 @@ fn the_operations_moving_each_former_port_name(
                 moves.push(StreamGraphOperation::SetNodeInputValue {
                     node: node.id,
                     input: name.clone(),
+                    member: None,
                     from: node.input_values.get(name).cloned(),
                     to: None,
                 });
@@ -214,6 +218,7 @@ fn the_operations_moving_each_former_port_name(
             moves.push(StreamGraphOperation::SetNodeInputValue {
                 node: node.id,
                 input: moved.current_name,
+                member: None,
                 from: None,
                 to: node.input_values.get(&moved.name_read).cloned(),
             });
@@ -227,6 +232,7 @@ fn the_operations_moving_each_former_port_name(
                 .and_then(|ports| ports.current_name(direction, &end.port))
                 .unwrap_or(&end.port)
                 .to_string(),
+            member: end.member.clone(),
         };
     let links = document.links();
     let mut links_under_former_names_of_each_link: Vec<(

@@ -169,6 +169,13 @@ impl StreamGraphTransactionExecutor<'_> {
             self.reverse_what_was_applied_live(&staged.streams, applied_live);
             return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
         }
+        let mut nodes_rebuilt: Vec<GraphTransactionRebuiltNode> = Vec::new();
+        if let Err(refusal) = self
+            .rebuild_each_node_a_setting_read_at_setup_changed(&staged.streams, &mut nodes_rebuilt)
+        {
+            self.reverse_what_was_applied_live(&staged.streams, applied_live);
+            return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
+        }
         let WhatTheTransactionHasStaged {
             streams,
             what_the_answer_names_of_each_added_node,
@@ -234,6 +241,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links,
                 why_each_link_was_made_unjudged,
+                nodes_rebuilt,
             },
         ))
     }
@@ -459,7 +467,11 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let overridden_by_a_link = match &edit_as_drawn {
             StreamGraphOperation::SetNodeInputValue {
-                node, input, to, ..
+                node,
+                input,
+                member,
+                to,
+                ..
             } => {
                 let set_on = level_as_drawn.node(*node)?;
                 if input_value_check == InputValueCheck::MadeOnApply
@@ -468,8 +480,14 @@ impl StreamGraphTransactionExecutor<'_> {
                     refuse_a_value_the_input_does_not_take(
                         stream_operations.as_ref(),
                         &set_on,
-                        &input_values_after_the_set(&set_on.input_values, input, to.as_ref()),
+                        &input_values_after_the_set(
+                            &set_on.input_values,
+                            input,
+                            member.as_deref(),
+                            to.as_ref(),
+                        ),
                         input,
+                        member.as_deref(),
                         to.as_ref(),
                         Some("/value"),
                     )?;
@@ -522,19 +540,29 @@ impl StreamGraphTransactionExecutor<'_> {
             let applied_on_the_running_stream = match (&applied, value_the_running_input_held) {
                 (
                     StreamGraphOperation::SetNodeInputValue {
-                        node, input, to, ..
+                        node,
+                        input,
+                        member,
+                        to,
+                        ..
                     },
                     Some(held),
                 ) => OneOperationAppliedLive {
                     operation: StreamGraphOperation::SetNodeInputValue {
                         node: *node,
                         input: input.clone(),
-                        from: held.saved,
+                        member: member.clone(),
+                        from: the_value_held_on_the_input_or_its_member(
+                            held.saved.as_ref(),
+                            member.as_deref(),
+                        )
+                        .cloned(),
                         to: to.clone(),
                     },
                     live_value_it_replaced: held.live.map(|value| InputValueToSetLive {
                         node: *node,
                         input: input.clone(),
+                        member: None,
                         value: Some(value),
                     }),
                 },
@@ -551,6 +579,10 @@ impl StreamGraphTransactionExecutor<'_> {
                     stream_operations.as_ref(),
                     the_open_batch_of(streams, stream_id).ok(),
                     &applied_on_the_running_stream,
+                );
+                self.rebuild_each_node_a_reversal_put_its_settings_back_on(
+                    stream_id,
+                    stream_operations.as_ref(),
                 );
                 return Err(format!(
                     "stream `{stream_id}`'s graph document does not hold what its running graph \

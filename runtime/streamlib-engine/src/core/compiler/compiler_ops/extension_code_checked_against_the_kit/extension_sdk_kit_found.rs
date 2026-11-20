@@ -28,6 +28,9 @@ pub(super) const KIT_TIE_LINES_FILE: &str = "tie_lines.json";
 /// The kit's strict lint rules.
 pub(super) const KIT_LINT_RULES_FILE: &str = "oxlint.json";
 
+/// The kit's folder holding the template each kind of node UI element starts from.
+pub(super) const KIT_TEMPLATES_FOLDER: &str = "templates";
+
 /// A kit found, where, and the SDK version it was written at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ExtensionSdkKitFound {

@@ -118,6 +118,13 @@ impl TextureInner {
         true
     }
 
+    /// Whether a kernel may bind this texture as a sampled image (Vulkan:
+    /// SAMPLED usage).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn supports_sampled_read(&self) -> bool {
+        self.inner.supports_sampled_read()
+    }
+
     /// Whether a compute kernel may write this texture as a storage image
     /// (Vulkan: STORAGE usage).
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -241,6 +248,14 @@ impl Texture {
     /// directly, which panics for a cdylib caller.
     pub fn supports_transfer_read(&self) -> bool {
         self.host_inner().supports_transfer_read()
+    }
+
+    /// Whether a kernel may bind this texture as a sampled image (Vulkan:
+    /// SAMPLED usage). Engine-internal: reads the host's `TextureInner`
+    /// directly, which panics for a cdylib caller.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn supports_sampled_read(&self) -> bool {
+        self.host_inner().supports_sampled_read()
     }
 
     /// Whether a compute kernel may write this texture as a storage image

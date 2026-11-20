@@ -7,8 +7,8 @@
 
 use streamlib::sdk::descriptors::{
     BuiltInPinTypeName, BundleMember, NamedPinTypeImportPath, NodeClassImportPath, NodeDescriptor,
-    PinConversion, PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkVerdict, PinType,
-    ProjectAssetMedia, TexturePixelFormat, VectorComponentCount, pin_link_verdict,
+    PinConversion, PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkVerdict, PinLinkWarning,
+    PinType, ProjectAssetMedia, TexturePixelFormat, VectorComponentCount, pin_link_verdict,
 };
 use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib_media_builtins::register_media_builtin_node_types;
@@ -30,7 +30,7 @@ fn a_texture_of(pixel_formats: &[TexturePixelFormat]) -> PinType {
 }
 
 /// Each built-in conversion with a typed form, as it states itself.
-fn the_typed_conversions() -> [PinConversion; 4] {
+fn the_typed_conversions() -> [PinConversion; 5] {
     let conversion = |name: &str,
                       input_port_name: &str,
                       input_pin_type,
@@ -59,6 +59,16 @@ fn the_typed_conversions() -> [PinConversion; 4] {
             PinType::Tensor {},
             "image",
             a_texture_of(&[]),
+        ),
+        conversion(
+            "TextureFormatConvert",
+            "image",
+            a_texture_of(&[
+                TexturePixelFormat::Rgba8Unorm,
+                TexturePixelFormat::Bgra8Unorm,
+            ]),
+            "rgba_image",
+            a_texture_of(&[TexturePixelFormat::Rgba8Unorm]),
         ),
         conversion(
             "AudioToTensor",
@@ -173,6 +183,88 @@ fn the_verdict_offers_no_conversion_from_an_nv12_texture_into_a_tensor() {
     assert!(
         matches!(verdict.outcome, PinLinkOutcome::Refused(_)),
         "{verdict:?}"
+    );
+}
+
+/// A `bgra8_unorm` Texture linked into an input that takes only `rgba8_unorm` gets a
+/// `TextureFormatConvert`, which holds no setting.
+///
+/// Mental-revert: without the node registered, the link is refused.
+#[test]
+fn the_verdict_places_a_texture_format_convert_between_bgra8_and_rgba8() {
+    let conversions = the_conversions_stated_by(&the_registered_built_ins());
+
+    let verdict = the_verdict_between(
+        &a_texture_of(&[TexturePixelFormat::Bgra8Unorm]),
+        &a_texture_of(&[TexturePixelFormat::Rgba8Unorm]),
+        &conversions,
+    );
+
+    match verdict.outcome {
+        PinLinkOutcome::ConnectsThroughConvertNode(convert_node) => {
+            assert_eq!(
+                convert_node.conversion.node_type,
+                NodeClassImportPath::of_built_in_node("TextureFormatConvert")
+            );
+            assert!(convert_node.input_values.is_empty(), "{convert_node:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A pair of formats `TextureFormatConvert` does not cover is refused, the refusal naming both
+/// formats: one it takes no frame of, an sRGB one, and one into a format it does not write.
+///
+/// Mental-revert: declaring `rgba16_float` or `bgra8_unorm_srgb` on its input places the node.
+#[test]
+fn a_pair_of_formats_no_conversion_covers_is_refused_naming_both() {
+    let conversions = the_conversions_stated_by(&the_registered_built_ins());
+
+    for (output_format, input_format) in [
+        (
+            TexturePixelFormat::Rgba16Float,
+            TexturePixelFormat::Rgba8Unorm,
+        ),
+        (
+            TexturePixelFormat::Bgra8UnormSrgb,
+            TexturePixelFormat::Rgba8Unorm,
+        ),
+        (
+            TexturePixelFormat::Rgba8Unorm,
+            TexturePixelFormat::Bgra8Unorm,
+        ),
+    ] {
+        let verdict = the_verdict_between(
+            &a_texture_of(&[output_format]),
+            &a_texture_of(&[input_format]),
+            &conversions,
+        );
+
+        let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
+            panic!("{output_format:?} into {input_format:?}: {verdict:?}");
+        };
+        let refusal = refusal.to_string();
+        assert!(refusal.contains(output_format.wire_name()), "{refusal}");
+        assert!(refusal.contains(input_format.wire_name()), "{refusal}");
+    }
+}
+
+/// A Texture output that states no format connects to an input that takes only `rgba8_unorm`
+/// with a warning, so no convert node is placed on a guess.
+#[test]
+fn a_texture_output_stating_no_format_connects_with_a_warning_and_no_convert_node() {
+    let conversions = the_conversions_stated_by(&the_registered_built_ins());
+
+    let verdict = the_verdict_between(
+        &a_texture_of(&[]),
+        &a_texture_of(&[TexturePixelFormat::Rgba8Unorm]),
+        &conversions,
+    );
+
+    assert_eq!(verdict.outcome, PinLinkOutcome::Connects);
+    assert_eq!(
+        verdict.warnings,
+        [PinLinkWarning::TextureOutputStatesNoFormat]
     );
 }
 

@@ -45,6 +45,7 @@ mod input_value_changes_a_connect_waits_for;
 pub(super) use input_value_changes_a_connect_waits_for::InputValueChangesAConnectWaitsFor;
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
+mod node_rebuild;
 mod reactive_reader_rule_of_an_edit;
 pub(super) use graph_edits_in_one_commit::{ALifecycleChange, GraphEditsHeldForOneCommit};
 pub(super) use link_connected_between_two_ports::{
@@ -614,6 +615,14 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn rebuild_each_node_a_setting_read_at_setup_changed(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<uuid::Uuid>>> {
+        self.in_this_streams_log_route(
+            LoadedStreamInThisRuntime::rebuild_each_node_a_setting_read_at_setup_changed(self),
+        )
+    }
+
     fn hold_an_edit_its_document_holds_not_live(
         &self,
         graph_operation: &streamlib_project_repository::StreamGraphOperation,
@@ -713,6 +722,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         node_name: &str,
         input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
         input: &str,
+        member: Option<&str>,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
         self.refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
@@ -727,6 +737,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             self.node_types_this_stream_resolves(),
             &node,
             input,
+            member,
             value,
         )
     }
@@ -976,3 +987,6 @@ mod connect_refuses_an_island_into_the_app_process_tests;
 
 #[cfg(test)]
 mod connect_resolves_a_pin_type_found_another_way_tests;
+
+#[cfg(test)]
+mod node_rebuild_tests;

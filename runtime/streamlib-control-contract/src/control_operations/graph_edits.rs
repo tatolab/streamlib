@@ -7,9 +7,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::EVERY_SURFACE;
+use super::worked_examples;
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkCandidatesRequest, CheckLinkRequest,
@@ -37,6 +39,7 @@ impl ControlOperation for Transact {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::TRANSACT);
 }
 
 /// `add_node`: one node added to a loaded stream's graph.
@@ -56,6 +59,7 @@ impl ControlOperation for AddNode {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::ADD_NODE);
 }
 
 /// `connect`: one link between an output port and an input port.
@@ -75,6 +79,7 @@ impl ControlOperation for Connect {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CONNECT);
 }
 
 /// `check_link`: what `connect` would answer for one link, made nowhere.
@@ -93,7 +98,8 @@ impl ControlOperation for CheckLink {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_LINK);
 }
 
 /// `check_link_candidates`: what `check_link` would answer for each link between one placed end
@@ -105,14 +111,15 @@ impl ControlOperation for CheckLinkCandidates {
     type Result = LinkCandidatesCheckResult;
     const METHOD_NAME: &'static str = "check_link_candidates";
     const ONE_LINE_DOC: &'static str = "Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.";
-    const AGENT_USAGE_NOTE: &'static str = "Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{\"output\": {\"node\": …, \"port\": …}}`, each candidate then an input, or `{\"input\": …}`, each candidate then an output. `among` is `\"placed_ports\"`, every such port of every node at the level; `\"node_type_ports\"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{\"ends\": [...]}`, these ends alone, each `{\"kind\": \"placed_port\", \"node\", \"port\"}` or `{\"kind\": \"node_type_port\", \"node_type\", \"port\"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, so check a link inside a placed stream with `check_link`, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.";
+    const AGENT_USAGE_NOTE: &'static str = "Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{\"output\": {\"node\": …, \"port\": …}}`, each candidate then an input, or `{\"input\": …}`, each candidate then an output. `among` is `\"placed_ports\"`, every such port of every node at the level; `\"node_type_ports\"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{\"ends\": [...]}`, these ends alone, each `{\"kind\": \"placed_port\", \"node\", \"port\"}` or `{\"kind\": \"node_type_port\", \"node_type\", \"port\"}`, with `member` naming one member of a bundle the port carries. Among placed or node type ports, each port carrying a bundle is followed by each of its members as an end of its own. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, so check a link inside a placed stream with `check_link`, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+        ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_LINK_CANDIDATES);
 }
 
 /// `import_graph_generator`: run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
@@ -131,6 +138,7 @@ impl ControlOperation for ImportGraphGenerator {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::IMPORT_GRAPH_GENERATOR);
 }
 
 /// `remove_node`: remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it.
@@ -150,6 +158,7 @@ impl ControlOperation for RemoveNode {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REMOVE_NODE);
 }
 
 /// `disconnect`: take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.
@@ -168,6 +177,7 @@ impl ControlOperation for Disconnect {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DISCONNECT);
 }
 
 /// `set_node_config`: replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
@@ -225,6 +235,7 @@ impl ControlOperation for SetNodeInputValue {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_NODE_INPUT_VALUE);
 }
 
 /// `rename_node`: give a node another name, a label, as one transaction.
@@ -243,6 +254,7 @@ impl ControlOperation for RenameNode {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::RENAME_NODE);
 }
 
 /// `set_studio_fields`: replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.
@@ -261,6 +273,7 @@ impl ControlOperation for SetStudioFields {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_STUDIO_FIELDS);
 }
 
 /// `set_exposed_config_fields`: replace the config fields a node takes as inputs, as one transaction.
@@ -280,6 +293,8 @@ impl ControlOperation for SetExposedConfigFields {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> =
+        Some(worked_examples::SET_EXPOSED_CONFIG_FIELDS);
 }
 
 /// `add_group`: make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
@@ -298,6 +313,7 @@ impl ControlOperation for AddGroup {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::ADD_GROUP);
 }
 
 /// `set_group_fields`: set a labelled group's title, description or colour, as one transaction.
@@ -317,6 +333,7 @@ impl ControlOperation for SetGroupFields {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_GROUP_FIELDS);
 }
 
 /// `collapse_selection_into_subgraph`: collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.
@@ -335,6 +352,8 @@ impl ControlOperation for CollapseSelectionIntoSubgraph {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> =
+        Some(worked_examples::COLLAPSE_SELECTION_INTO_SUBGRAPH);
 }
 
 /// `unlock_subgraph`: unlock a subgraph node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
@@ -353,6 +372,7 @@ impl ControlOperation for UnlockSubgraph {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::UNLOCK_SUBGRAPH);
 }
 
 /// `add_note`: place a canvas note on a loaded stream's graph, as one transaction.
@@ -372,6 +392,7 @@ impl ControlOperation for AddNote {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::ADD_NOTE);
 }
 
 /// `set_note_fields`: set a canvas note's text, position or size, as one transaction.
@@ -392,6 +413,7 @@ impl ControlOperation for SetNoteFields {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_NOTE_FIELDS);
 }
 
 /// `remove_note`: take a canvas note off a loaded stream's graph, as one transaction.
@@ -411,6 +433,7 @@ impl ControlOperation for RemoveNote {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REMOVE_NOTE);
 }
 
 /// `remove_group`: take out a labelled group, as one transaction.
@@ -429,6 +452,7 @@ impl ControlOperation for RemoveGroup {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REMOVE_GROUP);
 }
 
 /// `write_graph_input`: write a value onto one of a loaded stream's graph inputs.
@@ -467,6 +491,7 @@ impl ControlOperation for Undo {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::UNDO);
 }
 
 /// `redo`: redo what an author's latest undo in a project reversed, as a new transaction.
@@ -486,4 +511,5 @@ impl ControlOperation for Redo {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REDO);
 }

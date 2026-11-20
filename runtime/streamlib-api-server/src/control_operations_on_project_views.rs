@@ -225,6 +225,7 @@ impl ControlOperationDispatcher {
                 level: Vec::new(),
                 node: node.to_string(),
                 input,
+                member: None,
                 value: Some(value),
             }],
             Some(GraphEditMode::Live),

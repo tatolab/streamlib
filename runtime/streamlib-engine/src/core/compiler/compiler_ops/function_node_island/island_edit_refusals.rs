@@ -18,6 +18,7 @@ use crate::core::graph::{
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
+use super::super::shader_node_island::is_a_shader_node;
 use super::{
     is_a_previous_value_node, is_fed_by_a_node_that_is_not_a_function_node, link_in,
     runs_inside_the_read_of_each_node_it_feeds, the_function_nodes_upstream_of,
@@ -70,8 +71,9 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
 }
 
 /// Refuse a link from `from` into `to` an island cannot take: a second link into a port an
-/// island feeds, an island into a port declaring an audio window, or a link closing a cycle of
-/// function nodes. `held_as` names the link when `graph` already holds it, so it is counted
+/// island feeds, an island into a port declaring an audio window, a link from a function node or
+/// into a shader node ending at a member of a bundle, or a link closing a cycle of function
+/// nodes. `held_as` names the link when `graph` already holds it, so it is counted
 /// once; a link not yet made is judged as if `graph` held it.
 pub(crate) fn refuse_a_link_an_island_cannot_take(
     graph: &Graph,
@@ -81,6 +83,7 @@ pub(crate) fn refuse_a_link_an_island_cannot_take(
 ) -> Result<()> {
     refuse_a_second_link_into_a_port_an_island_feeds(graph, from, to, held_as)?;
     refuse_an_island_into_a_port_declaring_an_audio_window(graph, from, to)?;
+    refuse_a_link_an_island_reads_whole_ending_at_a_member(graph, from, to)?;
     refuse_a_link_closing_a_cycle_of_function_nodes(graph, from, to, held_as)
 }
 
@@ -283,6 +286,39 @@ fn refuse_a_second_link_into_a_port_an_island_feeds(
         )));
     }
     Ok(())
+}
+
+/// Refuse a link ending at a member of a bundle input `to` when its value reaches the input whole,
+/// with no message to build the bundle from: one from `from`, a function node, whose island
+/// hands the input one value, or one into a shader node, whose island reads its inputs at its
+/// host.
+fn refuse_a_link_an_island_reads_whole_ending_at_a_member(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Result<()> {
+    let Some(member) = to.member() else {
+        return Ok(());
+    };
+    let (why, to_fix) = if runs_inside_the_read_of_each_node_it_feeds(graph, from.node_run_id()) {
+        (
+            "it starts at a function node, whose island hands the input it feeds one whole value",
+            "link the whole input, or feed the member from a node that is no function node",
+        )
+    } else if is_a_shader_node(graph, to.node_run_id()) {
+        (
+            "it ends at a shader node, whose island reads each input whole",
+            "link the whole input",
+        )
+    } else {
+        return Ok(());
+    };
+    Err(Error::InvalidLink(format!(
+        "the link from `{from}` ends at member `{member}` of input `{}` of `{}`, and {why}. To \
+         fix: {to_fix}",
+        to.port_name(),
+        to.node_run_id()
+    )))
 }
 
 /// Refuse a link from `from`, a function node, into `to`, an input port declaring an

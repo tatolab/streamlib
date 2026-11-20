@@ -188,6 +188,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
             _node_name: &str,
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
+            _member: ::std::option::Option<&str>,
             _value: ::std::option::Option<&::serde_json::Value>,
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
@@ -229,6 +230,14 @@ macro_rules! graph_mutation_ops_are_unreachable {
             _refusal: &str,
         ) {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
+        fn rebuild_each_node_a_setting_read_at_setup_changed(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::std::vec::Vec<::uuid::Uuid>>,
+        > {
+            ::std::boxed::Box::pin(::std::future::ready(Ok(::std::vec::Vec::new())))
         }
         fn apply_a_stream_graph_operation_live(
             &self,
@@ -712,6 +721,14 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> ::streamlib::sdk::runtime::ExtensionCodeCheck {
                 ::streamlib::sdk::runtime::ExtensionCodeCheckersHeld::default()
                     .check_a_projects_extension_code(project_directory, paths, None)
+            }
+            fn a_template_from_the_extension_sdk_kit(
+                &self,
+                project_directory: &::std::path::Path,
+                template_file: &str,
+            ) -> ::std::result::Result<::streamlib::sdk::runtime::ExtensionSdkKitTemplate, String> {
+                ::streamlib::sdk::runtime::ExtensionCodeCheckersHeld::default()
+                    .a_template_from_the_kit(project_directory, template_file, None)
             }
         }
     };

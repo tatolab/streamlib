@@ -323,14 +323,7 @@ impl VulkanColorConverter {
         src: &Texture,
         dst: &Texture,
     ) -> Result<Arc<VulkanComputeKernel>> {
-        if !matches!(self.src_format, PixelFormat::Rgba32 | PixelFormat::Bgra32)
-            || self.dst_format != PixelFormat::Rgba32
-        {
-            return Err(Error::NotSupported(format!(
-                "color converter image→image: {:?} → {:?} is not RGBA or BGRA → RGBA",
-                self.src_format, self.dst_format
-            )));
-        }
+        self.refuse_a_format_pair_the_image_to_image_kernel_does_not_convert()?;
         if (src.width(), src.height()) != (dst.width(), dst.height()) {
             return Err(Error::Configuration(format!(
                 "color converter image→image: source is {}x{} and destination {}x{}; the \
@@ -354,7 +347,33 @@ impl VulkanColorConverter {
                     .to_string(),
             ));
         }
-        let kernel = kernel_built_once(&self.image_to_image_kernel, || {
+        let kernel = self.image_to_image_kernel_built_once()?;
+        kernel.set_sampled_texture(0, src)?;
+        kernel.set_storage_image(1, dst)?;
+        Ok(kernel)
+    }
+
+    /// Build the image→image kernel's pipeline now, so no later
+    /// [`Self::prepare_image_to_image_storage`] builds one.
+    pub(crate) fn build_the_image_to_image_kernel(&self) -> Result<()> {
+        self.image_to_image_kernel_built_once().map(drop)
+    }
+
+    fn refuse_a_format_pair_the_image_to_image_kernel_does_not_convert(&self) -> Result<()> {
+        if !matches!(self.src_format, PixelFormat::Rgba32 | PixelFormat::Bgra32)
+            || self.dst_format != PixelFormat::Rgba32
+        {
+            return Err(Error::NotSupported(format!(
+                "color converter image→image: {:?} → {:?} is not RGBA or BGRA → RGBA",
+                self.src_format, self.dst_format
+            )));
+        }
+        Ok(())
+    }
+
+    fn image_to_image_kernel_built_once(&self) -> Result<Arc<VulkanComputeKernel>> {
+        self.refuse_a_format_pair_the_image_to_image_kernel_does_not_convert()?;
+        kernel_built_once(&self.image_to_image_kernel, || {
             let label = format!(
                 "color_convert_rgba_image_to_rgba_image:{:?}_to_{:?}",
                 self.src_format, self.dst_format
@@ -370,12 +389,10 @@ impl VulkanColorConverter {
                     )),
                     bindings: IMAGE_TO_IMAGE_BINDINGS,
                     push_constant_size: 0,
+                    specialization_constants: &[],
                 },
             )
-        })?;
-        kernel.set_sampled_texture(0, src)?;
-        kernel.set_storage_image(1, dst)?;
-        Ok(kernel)
+        })
     }
 
     /// Build an RGBA-image-to-byte-buffer kernel, refused unless this
@@ -404,6 +421,7 @@ impl VulkanColorConverter {
                 spv,
                 bindings: IMAGE_TO_BYTE_BUFFER_BINDINGS,
                 push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+                specialization_constants: &[],
             },
         )
     }
@@ -475,6 +493,7 @@ impl VulkanColorConverter {
                 spv,
                 bindings: BUFFER_TO_IMAGE_BINDINGS,
                 push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+                specialization_constants: &[],
             },
         )
     }
