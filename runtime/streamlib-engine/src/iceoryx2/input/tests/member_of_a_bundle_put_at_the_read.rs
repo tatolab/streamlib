@@ -227,3 +227,27 @@ fn a_message_holding_no_value_of_the_member_is_dropped_and_counted() {
     assert_eq!(the_bundles_read(&mailboxes), Vec::new());
     assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-level"), Some(&1));
 }
+
+/// A member read refuses what a whole-port read refuses: a message stamping more payload than
+/// its sample carries is dropped and counted, not read as the member it starts with.
+///
+/// Mental-revert: falling back to the whole sample hands the reader a bundle with `level` 0.5.
+#[test]
+fn a_message_stamping_more_payload_than_its_sample_carries_is_dropped_and_counted() {
+    let mailboxes = InputMailboxesInner::new();
+    let into_level = a_link_into_the_member(
+        &mailboxes,
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let packed = pack_pin_value(&the_type_of("level"), &json!(0.5), 0).unwrap();
+    let stamped_past_the_sample = u32::try_from(packed.payload.len() + 64).unwrap();
+
+    into_level.send_numbered(&TestChannelSample {
+        payload_descriptor: packed.payload_descriptor,
+        ..TestChannelSample::stamping(5, stamped_past_the_sample, &packed.payload)
+    });
+
+    assert_eq!(the_bundles_read(&mailboxes), Vec::new());
+    assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-level"), Some(&1));
+}

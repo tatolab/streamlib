@@ -104,8 +104,22 @@ impl InputMailboxesInner {
                 };
                 let members_at_the_read = &bound.bundle_members_at_the_read;
                 let payload = if members_at_the_read.reads_a_member() {
-                    let area = borrowed.sample_payload_area_bytes();
-                    let whole_payload = channel_user_header.payload_within(area).unwrap_or(area);
+                    let whole_payload = match channel_user_header
+                        .payload_within(borrowed.sample_payload_area_bytes())
+                    {
+                        Ok(whole_payload) => whole_payload,
+                        Err(refusal) => {
+                            bound.dropped_bag_counter.record_one_dropped_bag();
+                            tracing::warn!(
+                                port = %bound.local_port,
+                                link = %bound.inbound_link_name,
+                                "InputMailboxes: the link reads members of a bundle, and this \
+                                 message stamps more payload than its sample carries, so it is \
+                                 dropped and counted: {refusal}"
+                            );
+                            continue;
+                        }
+                    };
                     match members_at_the_read.the_message_the_port_reads(
                         &channel_user_header,
                         whole_payload,

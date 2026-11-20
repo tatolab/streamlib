@@ -168,8 +168,8 @@ pub(crate) fn refuse_a_link_into_a_member_no_bundle_is_built_with(
     )))
 }
 
-/// Refuse a link into `to` when another link already feeds that input and one of the two ends at
-/// a member while the other feeds the whole port: a bundle input is fed either whole or member
+/// Refuse a link into `to` when another link still standing feeds that input and one of the two
+/// ends at a member while the other feeds the whole port: a bundle input is fed either whole or member
 /// by member, so its node reads one bundle either way.
 pub(crate) fn refuse_a_whole_link_beside_a_member_link(
     graph: &Graph,
@@ -178,7 +178,8 @@ pub(crate) fn refuse_a_whole_link_beside_a_member_link(
     let ends_at_a_member = to.member().is_some();
     let beside = graph.traversal().e(()).iter().find(|link| {
         let held = link.to_port();
-        held.node_run_id() == to.node_run_id()
+        graph.stands(link)
+            && held.node_run_id() == to.node_run_id()
             && held.port_name() == to.port_name()
             && held.member().is_some() != ends_at_a_member
     });

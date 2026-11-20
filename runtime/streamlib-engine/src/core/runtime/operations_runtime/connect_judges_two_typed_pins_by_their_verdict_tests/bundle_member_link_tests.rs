@@ -7,6 +7,7 @@
 use super::*;
 use crate::core::PortDirection;
 use crate::core::descriptors::BundleMember;
+use crate::core::graph::{GraphEdgeWithComponents, PendingDeletionComponent};
 
 const READING_SOURCE: &str = "VerdictCheckReadingSource";
 const FLOAT_SINK: &str = "VerdictCheckFloatSink";
@@ -311,6 +312,42 @@ fn a_whole_link_beside_a_member_link_into_one_bundle_input_is_refused() {
         );
     }
     assert_eq!(the_links_in(&compiler), 2);
+}
+
+/// A whole link a disconnect has marked leaves with the commit, so a member link into the same
+/// input in that commit connects beside it.
+#[test]
+fn a_member_link_connects_beside_a_whole_link_marked_for_removal() {
+    register_the_bundle_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let level = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let reading = a_node_of(&compiler, class_path(READING_SOURCE));
+    let sink = a_node_of(&compiler, class_path(READING_SINK));
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(reading, "reading"),
+        InputLinkPortRef::new(sink.clone(), "reading"),
+    )
+    .unwrap();
+    compiler.scope(|graph, _tx| {
+        let whole = graph
+            .traversal()
+            .e(())
+            .iter()
+            .map(|link| link.id.clone())
+            .next();
+        let whole = whole.unwrap_or_else(|| panic!("the whole link is in the graph"));
+        if let Some(link) = graph.traversal_mut().e(&whole).first_mut() {
+            link.insert(PendingDeletionComponent);
+        }
+    });
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(level, "value"),
+        InputLinkPortRef::new(sink, "reading").at_member(Some("level".to_owned())),
+    )
+    .unwrap_or_else(|why| panic!("the marked whole link does not stand: {why}"));
 }
 
 /// A member that travels only as messages holds no value for the input's port to build its
