@@ -6,21 +6,21 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use crate::VideoCodecNodeIdentity;
-use crate::video_encode_host_protocol::{
-    VIDEO_ENCODE_HOST_PROTOCOL_VERSION, VideoEncodeHostConnection, VideoEncodeHostReply,
-    VideoEncodeHostRequest, VideoEncodeHostSessionRequest,
-};
-use crate::video_encode_host_session_of_the_node::{
-    ENCODE_HOST_REOPEN_INTERVAL, VideoEncodeHostSession,
+use crate::video_codec_host_protocol::{
+    VIDEO_CODEC_HOST_PROTOCOL_VERSION, VideoCodecHostConnection, VideoCodecHostReply,
+    VideoCodecHostRequest, VideoEncodeSessionRequest,
 };
 use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
+use crate::video_encode_session_of_the_node::{
+    VIDEO_CODEC_HOST_REOPEN_INTERVAL, VideoEncodeSessionInTheCodecHost,
+};
 use crate::video_encoder_settings::VideoEncoderSettings;
 
 const NODE: VideoCodecNodeIdentity = VideoCodecNodeIdentity::H264_ENCODER;
 
-fn a_session_request() -> VideoEncodeHostSessionRequest {
-    VideoEncodeHostSessionRequest {
-        protocol_version: VIDEO_ENCODE_HOST_PROTOCOL_VERSION,
+fn a_session_request() -> VideoEncodeSessionRequest {
+    VideoEncodeSessionRequest {
+        protocol_version: VIDEO_CODEC_HOST_PROTOCOL_VERSION,
         elementary_stream: NODE.elementary_stream.into(),
         settings: VideoEncoderSettings::default(),
         vulkan_device_uuid: [1; 16],
@@ -38,10 +38,10 @@ fn a_frame(timestamp_ns: i64) -> VideoFrameToEncode {
     }
 }
 
-/// A stand-in encode host: it opens each session it is asked for, reports
+/// A stand-in video codec host: it opens each session it is asked for, reports
 /// every frame's sync-point flag on `frames_seen`, answers it as not checked
 /// out, and drops a session's connection after `frames_per_session` frames.
-fn a_stand_in_encode_host(
+fn a_stand_in_video_codec_host(
     listener: UnixListener,
     sessions: usize,
     frames_per_session: usize,
@@ -50,17 +50,18 @@ fn a_stand_in_encode_host(
     let serving = std::thread::spawn(move || {
         for session_number in 0..sessions {
             let (socket, _) = listener.accept().unwrap();
-            let mut connection = VideoEncodeHostConnection::over(socket);
-            let Some(VideoEncodeHostRequest::OpenSession(_)) = connection.receive().unwrap() else {
+            let mut connection = VideoCodecHostConnection::over(socket);
+            let Some(VideoCodecHostRequest::OpenEncodeSession(_)) = connection.receive().unwrap()
+            else {
                 panic!("a session's first message opens it");
             };
             connection
-                .send(&VideoEncodeHostReply::SessionOpened {
+                .send(&VideoCodecHostReply::SessionOpened {
                     device_name: "stand-in".to_string(),
                 })
                 .unwrap();
             for _ in 0..frames_per_session {
-                let Some(VideoEncodeHostRequest::EncodeFrame {
+                let Some(VideoCodecHostRequest::EncodeFrame {
                     as_a_sync_point, ..
                 }) = connection.receive().unwrap()
                 else {
@@ -68,7 +69,7 @@ fn a_stand_in_encode_host(
                 };
                 frames_seen.send((session_number, as_a_sync_point)).unwrap();
                 connection
-                    .send(&VideoEncodeHostReply::Encode(
+                    .send(&VideoCodecHostReply::Encode(
                         VideoFrameEncodeOutcome::NotCheckedOut,
                     ))
                     .unwrap();
@@ -81,10 +82,11 @@ fn a_stand_in_encode_host(
 #[test]
 fn a_lost_session_is_opened_again_after_the_interval_and_its_first_frame_is_a_sync_point() {
     let socket_directory = tempfile::tempdir().unwrap();
-    let endpoint = socket_directory.path().join("video-encode-host.sock");
+    let endpoint = socket_directory.path().join("video-codec-host.sock");
     let (serving, frames_seen) =
-        a_stand_in_encode_host(UnixListener::bind(&endpoint).unwrap(), 2, 1);
-    let mut session = VideoEncodeHostSession::open(NODE, &endpoint, a_session_request()).unwrap();
+        a_stand_in_video_codec_host(UnixListener::bind(&endpoint).unwrap(), 2, 1);
+    let mut session =
+        VideoEncodeSessionInTheCodecHost::open(NODE, &endpoint, a_session_request()).unwrap();
 
     assert_eq!(
         session.encode(a_frame(1), false),
@@ -100,11 +102,12 @@ fn a_lost_session_is_opened_again_after_the_interval_and_its_first_frame_is_a_sy
     );
     let refusal = session.encode(a_frame(3), false).unwrap_err();
     assert_eq!(
-        refusal, "H264Encoder: the encode host's connection was lost, so the frame was dropped",
+        refusal,
+        "H264Encoder: the video codec host's connection was lost, so the frame was dropped",
         "a frame inside the reopen interval is refused without a connect"
     );
 
-    std::thread::sleep(ENCODE_HOST_REOPEN_INTERVAL);
+    std::thread::sleep(VIDEO_CODEC_HOST_REOPEN_INTERVAL);
     assert_eq!(
         session.encode(a_frame(4), false),
         Ok(VideoFrameEncodeOutcome::NotCheckedOut)
@@ -120,24 +123,24 @@ fn a_lost_session_is_opened_again_after_the_interval_and_its_first_frame_is_a_sy
 #[test]
 fn a_refused_session_is_named_with_the_hosts_reason() {
     let socket_directory = tempfile::tempdir().unwrap();
-    let endpoint = socket_directory.path().join("video-encode-host.sock");
+    let endpoint = socket_directory.path().join("video-codec-host.sock");
     let listener = UnixListener::bind(&endpoint).unwrap();
     let refusing = std::thread::spawn(move || {
         let (socket, _) = listener.accept().unwrap();
-        let mut connection = VideoEncodeHostConnection::over(socket);
-        let _: Option<VideoEncodeHostRequest> = connection.receive().unwrap();
+        let mut connection = VideoCodecHostConnection::over(socket);
+        let _: Option<VideoCodecHostRequest> = connection.receive().unwrap();
         connection
-            .send(&VideoEncodeHostReply::Refused {
+            .send(&VideoCodecHostReply::Refused {
                 refusal: "the Vulkan Video encode device was refused".to_string(),
             })
             .unwrap();
     });
-    let refusal = VideoEncodeHostSession::open(NODE, &endpoint, a_session_request())
+    let refusal = VideoEncodeSessionInTheCodecHost::open(NODE, &endpoint, a_session_request())
         .err()
         .unwrap();
     assert_eq!(
         refusal,
-        "H264Encoder: the encode host refused the session: the Vulkan Video encode device was \
+        "H264Encoder: the video codec host refused the session: the Vulkan Video encode device was \
          refused"
     );
     refusing.join().unwrap();
@@ -146,13 +149,13 @@ fn a_refused_session_is_named_with_the_hosts_reason() {
 #[test]
 fn no_host_listening_is_refused_naming_the_socket() {
     let socket_directory = tempfile::tempdir().unwrap();
-    let endpoint = socket_directory.path().join("video-encode-host.sock");
-    let refusal = VideoEncodeHostSession::open(NODE, &endpoint, a_session_request())
+    let endpoint = socket_directory.path().join("video-codec-host.sock");
+    let refusal = VideoEncodeSessionInTheCodecHost::open(NODE, &endpoint, a_session_request())
         .err()
         .unwrap();
     assert!(
         refusal.starts_with(&format!(
-            "H264Encoder: the encode host at {} refused a connection",
+            "H264Encoder: the video codec host at {} refused a connection",
             endpoint.display()
         )),
         "{refusal}"

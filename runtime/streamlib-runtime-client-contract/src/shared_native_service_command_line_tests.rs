@@ -7,7 +7,7 @@ use crate::shared_native_service_command_line::SharedNativeServiceCommandLine;
 
 fn command_line_of(arguments: &[&str]) -> Result<SharedNativeServiceCommandLine, String> {
     SharedNativeServiceCommandLine::of_the_arguments(
-        "the encode host",
+        "the video codec host",
         arguments.iter().map(|argument| argument.to_string()),
     )
 }
@@ -17,13 +17,13 @@ fn a_service_reads_the_socket_and_the_directory_it_was_started_with() {
     assert_eq!(
         command_line_of(&[
             "--state-directory",
-            "/var/tatolab/services/video-encode-host",
+            "/var/tatolab/services/video-codec-host",
             "--listen-socket",
-            "/run/tatolab/video-encode-host.sock",
+            "/run/tatolab/video-codec-host.sock",
         ]),
         Ok(SharedNativeServiceCommandLine {
-            listen_socket: PathBuf::from("/run/tatolab/video-encode-host.sock"),
-            state_directory: PathBuf::from("/var/tatolab/services/video-encode-host"),
+            listen_socket: PathBuf::from("/run/tatolab/video-codec-host.sock"),
+            state_directory: PathBuf::from("/var/tatolab/services/video-codec-host"),
         })
     );
 }
@@ -44,6 +44,6 @@ fn a_missing_value_switch_or_unknown_switch_is_refused_by_name() {
     );
     assert_eq!(
         command_line_of(&["--width", "1"]),
-        Err("--width is not a switch the encode host takes".to_string())
+        Err("--width is not a switch the video codec host takes".to_string())
     );
 }

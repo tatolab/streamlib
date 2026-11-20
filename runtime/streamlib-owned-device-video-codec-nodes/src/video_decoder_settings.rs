@@ -3,10 +3,12 @@
 
 //! A video decoder node's config keys.
 
+use serde::{Deserialize, Serialize};
+
 /// The config keys `H264Decoder` and `H265Decoder` take: a cap on the extent
 /// the decoded picture buffer is allocated for, absent to size it from the
 /// stream's first SPS.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoDecoderSettings {
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,

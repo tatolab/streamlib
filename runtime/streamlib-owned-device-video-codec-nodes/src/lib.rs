@@ -4,7 +4,7 @@
 //! The video codec node bodies `tatolab-h264` and `tatolab-h265` run in their
 //! helpers: a thread reads its node's ports through the module host table and
 //! codes, with no Python attached: with Vulkan Video on Linux, an encoder in
-//! the machine's encode host and a decoder on a device its helper owns, and
+//! the machine's video codec host and a decoder on a device its helper owns, and
 //! on Apple's media engine through VideoToolbox on macOS.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,31 +23,33 @@ pub mod encoded_video_publication;
 pub mod image_frame_on_the_video_port;
 #[cfg(target_os = "linux")]
 pub mod owned_device_video_decoder;
+#[cfg(target_os = "linux")]
+pub mod video_codec_host;
+#[cfg(target_os = "linux")]
+pub mod video_codec_host_protocol;
 #[cfg(all(test, target_os = "linux"))]
-mod owned_device_video_decoder_tests;
+mod video_codec_host_protocol_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod video_codec_host_tests;
 pub mod video_codec_retry_gate;
 #[cfg(test)]
 mod video_codec_retry_gate_tests;
+#[cfg(target_os = "linux")]
+pub mod video_decode_on_a_device;
+#[cfg(all(test, target_os = "linux"))]
+mod video_decode_on_a_device_tests;
 pub mod video_decoder_opening;
 #[cfg(test)]
 mod video_decoder_opening_tests;
 pub mod video_decoder_settings;
 #[cfg(target_os = "linux")]
-pub mod video_encode_host;
-#[cfg(target_os = "linux")]
-pub mod video_encode_host_protocol;
-#[cfg(all(test, target_os = "linux"))]
-mod video_encode_host_protocol_tests;
-#[cfg(target_os = "linux")]
-pub mod video_encode_host_session_of_the_node;
-#[cfg(all(test, target_os = "linux"))]
-mod video_encode_host_session_of_the_node_tests;
-#[cfg(all(test, target_os = "linux"))]
-mod video_encode_host_tests;
-#[cfg(target_os = "linux")]
 pub mod video_encode_on_a_device;
 #[cfg(all(test, target_os = "linux"))]
 mod video_encode_on_a_device_tests;
+#[cfg(target_os = "linux")]
+pub mod video_encode_session_of_the_node;
+#[cfg(all(test, target_os = "linux"))]
+mod video_encode_session_of_the_node_tests;
 pub mod video_encoder_settings;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;

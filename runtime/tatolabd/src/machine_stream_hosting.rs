@@ -68,33 +68,33 @@ fn offer_the_browser_host_when_the_runtime_unit_carries_it(
     );
 }
 
-/// Offer every encoder node the encode host the runtime unit carries beside
-/// this executable, which encodes every node's frames on one device per GPU;
-/// one built without it offers none, and each encoder opens a device of its
-/// own.
+/// Offer every video codec node the video codec host the runtime unit
+/// carries beside this executable, which codes every node's frames on one
+/// device per GPU and direction; a unit built without it offers none, so a
+/// codec node's lease of it is refused.
 #[cfg(target_os = "linux")]
-fn offer_the_video_encode_host_when_the_runtime_unit_carries_it(
+fn offer_the_video_codec_host_when_the_runtime_unit_carries_it(
     engine: &Runner,
     tatolab_state_directory: &TatolabStateDirectory,
 ) {
     use streamlib::sdk::node_interpreter::{
-        VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME, VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
+        VIDEO_CODEC_HOST_EXECUTABLE_FILE_NAME, VIDEO_CODEC_HOST_SHARED_NATIVE_SERVICE_NAME,
     };
-    let video_encode_host_executable =
+    let video_codec_host_executable =
         match crate::runtime_unit_executable_beside_tatolabd::runtime_unit_executable_beside_this_one(
-            VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME,
+            VIDEO_CODEC_HOST_EXECUTABLE_FILE_NAME,
         ) {
             Ok(executable) => executable,
             Err(missing) => {
-                tracing::info!("{missing}, so each encoder opens a device of its own");
+                tracing::info!("{missing}, so no video codec node can code on Linux");
                 return;
             }
         };
     offer_the_shared_native_service(
         engine,
         tatolab_state_directory,
-        VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME,
-        video_encode_host_executable,
+        VIDEO_CODEC_HOST_SHARED_NATIVE_SERVICE_NAME,
+        video_codec_host_executable,
         None,
     );
 }
@@ -206,7 +206,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         tatolab_state_directory,
     );
     #[cfg(target_os = "linux")]
-    offer_the_video_encode_host_when_the_runtime_unit_carries_it(&engine, tatolab_state_directory);
+    offer_the_video_codec_host_when_the_runtime_unit_carries_it(&engine, tatolab_state_directory);
     streamlib_media_builtins::register_media_builtin_node_types();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();
