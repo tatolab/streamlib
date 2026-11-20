@@ -117,14 +117,14 @@ fn a_frame_without_the_attribute_is_refused_naming_what_it_has() {
 #[test]
 fn a_format_with_no_one_tensor_layout_is_refused_at_setup() {
     for format in ["nv12", "rgb8", ""] {
-        let config = TensorToTextureConfig {
+        let settings = TensorToTextureSettings {
             format: format.to_string(),
-            ..TensorToTextureConfig::default()
+            ..TensorToTextureSettings::default()
         };
-        assert!(image_format_of_the_config(&config).is_err(), "{format}");
+        assert!(image_format_of_the_settings(&settings).is_err(), "{format}");
     }
     assert_eq!(
-        image_format_of_the_config(&TensorToTextureConfig::default()).ok(),
+        image_format_of_the_settings(&TensorToTextureSettings::default()).ok(),
         Some(TextureFormat::Rgba8Unorm)
     );
 }
@@ -205,27 +205,86 @@ fn the_texture_written_is_of_the_format_the_node_holds() {
     );
 }
 
-/// A `TensorToTexture` that takes a new config live writes the format that config names from the
-/// next frame, the format a link's verdict reads from the config it holds.
+/// A `TensorToTexture` handed the values its inputs hold before it is set up writes the format
+/// they name, each setting they name no value for keeping its default; a value its setting does
+/// not take is refused, naming the node.
 ///
-/// Mental-revert: a format read once at setup keeps writing `rgba8_unorm` after the config names
-/// `bgra8_unorm`.
+/// Mental-revert: settings left at their defaults keep writing `rgba8_unorm` after the inputs
+/// hold `bgra8_unorm`.
 #[test]
-fn a_config_taken_live_changes_the_format_written() {
+fn the_settings_held_before_setup_are_the_ones_it_writes_with() {
     use streamlib::sdk::nodes::GeneratedNode;
-    let mut node =
-        <TensorToTexture::Node as GeneratedNode>::from_config(TensorToTextureConfig::default())
-            .expect("a TensorToTexture of the default config");
+    let mut node = <TensorToTexture::Node as GeneratedNode>::from_config(Default::default())
+        .expect("a TensorToTexture");
     assert_eq!(
         node.image_format_it_writes().unwrap(),
         TextureFormat::Rgba8Unorm
     );
 
-    node.apply_config_json(&streamlib::sdk::serde_json::json!({ "format": "bgra8_unorm" }))
-        .expect("the config is taken live");
+    let held = |values: streamlib::sdk::serde_json::Value| {
+        values.as_object().cloned().expect("an object of values")
+    };
+    node.set_unlinked_input_values(&held(streamlib::sdk::serde_json::json!({
+        "format": "bgra8_unorm",
+        "array": null,
+    })))
+    .expect("the settings are taken");
 
     assert_eq!(
         node.image_format_it_writes().unwrap(),
         TextureFormat::Bgra8Unorm
     );
+    assert_eq!(node.settings.attribute, "image");
+
+    let refusal = node
+        .set_unlinked_input_values(&held(streamlib::sdk::serde_json::json!({ "format": 3 })))
+        .expect_err("a number is no format");
+    assert!(refusal.to_string().contains("TensorToTexture"), "{refusal}");
+}
+
+/// The node catalog lists `TensorToTexture`'s settings after its `array` port, `format` a Menu
+/// of the formats one tensor holds, each read at setup, and no config.
+///
+/// Mental-revert: a `format` declared as a String lists no options to choose from.
+#[test]
+fn the_catalog_lists_its_format_as_a_menu_read_at_setup() {
+    crate::register_media_builtin_node_types();
+    let descriptor = streamlib::sdk::nodes::NODE_REGISTRY
+        .descriptor(&TensorToTexture::node_class_import_path())
+        .expect("the built-in registers");
+    let rendered = serde_json::to_value(streamlib::sdk::json_schema::NodeDescriptorOutput::from(
+        &descriptor,
+    ))
+    .unwrap();
+    let inputs = rendered["inputs"].as_array().unwrap();
+    assert_eq!(
+        inputs
+            .iter()
+            .map(|input| input["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["array", "attribute", "format"],
+        "{rendered}"
+    );
+    let format = &inputs[2];
+    assert_eq!(
+        format["pin_type"]["pin_type"],
+        serde_json::json!({
+            "type": "menu",
+            "option_names": [
+                "rgba8_unorm",
+                "rgba8_unorm_srgb",
+                "bgra8_unorm",
+                "bgra8_unorm_srgb",
+                "rgba16_float",
+                "rgba32_float"
+            ]
+        }),
+        "{rendered}"
+    );
+    assert_eq!(format["default_value"], serde_json::json!("rgba8_unorm"));
+    assert_eq!(
+        format["input_mode"],
+        serde_json::json!({"mode": "setting_only", "read": "at_setup"})
+    );
+    assert!(descriptor.config_schema.is_none(), "{rendered}");
 }

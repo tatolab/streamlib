@@ -65,6 +65,10 @@ fn one_built_in_renders_to_its_golden_class_and_config() {
     let golden = format!(
         "{GENERATED_MODULE_HEADER}{}",
         r#"
+from typing import ClassVar, Literal, TypedDict
+
+from ._built_in_node import BuiltInNode
+
 __all__ = [
     "FrameSink",
     "FrameSinkConfig",
@@ -113,6 +117,130 @@ class FrameSink(BuiltInNode[FrameSinkConfig]):
 "#
     );
     assert_eq!(rendered, golden, "rendered:\n{rendered}");
+}
+
+/// A built-in taking no config whose every port states one pin type, as the runtime describes
+/// it: a Stream input, two settings read at setup, a Menu among them, and an output.
+fn texture_tinter_descriptor_with_settings() -> Value {
+    json!({
+        "type": "tatolab.stream:TextureTinter",
+        "description": "Tints textures",
+        "config_schema": null,
+        "inputs": [
+            {
+                "name": "image", "description": "The textures to tint",
+                "required": true, "delivery_profile": "newest",
+                "pin_type": {"kind": "is", "pin_type": {"type": "texture"}}, "flow": "stream"
+            },
+            {
+                "name": "strength", "description": "How strongly each is tinted.",
+                "required": false, "delivery_profile": null,
+                "pin_type": {"kind": "is", "pin_type": {"type": "integer", "exact_size": "uint8"}},
+                "flow": "value",
+                "input_mode": {"mode": "setting_only", "read": "at_setup"},
+                "default_value": 3
+            },
+            {
+                "name": "tint", "description": "The tint.",
+                "required": false, "delivery_profile": null,
+                "pin_type": {"kind": "is", "pin_type": {"type": "menu", "option_names": ["warm", "cool"]}},
+                "flow": "value",
+                "input_mode": {"mode": "setting_only", "read": "at_setup"},
+                "default_value": "warm"
+            }
+        ],
+        "outputs": [{
+            "name": "tinted", "description": "One tinted texture each",
+            "required": true, "delivery_profile": null,
+            "pin_type": {"kind": "is", "pin_type": {"type": "texture"}}, "flow": "stream"
+        }]
+    })
+}
+
+/// A typed built-in renders as a class node is declared: its Stream input and output pins, its
+/// settings fields with their types and defaults, and no config class.
+///
+/// Mental-revert: rendering it as a config class leaves `TextureTinterConfig` in `__all__` and no
+/// field on the class.
+#[test]
+fn a_typed_built_in_renders_its_fields_and_pins_and_no_config() {
+    let rendered = render_built_in_node_classes_module(&[descriptor_from(
+        texture_tinter_descriptor_with_settings(),
+    )])
+    .unwrap();
+    let golden = format!(
+        "{GENERATED_MODULE_HEADER}{}",
+        r#"
+from typing import Annotated, ClassVar, Literal
+
+from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
+from ._class_node_pins import InputPin, OutputPin
+from ._description import Description
+from ._input_declaration_annotations import SettingOnly, StreamDelivery
+from ._pin_types import Texture, UInt8
+
+__all__ = [
+    "TextureTinter",
+]
+
+
+class TextureTinter(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Tints textures.
+
+    Inputs:
+        `image` (newest): The textures to tint.
+
+    Outputs:
+        `tinted`: One tinted texture each.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:TextureTinter"
+
+    image: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description("The textures to tint"),
+        ]
+    ]
+
+    strength: Annotated[
+        UInt8,
+        SettingOnly(),
+        Description("How strongly each is tinted."),
+    ] = 3
+
+    tint: Annotated[
+        Literal["warm", "cool"],
+        SettingOnly(),
+        Description("The tint."),
+    ] = "warm"
+
+    tinted: OutputPin[
+        Annotated[
+            Texture,
+            Description("One tinted texture each"),
+        ]
+    ]
+"#
+    );
+    assert_eq!(rendered, golden, "rendered:\n{rendered}");
+}
+
+#[test]
+fn a_typed_built_ins_setting_with_no_default_is_refused_naming_it() {
+    let mut descriptor = texture_tinter_descriptor_with_settings();
+    descriptor["inputs"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("default_value");
+    let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains("input `strength` holds no default"),
+        "{refusal}"
+    );
 }
 
 #[test]

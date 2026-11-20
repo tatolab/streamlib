@@ -11,8 +11,8 @@ use streamlib::sdk::iceoryx2::{
 use super::tensor_to_audio::*;
 use crate::pin_type_conversion::audio_to_tensor::array_frame_of_the_channels_block;
 
-fn stereo_at_48_khz() -> TensorToAudioConfig {
-    TensorToAudioConfig {
+fn stereo_at_48_khz() -> TensorToAudioSettings {
+    TensorToAudioSettings {
         channel_names: vec!["left".into(), "right".into()],
         sample_rate: 48_000,
         attribute: "samples".into(),
@@ -27,9 +27,9 @@ fn array_frame_of(
 }
 
 /// The node catalog lists `TensorToAudio`'s settings, as it registers, after its `array`
-/// port in the order its config schema lists them, each an input taking no wire with its
-/// default: `sample_rate` a 32-bit unsigned
-/// Integer, `attribute` a String, and `channel_names`, a list, with no pin type.
+/// port in the order its settings declare them, each an input taking no wire read at setup
+/// with its default: `attribute` a String, `channel_names` a List of String and `sample_rate`
+/// a 32-bit unsigned Integer. It takes no config.
 ///
 /// Mental-revert: rendering only the declared inputs leaves `array` alone in `inputs`.
 #[test]
@@ -79,8 +79,9 @@ fn the_catalog_lists_its_settings_as_inputs_taking_no_wire_after_its_port() {
             &serde_json::json!("samples")
         )
     );
-    assert!(
-        setting("channel_names").get("pin_type").is_none(),
+    assert_eq!(
+        setting("channel_names")["pin_type"]["pin_type"],
+        serde_json::json!({"type": "list_of", "element_type": {"type": "string"}}),
         "{rendered}"
     );
     assert_eq!(
@@ -91,6 +92,7 @@ fn the_catalog_lists_its_settings_as_inputs_taking_no_wire_after_its_port() {
         rendered.get("exposable_config_fields").is_none(),
         "a natively compiled type exposes no config field: {rendered}"
     );
+    assert!(descriptor.config_schema.is_none(), "{rendered}");
 }
 
 #[test]
@@ -132,7 +134,7 @@ fn a_channels_block_converted_to_an_array_and_back_keeps_its_samples() {
 }
 
 #[test]
-fn the_configured_attribute_is_the_one_read() {
+fn the_attribute_its_settings_name_is_the_one_read() {
     let gains = [1.0f32, 2.0, 3.0, 4.0];
     let gain_bytes: Vec<u8> = gains.iter().flat_map(|gain| gain.to_le_bytes()).collect();
     let (descriptor, payload) = array_frame_of(&[
@@ -149,12 +151,13 @@ fn the_configured_attribute_is_the_one_read() {
             data: &gain_bytes,
         },
     ]);
-    let config = TensorToAudioConfig {
+    let settings = TensorToAudioSettings {
         attribute: "gains".into(),
         ..stereo_at_48_khz()
     };
 
-    let (_, samples) = channels_block_of_the_array_frame(&config, 0, descriptor, &payload).unwrap();
+    let (_, samples) =
+        channels_block_of_the_array_frame(&settings, 0, descriptor, &payload).unwrap();
 
     assert_eq!(samples, gain_bytes);
 }
