@@ -21,17 +21,20 @@ permitted and PipeWire otherwise.
 from __future__ import annotations
 
 import ctypes
-import dataclasses
 import sys
-from typing import Annotated, Literal, NoReturn, get_args
+from typing import Annotated, Literal, NoReturn
 
 from tatolab.stream import (
+    Description,
     GpuSurfaceHandle,
-    RuntimeContextFullAccess,
-    Image,
     ImageFrame,
-    Input,
+    InputPin,
+    PinControl,
+    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
     log,
     node,
 )
@@ -61,7 +64,7 @@ from .v4l2loopback_control_node import (
 )
 from .virtual_camera_naming import TheNodeAVirtualCameraIsNamedFor, camera_name_for
 
-__all__ = ["VirtualCameraSink", "VirtualCameraSinkConfig"]
+__all__ = ["VirtualCameraSink"]
 
 VIRTUAL_CAMERA_SINK_NODE_NAME = "VirtualCameraSink"
 
@@ -76,34 +79,6 @@ DROPPED_FRAMES_BETWEEN_REPORTS = 300
 VirtualCameraDoorName = Literal["auto", "v4l2loopback", "pipewire"]
 
 VirtualCameraDoorTaken = Literal["v4l2loopback", "pipewire"]
-
-
-@dataclasses.dataclass
-class VirtualCameraSinkConfig:
-    """What a `VirtualCameraSink` is configured with: the camera's name and the door it takes."""
-
-    name: Annotated[
-        "str | None",
-        "The camera's name in every picker. Absent: `StreamLib Camera` plus a short id that is "
-        "unique per node and stream and stable across runs of the stream.",
-    ] = None
-    door: Annotated[
-        VirtualCameraDoorName,
-        "Which door to take: `v4l2loopback` a `/dev/video*` camera every application sees, "
-        "`pipewire` a PipeWire camera portal-based applications select, `auto` the loopback "
-        "door where it is permitted and PipeWire otherwise.",
-    ] = "auto"
-
-    def __post_init__(self) -> None:
-        if self.name is not None and not isinstance(self.name, str):
-            raise ValueError(
-                f"VirtualCameraSinkConfig: name is a string, got {self.name!r}"
-            )
-        if self.door not in get_args(VirtualCameraDoorName):
-            raise ValueError(
-                "VirtualCameraSinkConfig: door is one of "
-                f"{', '.join(get_args(VirtualCameraDoorName))}, got {self.door!r}"
-            )
 
 
 def virtual_camera_door_taken(
@@ -148,7 +123,7 @@ class _LatchedRefusal(Exception):
         "v4l2loopback or PipeWire camera per instance, created at setup and removed at teardown"
     ),
 )
-@node.process(scheduling="high")
+@node(scheduling="high")
 class VirtualCameraSink:
     """Each frame's picture, converted to YUYV, as the camera's next picture.
 
@@ -161,8 +136,33 @@ class VirtualCameraSink:
     is left in place and reclaimed by its name at the next setup.
     """
 
-    def __init__(self, config: VirtualCameraSinkConfig) -> None:
-        self._config = config
+    name: Annotated[
+        str | None,
+        SettingOnly(),
+        Description(
+            "The camera's name in every picker. Unset: `StreamLib Camera` plus a short id that "
+            "is unique per node and stream and stable across runs of the stream."
+        ),
+    ] = None
+    door: Annotated[
+        VirtualCameraDoorName,
+        SettingOnly(),
+        Description(
+            "Which door to take: `v4l2loopback` a `/dev/video*` camera every application sees, "
+            "`pipewire` a PipeWire camera portal-based applications select, `auto` the loopback "
+            "door where it is permitted and PipeWire otherwise."
+        ),
+    ] = "auto"
+    video: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            PinControl("preview"),
+            Description("Video frames to present as the camera's picture"),
+        ]
+    ]
+
+    def __init__(self) -> None:
         self._control_node: V4l2LoopbackControlNode = V4l2LoopbackControlNodeOnDisk()
         self._camera_name = ""
         self._device: "V4l2LoopbackOutputDevice | None" = None
@@ -179,15 +179,9 @@ class VirtualCameraSink:
         self._frames_dropped_under_refusal = 0
         self._frames_that_failed_to_write = 0
 
-    video = Input(
-        Image,
-        delivery="newest",
-        description="Video frames to present as the camera's picture",
-    )
-
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self._camera_name = camera_name_for(
-            self._config.name,
+            self.name,
             TheNodeAVirtualCameraIsNamedFor(
                 stream_project_directory=ctx.stream_project_directory,
                 stream_id=ctx.stream_id,
@@ -201,7 +195,7 @@ class VirtualCameraSink:
             )
         access = self._control_node.access()
         loopback_refusal = loopback_door_refusal_or_none(self._camera_name, access)
-        door_taken = virtual_camera_door_taken(self._config.door, access)
+        door_taken = virtual_camera_door_taken(self.door, access)
         if door_taken == "v4l2loopback":
             if loopback_refusal is not None:
                 self._refuse_at_setup(loopback_refusal, access)
@@ -214,7 +208,7 @@ class VirtualCameraSink:
                 ctx.open_module_host_table(), self._camera_name
             )
         except RuntimeError as pipewire_refusal:
-            if self._config.door == "auto" and loopback_refusal is not None:
+            if self.door == "auto" and loopback_refusal is not None:
                 self._refuse_at_setup(
                     neither_door_opens_refusal(
                         self._camera_name, loopback_refusal, str(pipewire_refusal)
@@ -229,7 +223,7 @@ class VirtualCameraSink:
             door="pipewire",
             reason=(
                 "door is pipewire"
-                if self._config.door == "pipewire"
+                if self.door == "pipewire"
                 else f"{V4L2LOOPBACK_CONTROL_NODE_PATH} is {access.value}, so auto took PipeWire"
             ),
         )
@@ -238,13 +232,13 @@ class VirtualCameraSink:
         log.error(
             refusal,
             camera=self._camera_name,
-            door=self._config.door,
+            door=self.door,
             control_node=access.value,
         )
         raise RuntimeError(refusal)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video)
+        frame = self.video.read()
         if frame is None:
             return
         if self._latched_refusal is not None:

@@ -15,9 +15,16 @@ import time
 import pytest
 
 from helper_process_link_wiring import wire_one_link
-from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource, MicrophoneSourceConfig
+from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource
 from tatolab.runtime import _engine
 from tatolab.stream import Channels, ChannelsBlock, Input, RuntimeContextFullAccess, log
+from tatolab.stream._class_node_construction import construct_class_node
+
+
+def a_microphone(**field_values: object) -> MicrophoneSource:
+    """A `MicrophoneSource` built as its helper builds it, `audio` bound to a stand-in: its native half writes the port."""
+    return construct_class_node(MicrophoneSource, field_values=field_values, pins={"audio": object()})
+
 
 #: Long enough for the first block on any arm, which opens a device or starts
 #: the null backend's clock first.
@@ -92,7 +99,7 @@ def microphone_wired_to_a_reader(
 def test_a_started_microphone_publishes_device_stamped_blocks_in_the_format_it_opened(
     microphone_wired_to_a_reader,
 ):
-    microphone = MicrophoneSource(MicrophoneSourceConfig())
+    microphone = a_microphone()
     context = microphone_wired_to_a_reader.microphone_context
     microphone.setup(context)
     capture = microphone._opened_capture()
@@ -122,7 +129,7 @@ def test_a_started_microphone_publishes_device_stamped_blocks_in_the_format_it_o
 def test_the_audio_port_is_lent_to_native_code_so_python_cannot_write_it(
     microphone_wired_to_a_reader,
 ):
-    microphone = MicrophoneSource(MicrophoneSourceConfig())
+    microphone = a_microphone()
     context = microphone_wired_to_a_reader.microphone_context
     microphone.setup(context)
     try:
@@ -135,7 +142,7 @@ def test_the_audio_port_is_lent_to_native_code_so_python_cannot_write_it(
 def test_a_device_the_backend_cannot_open_refuses_setup_naming_it(
     microphone_wired_to_a_reader,
 ):
-    microphone = MicrophoneSource(MicrophoneSourceConfig(device_id="tatolab-no-such-microphone"))
+    microphone = a_microphone(device_id="tatolab-no-such-microphone")
     with pytest.raises(RuntimeError, match="tatolab-no-such-microphone"):
         microphone.setup(microphone_wired_to_a_reader.microphone_context)
 
@@ -143,7 +150,7 @@ def test_a_device_the_backend_cannot_open_refuses_setup_naming_it(
 def test_a_microphone_stopped_and_started_again_keeps_publishing(
     microphone_wired_to_a_reader,
 ):
-    microphone = MicrophoneSource(MicrophoneSourceConfig())
+    microphone = a_microphone()
     context = microphone_wired_to_a_reader.microphone_context
     microphone.setup(context)
     try:
@@ -159,7 +166,7 @@ def test_a_microphone_stopped_and_started_again_keeps_publishing(
 def test_a_microphone_never_set_up_or_started_tears_down_cleanly(
     microphone_wired_to_a_reader,
 ):
-    microphone = MicrophoneSource(MicrophoneSourceConfig())
+    microphone = a_microphone()
     context = microphone_wired_to_a_reader.microphone_context
     microphone.stop(context)
     microphone.teardown(context)
@@ -169,7 +176,7 @@ def test_a_microphone_never_set_up_or_started_tears_down_cleanly(
 
 
 def test_start_before_setup_is_refused_by_name(microphone_wired_to_a_reader):
-    microphone = MicrophoneSource(MicrophoneSourceConfig())
+    microphone = a_microphone()
     with pytest.raises(RuntimeError, match="before setup"):
         microphone.start(microphone_wired_to_a_reader.microphone_context)
 
