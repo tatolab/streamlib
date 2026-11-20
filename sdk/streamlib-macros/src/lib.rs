@@ -4,6 +4,7 @@
 mod codegen;
 mod grammar;
 mod node_config;
+mod node_settings;
 
 use grammar as attribute_grammar;
 
@@ -36,6 +37,18 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn node_config(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
     match node_config::expand_node_config(attr.into(), item_struct, sdk_root()) {
+        Ok(expanded) => expanded.into(),
+        Err(refusal) => refusal.to_compile_error().into(),
+    }
+}
+
+/// Declares a struct as a node type's settings: each field an input that takes no wire, read
+/// once, when the node is set up, described by `#[description = "…"]` and, for a String chosen
+/// from a list, `#[options("…", …)]`. A node takes it with `#[node(settings = …)]`.
+#[proc_macro_attribute]
+pub fn node_settings(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item_struct = parse_macro_input!(item as ItemStruct);
+    match node_settings::expand_node_settings(attr.into(), item_struct, sdk_root()) {
         Ok(expanded) => expanded.into(),
         Err(refusal) => refusal.to_compile_error().into(),
     }

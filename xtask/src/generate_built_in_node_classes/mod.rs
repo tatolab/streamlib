@@ -3,8 +3,9 @@
 
 //! Renders `tatolab.stream`'s built-in node classes from the runtime's own
 //! descriptors: one class per built-in, whose `type` is the path the runtime
-//! registers it under, and one `TypedDict` per config, rendered from the
-//! config's JSON Schema. The Rust declaration is the only one; `--check` is the
+//! registers it under. A typed built-in declares its fields and pins as a class
+//! node does; a built-in that takes a config has one `TypedDict`, rendered from
+//! the config's JSON Schema. The Rust declaration is the only one; `--check` is the
 //! CI gate that fails when the checked-in module drifts from it.
 //!
 //! The descriptors come from `streamlib-media-builtins`' example
@@ -13,8 +14,13 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
+
+mod typed_built_in_node;
+
+use typed_built_in_node::{ImportedName, is_a_typed_built_in, render_fields_and_pins};
 
 /// One built-in's catalog entry, as the descriptor example prints it. The
 /// config schema stays a JSON value: it is open-ended JSON Schema.
@@ -38,24 +44,49 @@ struct BuiltInNodePortDescriptor {
     delivery_profile: Option<String>,
     #[serde(default)]
     family: Option<BuiltInNodePortFamilyDeclaration>,
-    /// How the input takes its value, tagged by `mode`; present on a setting, which the config
-    /// renders, so the docstring's inputs leave it out.
+    /// How the input takes its value, tagged by `mode`; present on a setting, which a field or
+    /// the config renders, so the docstring's inputs leave it out.
     #[serde(default)]
     input_mode: Option<BuiltInNodeInputMode>,
+    /// The pin type the port declares, or how it is found, tagged by `kind`; absent on a port
+    /// that declares none.
+    #[serde(default)]
+    pin_type: Option<Value>,
+    /// How its messages are read, beside its pin type.
+    #[serde(default)]
+    flow: Option<String>,
+    /// The value a setting holds until it is set.
+    #[serde(default)]
+    default_value: Option<Value>,
+    /// What the port states besides its type.
+    #[serde(default)]
+    annotations: Option<Map<String, Value>>,
 }
 
-/// The part of an input's mode the generator reads: whether it is a setting.
+/// The part of an input's mode the generator reads: whether it is a setting, and when it is
+/// read.
 #[derive(Debug, Deserialize)]
 struct BuiltInNodeInputMode {
     mode: String,
+    #[serde(default)]
+    read: Option<String>,
 }
 
 impl BuiltInNodePortDescriptor {
-    /// Whether the catalog lists this input as a setting, a config field the config renders.
+    /// Whether the catalog lists this input as a setting, which a field or the config renders.
     fn is_a_setting(&self) -> bool {
         self.input_mode
             .as_ref()
             .is_some_and(|input_mode| input_mode.mode == "setting_only")
+    }
+
+    /// The one pin type the port states, in the contract's form; `None` when it states none, or
+    /// its type is found another way.
+    fn exact_pin_type(&self) -> Option<&Value> {
+        let declared = self.pin_type.as_ref()?;
+        (declared.get("kind").and_then(Value::as_str) == Some("is"))
+            .then(|| declared.get("pin_type"))
+            .flatten()
     }
 }
 
@@ -110,13 +141,9 @@ const GENERATED_MODULE_HEADER: &str = r#"# Copyright (c) 2025 Tatolab LLC
 # built-in descriptors. Do not edit: CI fails when this file differs from a
 # regeneration.
 
-"""The runtime's built-in nodes, each with the shape of its config."""
+"""The runtime's built-in nodes, each with its fields and pins, or the shape of its config."""
 
 from __future__ import annotations
-
-from typing import ClassVar, Literal, TypedDict
-
-from ._built_in_node import BuiltInNode
 "#;
 
 /// Regenerate the module, or with `check_only` fail when the checked-in one
@@ -198,11 +225,18 @@ pub fn render_built_in_node_classes_module(
 
     let mut exported_names: Vec<String> = rendered_classes
         .iter()
-        .flat_map(|rendered| [rendered.class_name.clone(), rendered.config_name()])
+        .flat_map(|rendered| {
+            std::iter::once(rendered.class_name.clone()).chain(rendered.config_name())
+        })
         .collect();
     exported_names.sort();
+    let imports: BTreeSet<ImportedName> = rendered_classes
+        .iter()
+        .flat_map(|rendered| rendered.imports.iter().copied())
+        .collect();
 
     let mut module = String::from(GENERATED_MODULE_HEADER);
+    module.push_str(&render_imports(&imports)?);
     module.push_str("\n__all__ = [\n");
     for exported_name in &exported_names {
         writeln!(module, "    \"{exported_name}\",")?;
@@ -214,14 +248,46 @@ pub fn render_built_in_node_classes_module(
     Ok(module)
 }
 
+/// The import lines of `imports`: the standard library's first, then the package's, each
+/// module's names on one line.
+fn render_imports(imports: &BTreeSet<ImportedName>) -> Result<String> {
+    let mut text = String::new();
+    for package_modules in [false, true] {
+        let mut modules: Vec<&str> = imports
+            .iter()
+            .map(|(module, _)| *module)
+            .filter(|module| module.starts_with('.') == package_modules)
+            .collect();
+        modules.dedup();
+        if modules.is_empty() {
+            continue;
+        }
+        text.push('\n');
+        for module in modules {
+            let names: Vec<&str> = imports
+                .iter()
+                .filter(|(of_module, _)| *of_module == module)
+                .map(|(_, name)| *name)
+                .collect();
+            writeln!(text, "from {module} import {}", names.join(", "))?;
+        }
+    }
+    Ok(text)
+}
+
 struct RenderedBuiltInNode {
     class_name: String,
+    /// Whether it takes a config, rendered as a `TypedDict` of its own.
+    takes_a_config: bool,
+    /// Each name its text imports.
+    imports: BTreeSet<ImportedName>,
     text: String,
 }
 
 impl RenderedBuiltInNode {
-    fn config_name(&self) -> String {
-        config_name_of(&self.class_name)
+    fn config_name(&self) -> Option<String> {
+        self.takes_a_config
+            .then(|| config_name_of(&self.class_name))
     }
 }
 
@@ -238,18 +304,26 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
         bail!("built-in `{built_in_node_type}` does not name a Python class");
     }
     let refused_item_label = format!("built-in `{class_name}`");
-    let config_name = config_name_of(class_name);
+    let typed = is_a_typed_built_in(descriptor);
+    let mut imports = BTreeSet::from([("typing", "ClassVar"), ("._built_in_node", "BuiltInNode")]);
 
     let mut text = String::new();
-    text.push_str(&render_config_typed_dict(
-        class_name,
-        descriptor.config_schema.as_ref(),
-        &refused_item_label,
-    )?);
+    let input_values_type = if typed {
+        imports.insert(("._built_in_node", "InputValuesOfATypedBuiltInNode"));
+        "InputValuesOfATypedBuiltInNode".to_owned()
+    } else {
+        text.push_str(&render_config_typed_dict(
+            class_name,
+            descriptor.config_schema.as_ref(),
+            &refused_item_label,
+            &mut imports,
+        )?);
+        config_name_of(class_name)
+    };
 
     write!(
         text,
-        "\n\nclass {class_name}(BuiltInNode[{config_name}]):\n"
+        "\n\nclass {class_name}(BuiltInNode[{input_values_type}]):\n"
     )?;
     let mut class_doc_paragraphs = vec![python_prose(
         &sentence(&descriptor.description),
@@ -266,7 +340,9 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
             class_doc_paragraphs.push(render_port_paragraph(heading, ports, &refused_item_label)?);
         }
     }
-    class_doc_paragraphs.push(format!("Config: `{config_name}`."));
+    if !typed {
+        class_doc_paragraphs.push(format!("Config: `{input_values_type}`."));
+    }
     text.push_str(&render_docstring(&class_doc_paragraphs, 4));
     writeln!(
         text,
@@ -279,8 +355,17 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
              __test__: ClassVar[bool] = False\n",
         );
     }
+    if typed {
+        text.push_str(&render_fields_and_pins(
+            descriptor,
+            &refused_item_label,
+            &mut imports,
+        )?);
+    }
     Ok(RenderedBuiltInNode {
         class_name: class_name.to_owned(),
+        takes_a_config: !typed,
+        imports,
         text,
     })
 }
@@ -321,6 +406,7 @@ fn render_config_typed_dict(
     class_name: &str,
     config_schema: Option<&Value>,
     refused_item_label: &str,
+    imports: &mut BTreeSet<ImportedName>,
 ) -> Result<String> {
     let config_name = config_name_of(class_name);
     let empty_properties = Map::new();
@@ -365,6 +451,10 @@ fn render_config_typed_dict(
             definitions,
             &config_key_refused_item_label,
         )?);
+    }
+    imports.insert(("typing", "TypedDict"));
+    if optional_fields.contains("Literal[") {
+        imports.insert(("typing", "Literal"));
     }
 
     let config_doc = format!("`{class_name}`'s config: the keys `stream_builder.add` takes.");

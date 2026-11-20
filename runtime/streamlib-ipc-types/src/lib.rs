@@ -17,6 +17,7 @@
 //! emit `tracing`).
 
 mod bags_a_gap_in_the_numbering_says_were_lost;
+mod bundle_frame_payload;
 mod channel_chunk_ceilings;
 mod channel_egress_admission;
 mod channel_service_slot_limits;
@@ -34,6 +35,15 @@ mod port_key;
 mod reserved_slot_reader;
 mod stream_clock_board;
 pub use bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
+pub use bundle_frame_payload::{
+    BUNDLE_FRAME_BODY_USED_BYTES, BUNDLE_FRAME_ROW_BYTES, BUNDLE_FRAME_ROW_DESCRIPTOR_BODY_OFFSET,
+    BUNDLE_FRAME_ROW_DESCRIPTOR_KIND_OFFSET, BUNDLE_FRAME_ROW_ELEMENT_INDEX_OFFSET,
+    BUNDLE_FRAME_ROW_HOLDS_OFFSET, BUNDLE_FRAME_ROW_MEMBER_NAME_BYTES,
+    BUNDLE_FRAME_ROW_MEMBER_NAME_OFFSET, BUNDLE_FRAME_ROW_PAYLOAD_ALIGNMENT_BYTES,
+    BUNDLE_FRAME_ROW_PAYLOAD_BYTE_LEN_OFFSET, BUNDLE_FRAME_ROW_PAYLOAD_OFFSET_OFFSET,
+    BundleFrameDescriptorBody, BundleFrameRefusal, BundleFrameRow, BundleFrameRowHolds,
+    BundleFrameRowToPack, bundle_frame_of_rows, bundle_frame_row_table_of,
+};
 pub use channel_chunk_ceilings::{
     DEFAULT_EXPECTED_PAYLOAD_BYTES, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
     UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES, chunk_bytes_a_ceiling_sized_bag_takes,

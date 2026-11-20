@@ -23,8 +23,14 @@ fn minimal_schema() -> NodeSchema {
 #[test]
 fn node_struct_does_not_carry_audio_field() {
     let schema = minimal_schema();
-    let rendered =
-        generate_node_struct_from_schema(&schema, &None, &[], &quote! { pub }).to_string();
+    let rendered = generate_node_struct_from_schema(
+        &schema,
+        &None,
+        &NodeSettingsEmitted::of(None),
+        &[],
+        &quote! { pub },
+    )
+    .to_string();
     assert!(
         !rendered.contains("audio"),
         "generated Node struct must not declare an `audio` field — got: {}",
@@ -40,7 +46,9 @@ fn node_struct_does_not_carry_audio_field() {
 #[test]
 fn from_config_initializer_does_not_construct_audio_converter() {
     let schema = minimal_schema();
-    let rendered = generate_from_config_from_schema(&schema, &None, &[]).to_string();
+    let rendered =
+        generate_from_config_from_schema(&schema, &None, &NodeSettingsEmitted::of(None), &[])
+            .to_string();
     assert!(
         !rendered.contains("NodeAudioConverter"),
         "from_config must not reference NodeAudioConverter — got: {}",
@@ -232,6 +240,7 @@ fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
     let generated_struct = parse_generated_node_struct(generate_node_struct_from_schema(
         &schema,
         &None,
+        &NodeSettingsEmitted::of(None),
         &custom_fields,
         &quote! { pub },
     ));
@@ -282,9 +291,13 @@ fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
              to carry the authored `#[cfg]`"
     );
 
-    let from_config_struct_expression = parse_generated_from_config_struct_expression(
-        generate_from_config_from_schema(&schema, &None, &custom_fields),
-    );
+    let from_config_struct_expression =
+        parse_generated_from_config_struct_expression(generate_from_config_from_schema(
+            &schema,
+            &None,
+            &NodeSettingsEmitted::of(None),
+            &custom_fields,
+        ));
     for port_field_name in ["inputs", "outputs"] {
         let port_initializer = initialized_field(&from_config_struct_expression, port_field_name)
             .unwrap_or_else(|| {
@@ -311,6 +324,7 @@ fn node_struct_preserves_cfg_attribute_on_custom_field() {
     let rendered = render_token_stream_without_whitespace(generate_node_struct_from_schema(
         &minimal_schema(),
         &None,
+        &NodeSettingsEmitted::of(None),
         &custom_fields,
         &quote! { pub },
     ));
@@ -336,6 +350,7 @@ fn from_config_initializer_preserves_cfg_attribute_on_custom_field() {
     let rendered = render_token_stream_without_whitespace(generate_from_config_from_schema(
         &minimal_schema(),
         &None,
+        &NodeSettingsEmitted::of(None),
         &custom_fields,
     ));
     assert!(
@@ -368,6 +383,7 @@ fn node_struct_forwards_doc_and_lint_attributes_but_not_cfg_attr() {
     let rendered = render_token_stream_without_whitespace(generate_node_struct_from_schema(
         &minimal_schema(),
         &None,
+        &NodeSettingsEmitted::of(None),
         &custom_fields,
         &quote! { pub },
     ));
@@ -535,9 +551,13 @@ fn struct_with_a_cfg_alongside_every_other_forwardable_attribute() -> ItemStruct
 fn from_config_initializer_forwards_cfg_only() {
     let custom_fields =
         extract_custom_fields(&struct_with_a_cfg_alongside_every_other_forwardable_attribute());
-    let from_config_struct_expression = parse_generated_from_config_struct_expression(
-        generate_from_config_from_schema(&minimal_schema(), &None, &custom_fields),
-    );
+    let from_config_struct_expression =
+        parse_generated_from_config_struct_expression(generate_from_config_from_schema(
+            &minimal_schema(),
+            &None,
+            &NodeSettingsEmitted::of(None),
+            &custom_fields,
+        ));
 
     let initializer = initialized_field(
         &from_config_struct_expression,
@@ -614,6 +634,7 @@ fn rendered_descriptor_for_config_type(config_type: &TokenStream) -> String {
         &minimal_schema(),
         &no_declared_meta_or_port_descriptions(),
         config_type,
+        &NodeSettingsEmitted::of(None),
     ))
 }
 
@@ -627,6 +648,7 @@ fn only_a_node_paced_by_real_time_declares_it_on_its_descriptor() {
             },
             &no_declared_meta_or_port_descriptions(),
             &quote! { __streamlib_sdk::nodes::EmptyConfig },
+            &NodeSettingsEmitted::of(None),
         ))
     };
     assert!(rendered_for(true).contains(".paced_by_real_time()"));
@@ -643,6 +665,7 @@ fn only_a_node_that_declares_a_category_sets_one_on_its_descriptor() {
                 ..no_declared_meta_or_port_descriptions()
             },
             &quote! { __streamlib_sdk::nodes::EmptyConfig },
+            &NodeSettingsEmitted::of(None),
         ))
     };
     assert!(rendered_for(Some("Effects/Stylize")).contains(".with_category(\"Effects/Stylize\")"));
@@ -659,6 +682,7 @@ fn only_a_node_that_states_a_conversion_says_so_on_its_descriptor() {
                 ..no_declared_meta_or_port_descriptions()
             },
             &quote! { __streamlib_sdk::nodes::EmptyConfig },
+            &NodeSettingsEmitted::of(None),
         ))
     };
     assert!(rendered_for(true).contains(".stating_a_conversion()"));
@@ -676,8 +700,11 @@ fn rendered_impl_block_declared_as(built_in_node: bool) -> String {
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(built_in_node, &schema.name),
-        &quote! { __streamlib_sdk::nodes::EmptyConfig },
-        &None,
+        &NodeConfigEmitted {
+            config_type: &quote! { __streamlib_sdk::nodes::EmptyConfig },
+            field_name: &None,
+        },
+        &NodeSettingsEmitted::of(None),
         &[],
     ))
 }
@@ -866,5 +893,78 @@ fn a_crate_visible_node_generates_crate_visible_items_only() {
             && !rendered.contains("pubstruct")
             && !rendered.contains("pubtype"),
         "a pub(crate) node must generate no public item — got: {rendered}"
+    );
+}
+
+/// A node declaring `settings = …` holds its settings on its `Node`, taken from the input values
+/// until it is set up, declares each as an input after those it declares, and takes no config;
+/// `node` builds a spec holding the settings as input values.
+///
+/// Mental-revert: settings taken after setup reach a running node rather than rebuilding it.
+#[test]
+fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
+    let settings_type: syn::Path = syn::parse_quote! { crate::BlurSettings };
+    let settings = NodeSettingsEmitted::of(Some(&settings_type));
+    let config_type = quote! { __streamlib_sdk::nodes::EmptyConfig };
+
+    let node_struct = render_token_stream_without_whitespace(generate_node_struct_from_schema(
+        &minimal_schema(),
+        &None,
+        &settings,
+        &[],
+        &quote! { pub },
+    ));
+    assert!(
+        node_struct.contains("pubsettings:crate::BlurSettings,"),
+        "{node_struct}"
+    );
+    assert!(
+        node_struct.contains("__streamlib_settings_were_read_at_setup:bool,"),
+        "{node_struct}"
+    );
+
+    let descriptor = render_token_stream_without_whitespace(generate_descriptor_from_schema(
+        &minimal_schema(),
+        &no_declared_meta_or_port_descriptions(),
+        &config_type,
+        &settings,
+    ));
+    assert!(
+        descriptor.contains(".with_the_inputs_of_its_settings::<crate::BlurSettings>()"),
+        "{descriptor}"
+    );
+    assert!(!descriptor.contains("with_config_schema"), "{descriptor}");
+
+    let node_impl = render_token_stream_without_whitespace(generate_node_impl_from_schema(
+        &minimal_schema(),
+        &quote! { pub },
+        &no_declared_meta_or_port_descriptions(),
+        &node_type_minted(false, "MinimalProbe"),
+        &NodeConfigEmitted {
+            config_type: &config_type,
+            field_name: &None,
+        },
+        &settings,
+        &[],
+    ));
+    assert!(
+        node_impl.contains("fntake_the_settings_the_input_values_hold("),
+        "{node_impl}"
+    );
+    assert!(
+        node_impl.contains("ifself.__streamlib_settings_were_read_at_setup{returnOk(());}"),
+        "{node_impl}"
+    );
+    assert!(
+        node_impl.contains("self.__streamlib_settings_were_read_at_setup=true;"),
+        "{node_impl}"
+    );
+    assert!(
+        node_impl.contains("pubfnnode(settings:crate::BlurSettings)"),
+        "{node_impl}"
+    );
+    assert!(
+        node_impl.contains(".with_pins_and_studio_fields("),
+        "{node_impl}"
     );
 }

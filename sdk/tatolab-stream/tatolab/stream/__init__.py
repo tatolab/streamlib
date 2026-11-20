@@ -69,19 +69,14 @@ from ._pin_types import Vector4 as Vector4
 from ._project_asset_uuid import ProjectAssetMedia as ProjectAssetMedia
 from ._project_asset_uuid import ProjectAssetUuid as ProjectAssetUuid
 from ._built_in_nodes import AudioToTensor as AudioToTensor
-from ._built_in_nodes import AudioToTensorConfig as AudioToTensorConfig
 from ._built_in_nodes import ChannelsToRecords as ChannelsToRecords
 from ._built_in_nodes import ChannelsToRecordsConfig as ChannelsToRecordsConfig
 from ._built_in_nodes import RecordsToChannels as RecordsToChannels
 from ._built_in_nodes import RecordsToChannelsConfig as RecordsToChannelsConfig
 from ._built_in_nodes import TensorToAudio as TensorToAudio
-from ._built_in_nodes import TensorToAudioConfig as TensorToAudioConfig
 from ._built_in_nodes import TensorToTexture as TensorToTexture
-from ._built_in_nodes import TensorToTextureConfig as TensorToTextureConfig
 from ._built_in_nodes import TextureFormatConvert as TextureFormatConvert
-from ._built_in_nodes import TextureFormatConvertConfig as TextureFormatConvertConfig
 from ._built_in_nodes import TextureToTensor as TextureToTensor
-from ._built_in_nodes import TextureToTensorConfig as TextureToTensorConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
 from ._gpu_protocols import ComputeKernel as ComputeKernel
 from ._gpu_protocols import GpuContextFullAccess as GpuContextFullAccess
@@ -197,7 +192,6 @@ __all__ = [
     "ArrayFrameCpuAttribute",
     "ArrayFrameGpuAttribute",
     "AudioToTensor",
-    "AudioToTensorConfig",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",
     "Channels",
@@ -316,13 +310,9 @@ __all__ = [
     "StreamClock",
     "StreamClockReading",
     "TensorToAudio",
-    "TensorToAudioConfig",
     "TensorToTexture",
-    "TensorToTextureConfig",
     "TextureFormatConvert",
-    "TextureFormatConvertConfig",
     "TextureToTensor",
-    "TextureToTensorConfig",
     "Time",
     "UnreadMessage",
     "clock",

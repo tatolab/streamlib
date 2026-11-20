@@ -389,6 +389,7 @@ impl VulkanColorConverter {
                     )),
                     bindings: IMAGE_TO_IMAGE_BINDINGS,
                     push_constant_size: 0,
+                    specialization_constants: &[],
                 },
             )
         })
@@ -420,6 +421,7 @@ impl VulkanColorConverter {
                 spv,
                 bindings: IMAGE_TO_BYTE_BUFFER_BINDINGS,
                 push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+                specialization_constants: &[],
             },
         )
     }
@@ -491,6 +493,7 @@ impl VulkanColorConverter {
                 spv,
                 bindings: BUFFER_TO_IMAGE_BINDINGS,
                 push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+                specialization_constants: &[],
             },
         )
     }

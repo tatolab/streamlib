@@ -38,8 +38,8 @@ mod texture_to_tensor_tests;
 pub use audio_to_tensor::AudioToTensor;
 pub use channels_to_records::{ChannelsToRecords, ChannelsToRecordsConfig};
 pub use records_to_channels::{RecordsToChannels, RecordsToChannelsConfig};
-pub use tensor_to_audio::{TensorToAudio, TensorToAudioConfig};
-pub use tensor_to_texture::{TensorToTexture, TensorToTextureConfig};
+pub use tensor_to_audio::{TensorToAudio, TensorToAudioSettings};
+pub use tensor_to_texture::{TensorToTexture, TensorToTextureSettings};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use texture_format_convert::TextureFormatConvert;
 pub use texture_to_tensor::TextureToTensor;

@@ -13,7 +13,6 @@ use streamlib::sdk::iceoryx2::{
     array_frame_attribute_table_of,
 };
 use streamlib::sdk::nodes::ReactiveNode;
-use streamlib::sdk::schemars::JsonSchema;
 
 use super::audio_to_tensor::AUDIO_TO_TENSOR_SAMPLES_ATTRIBUTE_NAME;
 use super::conversion_node_config_defaults::{
@@ -25,33 +24,25 @@ use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descript
 const ARRAY_INPUT_PORT: &str = "array";
 const CHANNELS_OUTPUT_PORT: &str = "channels";
 
-/// Configuration for [`TensorToAudio`].
-#[streamlib::sdk::node_config]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "streamlib::sdk::schemars")]
+/// The settings [`TensorToAudio`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TensorToAudioConfig {
-    #[serde(default = "one_channel_named_value")]
-    #[description = "The names of the channels `channels` carries, one per row of the attribute."]
-    pub channel_names: Vec<String>,
-    #[serde(default = "forty_eight_thousand_samples_per_second")]
-    #[description = "The sample rate `channels` states, in samples per second per channel."]
-    pub sample_rate: u32,
-    #[serde(default = "default_samples_attribute_name")]
+pub struct TensorToAudioSettings {
     #[description = "The attribute of each Array frame read as the block's samples."]
     pub attribute: String,
+    #[description = "The names of the channels `channels` carries, one per row of the attribute."]
+    pub channel_names: Vec<String>,
+    #[description = "The sample rate `channels` states, in samples per second per channel."]
+    pub sample_rate: u32,
 }
 
-fn default_samples_attribute_name() -> String {
-    AUDIO_TO_TENSOR_SAMPLES_ATTRIBUTE_NAME.to_string()
-}
-
-impl Default for TensorToAudioConfig {
+impl Default for TensorToAudioSettings {
     fn default() -> Self {
         Self {
+            attribute: AUDIO_TO_TENSOR_SAMPLES_ATTRIBUTE_NAME.to_string(),
             channel_names: one_channel_named_value(),
             sample_rate: forty_eight_thousand_samples_per_second(),
-            attribute: default_samples_attribute_name(),
         }
     }
 }
@@ -59,7 +50,7 @@ impl Default for TensorToAudioConfig {
 #[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
-    config = crate::pin_type_conversion::tensor_to_audio::TensorToAudioConfig,
+    settings = crate::pin_type_conversion::tensor_to_audio::TensorToAudioSettings,
     input(
         "array",
         description = "The Array frames whose `attribute` is converted",
@@ -70,8 +61,8 @@ impl Default for TensorToAudioConfig {
         "channels",
         description = "One Channels block per frame, one channel per name in `channel_names`",
         pin_type = Audio,
-        names = from_config("channel_names"),
-        rate = from_config("sample_rate")
+        names = from_setting("channel_names"),
+        rate = from_setting("sample_rate")
     ),
 )]
 #[meta(
@@ -92,15 +83,15 @@ impl ReactiveNode for TensorToAudio::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         refuse_a_channels_output_config(
             "TensorToAudio",
-            &self.config.channel_names,
-            self.config.sample_rate,
+            &self.settings.channel_names,
+            self.settings.sample_rate,
         )
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(ARRAY_INPUT_PORT)? {
             let (payload_descriptor, payload) = match channels_block_of_the_array_frame(
-                &self.config,
+                &self.settings,
                 self.next_start_sample,
                 message.payload_descriptor,
                 message.payload.bytes(),
@@ -127,10 +118,10 @@ impl ReactiveNode for TensorToAudio::Node {
     }
 }
 
-/// The Channels block holding `config.attribute` of the Array frame
+/// The Channels block holding `settings.attribute` of the Array frame
 /// `payload_descriptor` and `payload` carry, starting at `start_sample`.
 pub fn channels_block_of_the_array_frame(
-    config: &TensorToAudioConfig,
+    settings: &TensorToAudioSettings,
     start_sample: u64,
     payload_descriptor: DataChannelPayloadDescriptor,
     payload: &[u8],
@@ -146,7 +137,7 @@ pub fn channels_block_of_the_array_frame(
         payload,
     )
     .map_err(|refusal| Error::PortError(format!("TensorToAudio: {refusal}")))?;
-    let attribute_name = config.attribute.as_str();
+    let attribute_name = settings.attribute.as_str();
     let attribute = attribute_table
         .iter()
         .find(|row| row.name == attribute_name)
@@ -168,7 +159,7 @@ pub fn channels_block_of_the_array_frame(
                 attribute.dtype
             ))
         })?;
-    let channel_count = config.channel_names.len() as u64;
+    let channel_count = settings.channel_names.len() as u64;
     let [attribute_channel_count, samples_per_channel] = attribute.shape[..] else {
         return Err(Error::PortError(format!(
             "TensorToAudio: attribute {attribute_name:?} has shape {:?}; it is read as \
@@ -200,7 +191,7 @@ pub fn channels_block_of_the_array_frame(
     };
     let block_body = ChannelsBlockDescriptorBody {
         start_sample,
-        sample_rate: config.sample_rate,
+        sample_rate: settings.sample_rate,
         channel_count: channel_count as u32,
         samples_per_channel,
         sample_type: sample_type as u32,

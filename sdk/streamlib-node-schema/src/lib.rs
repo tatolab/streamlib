@@ -19,6 +19,7 @@ pub mod node_class_short_name;
 pub mod node_kind;
 pub mod node_reference_in_config;
 pub mod node_schema;
+pub mod node_settings;
 pub mod node_value_lifetime;
 pub mod pin_type;
 pub mod port_family;
@@ -58,6 +59,10 @@ pub use node_schema::{
     MAX_INPUT_PORT_BORROW_QUOTA, NEWEST_DELIVERY_PROFILE, NodeConfigSchema, NodeLanguage,
     NodePortSchema, NodeScheduling, NodeSchema, NodeSchemaExecution, NodeStateField,
     ORDERED_DELIVERY_PROFILE, RuntimeConfig, RuntimeOptions, to_pascal_case, to_snake_case,
+};
+pub use node_settings::{
+    NodeSettings, SettingChosenFromOptions, SettingPinType, the_default_of_a_setting,
+    the_input_of_a_setting, the_menu_of_a_setting,
 };
 pub use node_value_lifetime::NodeValueLifetime;
 pub use port_family::{

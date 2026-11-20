@@ -294,6 +294,9 @@ pub(crate) struct ParsedNodeAttr {
     pub paced_by_real_time: bool,
     pub config_type: Option<Path>,
     pub config_field_name: String,
+    /// The `#[node_settings]` struct the node reads at setup, each of its fields one of the
+    /// node's inputs; `None` when it declares none.
+    pub settings_type: Option<Path>,
     pub inputs: Vec<ParsedPort>,
     pub outputs: Vec<ParsedPort>,
 }
@@ -365,6 +368,7 @@ fn parse_body(
     let mut paced_by_real_time = false;
     let mut config_type: Option<Path> = None;
     let mut config_field_name: Option<String> = None;
+    let mut settings_type: Option<(Ident, Path)> = None;
     let mut inputs: Vec<ParsedPort> = Vec::new();
     let mut outputs: Vec<ParsedPort> = Vec::new();
 
@@ -413,6 +417,10 @@ fn parse_body(
                 input.parse::<Token![=]>()?;
                 config_type = Some(input.parse()?);
             }
+            "settings" => {
+                input.parse::<Token![=]>()?;
+                settings_type = Some((key.clone(), input.parse()?));
+            }
             "config_field" => {
                 input.parse::<Token![=]>()?;
                 let lit: LitStr = input.parse()?;
@@ -449,6 +457,16 @@ fn parse_body(
         )
     })?;
 
+    if let Some((settings_key, _)) = &settings_type
+        && (config_type.is_some() || config_field_name.is_some())
+    {
+        return Err(syn::Error::new(
+            settings_key.span(),
+            "a node declaring `settings = …` takes every value it reads at setup as an input \
+             of its settings, so it declares no `config` or `config_field`",
+        ));
+    }
+
     let config_field_name = config_field_name.unwrap_or_else(|| "config".to_string());
 
     Ok(ParsedNodeAttr {
@@ -463,6 +481,7 @@ fn parse_body(
         paced_by_real_time,
         config_type,
         config_field_name,
+        settings_type: settings_type.map(|(_, settings_type)| settings_type),
         inputs,
         outputs,
     })
@@ -546,6 +565,7 @@ const NODE_ATTRIBUTE_KEYS: &[&str] = &[
     "paced_by_real_time",
     "config",
     "config_field",
+    "settings",
     "input",
     "output",
 ];
