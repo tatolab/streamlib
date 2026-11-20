@@ -659,8 +659,8 @@ class KernelDispatchBatch(Protocol):
         the shader does not declare or a wrong push-constant size raises at
         this line rather than when the scope closes.
 
-        One kernel may appear only once per batch: a kernel owns a single
-        descriptor set, so dispatching it again would give its earlier dispatch
-        these bindings.
+        One kernel may appear only once per batch: a recording binds a kernel
+        through one descriptor set, so dispatching it again would give its
+        earlier dispatch these bindings.
         """
         ...

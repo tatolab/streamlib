@@ -19,7 +19,7 @@ use crate::vulkan::rhi::kernels::vulkan_pipeline_cache_on_disk::{
     pipeline_cache_file_path_keyed_by, read_cache_blob,
 };
 
-use super::{COMPUTE_DISPATCH_SLOTS, ComputeDispatchSlot};
+use super::{COMPUTE_BATCH_DESCRIPTOR_SETS, COMPUTE_DISPATCH_SLOTS, ComputeDispatchSlot};
 
 fn descriptor_kind_to_vk(kind: ComputeBindingKind) -> vk::DescriptorType {
     match kind {
@@ -256,7 +256,8 @@ pub(super) fn pipeline_cache_file_path(
 
 /// One descriptor set per dispatch slot, and one for recording into a
 /// caller's command buffer.
-const SETS_A_KERNEL_ALLOCATES: u32 = COMPUTE_DISPATCH_SLOTS as u32 + 1;
+const SETS_A_KERNEL_ALLOCATES: u32 =
+    (COMPUTE_DISPATCH_SLOTS + 1 + COMPUTE_BATCH_DESCRIPTOR_SETS) as u32;
 
 pub(super) fn create_descriptor_pool(
     device: &vulkanalia::Device,
@@ -297,6 +298,24 @@ pub(super) fn allocate_descriptor_set(
     let sets = unsafe { device.allocate_descriptor_sets(&info) }
         .map_err(|e| Error::GpuError(format!("Failed to allocate descriptor set: {e}")))?;
     Ok(sets[0])
+}
+
+/// `N` descriptor sets of `layout` from `pool`, allocated in one call.
+pub(super) fn allocate_descriptor_sets<const N: usize>(
+    device: &vulkanalia::Device,
+    pool: vk::DescriptorPool,
+    layout: vk::DescriptorSetLayout,
+) -> Result<[vk::DescriptorSet; N]> {
+    let set_layouts = [layout; N];
+    let info = vk::DescriptorSetAllocateInfo::builder()
+        .descriptor_pool(pool)
+        .set_layouts(&set_layouts)
+        .build();
+    let sets = unsafe { device.allocate_descriptor_sets(&info) }
+        .map_err(|e| Error::GpuError(format!("Failed to allocate descriptor sets: {e}")))?;
+    sets.try_into().map_err(|sets: Vec<_>| {
+        Error::GpuError(format!("asked for {N} descriptor sets, got {}", sets.len()))
+    })
 }
 
 fn create_command_pool(

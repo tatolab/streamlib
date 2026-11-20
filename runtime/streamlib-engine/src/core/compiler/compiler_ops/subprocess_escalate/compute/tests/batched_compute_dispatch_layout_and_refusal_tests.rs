@@ -84,8 +84,8 @@ fn every_registration_cell_naming_one_image_learns_the_landed_layout() {
         .expect("a recording over two cells of one image dispatches");
 }
 
-/// A kernel owns one descriptor set, so the second bind would hand the
-/// first recorded dispatch this dispatch's bindings — and nothing has
+/// A recording binds a kernel through one descriptor set, so the second bind
+/// would hand the first recorded dispatch this dispatch's bindings — and nothing has
 /// executed yet, so it would do it silently.
 #[test]
 fn a_batch_naming_one_kernel_twice_is_refused_saying_why() {

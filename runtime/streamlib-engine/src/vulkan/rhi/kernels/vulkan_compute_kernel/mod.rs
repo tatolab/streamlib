@@ -52,6 +52,10 @@ pub(crate) struct VulkanComputeKernelInner {
     /// The descriptor set [`Self::record`] writes, apart from every dispatch
     /// slot's.
     record_descriptor_set: vk::DescriptorSet,
+    /// The descriptor sets a batched recording writes, one per dispatch of
+    /// this kernel a batch may still have in flight; the batch picks a set
+    /// whose last submission has retired.
+    batch_descriptor_sets: [vk::DescriptorSet; COMPUTE_BATCH_DESCRIPTOR_SETS],
     shader_module: vk::ShaderModule,
     /// What one in-flight dispatch owns; a dispatch takes the next free one.
     dispatch_slots: Vec<Mutex<ComputeDispatchSlot>>,
@@ -73,6 +77,9 @@ pub(crate) struct VulkanComputeKernelInner {
 /// How many dispatches one kernel can have in flight at once: the engine's two
 /// frames in flight.
 const COMPUTE_DISPATCH_SLOTS: usize = 2;
+
+/// How many batched recordings of one kernel can be in flight at once.
+pub(crate) const COMPUTE_BATCH_DESCRIPTOR_SETS: usize = 2;
 
 /// The Vulkan state one dispatch records, submits and waits on. Each slot has
 /// its own command pool, because a pool may record on one thread at a time.
