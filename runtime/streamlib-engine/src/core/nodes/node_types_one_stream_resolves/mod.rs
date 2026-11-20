@@ -41,10 +41,7 @@ static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
     let descriptor =
         the_node_type_of_a_graph_input().expect("the GraphInput node type's names are valid");
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
-        input_and_output_port_info: GraphNodePorts {
-            inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
-            outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
-        },
+        input_and_output_port_info: GraphNodePorts::of_a_node_just_placed(&descriptor),
         descriptor,
         conversion: None,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
@@ -204,10 +201,7 @@ impl NodeTypesOneStreamResolves {
                 }
             };
             why_no_node_takes_each_view.remove(&node_type);
-            let input_and_output_port_info = GraphNodePorts {
-                inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
-                outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
-            };
+            let input_and_output_port_info = GraphNodePorts::of_a_node_just_placed(&descriptor);
             let descriptor_for_constructor = descriptor.clone();
             view_types.insert(
                 node_type,
@@ -335,10 +329,7 @@ impl NodeTypesOneStreamResolves {
                  Python class or its module"
             )));
         }
-        let input_and_output_port_info = GraphNodePorts {
-            inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
-            outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
-        };
+        let input_and_output_port_info = GraphNodePorts::of_a_node_just_placed(&descriptor);
         self.described_in_this_streams_node_interpreter
             .write()
             .insert(

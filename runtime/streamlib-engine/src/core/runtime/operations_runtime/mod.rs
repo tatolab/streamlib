@@ -990,3 +990,6 @@ mod connect_resolves_a_pin_type_found_another_way_tests;
 
 #[cfg(test)]
 mod node_rebuild_tests;
+
+#[cfg(test)]
+mod connect_grows_a_pin_group_tests;

@@ -209,6 +209,10 @@ pub struct NodeDescriptor {
     pub conversion: bool,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
+    /// The pin groups the node type declares: slots of inputs and outputs that repeat, each
+    /// slot's ports beside `inputs` and `outputs` on a node, named `<group>.<index>.<pin>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pin_groups: Vec<crate::pin_group::PinGroupDescriptor>,
     pub examples: CodeExamples,
 }
 
@@ -235,6 +239,7 @@ impl NodeDescriptor {
             conversion: false,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            pin_groups: Vec::new(),
             examples: CodeExamples::default(),
         }
     }
@@ -342,6 +347,53 @@ impl NodeDescriptor {
         self
     }
 
+    /// Declare a pin group: a slot of inputs and outputs that repeats.
+    pub fn with_pin_group(mut self, pin_group: crate::pin_group::PinGroupDescriptor) -> Self {
+        self.pin_groups.push(pin_group);
+        self
+    }
+
+    /// Each input a node of the type holds with `slot_counts` slots in its pin groups, in the
+    /// order the groups are declared: the inputs it declares, the input setting the count of
+    /// each group a person sets, then each slot's inputs.
+    pub fn the_inputs_with_slots(&self, slot_counts: &[usize]) -> Vec<PortDescriptor> {
+        let mut inputs = self.inputs.clone();
+        inputs.extend(
+            self.pin_groups
+                .iter()
+                .filter_map(crate::pin_group::PinGroupDescriptor::the_input_setting_its_slot_count),
+        );
+        for (group, count) in self.pin_groups.iter().zip(slot_counts) {
+            for slot in 0..*count {
+                inputs.extend(group.the_ports_of_slot(slot).0);
+            }
+        }
+        inputs
+    }
+
+    /// Each output a node of the type holds with `slot_counts` slots in its pin groups: the
+    /// outputs it declares, then each slot's outputs.
+    pub fn the_outputs_with_slots(&self, slot_counts: &[usize]) -> Vec<PortDescriptor> {
+        let mut outputs = self.outputs.clone();
+        for (group, count) in self.pin_groups.iter().zip(slot_counts) {
+            for slot in 0..*count {
+                outputs.extend(group.the_ports_of_slot(slot).1);
+            }
+        }
+        outputs
+    }
+
+    /// The node type with one slot in each of its pin groups, its slots' ports among its inputs
+    /// and outputs: what the ports of a node just placed are judged by.
+    pub fn with_one_slot_in_each_pin_group(&self) -> Self {
+        let one_each = vec![1; self.pin_groups.len()];
+        Self {
+            inputs: self.the_inputs_with_slots(&one_each),
+            outputs: self.the_outputs_with_slots(&one_each),
+            ..self.clone()
+        }
+    }
+
     pub fn with_rust_example(mut self, example: impl Into<String>) -> Self {
         self.examples.rust = example.into();
         self
@@ -368,7 +420,16 @@ impl NodeDescriptor {
     /// states, or none.
     pub fn with_input_deliveries_defaulted_by_pin(mut self) -> Result<Self, String> {
         let node_type = &self.node_class_import_path;
-        for port in self.inputs.iter().chain(&self.outputs) {
+        let pin_group_pins = self
+            .pin_groups
+            .iter()
+            .flat_map(|group| group.inputs.iter().chain(&group.outputs));
+        for port in self
+            .inputs
+            .iter()
+            .chain(&self.outputs)
+            .chain(pin_group_pins)
+        {
             if let Some(refusal) = port
                 .declared_pin()
                 .and_then(|pin| pin.refusal_of_its_flow(&port.name))
@@ -376,7 +437,11 @@ impl NodeDescriptor {
                 return Err(format!("`{node_type}`: {refusal}"));
             }
         }
-        for input in &mut self.inputs {
+        let pin_group_inputs = self
+            .pin_groups
+            .iter_mut()
+            .flat_map(|group| group.inputs.iter_mut());
+        for input in self.inputs.iter_mut().chain(pin_group_inputs) {
             if let Some(stated) = &input.delivery_profile {
                 if let Some(refusal) = input
                     .declared_pin()

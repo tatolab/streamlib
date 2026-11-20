@@ -215,6 +215,7 @@ impl GraphInterfacePort {
             pin,
             annotations: PinAnnotations::default(),
             value_read: None,
+            pin_group_slot: None,
         }
     }
 

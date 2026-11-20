@@ -103,8 +103,14 @@ impl<'a> TraversalSourceMut<'a> {
         node.resolve_the_ports_its_settings_declare();
         node.exposed_config_fields = spec.exposed_config_fields;
         node.studio = spec.studio;
+        if let Some(descriptor) = node_types.descriptor(&node.node_type)
+            && !descriptor.pin_groups.is_empty()
+        {
+            node.hold_the_pin_groups_of_its_type(descriptor.pin_groups.into());
+        }
 
         let node_idx = self.graph.add_node(node);
+        crate::core::graph::reshape_the_pin_group_slots_of(self.graph, node_idx);
 
         if let Some(node_mut) = self.graph.node_weight_mut(node_idx) {
             let state = StateComponent::new(if registry_miss {
