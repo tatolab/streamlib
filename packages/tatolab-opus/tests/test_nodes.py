@@ -19,8 +19,13 @@ from helper_process_link_wiring import wire_one_link
 from parent_stream_facts_stand_in import ParentHoldingStreamFacts
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.runtime import _engine
-from tatolab.runtime._node_hosting import construct_node_instance
+from tatolab.runtime._class_node_fields import ClassNodeFields
+from tatolab.runtime._node_hosting import (
+    class_node_members_of,
+    construct_class_node_from_its_fields_and_pins,
+)
 from tatolab.runtime._node_interpreter_bootstrap import describe_one_node_class
+from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream import (
     Channels,
     ChannelsBlock,
@@ -42,7 +47,7 @@ LIBOPUS_PRE_SKIP_SAMPLES = 312
 
 @graph_generator
 def an_opus_round_trip(stream_builder: StreamBuilder) -> None:
-    encoder = stream_builder.add(OpusEncoder, config={"bitrate_bps": 64_000})
+    encoder = stream_builder.add(OpusEncoder, input_values={"bitrate_bps": 64_000})
     decoder = stream_builder.add(OpusDecoder)
     stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
 
@@ -59,9 +64,12 @@ def test_each_node_is_named_by_its_own_import_path_in_the_module():
 
 
 def test_the_encoders_input_declares_a_window_contract_that_follows_its_sources_channel_count():
-    [audio] = describe_one_node_class("tatolab.opus:OpusEncoder")["input_ports"]
+    audio = next(
+        port
+        for port in describe_one_node_class("tatolab.opus:OpusEncoder")["input_ports"]
+        if port["name"] == "audio"
+    )
 
-    assert audio["name"] == "audio"
     assert audio["delivery_profile"] == "ordered"
     assert audio["audio_window"] == {
         "resolved_from": "declaration",
@@ -73,47 +81,83 @@ def test_the_encoders_input_declares_a_window_contract_that_follows_its_sources_
     }
 
 
-def test_the_decoder_takes_opus_packets_and_publishes_f32_channels_at_opus_rate():
+def the_pin_type_of(port: "dict[str, Any]") -> "dict[str, Any]":
+    return port["pin_declaration"]["pin_type"]["pin_type"]
+
+
+def test_the_decoder_converts_opus_packets_into_audio():
     described = describe_one_node_class("tatolab.opus:OpusDecoder")
     [encoded_audio] = described["input_ports"]
     [audio] = described["output_ports"]
 
-    assert encoded_audio["family"] == {"family": "packets", "requires_codec": ["opus"]}
+    assert the_pin_type_of(encoded_audio) == {"type": "encoded_audio", "codecs": ["opus"]}
+    assert encoded_audio["delivery_profile"] == "ordered"
     assert audio["name"] == "audio"
-    assert audio["family"] == {
-        "family": "channels",
-        "rate": {"stated": OPUS_SAMPLE_RATE_HZ},
-        "dtype": "f32",
-    }
+    assert the_pin_type_of(audio) == {"type": "audio"}
 
 
 def test_the_encoder_publishes_opus_packets():
     [encoded_audio] = describe_one_node_class("tatolab.opus:OpusEncoder")["output_ports"]
 
+    assert the_pin_type_of(encoded_audio) == {"type": "encoded_audio", "codecs": ["opus"]}
     assert encoded_audio["family"] == {"family": "packets", "codec": "opus"}
 
 
-@pytest.mark.parametrize(
-    "config, refusal",
-    [
-        ({"application": "surround"}, "surround"),
-        ({"bitrate_bps": 0}, "bitrate_bps"),
-        ({"bitrate_bps": True}, "bitrate_bps"),
-        ({"bitrate_bps": 2**32}, "bitrate_bps"),
-    ],
-)
-def test_an_encoder_config_libopus_cannot_take_is_refused_by_name(config, refusal):
-    with pytest.raises(ValueError, match=refusal):
-        construct_node_instance(OpusEncoder, config, None)
+def test_the_encoders_settings_are_read_at_setup_and_name_what_libopus_takes():
+    described = describe_one_node_class("tatolab.opus:OpusEncoder")
+    settings = {
+        port["name"]: port
+        for port in described["input_ports"]
+        if port.get("input_mode", {}).get("mode") == "setting_only"
+    }
+
+    assert set(settings) == {"bitrate_bps", "application"}
+    assert settings["bitrate_bps"]["pin_declaration"]["annotations"]["range"] == {
+        "minimum": 1,
+        "maximum": 2**31 - 1,
+    }
+    assert the_pin_type_of(settings["application"]) == {
+        "type": "menu",
+        "option_names": ["audio", "voip", "lowdelay"],
+    }
 
 
-def test_an_empty_encoder_config_is_legal():
-    assert isinstance(construct_node_instance(OpusEncoder, {}, None), OpusEncoder)
+def an_encoder_with_no_link(**field_values: Any) -> OpusEncoder:
+    return construct_class_node(
+        OpusEncoder,
+        field_values=field_values,
+        pins={"audio": object(), "encoded_audio": object()},
+    )
 
 
-def test_an_encoder_setting_the_class_does_not_take_is_refused():
-    with pytest.raises(TypeError, match="channels"):
-        construct_node_instance(OpusEncoder, {"channels": 2}, None)
+def test_an_encoder_with_no_values_takes_libopus_own_bitrate_and_the_audio_tuning():
+    encoder = an_encoder_with_no_link()
+    assert (encoder.bitrate_bps, encoder.application) == (None, "audio")
+
+
+def an_opus_node_on_its_links(
+    node_class: type, input_values: "dict[str, Any]", links: Any, ctx: Any
+) -> Any:
+    """`node_class` built as its helper builds it: each field from `input_values`, each pin
+    bound to `links`."""
+    members = class_node_members_of(node_class)
+    assert members is not None
+    fields = ClassNodeFields(
+        members,
+        link_data_access=links,
+        inputs=ctx.inputs,
+        node_id=node_class.__name__,
+        stored_input_values=input_values,
+    )
+    return construct_class_node_from_its_fields_and_pins(
+        node_class,
+        members,
+        fields,
+        link_data_access=links,
+        inputs=ctx.inputs,
+        outputs=ctx.outputs,
+        node_id=node_class.__name__,
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -223,10 +267,12 @@ class OpusRoundTripOnWiredLinks:
         self.encoder_context = context(encoder_links, "encoder-under-test")
         self.decoder_context = context(decoder_links, "decoder-under-test")
         self.sink_context = context(sink_links, "sink-under-test")
-        self.encoder = construct_node_instance(
-            OpusEncoder, {"bitrate_bps": 128_000}, encoder_links
+        self.encoder = an_opus_node_on_its_links(
+            OpusEncoder, {"bitrate_bps": 128_000}, encoder_links, self.encoder_context
         )
-        self.decoder = construct_node_instance(OpusDecoder, {}, decoder_links)
+        self.decoder = an_opus_node_on_its_links(
+            OpusDecoder, {}, decoder_links, self.decoder_context
+        )
 
     def send(self, window: PlanarWindowToSend) -> None:
         self.source_context.outputs.write_channels_block(
@@ -316,7 +362,7 @@ def test_a_window_whose_channel_count_opus_cannot_place_is_refused_by_name_and_t
 def test_an_empty_message_on_the_decoders_link_is_refused_by_name(
     opus_round_trip: OpusRoundTripOnWiredLinks,
 ):
-    decoder = construct_node_instance(OpusDecoder, {}, None)
+    decoder = opus_round_trip.decoder
     with pytest.raises(ValueError, match="no Opus packet"):
         decoder._decoder.decode_one_arriving_message(b"", 0, True, 0, None)
     with pytest.raises(ValueError, match="names codec `mp4a.40.2`"):
