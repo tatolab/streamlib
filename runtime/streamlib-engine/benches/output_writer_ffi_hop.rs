@@ -383,6 +383,7 @@ fn build_round_trip(tag: &str) -> RoundTripFixture {
         "L-bench-round-trip",
         &InboundLinkName::from("pbench/out"),
         subscriber,
+        streamlib_engine::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     RoundTripFixture {

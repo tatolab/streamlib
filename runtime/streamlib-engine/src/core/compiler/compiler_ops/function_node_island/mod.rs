@@ -76,17 +76,27 @@ pub(crate) enum HowALinkIsWired {
 }
 
 /// The input port of the reader `island_link_id` carries its island to that
-/// the channel of `link_id`, into one of the island's function nodes, is wired
+/// the channel of `link`, into one of the island's function nodes, is wired
 /// into: one for each island link, so two islands one reader evaluates never
-/// take each other's messages.
+/// take each other's messages. A link into the whole input takes a port of its
+/// own; every link ending at a member of one bundle input shares one, where the
+/// reader builds the members it reads into one message.
 ///
 /// Wire contract with the helper bootstrap: an island node's `links_into`
 /// entry names it as `{"port", "from": {"reader_input_port"}}`.
 pub(crate) fn the_reader_input_port_a_link_into_a_function_node_is_read_at(
-    link_id: &LinkUniqueId,
+    link: &Link,
     island_link_id: &LinkUniqueId,
 ) -> String {
-    format!("function_node_island_input_{link_id}_{island_link_id}")
+    let to = link.to_port();
+    match to.member() {
+        None => format!("function_node_island_input_{}_{island_link_id}", link.id),
+        Some(_) => format!(
+            "function_node_island_members_of_{}_{}_{island_link_id}",
+            to.node_run_id(),
+            to.port_name()
+        ),
+    }
 }
 
 /// Whether `node_id` is a function node that runs inside the read of each
@@ -191,6 +201,10 @@ fn open_a_read_of_a_link_at_the_reader_of_an_island_link_unless_open(
     if is_read_by_the_reader_of_an_island_link(graph, link_id, island_link_id) {
         return Ok(());
     }
+    let reader_input_port = the_reader_input_port_a_link_into_a_function_node_is_read_at(
+        link_in(graph, link_id)?,
+        island_link_id,
+    );
     let reader_id = link_in(graph, island_link_id)?
         .to_port()
         .node_run_id()
@@ -215,10 +229,7 @@ fn open_a_read_of_a_link_at_the_reader_of_an_island_link_unless_open(
         graph,
         link_id,
         island_link_id,
-        InputLinkPortRef::new(
-            reader_id,
-            the_reader_input_port_a_link_into_a_function_node_is_read_at(link_id, island_link_id),
-        ),
+        InputLinkPortRef::new(reader_id, reader_input_port),
         iceoryx2_node,
     )
 }

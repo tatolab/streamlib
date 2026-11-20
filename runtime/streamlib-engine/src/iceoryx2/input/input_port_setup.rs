@@ -47,6 +47,7 @@ fn windowed_port_config(
             )),
         )),
         dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
+        newest_value_of_each_member_put_at_the_read: serde_json::Map::new(),
         borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
     }
 }
@@ -89,6 +90,7 @@ impl InputMailboxesInner {
                 mailbox: PortMailbox::new(buffer_size, read_mode),
                 audio_windowing: InstalledInputPortAudioWindowing::NotWindowed,
                 dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
+                newest_value_of_each_member_put_at_the_read: serde_json::Map::new(),
                 borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
             },
         );
@@ -116,6 +118,7 @@ impl InputMailboxesInner {
                 ),
                 audio_windowing: InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat,
                 dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
+                newest_value_of_each_member_put_at_the_read: serde_json::Map::new(),
                 borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
             },
         );

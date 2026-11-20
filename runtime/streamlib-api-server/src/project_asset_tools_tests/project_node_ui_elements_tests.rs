@@ -56,3 +56,29 @@ async fn each_element_is_listed_with_its_module_and_file_and_the_manifest_as_wri
     );
     assert_eq!(listed["unreadable_manifests"], json!([]));
 }
+
+#[tokio::test]
+async fn a_control_for_a_named_type_is_listed_with_the_types_import_path() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let node_ui_folder = served.project_directory().join("node_ui");
+    std::fs::create_dir_all(&node_ui_folder).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/every-pin-kind/node_ui/tatolab_node_ui.json"),
+        node_ui_folder.join("tatolab_node_ui.json"),
+    )
+    .unwrap();
+
+    let listed = served
+        .answered("list_project_node_ui_elements", json!({}))
+        .await;
+
+    let [row] = listed["elements"].as_array().unwrap().as_slice() else {
+        panic!("one element: {listed}");
+    };
+    assert_eq!(row["script_path"], "node_ui/sweep_on_its_wire.ts");
+    assert_eq!(
+        row["element"],
+        json!({ "kind": "control", "pin_type": "nodes.sweep:Sweep", "control": null })
+    );
+}

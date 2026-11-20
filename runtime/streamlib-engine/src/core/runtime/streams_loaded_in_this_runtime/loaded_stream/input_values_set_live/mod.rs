@@ -8,7 +8,7 @@
 //! leaves every value as it was. A set of no value on an unlinked Trigger input fires it instead,
 //! as `trigger_fires_set_live` says.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use parking_lot::RwLock;
 use uuid::Uuid;
@@ -25,12 +25,12 @@ use crate::core::error::WhyANodeOfAStreamIsNotRunning;
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
-    refuse_an_input_value_its_input_does_not_take, the_control_value_of_a_pin,
-    the_input_value_change, the_lifetime_of_the_input, the_words_of_an_input_set_twice_live,
+    a_live_set_replaces_an_earlier_one, refuse_an_input_value_its_input_does_not_take,
+    the_control_value_of_a_pin, the_input_value_change,
+    the_input_values_a_live_set_is_checked_against, the_lifetime_of_the_input,
+    the_words_of_an_input_set_twice_live,
 };
-use crate::core::graph::legacy_config_of_a_node::{
-    LegacyConfigOfANodeType, input_values_of_a_config_and_pin_values,
-};
+use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{Graph, GraphNode, NodeRunId};
 use crate::core::nodes::{NodeTypesOneStreamResolves, is_the_input_of_an_output_a_panel_writes};
 use crate::core::pubsub::RuntimeEvent;
@@ -179,15 +179,26 @@ pub(crate) fn set_the_input_values_live_and_hand_each_node_its_own(
 }
 
 /// Refuse `sets` when two of them name one input of one node, at the second, whatever else
-/// they set: the second value would replace the first before the node is handed either. A fire
-/// replaces nothing, so an input fired twice fires twice.
+/// they set, unless each names another member of it: the second value would replace the first
+/// before the node is handed either. A fire replaces nothing, so an input fired twice fires
+/// twice.
 fn refuse_an_input_set_twice(
     graph: &Graph,
     sets: &[InputValueToSetLive],
 ) -> std::result::Result<(), LiveInputValueSetRefusal> {
-    let mut inputs_set = HashSet::with_capacity(sets.len());
+    let mut members_set_of_each_input: HashMap<(Uuid, &str), Vec<Option<&str>>> =
+        HashMap::with_capacity(sets.len());
     for (set_index, set) in sets.iter().enumerate() {
-        if !is_a_fire(graph, set) && !inputs_set.insert((set.node, set.input.as_str())) {
+        if is_a_fire(graph, set) {
+            continue;
+        }
+        let member = set.member.as_deref();
+        let members_set = members_set_of_each_input
+            .entry((set.node, set.input.as_str()))
+            .or_default();
+        let set_twice = a_live_set_replaces_an_earlier_one(members_set, member);
+        members_set.push(member);
+        if set_twice {
             let node_name = graph
                 .node_by_uuid(set.node)
                 .map_or_else(|| set.node.to_string(), |node| node.display_name.clone());
@@ -198,6 +209,30 @@ fn refuse_an_input_set_twice(
         }
     }
     Ok(())
+}
+
+/// The live value each input `sets` set holds once every one of them is made, by node and input:
+/// the members several sets of one bundle input set, together, so each set is checked against
+/// the bundle the whole transaction leaves. A fire sets no value and is left out.
+fn the_live_value_each_input_holds_after_the_sets<'set>(
+    graph: &Graph,
+    sets: &'set [InputValueToSetLive],
+) -> HashMap<(Uuid, &'set str), Option<serde_json::Value>> {
+    let mut live_after_the_sets: HashMap<(Uuid, &str), Option<serde_json::Value>> = HashMap::new();
+    for set in sets.iter().filter(|set| !is_a_fire(graph, set)) {
+        let held = live_after_the_sets
+            .remove(&(set.node, set.input.as_str()))
+            .unwrap_or_else(|| graph.live_input_values().value_of(set.node, &set.input));
+        live_after_the_sets.insert(
+            (set.node, set.input.as_str()),
+            streamlib_project_repository::the_input_value_after_the_set(
+                held,
+                set.member.as_deref(),
+                set.value.as_ref(),
+            ),
+        );
+    }
+    live_after_the_sets
 }
 
 /// Set each of `sets` live in `graph`'s live values and answer how each node set on takes its
@@ -220,6 +255,7 @@ fn set_the_input_values_live(
     let mut value_sets: Vec<(usize, &InputValueToSetLive)> = Vec::with_capacity(sets.len());
     let mut set_on_each: Vec<&GraphNode> = Vec::with_capacity(sets.len());
     let mut fires: Vec<(usize, &InputValueToSetLive)> = Vec::new();
+    let live_after_the_sets = the_live_value_each_input_holds_after_the_sets(graph, sets);
     for (set_index, set) in sets.iter().enumerate() {
         let Some(set_on) = graph.node_by_uuid(set.node) else {
             return Ok(None);
@@ -238,17 +274,23 @@ fn set_the_input_values_live(
         if is_held_on_the_graph(graph, set_on, &set.input) {
             return Ok(None);
         }
+        let live_after_the_set = live_after_the_sets
+            .get(&(set.node, set.input.as_str()))
+            .cloned()
+            .flatten();
         refuse_an_input_value_its_input_does_not_take(
             graph.node_types_this_stream_resolves(),
             &NodeAnInputValueIsSetOn {
                 name: &set_on.display_name,
                 node_type: &set_on.node_type,
-                input_values_after_the_set: &input_values_of_a_config_and_pin_values(
-                    set_on.config.as_ref(),
-                    &set_on.pins,
+                input_values_after_the_set: &the_input_values_a_live_set_is_checked_against(
+                    set_on,
+                    &set.input,
+                    live_after_the_set.as_ref(),
                 ),
             },
             &set.input,
+            set.member.as_deref(),
             set.value.as_ref(),
         )
         .and_then(|()| {
@@ -256,7 +298,7 @@ fn set_the_input_values_live(
                 graph,
                 set_on,
                 &set.input,
-                set.value.as_ref(),
+                live_after_the_set.as_ref(),
             )
         })
         .map_err(|refusal| LiveInputValueSetRefusal::TheInputDoesNotTakeIt {
@@ -279,14 +321,20 @@ fn set_the_input_values_live(
         .zip(&set_on_each)
         .map(|((_, set), set_on)| InputValueSetLive {
             input: set.input.clone(),
-            live_value_before: graph.live_input_values().set(
+            live_value_before: graph.live_input_values().set_on_the_input_or_its_member(
                 set.node,
                 &set.input,
+                set.member.as_deref(),
                 set.value.clone(),
                 the_lifetime_of_the_input(set_on, &set.input),
             ),
             saved_value: set_on.pins.get(&set.input).cloned(),
-            linked_from: the_output_feeding_the_input(graph, set_on, &set.input),
+            linked_from: the_output_feeding_the_input(
+                graph,
+                set_on,
+                &set.input,
+                set.member.as_deref(),
+            ),
         });
     let made: Vec<InputValueSetLive> = sets
         .iter()
@@ -308,7 +356,9 @@ fn set_the_input_values_live(
     let changes_announced = value_sets
         .iter()
         .zip(&set_on_each)
-        .filter_map(|((_, set), set_on)| the_input_value_change(graph, set_on, &set.input))
+        .flat_map(|((_, set), set_on)| {
+            the_input_value_change(graph, set_on, &set.input, set.member.as_deref())
+        })
         .collect();
     let mut deliveries = Vec::new();
     let mut function_nodes_read_inside_an_island = Vec::new();
@@ -494,13 +544,18 @@ fn put_back_the_live_set(
         .collect()
 }
 
-/// The output that a link of `graph` feeds input `input` of `node` from, as `(node UUID, port)`.
+/// The output that a link of `graph` feeds input `input` of `node` from, as `(node UUID, port)`:
+/// the link feeding the whole input, else, for a set of `member`, the one ending at that member.
 pub(crate) fn the_output_feeding_the_input(
     graph: &Graph,
     node: &GraphNode,
     input: &str,
+    member: Option<&str>,
 ) -> Option<(Uuid, String)> {
-    let source = graph.link_into(&node.id, input)?.source();
+    let source = graph
+        .link_into(&node.id, input)
+        .or_else(|| graph.link_into_the_input_or_its_member(&node.id, input, Some(member?)))?
+        .source();
     graph
         .traversal()
         .v(source.node_run_id())
@@ -508,6 +563,10 @@ pub(crate) fn the_output_feeding_the_input(
         .map(|feeding| (feeding.node_uuid, source.port_name().to_owned()))
 }
 
+#[cfg(test)]
+mod bundle_member_links_tests;
+#[cfg(test)]
+mod bundle_member_sets_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

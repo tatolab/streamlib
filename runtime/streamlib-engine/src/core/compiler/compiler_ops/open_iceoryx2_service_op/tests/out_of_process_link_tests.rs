@@ -48,6 +48,7 @@ fn record_wiring_for_both_out_of_process_endpoints(
         1,
         link_id,
         None,
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("recording dest wiring must succeed");
 }
@@ -394,6 +395,7 @@ fn a_helper_placed_nodes_metrics_carry_exactly_the_keys_an_app_process_ones_do()
         1,
         &"L-helper-windowed".into(),
         declared,
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("a windowed helper port wires");
 
@@ -722,6 +724,7 @@ fn a_link_between_an_engine_endpoint_and_a_helper_reclaims_each_its_own_way() {
         1,
         &link_id,
         None,
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("recording dest wiring must succeed");
     assert!(source_output.has_channel_publisher("out1"));

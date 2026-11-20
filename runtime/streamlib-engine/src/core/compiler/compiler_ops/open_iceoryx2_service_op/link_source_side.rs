@@ -15,9 +15,9 @@ use crate::core::graph::{
 use crate::core::nodes::{NodeInstance, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope};
 use crate::core::output_port_stream_facts::StreamFactsOfOutputPorts;
 use crate::iceoryx2::{
-    ChannelEgressConfig, ChannelSizing, ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES,
-    DeliveryProfile, DeliveryResolution, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
-    effective_channel_chunk_ceiling_bytes,
+    BundleMembersAtTheRead, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
+    Iceoryx2NotifyService, Iceoryx2Service, effective_channel_chunk_ceiling_bytes,
 };
 use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
 
@@ -304,6 +304,7 @@ pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
         max_notifiers: MAX_INBOUND_LINKS_PER_DESTINATION,
         room_for_a_windowed_reader_joining_later:
             RoomForAWindowedReaderTheSourcesGraphCannotSee::Made,
+        bundle_members_at_the_read: BundleMembersAtTheRead::default(),
     };
     let opened = open_the_source_side_of_a_link(
         source_graph,

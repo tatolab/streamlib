@@ -38,7 +38,14 @@ mod function_node_island_feeding;
 mod inbound_link_accounting;
 mod input_port_mailbox_reads;
 mod input_port_setup;
+mod member_put_at_the_read;
+mod member_taken_at_the_read;
 mod queued_trigger_fires;
+
+pub use member_put_at_the_read::{
+    BundleMembersAtTheRead, MemberPutAtTheRead, WhatTheMembersArePutInto,
+};
+pub use member_taken_at_the_read::MemberTakenAtTheRead;
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
 /// mixdown and framing work runs with that mutex released.
@@ -144,6 +151,9 @@ struct PortBoundSubscriber {
     /// This link's share of the destination's discarded-sample counts, held only
     /// by a link into a windowed port.
     discarded_sample_counter: Option<InboundLinkDiscardedSampleCounter>,
+    /// The bundle members this link reads: the one it takes from each message of its output's
+    /// bundle as it arrives, and the one of its input's bundle it puts that value into.
+    bundle_members_at_the_read: BundleMembersAtTheRead,
     /// What this subscriber's ring has overwritten, read off jumps in the
     /// numbering of the publisher that is sending it — one unbroken run per
     /// publisher, so a replaced producer is a baseline rather than a gap.
@@ -165,12 +175,12 @@ impl InboundLinkSubscribersAndListener {
     /// Remove the subscriber serving `link_id`, returning the local input port it
     /// was bound to (so the caller can decide whether that port's mailbox is now
     /// orphaned). `None` if no subscriber matches — a no-op.
-    fn remove_by_link(&mut self, link_id: &str) -> Option<String> {
+    fn remove_by_link(&mut self, link_id: &str) -> Option<PortBoundSubscriber> {
         let position = self
             .subscribers
             .iter()
             .position(|bound| bound.link_id == link_id)?;
-        Some(self.subscribers.remove(position).local_port)
+        Some(self.subscribers.remove(position))
     }
 
     /// Whether any remaining subscriber is still bound to `local_port`.
@@ -279,6 +289,9 @@ struct PortConfig {
     /// to the reader, until the reader counts that bag lost. `None` before any
     /// read, after the count, and for a bag no link delivered or a window.
     dropped_bag_counter_of_the_bag_last_handed_to_the_reader: Option<InboundLinkDroppedBagCounter>,
+    /// The newest value each link ending at a member of the bundle this port reads has carried,
+    /// by member; empty for a port no such link feeds.
+    newest_value_of_each_member_put_at_the_read: serde_json::Map<String, serde_json::Value>,
 }
 
 /// How one port windows what arrives on it.

@@ -6,10 +6,12 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectTransactionsResourceContents,
 };
 
+use super::worked_examples;
 use super::{EVERY_SURFACE, EVERY_SURFACE_BUT_THE_AGENT_SURFACE};
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListStreamsRequest, LogsRequest,
@@ -124,7 +126,7 @@ impl ControlOperation for SubscribeInputValueChanges {
     type Result = SubscribeInputValueChangesResult;
     const METHOD_NAME: &'static str = "subscribe_input_value_changes";
     const ONE_LINE_DOC: &'static str = "Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.";
-    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. A bundle input's change is sent for each member it changes, naming the `member`, with the `value` and `value_comes_from` of that member's row of `member_values`. Changes are sent at most once each 33 ms for one input, or one member of a bundle input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
@@ -167,7 +169,8 @@ impl ControlOperation for DescribeRuntime {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ListedAsATool;
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_RUNTIME);
 }
 
 /// `list_streams`: every stream the runtime holds, with its state.
@@ -187,6 +190,7 @@ impl ControlOperation for ListStreams {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_STREAMS);
 }
 
 /// `graph`: a loaded stream's graph, or every loaded stream's.
@@ -205,6 +209,7 @@ impl ControlOperation for Graph {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::GRAPH);
 }
 
 /// `logs`: read a project's log records after a cursor, oldest first.
@@ -223,4 +228,5 @@ impl ControlOperation for Logs {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LOGS);
 }

@@ -34,7 +34,8 @@ pub(super) fn is_a_fire(graph: &Graph, set: &InputValueToSetLive) -> bool {
 }
 
 /// Refuse the fire `set`, at `set_index`, of a Trigger input of `set_on` in `graph` that no
-/// running node reads: one sending a value, one into a function or shader node, whose reader
+/// running node reads: one naming a member, which a Trigger, no bundle, does not have, one sending
+/// a value, one into a function or shader node, whose reader
 /// wakes on no message, one a link feeds, whose messages are its only events, and one of a node
 /// that does not run, `why_a_node_not_built_does_not_run` saying why when it has not failed.
 pub(super) fn refuse_a_fire_no_running_node_reads(
@@ -50,6 +51,15 @@ pub(super) fn refuse_a_fire_no_running_node_reads(
         set_index,
         refusal: InputValueRefusal { code, words },
     };
+    if let Some(member) = &set.member {
+        return Err(refused(
+            InputValueRefusalCode::InputValueNotValid,
+            format!(
+                "input `{input}` of `{node_name}` is a Trigger, no bundle, so it has no member \
+                 `{member}` to fire. To fix: leave `member` out to fire the input"
+            ),
+        ));
+    }
     if set.value.as_ref().is_some_and(|value| !value.is_null()) {
         return Err(LiveInputValueSetRefusal::TheInputDoesNotTakeIt {
             set_index,

@@ -16,8 +16,11 @@ control message, one f64 sample on one channel at rate 0, a Color, Vector,
 Rectangle or Transform output one f64 sample on each channel of its parts, a
 String, Menu, Asset or List as its type packs, a Records message `{"value": ...}`
 or an Array frame for a List of numbers or values of parts, which an input of
-one reads back, a `dict` output as a Records message, and an `UnreadMessage`
-output exactly as the message arrived.
+one reads back, a `dict` output as a Records message, a value of a named type
+as the Bytes message its class packs, and an `UnreadMessage` output exactly as
+the message arrived. A named type's input that may take `None` holds `None`
+until a value arrives, and every other input holds back the call until one
+does.
 """
 
 from __future__ import annotations
@@ -45,11 +48,13 @@ from tatolab.runtime._engine import (
     hand_an_unread_message_on,
     read_the_control_value_at_an_input_port,
     read_the_message_at_an_input_port_unread,
+    read_the_named_value_at_an_input_port,
     read_the_parts_at_an_input_port,
     read_the_stored_value_at_an_input_port,
+    write_the_named_value_on_an_output_port,
     write_the_stored_value_on_an_output_port,
 )
-from tatolab.runtime._function_node_carried_values import PART_VALUE_TYPES
+from tatolab.runtime._function_node_carried_values import NAMED_VALUE_TYPE, PART_VALUE_TYPES
 from tatolab.runtime._function_node_stored_values import STORED_VALUE_TYPES
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeBodyRunAsPython,
@@ -73,7 +78,7 @@ def the_node_class_a_promoted_function_node_runs_as(
 ) -> type:
     """A `@node.process` class whose `process` calls `function_node`, compiled or as Python, once per run of its loop."""
     prepared = prepare_function_node_to_evaluate(function_node, import_path)
-    ports_carrying_records = _ports_carrying_records(prepared)
+    ports_carrying_records = _ports_carrying_records(prepared) | _ports_carrying_a_named_value(prepared)
     config_class: Optional[type] = getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
     ports_named_like_a_runner_member = sorted(
         port
@@ -212,6 +217,7 @@ class _FunctionNodeRunAsAStandaloneNode:
         ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
         value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
         pin_types_of_stored_values = _pin_types_of_the_stored_values_it_carries(prepared)
+        ports_carrying_a_named_value = _ports_carrying_a_named_value(prepared)
         for input_index, input_port in enumerate(prepared.input_ports):
             if input_port in ports_carrying_an_unread_message:
                 self._input_values[input_index] = read_the_message_at_an_input_port_unread(
@@ -231,6 +237,12 @@ class _FunctionNodeRunAsAStandaloneNode:
                     input_port=input_port,
                     pin_type=json.dumps(pin_types_of_stored_values[input_port]),
                 )
+            elif value_type == NAMED_VALUE_TYPE:
+                read = read_the_named_value_at_an_input_port(
+                    link_data_access=self._link_data_access,
+                    node_id=self._node_id,
+                    input_port=input_port,
+                )
             elif value_type in PART_VALUE_TYPES:
                 read = read_the_parts_at_an_input_port(
                     link_data_access=self._link_data_access,
@@ -244,17 +256,20 @@ class _FunctionNodeRunAsAStandaloneNode:
                 )
             if read is not None:
                 self._input_values[input_index] = read
-        input_values = [value for value in self._input_values if value is not None]
-        if len(input_values) != len(self._input_values):
+        inputs_that_may_hold_none = _named_inputs_that_take_none(prepared)
+        if any(
+            value is None and input_port not in inputs_that_may_hold_none
+            for input_port, value in zip(prepared.input_ports, self._input_values)
+        ):
             return
         output_values = self._evaluation.evaluate(
-            [*input_values, *self._compiled_config_values_handed_to_each_call]
+            [*self._input_values, *self._compiled_config_values_handed_to_each_call]
         )
         for output_port, output_value in zip(prepared.output_ports, output_values):
             if output_value is None:
                 continue
             if output_port in ports_carrying_an_unread_message:
-                if isinstance(output_value, (int, float, dict)):
+                if isinstance(output_value, (int, float, dict, bytes)):
                     raise TypeError(
                         f"output {output_port!r} hands on an `UnreadMessage`, and the node gave {output_value!r}"
                     )
@@ -266,6 +281,17 @@ class _FunctionNodeRunAsAStandaloneNode:
                 continue
             if output_port in ports_carrying_records:
                 ctx.outputs.write(getattr(type(self), output_port), output_value)
+                continue
+            if output_port in ports_carrying_a_named_value:
+                if not isinstance(output_value, bytes):
+                    raise TypeError(
+                        f"output {output_port!r} carries a named type, and the node gave {output_value!r}"
+                    )
+                write_the_named_value_on_an_output_port(
+                    link_data_access=self._link_data_access,
+                    output_port=output_port,
+                    payload=output_value,
+                )
                 continue
             if output_port in pin_types_of_stored_values:
                 if not isinstance(output_value, dict):
@@ -300,6 +326,28 @@ def _ports_carrying_an_unread_message(prepared: FunctionNodeReadyToEvaluate) -> 
             prepared.output_ports[output_index]
             for output_index in how_its_values_are_carried["outputs_carrying_an_unread_message"]
         ]
+    )
+
+
+def _ports_carrying_a_named_value(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":
+    """Each port of a named type, which a node declares on Records."""
+    return frozenset(
+        port
+        for ports, value_types in (
+            (prepared.input_ports, prepared.input_value_types),
+            (prepared.output_ports, _the_output_value_types_of(prepared)),
+        )
+        for port, value_type in zip(ports, value_types)
+        if value_type == NAMED_VALUE_TYPE
+    )
+
+
+def _named_inputs_that_take_none(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":
+    """Each input of a named type that may take `None`, which the node is called without."""
+    return frozenset(
+        prepared.input_ports[input_index]
+        for input_index in prepared.how_its_values_are_carried["inputs_that_take_none"]
+        if prepared.input_value_types[input_index] == NAMED_VALUE_TYPE
     )
 
 

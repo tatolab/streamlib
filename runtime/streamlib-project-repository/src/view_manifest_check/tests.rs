@@ -262,19 +262,3 @@ fn an_imports_views_folder_that_does_not_read_keeps_no_own_view_from_being_check
 
     assert_eq!(checked.files_checked.len(), 1);
 }
-
-#[test]
-fn only_a_manifest_directly_in_a_views_folder_is_one_the_check_owns() {
-    assert!(is_the_manifest_of_a_projects_own_view(
-        "views/typed/tatolab_view.json"
-    ));
-    for path in [
-        "nodes/blur.py",
-        "views/tatolab_view.json",
-        "views//tatolab_view.json",
-        "views/typed/dist/tatolab_view.json",
-        "imports/levels/views/meter/tatolab_view.json",
-    ] {
-        assert!(!is_the_manifest_of_a_projects_own_view(path), "{path}");
-    }
-}

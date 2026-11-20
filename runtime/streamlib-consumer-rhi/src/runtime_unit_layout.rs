@@ -173,6 +173,23 @@ pub fn runtime_client_package_directory_beside_the_lend(lend_directory: &Path) -
     )
 }
 
+/// The directory beside the lend that holds the extension SDK's kit: the declarations, strict
+/// options and rules a project's views and controls are checked against, as data. A Tato Studio
+/// places the kit its own SDK build wrote, so its runtime checks against what that Studio draws
+/// with.
+pub const EXTENSION_SDK_KIT_DIRECTORY_NAME: &str = "extension-sdk";
+
+/// The extension SDK kit's directory beside the lend at `lend_directory`, or `None` for a lend
+/// at the filesystem root: `lib/tatolab/extension-sdk/` in a runtime unit, and
+/// `Contents/Resources/extension-sdk/` in a macOS app bundle.
+pub fn extension_sdk_kit_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(EXTENSION_SDK_KIT_DIRECTORY_NAME),
+    )
+}
+
 /// The directory beside the lend that holds the third-party wheels the core
 /// modules require, for the unit's own platform, which every project's sync
 /// finds through its `.tatolab/carried-wheels` link before any index.

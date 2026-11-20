@@ -5,15 +5,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use streamlib_project_repository::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
-    is_a_graph_interface_node_type,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
+    StreamGraphOperation, is_a_graph_interface_node_type,
 };
 
 use uuid::Uuid;
 
 use crate::core::descriptors::{NodeClassImportPath, PortDescriptor};
 use crate::core::graph::legacy_config_of_a_node::{
-    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
+    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_of_a_document_node,
 };
 use crate::core::graph::{
     ALinkConnected, LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
@@ -91,17 +91,11 @@ impl LoadedStreamInThisRuntime {
                 .await?;
                 let (mut node, links) =
                     self.the_added_node_under_the_current_port_names(node, links);
-                let mut spec = node_spec_holding_the_input_values(
+                let spec = node_spec_of_a_document_node(
                     self.node_types_this_stream_resolves(),
                     node_type,
-                    &node.input_values,
-                    node.studio.to_map(),
-                )
-                .with_exposed_config_fields(node.exposed_config_fields.clone())
-                .with_node_uuid(node.id);
-                if !node.name.is_empty() {
-                    spec = spec.with_display_name(node.name.clone());
-                }
+                    &node,
+                );
                 let a_node_held_the_uuid_before_the_add =
                     self.the_node_of_the_node(node.id).is_ok();
                 let added = match self.add_node_async(spec).await {
@@ -128,14 +122,18 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::RemoveNode { node, links })
             }
             StreamGraphOperation::Connect { link } => {
-                if self.the_link_held_between(&link)?.is_none() {
+                if self.the_links_the_link_is_wired_as(&link)?.is_none() {
                     self.connect_the_link(&link).await?;
                 }
                 Ok(StreamGraphOperation::Connect { link })
             }
             StreamGraphOperation::Disconnect { link } => {
-                match self.the_link_held_between(&link)? {
-                    Some(link_id) => self.disconnect_async(link_id).await?,
+                match self.the_links_the_link_is_wired_as(&link)? {
+                    Some(wired_as) => {
+                        for link_id in wired_as {
+                            self.disconnect_async(link_id).await?;
+                        }
+                    }
                     None if Self::the_link_by_node_uuid(&link)
                         .is_some_and(|link| self.forget_the_link_set_aside(&link)) => {}
                     None if disconnects_a_port_by_a_name_it_had => {}
@@ -143,9 +141,9 @@ impl LoadedStreamInThisRuntime {
                         return Err(Error::GraphError(format!(
                             "stream `{}` holds no link {}/{} -> {}/{}",
                             self.stream_id(),
-                            link.source.node,
+                            self.the_name_of_the_node(link.source.node),
                             link.source.port,
-                            link.target.node,
+                            self.the_name_of_the_node(link.target.node),
                             link.target.port
                         )));
                     }
@@ -163,7 +161,7 @@ impl LoadedStreamInThisRuntime {
                 from,
                 to,
             } => {
-                self.set_pin_value(&self.the_node_of_the_node(node)?, &input, to.clone())?;
+                self.set_pin_value(&self.the_node_of_the_node(node)?, &input, None, to.clone())?;
                 Ok(StreamGraphOperation::SetPinValue {
                     node,
                     input,
@@ -174,14 +172,16 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::SetNodeInputValue {
                 node,
                 input,
+                member,
                 from,
                 to,
             } => {
-                self.set_one_input_value_of_the_node(node, &input, to.clone())
+                self.set_one_input_value_of_the_node(node, &input, member.as_deref(), to.clone())
                     .await?;
                 Ok(StreamGraphOperation::SetNodeInputValue {
                     node,
                     input,
+                    member,
                     from,
                     to,
                 })
@@ -265,7 +265,7 @@ impl LoadedStreamInThisRuntime {
     pub(crate) async fn reconcile_each_stream_fragment_to_the_stream_it_references(
         &self,
     ) -> Result<()> {
-        let graph_as_drawn = self.to_json()?;
+        let graph_as_drawn = self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?;
         self.reconcile_the_live_graph_to_the_graph_document(
             graph_as_drawn,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
@@ -279,7 +279,7 @@ impl LoadedStreamInThisRuntime {
         &self,
         mut graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
-        let graph_as_drawn = self.to_json()?;
+        let graph_as_drawn = self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?;
         let mut graph_document =
             StreamGraphDocument::from_value(graph_as_drawn.clone()).map_err(Error::GraphError)?;
         if let StreamGraphOperation::AddNode { node, .. } = &mut graph_operation {
@@ -329,6 +329,25 @@ impl LoadedStreamInThisRuntime {
             return Err(refusal);
         }
         Ok(graph_operation)
+    }
+
+    /// This stream's graph as drawn without the nodes and links an earlier edit of the graph
+    /// edits held for one commit took out, which stay drawn, pending deletion, until it closes:
+    /// a reconcile to a document holding them would place them again.
+    fn the_graph_as_drawn_once_what_is_pending_deletion_leaves(&self) -> Result<serde_json::Value> {
+        let mut graph_as_drawn = self.to_json()?;
+        let is_pending_deletion = |drawn: &serde_json::Value| {
+            drawn
+                .pointer("/components/pending_deletion")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
+        for drawn_entities in ["nodes", "links"] {
+            if let Some(serde_json::Value::Array(drawn)) = graph_as_drawn.get_mut(drawn_entities) {
+                drawn.retain(|drawn| !is_pending_deletion(drawn));
+            }
+        }
+        Ok(graph_as_drawn)
     }
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
@@ -411,21 +430,23 @@ impl LoadedStreamInThisRuntime {
         self.update_node_config_compiled_right_away(&node_run_id, &config)
             .await?;
         for input in pin_values_cleared {
-            self.set_pin_value(&node_run_id, &input, None)?;
+            self.set_pin_value(&node_run_id, &input, None, None)?;
         }
         for (input, value) in pin_values {
-            self.set_pin_value(&node_run_id, &input, Some(value))?;
+            self.set_pin_value(&node_run_id, &input, None, Some(value))?;
         }
         Ok(())
     }
 
-    /// Set the input value `input` of `node` to `value`, `None` taking it off: a setting its
-    /// type holds in its config is set in the config the node holds once each config update
-    /// already logged for it is applied, any other on its input.
+    /// Set the input value `input` of `node`, or its member `member` when one is named, to
+    /// `value`, `None` taking it off: a setting its type holds in its config is set in the config
+    /// the node holds once each config update already logged for it is applied, any other on its
+    /// input.
     async fn set_one_input_value_of_the_node(
         &self,
         node: Uuid,
         input: &str,
+        member: Option<&str>,
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         let node_run_id = self.the_node_of_the_node(node)?;
@@ -440,7 +461,7 @@ impl LoadedStreamInThisRuntime {
         let legacy_config =
             LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
         if !legacy_config.is_a_config_field(input) {
-            return self.set_pin_value(&node_run_id, input, value);
+            return self.set_pin_value(&node_run_id, input, member, value);
         }
         self.update_node_config_built_from_the_one_it_holds(&node_run_id, |config_held| {
             let mut config = match config_held.unwrap_or_default() {
@@ -453,10 +474,14 @@ impl LoadedStreamInThisRuntime {
                     )));
                 }
             };
-            match value {
-                Some(value) => config.insert(input.to_owned(), value),
-                None => config.remove(input),
-            };
+            let held = config.remove(input);
+            if let Some(after_the_set) = streamlib_project_repository::the_input_value_after_the_set(
+                held,
+                member,
+                value.as_ref(),
+            ) {
+                config.insert(input.to_owned(), after_the_set);
+            }
             Ok(serde_json::Value::Object(config))
         })
         .await
@@ -472,6 +497,15 @@ impl LoadedStreamInThisRuntime {
                 .iter()
                 .find(|held| held.node_uuid == node)
                 .is_some_and(|held| is_a_graph_interface_node_type(held.node_type.as_str()))
+        })
+    }
+
+    /// The name the node `node` was given, or its UUID when the stream holds no such node.
+    fn the_name_of_the_node(&self, node: Uuid) -> String {
+        self.compiler.scope_reading(|graph| {
+            graph
+                .node_by_uuid(node)
+                .map_or_else(|| node.to_string(), |held| held.display_name.clone())
         })
     }
 
@@ -631,12 +665,12 @@ impl LoadedStreamInThisRuntime {
             }
         };
         let held = match held_direction {
-            PortDirection::Output => {
-                ALinkEndTheGraphHolds::Output(OutputLinkPortRef::new(node_run_id, &held.port))
-            }
-            PortDirection::Input => {
-                ALinkEndTheGraphHolds::Input(InputLinkPortRef::new(node_run_id, &held.port))
-            }
+            PortDirection::Output => ALinkEndTheGraphHolds::Output(
+                OutputLinkPortRef::new(node_run_id, &held.port).at_member(held.member.clone()),
+            ),
+            PortDirection::Input => ALinkEndTheGraphHolds::Input(
+                InputLinkPortRef::new(node_run_id, &held.port).at_member(held.member.clone()),
+            ),
         };
         let node_types = self.node_types_this_stream_resolves();
         let mut answers = Vec::with_capacity(node_types_ports.len());
@@ -689,11 +723,13 @@ impl LoadedStreamInThisRuntime {
             OutputLinkPortRef::new(
                 self.the_node_of_the_node(link.source.node)?,
                 &link.source.port,
-            ),
+            )
+            .at_member(link.source.member.clone()),
             InputLinkPortRef::new(
                 self.the_node_of_the_node(link.target.node)?,
                 &link.target.port,
-            ),
+            )
+            .at_member(link.target.member.clone()),
         ))
     }
 
@@ -703,39 +739,56 @@ impl LoadedStreamInThisRuntime {
         link: &StreamGraphDocumentLink,
     ) -> Option<RunningLinkBetweenTwoNodesByUuid> {
         RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
-            link.source.node,
-            &link.source.port,
-            link.target.node,
-            &link.target.port,
+            (
+                link.source.node,
+                &link.source.port,
+                link.source.member.as_deref(),
+            ),
+            (
+                link.target.node,
+                &link.target.port,
+                link.target.member.as_deref(),
+            ),
         )
         .ok()
     }
 
-    /// The live link `link` names by its ends; `None` when the live graph holds none, and
-    /// refused when either end names a node it does not hold or a name that does not cast.
-    fn the_link_held_between(
+    /// The links the live graph holds `link` as, named by its ends: itself, or the two links
+    /// one the function node pool carries is wired as, which a disconnect of it takes out
+    /// together; `None` when the live graph holds none, and refused when either end names a
+    /// node it does not hold or a name that does not cast.
+    fn the_links_the_link_is_wired_as(
         &self,
         link: &StreamGraphDocumentLink,
-    ) -> Result<Option<LinkUniqueId>> {
-        let source = self.the_node_of_the_node(link.source.node)?;
-        let target = self.the_node_of_the_node(link.target.node)?;
-        let source_port = cast_exposed_name_to_url_safe(&link.source.port)?;
-        let target_port = cast_exposed_name_to_url_safe(&link.target.port)?;
-        Ok(self.compiler.scope(|graph, _tx| {
-            graph
-                .traversal()
-                .v(&source)
-                .out_e()
-                .iter()
-                .find(|held| {
-                    graph.stands(held)
-                        && held.source.port_name() == source_port
-                        && *held.target.node_run_id() == target
-                        && held.target.port_name() == target_port
-                })
-                .map(|held| held.id.clone())
-        }))
+    ) -> Result<Option<Vec<LinkUniqueId>>> {
+        self.the_node_of_the_node(link.source.node)?;
+        self.the_node_of_the_node(link.target.node)?;
+        let link_as_given = RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
+            (
+                link.source.node,
+                &link.source.port,
+                link.source.member.as_deref(),
+            ),
+            (
+                link.target.node,
+                &link.target.port,
+                link.target.member.as_deref(),
+            ),
+        )?;
+        Ok(self
+            .the_live_links_by_node_uuid()
+            .into_iter()
+            .find(|live_link| live_link.link_as_given == link_as_given)
+            .map(|live_link| live_link.wired_as))
     }
+}
+
+/// Whether `node`, a node of a graph document, runs as no node of its own: a fragment, a stream
+/// fragment, or a `GraphInput` or `GraphOutput` naming no family.
+pub(in crate::core::runtime) fn runs_as_no_node_of_its_own(node: &StreamGraphDocumentNode) -> bool {
+    node.fragment.is_some()
+        || node.node_type == STREAM_FRAGMENT_NODE_TYPE
+        || is_a_graph_interface_node_naming_no_family(&node.node_type, &node.input_values)
 }
 
 /// How a link with a port of a node type is judged: answered before any node is placed, or on a
@@ -799,6 +852,7 @@ fn how_a_node_types_port_is_judged(
         node_type,
         ports_of_its_direction,
         port.port,
+        port.member,
     )))
 }
 

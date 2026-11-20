@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
-use streamlib_node_schema::pin_type::BuiltInPinTypeName;
+use streamlib_node_schema::pin_type::{BuiltInPinTypeName, NamedPinTypeImportPath};
 
 /// What a module's `node_ui/tatolab_node_ui.json` registers.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -34,7 +34,7 @@ pub struct NodeUiManifest {
 pub struct NodeUiManifestControl {
     /// The pin type whose inputs the control edits or shows.
     #[serde(rename = "type")]
-    pub pin_type: BuiltInPinTypeName,
+    pub pin_type: NodeUiControlPinType,
     /// The control's name, which a pin's `control` annotation picks it by. Left out, the control
     /// is its pin type's default.
     #[serde(
@@ -46,6 +46,50 @@ pub struct NodeUiManifestControl {
     pub control: Option<String>,
     /// The script that default-exports the control's element class, inside the node UI folder.
     pub script: String,
+}
+
+/// The pin type a control is registered for: a built-in type by its name, as `float`, or a
+/// module's named type by the import path of the class that declares it, as
+/// `nodes.sensor:SensorReading`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum NodeUiControlPinType {
+    /// A built-in type, whose default control only the Studio's own module registers.
+    BuiltIn(BuiltInPinTypeName),
+    /// A module's named type, whose default control only the module that declares it registers.
+    Named(NamedPinTypeImportPath),
+}
+
+impl NodeUiControlPinType {
+    /// The type as a manifest writes it, as `float` or `nodes.sensor:SensorReading`.
+    pub fn as_written(&self) -> String {
+        match self {
+            Self::BuiltIn(name) => serde_json::to_value(name)
+                .ok()
+                .and_then(|name| name.as_str().map(str::to_owned))
+                .unwrap_or_default(),
+            Self::Named(import_path) => import_path.as_str().to_owned(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeUiControlPinType {
+    /// A name with a `:` between a module and a class is a named type, and any other a
+    /// built-in type's name, so a misspelled built-in name is refused naming the built-in names.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let written = String::deserialize(deserializer)?;
+        if written.contains(':') {
+            NamedPinTypeImportPath::new(written)
+                .map(Self::Named)
+                .map_err(D::Error::custom)
+        } else {
+            BuiltInPinTypeName::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(
+                written,
+            ))
+            .map(Self::BuiltIn)
+        }
+    }
 }
 
 /// A node body a module registers for one node type.
@@ -124,7 +168,7 @@ pub enum ProjectNodeUiElement {
     /// A control, which edits or shows an input of one pin type.
     Control {
         /// The pin type whose inputs it edits or shows.
-        pin_type: BuiltInPinTypeName,
+        pin_type: NodeUiControlPinType,
         /// Its name, which a pin's `control` annotation picks it by; `null` for its pin type's
         /// default.
         control: Option<String>,

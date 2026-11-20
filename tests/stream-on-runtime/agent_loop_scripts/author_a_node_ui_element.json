@@ -1,0 +1,270 @@
+{
+  "script": "author_a_node_ui_element",
+  "task": {
+    "statement": "In the project of the one stream the runtime holds, start a control named knob for float inputs from the extension SDK kit's template, as node_ui/knob.ts, and check that it passes; read it, write into it a knob drawn as a range slider that sets the slider's string value to the float, check it and read the refusal's code and place; write it again setting the slider's number value, and check that it passes.",
+    "givens": {
+      "element": {
+        "kind": "control",
+        "pin_type": "float",
+        "control": "knob"
+      },
+      "script": "knob.ts",
+      "script_path": "node_ui/knob.ts",
+      "manifest_path": "node_ui/tatolab_node_ui.json",
+      "control_source_with_a_mistake": "import type { ControlledPin, InputControlElement, InputControlState, StoredPinValue } from \"@tatolab/tato-app-view-sdk/node_ui\";\n\ntype PinTypeName = \"float\";\n\nexport default class Knob extends HTMLElement implements InputControlElement<PinTypeName> {\n  readonly #slider = document.createElement(\"input\");\n\n  constructor() {\n    super();\n    this.#slider.type = \"range\";\n    this.attachShadow({ mode: \"open\" }).append(this.#slider);\n  }\n\n  set pin({ declaration }: ControlledPin<PinTypeName>) {\n    this.#slider.setAttribute(\"aria-label\", declaration.label);\n  }\n\n  set value(value: StoredPinValue<PinTypeName>) {\n    this.#slider.value = value;\n  }\n\n  set state(state: InputControlState) {\n    this.#slider.disabled = state !== \"editable\";\n  }\n}\n",
+      "control_source_fixed": "import type { ControlledPin, InputControlElement, InputControlState, StoredPinValue } from \"@tatolab/tato-app-view-sdk/node_ui\";\n\ntype PinTypeName = \"float\";\n\nexport default class Knob extends HTMLElement implements InputControlElement<PinTypeName> {\n  readonly #slider = document.createElement(\"input\");\n\n  constructor() {\n    super();\n    this.#slider.type = \"range\";\n    this.attachShadow({ mode: \"open\" }).append(this.#slider);\n  }\n\n  set pin({ declaration }: ControlledPin<PinTypeName>) {\n    this.#slider.setAttribute(\"aria-label\", declaration.label);\n  }\n\n  set value(value: StoredPinValue<PinTypeName>) {\n    this.#slider.valueAsNumber = value;\n  }\n\n  set state(state: InputControlState) {\n    this.#slider.disabled = state !== \"editable\";\n  }\n}\n",
+      "refused_line": 19
+    }
+  },
+  "steps": [
+    {
+      "name": "streams",
+      "tool": "list_streams",
+      "arguments": {},
+      "expect": [
+        {
+          "at": "/streams",
+          "has_length": 1
+        }
+      ]
+    },
+    {
+      "name": "created",
+      "tool": "create_node_ui_element",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "element": {
+          "$given": "element"
+        },
+        "script": {
+          "$given": "script"
+        }
+      },
+      "expect": [
+        {
+          "at": "/script_path",
+          "equals": {
+            "$given": "script_path"
+          }
+        },
+        {
+          "at": "/manifest_path",
+          "equals": {
+            "$given": "manifest_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "checked_as_created",
+      "tool": "check_project_code",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "paths": [
+          {
+            "$given": "script_path"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "at": "/verdict",
+          "equals": "passed"
+        },
+        {
+          "at": "/findings",
+          "has_length": 0
+        },
+        {
+          "at": "/checks",
+          "holds_an_item_where": {
+            "/check": "extension_types",
+            "/state": "passed"
+          }
+        },
+        {
+          "at": "/checks",
+          "holds_an_item_where": {
+            "/check": "extension_lint",
+            "/state": "passed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "read",
+      "tool": "read_project_file",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "path": {
+          "$given": "script_path"
+        }
+      },
+      "expect": [
+        {
+          "at": "/path",
+          "equals": {
+            "$given": "script_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "written_with_a_mistake",
+      "tool": "write_project_file",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "path": {
+          "$given": "script_path"
+        },
+        "content": {
+          "$given": "control_source_with_a_mistake"
+        },
+        "expected_sha256": {
+          "$read": {
+            "step": "read",
+            "pointer": "/content_sha256"
+          }
+        }
+      },
+      "expect": [
+        {
+          "at": "/path",
+          "equals": {
+            "$given": "script_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "checked_with_a_mistake",
+      "tool": "check_project_code",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "paths": [
+          {
+            "$given": "script_path"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "at": "/verdict",
+          "equals": "failed"
+        },
+        {
+          "at": "/findings",
+          "holds_an_item_where": {
+            "/check": "extension_types",
+            "/finding_code": "TS2322",
+            "/severity": "error",
+            "/path": {
+              "$given": "script_path"
+            },
+            "/line": {
+              "$given": "refused_line"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "written_fixed",
+      "tool": "write_project_file",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "path": {
+          "$given": "script_path"
+        },
+        "content": {
+          "$given": "control_source_fixed"
+        },
+        "expected_sha256": {
+          "$read": {
+            "step": "written_with_a_mistake",
+            "pointer": "/content_sha256"
+          }
+        }
+      },
+      "expect": [
+        {
+          "at": "/path",
+          "equals": {
+            "$given": "script_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "checked_fixed",
+      "tool": "check_project_code",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "paths": [
+          {
+            "$given": "script_path"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "at": "/verdict",
+          "equals": "passed"
+        },
+        {
+          "at": "/findings",
+          "has_length": 0
+        },
+        {
+          "at": "/checks",
+          "holds_an_item_where": {
+            "/check": "extension_types",
+            "/state": "passed"
+          }
+        },
+        {
+          "at": "/checks",
+          "holds_an_item_where": {
+            "/check": "extension_lint",
+            "/state": "passed"
+          }
+        }
+      ]
+    }
+  ]
+}

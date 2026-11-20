@@ -685,7 +685,10 @@ fn the_value_of_each_graph_input(
         .filter_map(|node| {
             let port = node.input_port(GRAPH_INTERFACE_VALUE_PORT_NAME)?;
             let current_value = crate::core::graph::input_values::the_value_an_input_reads(
-                graph, node, port, false,
+                graph,
+                node,
+                port,
+                &crate::core::graph::WhatTheLinksIntoAnInputFeed::default(),
             )
             .and_then(|read| read.value)
             .filter(|value| !value.is_null());

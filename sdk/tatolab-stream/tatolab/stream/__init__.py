@@ -28,14 +28,25 @@ from ._exposed_name_cast import (
 )
 from ._description import Description as Description
 from ._formerly_named import FormerlyNamed as FormerlyNamed
+from ._named_pin_type_declaration import NamedPinTypeValue as NamedPinTypeValue
+from ._named_pin_type_declaration import named_pin_type as named_pin_type
 from ._number_range import NumberRange as NumberRange
 from ._pin_annotations import NumberStep as NumberStep
 from ._pin_annotations import NumberUnit as NumberUnit
 from ._pin_annotations import PinControl as PinControl
 from ._pin_annotations import PinMeaning as PinMeaning
 from ._pin_declaration import NodeDeclarationRefusal as NodeDeclarationRefusal
+from ._class_node_pins import InputPin as InputPin
+from ._class_node_pins import OutputPin as OutputPin
+from ._input_declaration_annotations import InputValueLifetime as InputValueLifetime
+from ._input_declaration_annotations import SettingOnly as SettingOnly
+from ._input_declaration_annotations import StreamDelivery as StreamDelivery
+from ._input_declaration_annotations import WireOnly as WireOnly
 from ._pin_types import Asset as Asset
+from ._pin_types import Audio as Audio
 from ._pin_types import Color as Color
+from ._pin_types import EncodedAudio as EncodedAudio
+from ._pin_types import EncodedVideo as EncodedVideo
 from ._pin_types import Float32 as Float32
 from ._pin_types import Float64 as Float64
 from ._pin_types import Int8 as Int8
@@ -47,7 +58,10 @@ from ._pin_types import UInt16 as UInt16
 from ._pin_types import UInt32 as UInt32
 from ._pin_types import UInt64 as UInt64
 from ._pin_types import Rectangle as Rectangle
+from ._pin_types import Tensor as Tensor
+from ._pin_types import Texture as Texture
 from ._pin_types import Transform as Transform
+from ._pin_types import Trigger as Trigger
 from ._pin_types import Vector2 as Vector2
 from ._pin_types import Vector3 as Vector3
 from ._pin_types import Vector4 as Vector4
@@ -63,6 +77,8 @@ from ._built_in_nodes import TensorToAudio as TensorToAudio
 from ._built_in_nodes import TensorToAudioConfig as TensorToAudioConfig
 from ._built_in_nodes import TensorToTexture as TensorToTexture
 from ._built_in_nodes import TensorToTextureConfig as TensorToTextureConfig
+from ._built_in_nodes import TextureFormatConvert as TextureFormatConvert
+from ._built_in_nodes import TextureFormatConvertConfig as TextureFormatConvertConfig
 from ._built_in_nodes import TextureToTensor as TextureToTensor
 from ._built_in_nodes import TextureToTensorConfig as TextureToTensorConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
@@ -230,6 +246,7 @@ __all__ = [
     "NodeReference",
     "NodeReferenceToNodeType",
     "FormerlyNamed",
+    "NamedPinTypeValue",
     "NumberRange",
     "NumberStep",
     "NumberUnit",
@@ -247,6 +264,18 @@ __all__ = [
     "UInt32",
     "UInt64",
     "Asset",
+    "Audio",
+    "EncodedAudio",
+    "EncodedVideo",
+    "InputPin",
+    "InputValueLifetime",
+    "OutputPin",
+    "SettingOnly",
+    "StreamDelivery",
+    "Tensor",
+    "Texture",
+    "Trigger",
+    "WireOnly",
     "Color",
     "Vector2",
     "Vector3",
@@ -292,6 +321,8 @@ __all__ = [
     "TensorToAudioConfig",
     "TensorToTexture",
     "TensorToTextureConfig",
+    "TextureFormatConvert",
+    "TextureFormatConvertConfig",
     "TextureToTensor",
     "TextureToTensorConfig",
     "Time",
@@ -302,6 +333,7 @@ __all__ = [
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
     "monotonic_now_ns",
+    "named_pin_type",
     "node",
     "run_graph_generator",
     "start_monotonic_timer",

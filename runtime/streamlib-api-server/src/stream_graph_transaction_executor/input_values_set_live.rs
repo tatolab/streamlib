@@ -7,7 +7,7 @@
 
 use streamlib::sdk::graph::input_values::{
     InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
-    the_words_of_an_input_set_twice_live,
+    a_live_set_replaces_an_earlier_one, the_words_of_an_input_set_twice_live,
 };
 
 use streamlib::sdk::graph::PortInfo;
@@ -27,8 +27,8 @@ impl StreamGraphTransactionExecutor<'_> {
     /// `stream_id_of_each_request`, when two of its value sets name one input of one node, at
     /// the second, whatever else it holds and whichever path applies it: the second value would
     /// replace the first before the node is handed either, so the first would never be
-    /// published. A fire of a Trigger input replaces nothing, so an input fired twice fires
-    /// twice.
+    /// published. Sets of two members of one bundle input replace neither, so each is taken. A
+    /// fire of a Trigger input replaces nothing, so an input fired twice fires twice.
     ///
     /// A node is the one its UUID, or an earlier `add_node`'s `as`, names at its level. An input
     /// is the one its name, or a name it had, finds: on a node of the stream's own level as the
@@ -47,7 +47,10 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let mut document_of_each_stream: HashMap<String, Option<StreamGraphDocument>> =
             HashMap::new();
-        let mut inputs_set: HashSet<(&NodeAValueSetNames, String)> = HashSet::new();
+        let mut members_set_of_each_input: HashMap<
+            (&NodeAValueSetNames, String),
+            Vec<Option<&str>>,
+        > = HashMap::new();
         for set in &sets {
             if sets_on_each_node
                 .get(&set.node)
@@ -78,7 +81,12 @@ impl StreamGraphTransactionExecutor<'_> {
                 continue;
             }
             let current_input = input.map_or_else(|| set.input.clone(), |input| input.name.clone());
-            if !inputs_set.insert((&set.node, current_input.clone())) {
+            let members_set = members_set_of_each_input
+                .entry((&set.node, current_input.clone()))
+                .or_default();
+            let set_twice = a_live_set_replaces_an_earlier_one(members_set, set.member);
+            members_set.push(set.member);
+            if set_twice {
                 let node_name = self
                     .the_node_a_stream_runs(&set.node, &mut document_of_each_stream)
                     .map_or_else(|| set.node.node.clone(), |node| node.name);
@@ -230,8 +238,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 stream_id.clone(),
                 StreamGraphOperation::SetNodeInputValue {
                     node: set.node,
+                    from: the_value_a_live_set_replaced(
+                        live_value_before.as_ref(),
+                        saved_value.as_ref(),
+                        set.member.as_deref(),
+                    ),
                     input,
-                    from: live_value_before.or(saved_value),
+                    member: set.member,
                     to: set.value,
                 },
             ));
@@ -245,9 +258,24 @@ impl StreamGraphTransactionExecutor<'_> {
             WhatAnAnswerNamesBesideItsOperations {
                 what_the_answer_names_of_each_added_node: &HashMap::new(),
                 overridden_by_links,
+                why_each_link_was_made_unjudged: BTreeMap::new(),
             },
         )))
     }
+}
+
+/// The value a live set on an input, or on its member `member` when one is named, replaced: the
+/// input's live value before the set, else its saved one, `live_value_before` and `saved_value`,
+/// or that member of the first that holds it.
+fn the_value_a_live_set_replaced(
+    live_value_before: Option<&Value>,
+    saved_value: Option<&Value>,
+    member: Option<&str>,
+) -> Option<Value> {
+    [live_value_before, saved_value]
+        .into_iter()
+        .find_map(|held| the_value_held_on_the_input_or_its_member(held, member))
+        .cloned()
 }
 
 /// Each value `requests` sets live, in order, when every one is a `set_node_input_value` or a
@@ -263,22 +291,23 @@ fn the_input_values_a_transaction_sets_live(
     for (request_index, (request, request_stream_id)) in
         requests.iter().zip(stream_id_of_each_request).enumerate()
     {
-        let (StreamGraphAction::SetNodeInputValue {
-            level,
-            node,
-            input,
-            value,
-            ..
-        }
-        | StreamGraphAction::SetPinValue {
-            level,
-            node,
-            input,
-            value,
-            ..
-        }) = request
-        else {
-            return None;
+        let (level, node, input, member, value) = match request {
+            StreamGraphAction::SetNodeInputValue {
+                level,
+                node,
+                input,
+                member,
+                value,
+                ..
+            } => (level, node, input, member.clone(), value),
+            StreamGraphAction::SetPinValue {
+                level,
+                node,
+                input,
+                value,
+                ..
+            } => (level, node, input, None, value),
+            _ => return None,
         };
         if !level.is_empty() || request_stream_id != stream_id {
             return None;
@@ -286,6 +315,7 @@ fn the_input_values_a_transaction_sets_live(
         sets.push(InputValueToSetLive {
             node: Uuid::parse_str(node).ok()?,
             input: input.clone(),
+            member,
             value: value.clone().filter(|value| !value.is_null()),
         });
         request_index_of_each_set.push(request_index);
@@ -307,12 +337,14 @@ struct NodeAValueSetNames {
 }
 
 /// One value set of a transaction: its index among the transaction's actions, the action, the
-/// node it names and its input as it names it.
+/// node it names, its input as it names it, and the member of that input it sets, when it names
+/// one.
 struct ValueSetOfATransaction<'request> {
     index: usize,
     request: &'request StreamGraphAction,
     node: NodeAValueSetNames,
     input: String,
+    member: Option<&'request str>,
 }
 
 /// Each value set of `requests` — a `set_node_input_value` or a `set_pin_value` — in order.
@@ -324,13 +356,21 @@ fn the_value_set_of_each_request<'request>(
         .iter()
         .zip(stream_id_of_each_request)
         .enumerate()
-        .filter_map(|(index, (request, stream_id))| match request {
-            StreamGraphAction::SetNodeInputValue {
-                level, node, input, ..
-            }
-            | StreamGraphAction::SetPinValue {
-                level, node, input, ..
-            } => Some(ValueSetOfATransaction {
+        .filter_map(|(index, (request, stream_id))| {
+            let (level, node, input, member) = match request {
+                StreamGraphAction::SetNodeInputValue {
+                    level,
+                    node,
+                    input,
+                    member,
+                    ..
+                } => (level, node, input, member.as_deref()),
+                StreamGraphAction::SetPinValue {
+                    level, node, input, ..
+                } => (level, node, input, None),
+                _ => return None,
+            };
+            Some(ValueSetOfATransaction {
                 index,
                 request,
                 node: NodeAValueSetNames {
@@ -340,8 +380,8 @@ fn the_value_set_of_each_request<'request>(
                         .map_or_else(|_| node.clone(), |node_uuid| node_uuid.to_string()),
                 },
                 input: input.clone(),
-            }),
-            _ => None,
+                member,
+            })
         })
         .collect()
 }

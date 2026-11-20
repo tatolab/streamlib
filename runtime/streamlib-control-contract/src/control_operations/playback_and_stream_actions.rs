@@ -7,9 +7,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::EVERY_SURFACE;
+use super::worked_examples;
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     OneProjectByItsDirectoryRequest, OneStreamActionRequest, SetStreamClockScaleRequest,
@@ -31,6 +33,7 @@ impl ControlOperation for StartPlayback {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::START_PLAYBACK);
 }
 
 /// `stop_playback`: queue the stop of a project's playback, its streams staying loaded.
@@ -50,6 +53,7 @@ impl ControlOperation for StopPlayback {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::STOP_PLAYBACK);
 }
 
 /// `pause_playback`: pause a playing project's playback at once.
@@ -67,7 +71,8 @@ impl ControlOperation for PausePlayback {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ListedAsATool;
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::PAUSE_PLAYBACK);
 }
 
 /// `resume_playback`: resume a paused project's playback at once.
@@ -85,7 +90,8 @@ impl ControlOperation for ResumePlayback {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ListedAsATool;
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::RESUME_PLAYBACK);
 }
 
 /// `describe_stream_action`: describe one stream action by its id: its state, its step and each stream it reached.
@@ -105,6 +111,7 @@ impl ControlOperation for DescribeStreamAction {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_STREAM_ACTION);
 }
 
 /// `cancel_stream_action`: cancel one stream action that is still queued or under way.
@@ -124,6 +131,7 @@ impl ControlOperation for CancelStreamAction {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CANCEL_STREAM_ACTION);
 }
 
 /// `set_stream_clock_scale`: run a started stream's scaled clock at another scale from now on.
@@ -143,4 +151,5 @@ impl ControlOperation for SetStreamClockScale {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_STREAM_CLOCK_SCALE);
 }

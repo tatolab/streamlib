@@ -22,9 +22,10 @@ use streamlib_project_repository::{
     ProjectAction, ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation,
     ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
     ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered,
-    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionNodeInsertedOnALink,
-    ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
-    StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
+    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionLinkMadeUnjudged,
+    ProjectTransactionNodeInsertedOnALink, ProjectTransactionReversal,
+    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphAction,
+    StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
     StreamGraphDocumentNote, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
@@ -32,8 +33,9 @@ use streamlib_project_repository::{
     asset_references_made_references_into_the_import,
     config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
-    is_a_graph_interface_node_type, stream_assets_of_the_project_a_graph_document_places,
-    the_fragment_a_stream_fragment_places, the_stream_document_of_an_import,
+    input_values_after_the_set, is_a_graph_interface_node_type,
+    stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
+    the_stream_document_of_an_import, the_value_held_on_the_input_or_its_member,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
@@ -50,6 +52,7 @@ use crate::control_operations_on_project_assets::{
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
+mod connect_asked_at_a_level;
 mod former_port_names;
 mod graph_request_refusals;
 use graph_request_refusals::what_a_graph_action_names;
@@ -67,6 +70,10 @@ mod ports_of_the_node_a_refusal_names;
 mod request_application;
 mod request_to_graph_operation;
 mod streams_each_operation_names;
+use connect_asked_at_a_level::why_each_link_an_edit_makes_at_a_placed_level_goes_unjudged;
+pub(crate) use connect_asked_at_a_level::{
+    AConnectJudgedInsideAPlacedStream, a_connect_judged_inside_a_placed_stream,
+};
 pub(crate) use streams_each_operation_names::StreamsTheRuntimeHolds;
 mod transaction_answers;
 
@@ -83,7 +90,7 @@ use request_to_graph_operation::{
     the_operation_a_connect_asks,
 };
 use streams_each_operation_names::the_stream_each_operation_names;
-use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
+use transaction_answers::{WhatAnAnswerNamesBesideItsOperations, the_links_an_operation_makes};
 
 /// What a `connect` from `source` to `target` at the own level of the running stream
 /// `stream_operations` runs asks of it, made as a transaction's `connect` makes it on the
@@ -100,6 +107,28 @@ pub(crate) fn what_a_connect_asks_of_the_running_stream(
     level_as_drawn: &StreamGraphDocument,
     stream_operations: &dyn RuntimeOperations,
 ) -> Result<WhatAConnectAsks, GraphRequestRefusal> {
+    what_a_connect_asks_at_a_level(
+        source,
+        target,
+        rendered_graph,
+        level_as_drawn,
+        stream_operations,
+        &|link| the_convert_node_a_live_connect_places(stream_operations, link),
+    )
+}
+
+/// What a `connect` from `source` to `target` asks of `level_as_drawn`, a level of the running
+/// stream `stream_operations` runs as drawn, made as
+/// [`what_a_connect_asks_of_the_running_stream`] makes it, the convert node a link needs as
+/// `convert_node_a_link_needs` says.
+fn what_a_connect_asks_at_a_level(
+    source: StreamGraphActionLinkEnd,
+    target: StreamGraphActionLinkEnd,
+    rendered_graph: &Value,
+    level_as_drawn: &StreamGraphDocument,
+    stream_operations: &dyn RuntimeOperations,
+    convert_node_a_link_needs: &ConvertNodeALinkOfTheRunningStreamNeeds<'_>,
+) -> Result<WhatAConnectAsks, GraphRequestRefusal> {
     let no_node_by_label = HashMap::new();
     let (source, target) = the_link_ends_under_their_current_port_names(
         source,
@@ -114,7 +143,7 @@ pub(crate) fn what_a_connect_asks_of_the_running_stream(
         level_as_drawn,
         &no_node_by_label,
         &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
-        &|link| the_convert_node_a_live_connect_places(stream_operations, link),
+        convert_node_a_link_needs,
         &|_| Ok(()),
     )?;
     if let WhatAConnectAsks::Link(link) = &asked {
@@ -156,10 +185,9 @@ fn the_convert_node_a_live_connect_places(
     }
 }
 
-/// Why a transaction's `connect` judges a link by the node types of its level, before anything
-/// is written, rather than by the running stream as it makes the link.
+/// Why a transaction's `connect` places no convert node on a link only one bridges.
 #[derive(Clone, Copy)]
-enum WhyALinkIsJudgedByNodeTypes {
+enum WhyConnectPlacesNoConvertNode {
     /// The link is inside a placed stream, not at the stream's own level.
     TheLinkIsAtAPlacedLevel,
     /// An earlier operation of the transaction has the stream take its edits once the
@@ -167,18 +195,42 @@ enum WhyALinkIsJudgedByNodeTypes {
     TheStreamTakesItsEditsLater,
 }
 
+/// The refusal of a link only `convert_node` bridges, which `connect` does not place `because`.
+fn the_refusal_of_a_link_only_a_convert_node_bridges(
+    convert_node: &ConvertNodeToInsert,
+    because: WhyConnectPlacesNoConvertNode,
+) -> GraphRequestRefusal {
+    let words = match because {
+        WhyConnectPlacesNoConvertNode::TheLinkIsAtAPlacedLevel => format!(
+            "{}: `connect` places that node itself only at a stream's own level, and this link \
+             is inside a placed stream; add the node and its two links there yourself",
+            convert_node.refusal_without_it
+        ),
+        WhyConnectPlacesNoConvertNode::TheStreamTakesItsEditsLater => format!(
+            "{}, or connect the link in a transaction of its own: `connect` places that node \
+             itself only on a stream that takes the edit live, and an earlier operation of this \
+             transaction has the stream take its edits once the documents hold them",
+            convert_node.refusal_without_it
+        ),
+    };
+    GraphRequestRefusal::coded(
+        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::LinkPinTypesDoNotConnect),
+        words,
+    )
+}
+
 /// Refuse `link`, drawn at `level_as_drawn`, before anything is written, as the stream's own
 /// level refuses a link made live, when its two typed ends, judged by the ports the node types
 /// of that level state as the running stream `stream_operations` resolves them, and not by the
-/// settings any of those nodes holds, do not connect as they are:
-/// one only a convert node bridges, which `connect` does not place there `because`, and any
-/// their pin types refuse. A link either end of which is untyped, or no node of the level, is
-/// left to the stream to judge as it takes the edit.
+/// settings any of those nodes holds, do not connect as they are: one only a convert node
+/// bridges, which `connect` does not place there `because`, and any their pin types refuse. A
+/// link either end of which is untyped, or no node of the level, is left to the stream to judge
+/// as it takes the edit.
 fn refuse_a_link_judged_by_the_node_types_of_its_level(
     stream_operations: &dyn RuntimeOperations,
     level_as_drawn: &StreamGraphDocument,
     link: &StreamGraphDocumentLink,
-    because: WhyALinkIsJudgedByNodeTypes,
+    because: WhyConnectPlacesNoConvertNode,
 ) -> Result<(), GraphRequestRefusal> {
     let (Ok(source), Ok(target)) = (
         level_as_drawn.node(link.source.node),
@@ -198,44 +250,32 @@ fn refuse_a_link_judged_by_the_node_types_of_its_level(
             port: &link.target.port,
         },
     );
-    let convert_node = match verdict.map(|verdict| verdict.outcome) {
-        Some(PinLinkOutcome::ConnectsThroughConvertNode(convert_node)) => convert_node,
+    match verdict.map(|verdict| verdict.outcome) {
+        Some(PinLinkOutcome::ConnectsThroughConvertNode(convert_node)) => Err(
+            the_refusal_of_a_link_only_a_convert_node_bridges(&convert_node, because),
+        ),
         Some(PinLinkOutcome::Refused(refusal)) => {
-            return Err(streamlib::sdk::error::Error::PinLinkRefused(refusal).into());
+            Err(streamlib::sdk::error::Error::PinLinkRefused(refusal).into())
         }
         Some(PinLinkOutcome::Connects | PinLinkOutcome::ConnectsWithFreeConversion(_)) | None => {
-            return Ok(());
+            Ok(())
         }
-    };
-    let words = match because {
-        WhyALinkIsJudgedByNodeTypes::TheLinkIsAtAPlacedLevel => format!(
-            "{}: `connect` places that node itself only at a stream's own level, and this link \
-             is inside a placed stream; add the node and its two links there yourself",
-            convert_node.refusal_without_it
-        ),
-        WhyALinkIsJudgedByNodeTypes::TheStreamTakesItsEditsLater => format!(
-            "{}, or connect the link in a transaction of its own: `connect` places that node \
-             itself only on a stream that takes the edit live, and an earlier operation of this \
-             transaction has the stream take its edits once the documents hold them",
-            convert_node.refusal_without_it
-        ),
-    };
-    Err(GraphRequestRefusal::coded(
-        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::LinkPinTypesDoNotConnect),
-        words,
-    ))
+    }
 }
 
 /// One graph operation applied: the operation its answer reports, as the stream it names draws
 /// it; what it made on that running stream; the project operations it records, in order; each
-/// operation a loaded stream takes once the project's documents hold it; and the link that
-/// overrides the input value it sets, when one feeds that input.
+/// operation a loaded stream takes once the project's documents hold it; the link that
+/// overrides the input value it sets, when one feeds that input; and each link it made without
+/// judging it, with why, as the stream draws it and as the transaction keeps it.
 struct OneGraphRequestApplied {
     operation_answered: StreamGraphOperation,
     applied_live: Option<OneOperationAppliedLive>,
     project_operations: Vec<ProjectOperation>,
     made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)>,
     overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
+    links_made_unjudged: Vec<(StreamGraphDocumentLink, String)>,
+    links_made_unjudged_as_kept: Vec<ProjectTransactionLinkMadeUnjudged>,
 }
 
 /// One operation made on a running stream, and the value set live on the input it set that it

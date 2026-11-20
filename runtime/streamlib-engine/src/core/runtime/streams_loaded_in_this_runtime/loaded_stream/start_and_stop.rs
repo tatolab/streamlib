@@ -413,8 +413,10 @@ impl LoadedStreamInThisRuntime {
             } in links_of_the_graph
             {
                 self.connect_while_no_input_value_changes(
-                    OutputLinkPortRef::new(node_of(&link.source_node)?, &link.source_port),
-                    InputLinkPortRef::new(node_of(&link.target_node)?, &link.target_port),
+                    OutputLinkPortRef::new(node_of(&link.source_node)?, &link.source_port)
+                        .at_member(link.source_member.clone()),
+                    InputLinkPortRef::new(node_of(&link.target_node)?, &link.target_port)
+                        .at_member(link.target_member.clone()),
                 )?;
             }
             Ok(())

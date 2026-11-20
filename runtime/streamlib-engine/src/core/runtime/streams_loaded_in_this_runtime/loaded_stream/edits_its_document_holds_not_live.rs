@@ -269,10 +269,12 @@ fn render_the_document_over_the_live_graph(
             let source = LinkPortRefOutput {
                 node: cast_or_as_written(&drawn.source.node),
                 port: drawn.source.port.clone(),
+                member: drawn.source.member.clone(),
             };
             let target = LinkPortRefOutput {
                 node: cast_or_as_written(&drawn.target.node),
                 port: drawn.target.port.clone(),
+                member: drawn.target.member.clone(),
             };
             let live = LinkEnds::of(&source, &target, &document_id_of_each_name)
                 .and_then(|ends| live_link_of_each_ends.remove(&ends));

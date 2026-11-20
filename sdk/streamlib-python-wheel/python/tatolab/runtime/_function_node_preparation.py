@@ -34,6 +34,7 @@ from tatolab.runtime._function_node_carried_values import (
     FunctionNodeDoesNotCompile,
     FunctionNodeReadyToEvaluate,
     FunctionNodeRunAsPythonInItsReader,
+    NAMED_VALUE_TYPE,
     UNREAD_MESSAGE_VALUE_TYPE,
 )
 from tatolab.runtime._function_node_evaluate_entry_compiler import (
@@ -43,6 +44,10 @@ from tatolab.runtime._function_node_evaluate_entry_compiler import (
 from tatolab.runtime._function_node_body_run_as_python import (
     FunctionNodeBodyRunAsPython,
 )
+
+# The value types of the inputs a body run as Python may take as `None`: a message input no new
+# message reached, and a named type's input, which holds no value while no link brings one.
+_INPUTS_THAT_MAY_HOLD_NO_VALUE = (UNREAD_MESSAGE_VALUE_TYPE, NAMED_VALUE_TYPE)
 
 
 def how_one_function_node_is_called(
@@ -120,15 +125,15 @@ def function_node_run_as_python_in_its_reader(
             raise FunctionNodeDoesNotCompile(
                 f"{import_path}'s port `{each_port['port']}` is {each_port['value_type']}, and a "
                 f"function node carries numbers, bools, Colors, Vectors, Rectangles, Transforms, "
-                f"Strings, Menus, Assets, Lists and dicts in this release. To fix: make it one "
+                f"Strings, Menus, Assets, Lists, named types and dicts in this release. To fix: make it one "
                 f"of them."
             )
     for each_input in function_signature["inputs"]:
-        if each_input["optional"] and each_input["value_type"] != UNREAD_MESSAGE_VALUE_TYPE:
+        if each_input["optional"] and each_input["value_type"] not in _INPUTS_THAT_MAY_HOLD_NO_VALUE:
             raise FunctionNodeDoesNotCompile(
                 f"{import_path}'s input `{each_input['parameter']}` is optional, and a function "
-                f"node takes a value on every input but an `UnreadMessage` in this release. To "
-                f"fix: give it a default."
+                f"node takes a value on every input but an `UnreadMessage` or a named type in "
+                f"this release. To fix: give it a default."
             )
     state_parameter: Optional[str] = function_signature["state_parameter"]
     state_record_class: Optional[type] = (

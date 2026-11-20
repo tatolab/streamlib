@@ -10,9 +10,9 @@ fn an_imports_version_is_the_sha256_of_its_files_hashes_as_canonical_json() {
     let copied_files = BTreeMap::from([
         (
             "tatolab-project.json".to_owned(),
-            lowercase_hex_sha256(b"{}\n"),
+            content_sha256_of(b"{}\n"),
         ),
-        ("wheels/a.whl".to_owned(), lowercase_hex_sha256(b"wheel")),
+        ("wheels/a.whl".to_owned(), content_sha256_of(b"wheel")),
     ]);
     assert_eq!(
         version_of_the_copied_files(&copied_files).unwrap(),

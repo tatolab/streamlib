@@ -36,6 +36,7 @@ fn the_uuid_of(graph: &Graph, node_run_id: &NodeRunId) -> Uuid {
 
 fn a_set(node: Uuid, input: &str, value: Option<Value>) -> InputValueToSetLive {
     InputValueToSetLive {
+        member: None,
         node,
         input: input.to_owned(),
         value,
@@ -179,11 +180,13 @@ fn only_the_helper_of_the_node_set_on_is_handed_its_live_values_over_the_saved_o
     assert_eq!(
         held_live.changes_announced,
         vec![RuntimeEvent::InputValueDidChange {
+            member: None,
             node,
             input: "level".to_owned(),
             value_read: Some(InputValueReadOnTheWire {
                 value: Some(json!(0.75)),
                 value_comes_from: Some(InputValueComesFromOnTheWire::Live),
+                member_values: None,
             }),
         }]
     );
@@ -322,7 +325,7 @@ fn the_graph_renders_the_value_each_input_reads_and_keeps_its_pins_saved() {
     link(&mut graph, (&lfo, "result"), (&remap, "x"));
     let mix_uuid = the_uuid_of(&graph, &mix);
     let graph = RwLock::new(graph);
-    set_the_saved_value_and_hand_it_over(&graph, &mix, "b", Some(json!(0.1))).unwrap();
+    set_the_saved_value_and_hand_it_over(&graph, &mix, "b", None, Some(json!(0.1))).unwrap();
     let render = |graph: &Graph, node_type: &str| -> Value {
         serde_json::to_value(graph.to_graph_response("this-machine".to_owned())).unwrap()["nodes"]
             .as_array()
@@ -386,15 +389,17 @@ fn an_input_reading_its_declared_default_renders_it_as_the_default() {
     let (level_meter, _delivery) = a_level_meter_past_its_setup(&mut graph);
     let node = graph.traversal().v(&level_meter).first().unwrap();
     assert_eq!(
-        crate::core::graph::input_values::the_input_value_change(&graph, node, "level"),
-        Some(RuntimeEvent::InputValueDidChange {
+        crate::core::graph::input_values::the_input_value_change(&graph, node, "level", None),
+        vec![RuntimeEvent::InputValueDidChange {
+            member: None,
             node: node.node_uuid,
             input: "level".to_owned(),
             value_read: Some(InputValueReadOnTheWire {
                 value: Some(json!(0.5)),
                 value_comes_from: Some(InputValueComesFromOnTheWire::Default),
+                member_values: None,
             }),
-        })
+        }]
     );
 }
 
@@ -439,7 +444,7 @@ fn a_function_node_read_inside_an_island_hands_its_reader_the_live_value_then_th
     assert_eq!(the_pins_last_handed(), Some(json!({ "x": 0.5 })));
 
     let committed =
-        set_the_saved_value_and_hand_it_over(&graph, &remap, "x", Some(json!(0.25))).unwrap();
+        set_the_saved_value_and_hand_it_over(&graph, &remap, "x", None, Some(json!(0.25))).unwrap();
     assert_eq!(the_pins_last_handed(), Some(json!({ "x": 0.25 })));
     assert_eq!(
         graph.read().live_input_values().value_of(remap_uuid, "x"),
@@ -626,8 +631,13 @@ fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
     delivery
         .refuses_input_values_once
         .store(true, Ordering::SeqCst);
-    let refused =
-        set_the_saved_value_and_hand_it_over(&graph, &level_meter, "level", Some(json!(0.75)));
+    let refused = set_the_saved_value_and_hand_it_over(
+        &graph,
+        &level_meter,
+        "level",
+        None,
+        Some(json!(0.75)),
+    );
 
     assert!(refused.is_err());
     {
@@ -643,7 +653,8 @@ fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
         handed_over_before_the_refusal,
         "the helper, which refused the value, is handed nothing back"
     );
-    set_the_saved_value_and_hand_it_over(&graph, &level_meter, "level", Some(json!(0.75))).unwrap();
+    set_the_saved_value_and_hand_it_over(&graph, &level_meter, "level", None, Some(json!(0.75)))
+        .unwrap();
     assert_eq!(
         delivery.input_values_handed_over.lock().last().unwrap()["level"],
         json!(0.75),
@@ -677,7 +688,7 @@ fn a_string_set_live_on_a_function_node_in_a_helper_of_its_own_is_refused() {
         .read()
         .live_input_values()
         .set(remap_uuid, "x", None, NodeValueLifetime::Kept);
-    set_the_saved_value_and_hand_it_over(&graph, &remap, "x", Some(json!(0.25))).unwrap();
+    set_the_saved_value_and_hand_it_over(&graph, &remap, "x", None, Some(json!(0.25))).unwrap();
     graph
         .write()
         .traversal_mut()
@@ -704,9 +715,9 @@ fn a_string_set_live_on_a_function_node_in_a_helper_of_its_own_is_refused() {
     let graph = graph.read();
     let node = graph.node_by_uuid(remap_uuid).unwrap();
     assert!(matches!(
-        crate::core::graph::input_values::the_input_value_change(&graph, node, "x"),
-        Some(RuntimeEvent::InputValueDidChange { value_read: Some(InputValueReadOnTheWire {
-            value: Some(ref value), value_comes_from: Some(InputValueComesFromOnTheWire::Saved) }), .. })
+        crate::core::graph::input_values::the_input_value_change(&graph, node, "x", None).as_slice(),
+        [RuntimeEvent::InputValueDidChange { value_read: Some(InputValueReadOnTheWire {
+            value: Some(value), value_comes_from: Some(InputValueComesFromOnTheWire::Saved), .. }), .. }]
             if value == &json!(0.25)
     ));
 }
@@ -863,6 +874,7 @@ fn a_value_saved_on_one_island_member_feeds_one_island_and_its_cost_is_measured(
             &graph,
             &remaps[0],
             "x",
+            None,
             Some(json!(set_index as f64 / 1000.0)),
         )
         .unwrap();
@@ -925,7 +937,7 @@ fn a_running_shader_node_takes_a_value_set_live_and_one_saved_on_it() {
         .expect("a shader node's value is held apart from the graph");
     assert_eq!(the_value_the_host_reads(&graph, &host, "amount"), 0.75);
 
-    set_the_saved_value_and_hand_it_over(&graph, &host, "amount", Some(json!(0.25))).unwrap();
+    set_the_saved_value_and_hand_it_over(&graph, &host, "amount", None, Some(json!(0.25))).unwrap();
     assert_eq!(the_value_the_host_reads(&graph, &host, "amount"), 0.25);
     assert_eq!(
         graph

@@ -14,7 +14,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectCodeCheckState, ProjectFileChecked,
 };
 
-use crate::project_asset_file_bytes::content_sha256_of;
+use crate::content_sha256::content_sha256_of;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_views::{
     PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME, every_view_a_project_brings_itself,
@@ -143,16 +143,6 @@ pub fn check_a_projects_view_manifests(
         findings,
         files_checked,
     })
-}
-
-/// Whether `path`, a path in a project, is the manifest of one of its own views, which the
-/// `extension_manifest` check reads and no other check does.
-pub fn is_the_manifest_of_a_projects_own_view(path: &str) -> bool {
-    matches!(
-        path.split('/').collect::<Vec<_>>().as_slice(),
-        [PROJECT_VIEWS_DIRECTORY, view_folder_name, TATOLAB_VIEW_MANIFEST_FILE_NAME]
-            if !view_folder_name.is_empty()
-    )
 }
 
 /// What a port declared by `family` alone writes in its place: the one pin type the family's

@@ -324,9 +324,8 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
 fn the_instructions_say_both_ends_of_a_connect_are_in_its_stream_and_name_the_track_receive() {
     let instructions = crate::mcp::LOCAL_API_MCP_SERVER_INSTRUCTIONS;
     for said in [
-        "Both ends of a `connect` are ports in the one stream it names",
-        "a stream reads another stream's track at a relay, on this machine or another, through \
-         a `MoqTrackReceive` node",
+        "Both ends of a link are ports in the one stream it names",
+        "a stream reads another stream's port at a MoQ relay through a MoqTrackReceive node",
     ] {
         assert!(
             instructions.contains(said),

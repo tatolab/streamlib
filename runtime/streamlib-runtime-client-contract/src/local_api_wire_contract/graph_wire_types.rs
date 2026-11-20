@@ -15,7 +15,8 @@ pub struct RefusedGraphLinkOnTheWire {
     pub target: GraphLinkEndOnTheWire,
 }
 
-/// One end of a link a graph tool names: a node by its UUID and one of its ports.
+/// One end of a link a graph tool names: a node by its UUID, one of its ports, and the member of
+/// a bundle port it starts at, if any.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphLinkEndOnTheWire {
@@ -23,6 +24,9 @@ pub struct GraphLinkEndOnTheWire {
     pub node: String,
     /// The port's name.
     pub port: String,
+    /// The member of a bundle port the link starts or ends at; absent for the whole port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
 }
 
 /// A node a graph transaction added.
@@ -113,6 +117,11 @@ pub struct GraphTransactionConnectedLink {
     /// What the link converts and warns of, as the judgement of its two typed ends says.
     #[serde(flatten)]
     pub marks: PinLinkMarksOnTheWire,
+    /// Why the link was saved without its two ends being judged, when it was: inside a placed
+    /// stream, it reaches a node that runs as no node of its own, or one that is not built to
+    /// judge it, such as one whose type is not described.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_judged_because: Option<String>,
 }
 
 /// An input a graph transaction set a value on while a link feeds it, so the link's messages

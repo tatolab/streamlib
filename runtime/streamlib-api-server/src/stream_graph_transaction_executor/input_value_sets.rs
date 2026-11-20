@@ -145,25 +145,42 @@ impl StreamGraphTransactionExecutor<'_> {
                     )
                     .map_err(refused)?
                 }
-                StreamGraphAction::SetNodeInputValue { input, value, .. }
-                | StreamGraphAction::SetPinValue { input, value, .. } => {
+                StreamGraphAction::SetNodeInputValue {
+                    input,
+                    member,
+                    value,
+                    ..
+                } => {
                     let value = value.as_ref().filter(|value| !value.is_null());
-                    refuse_a_value_the_input_does_not_take(
-                        stream.stream_operations.as_ref(),
-                        &set_on,
-                        &input_values_after_the_set(&set_on.input_values, input, value),
-                        input,
-                        value,
-                        Some("/value"),
-                    )
-                    .map_err(refused)?;
-                    vec![(input.clone(), value.cloned())]
+                    vec![
+                        the_value_set_checked(
+                            stream.stream_operations.as_ref(),
+                            &set_on,
+                            input,
+                            member.as_deref(),
+                            value,
+                        )
+                        .map_err(refused)?,
+                    ]
+                }
+                StreamGraphAction::SetPinValue { input, value, .. } => {
+                    let value = value.as_ref().filter(|value| !value.is_null());
+                    vec![
+                        the_value_set_checked(
+                            stream.stream_operations.as_ref(),
+                            &set_on,
+                            input,
+                            None,
+                            value,
+                        )
+                        .map_err(refused)?,
+                    ]
                 }
                 _ => continue,
             };
             for (input, value) in &sets {
                 set_on.input_values =
-                    input_values_after_the_set(&set_on.input_values, input, value.as_ref());
+                    input_values_after_the_set(&set_on.input_values, input, None, value.as_ref());
             }
             node_as_the_transaction_leaves_it.insert(named, set_on);
         }
@@ -304,6 +321,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut applied_by_the_sets: Vec<OneGraphRequestApplied> = Vec::with_capacity(sets.len());
         for (input, value) in sets {
             let set = StreamGraphAction::SetNodeInputValue {
+                member: None,
                 stream,
                 level: level.to_vec(),
                 node: node.to_owned(),
@@ -332,20 +350,6 @@ pub(super) fn its_input_values_are_checked(node: &StreamGraphDocumentNode) -> bo
     node.fragment.is_none()
         && node.node_type != STREAM_FRAGMENT_NODE_TYPE
         && !is_a_graph_interface_node_type(&node.node_type)
-}
-
-/// `input_values` with `input` set to `value`, `None` taking it off.
-pub(super) fn input_values_after_the_set(
-    input_values: &Map<String, Value>,
-    input: &str,
-    value: Option<&Value>,
-) -> Map<String, Value> {
-    let mut after_the_set = input_values.clone();
-    match value {
-        Some(value) => after_the_set.insert(input.to_owned(), value.clone()),
-        None => after_the_set.remove(input),
-    };
-    after_the_set
 }
 
 /// The link of `level` that feeds input `input` of `node`, which overrides a value set on it.
@@ -423,21 +427,49 @@ fn the_config_a_running_node_holds(
         .cloned()
 }
 
+/// The set of `value` on input `input` of `set_on`, or on its member `member` when one is named,
+/// checked, as the set of the whole value the input holds after it.
+fn the_value_set_checked(
+    stream_operations: &dyn RuntimeOperations,
+    set_on: &StreamGraphDocumentNode,
+    input: &str,
+    member: Option<&str>,
+    value: Option<&Value>,
+) -> Result<(String, Option<Value>), GraphRequestRefusal> {
+    let input_values_after_the_set =
+        input_values_after_the_set(&set_on.input_values, input, member, value);
+    refuse_a_value_the_input_does_not_take(
+        stream_operations,
+        set_on,
+        &input_values_after_the_set,
+        input,
+        member,
+        value,
+        Some("/value"),
+    )?;
+    Ok((
+        input.to_owned(),
+        input_values_after_the_set.get(input).cloned(),
+    ))
+}
+
 /// The type of `node`, refused when it names none.
 fn the_node_type_of(node: &StreamGraphDocumentNode) -> Result<NodeClassImportPath, String> {
     NodeClassImportPath::new(&node.node_type)
         .map_err(|refusal| format!("node {} `type`: {refusal}", node.id))
 }
 
-/// Refuse `value`, set on input `input` of `set_on` with `None` taking it off, when the input
-/// does not take it, as the stream `stream_operations` runs resolves the node's type; the value
-/// is at `refused_params_pointer` in the action's params, and in none when the runtime made the
-/// set itself, as an undo or redo does.
+/// Refuse `value`, set on input `input` of `set_on`, or on its member `member` when one is
+/// named, with `None` taking it off, when the input does not take it, as the stream
+/// `stream_operations` runs resolves the node's type; the value is at `refused_params_pointer`
+/// in the action's params, and in none when the runtime made the set itself, as an undo or redo
+/// does.
 pub(super) fn refuse_a_value_the_input_does_not_take(
     stream_operations: &dyn RuntimeOperations,
     set_on: &StreamGraphDocumentNode,
     input_values_after_the_set: &Map<String, Value>,
     input: &str,
+    member: Option<&str>,
     value: Option<&Value>,
     refused_params_pointer: Option<&str>,
 ) -> Result<(), GraphRequestRefusal> {
@@ -447,6 +479,7 @@ pub(super) fn refuse_a_value_the_input_does_not_take(
             &set_on.name,
             input_values_after_the_set,
             input,
+            member,
             value,
         )
         .map_err(|refusal| {
@@ -512,7 +545,7 @@ fn the_input_value_sets_a_config_stands_for(
     let mut input_values_after_the_sets = configured.input_values.clone();
     for (input, value) in &sets {
         input_values_after_the_sets =
-            input_values_after_the_set(&input_values_after_the_sets, input, value.as_ref());
+            input_values_after_the_set(&input_values_after_the_sets, input, None, value.as_ref());
     }
     for (input, value) in &sets {
         refuse_a_value_the_input_does_not_take(
@@ -520,6 +553,7 @@ fn the_input_value_sets_a_config_stands_for(
             configured,
             &input_values_after_the_sets,
             input,
+            None,
             value.as_ref(),
             Some(&format!(
                 "/config/{}",

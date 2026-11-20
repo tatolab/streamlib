@@ -43,9 +43,11 @@ use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 mod a_stream_outliving_its_connection_tests;
 mod an_edit_recorded_before_the_update_tests;
+mod bundle_member_link_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
 mod convert_node_inserted_on_a_link_tests;
+mod convert_node_inside_a_placed_stream_tests;
 mod graph_action_feed_and_subscription_tests;
 mod graph_answer_read_through_the_contract_tests;
 mod graph_edit_transaction_and_undo_tests;
@@ -71,6 +73,7 @@ mod renamed_pin_tests;
 mod stream_input_of_a_playing_stream_tests;
 mod stream_listing_actions_and_record_tests;
 mod stream_named_by_its_id_tests;
+mod texture_format_convert_inserted_on_a_link_tests;
 mod trigger_fire_tests;
 mod typed_pin_link_tests;
 mod venv_sync_stream_action_resource_tests;
@@ -669,4 +672,58 @@ fn the_graph_of_main_with_a_node_uuid() -> Value {
     let mut graph = the_graph_of_a_stream_named("main");
     graph["nodes"][0]["id"] = json!(Uuid::new_v4());
     graph
+}
+
+/// The mixer of a project's `main`, collapsed into the placed stream `sub`, beside a
+/// `GraphInput` `volume` added inside `sub`: the placing node's UUID, and the mixer's and
+/// `volume`'s UUIDs as `main` draws them inside it.
+struct TheMixerInsideAPlacedStream {
+    subgraph: String,
+    mixer: String,
+    volume: String,
+}
+
+impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
+    /// The mixer of `project`'s loaded `main` collapsed by `alice` into the placed stream
+    /// `sub`, with a `GraphInput` `volume` added beside it inside `sub`.
+    async fn the_mixer_collapsed_into_a_placed_stream(
+        &self,
+        project: &ProjectWithGraphDocuments,
+    ) -> TheMixerInsideAPlacedStream {
+        let stream_asset = project.stream_asset_of("main");
+        let collapsed = self
+            .the_answer_or_the_refusal_of(
+                "collapse_selection_into_subgraph",
+                json!({ "stream": stream_asset, "nodes": [input_value_set_tests::MIXER_NODE_UUID], "name": "sub",
+                        "author": an_agent_named("alice") }),
+            )
+            .await
+            .expect("the mixer collapses into `sub`");
+        let subgraph = collapsed["added_nodes"][0]["node"]
+            .as_str()
+            .expect("the placing node")
+            .to_owned();
+        self.the_answer_or_the_refusal_of(
+            "add_node",
+            json!({ "stream": stream_asset, "level": [subgraph], "type": streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
+                    "name": "volume", "config": { "port": "volume", "family": "channels" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("a `GraphInput` is added inside `sub`");
+        let sub = project.the_graph_document_of("sub");
+        let drawn = |name: &str| {
+            the_uuid_a_held_node_takes_under(
+                &subgraph,
+                the_node_named(&sub, name)["id"]
+                    .as_str()
+                    .expect("the node's UUID"),
+            )
+        };
+        TheMixerInsideAPlacedStream {
+            mixer: drawn("mixer"),
+            volume: drawn("volume"),
+            subgraph,
+        }
+    }
 }

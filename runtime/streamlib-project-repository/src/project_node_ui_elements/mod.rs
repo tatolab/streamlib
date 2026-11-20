@@ -77,7 +77,7 @@ pub fn every_node_ui_element_a_project_and_its_imports_bring(
                             module: read.module.clone(),
                             script_path: read.the_path_of_a_script(&control.script),
                             element: ProjectNodeUiElement::Control {
-                                pin_type: control.pin_type,
+                                pin_type: control.pin_type.clone(),
                                 control: control.control.clone(),
                             },
                         })
@@ -180,15 +180,15 @@ fn the_node_ui_manifest_in(
 
 /// A `tatolab_node_ui.json` as read: its bytes when they were read, and the manifest or why it
 /// does not read.
-pub(crate) struct NodeUiManifestFileRead {
-    pub(crate) bytes: Option<Vec<u8>>,
-    pub(crate) manifest: Result<NodeUiManifest, String>,
+pub struct NodeUiManifestFileRead {
+    /// Its bytes; `None` when they could not be read.
+    pub bytes: Option<Vec<u8>>,
+    /// The manifest read against the view contract, or why it does not read.
+    pub manifest: Result<NodeUiManifest, String>,
 }
 
 /// `manifest_file` read against the view contract; `None` when there is no such file.
-pub(crate) fn the_node_ui_manifest_file_read(
-    manifest_file: &Path,
-) -> Option<NodeUiManifestFileRead> {
+pub fn the_node_ui_manifest_file_read(manifest_file: &Path) -> Option<NodeUiManifestFileRead> {
     match std::fs::read(manifest_file) {
         Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => None,
         Err(unreadable) => Some(NodeUiManifestFileRead {

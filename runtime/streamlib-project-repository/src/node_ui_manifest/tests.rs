@@ -4,7 +4,7 @@
 use serde_json::json;
 use streamlib_node_schema::pin_type::BuiltInPinTypeName;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    NodeUiManifestControl, NodeUiManifestNodeBody,
+    NodeUiControlPinType, NodeUiManifestControl, NodeUiManifestNodeBody,
 };
 
 use super::*;
@@ -25,17 +25,17 @@ fn a_manifest_reads_its_controls_and_node_bodies_and_a_control_left_unnamed_is_i
         manifest.controls,
         vec![
             NodeUiManifestControl {
-                pin_type: BuiltInPinTypeName::Float,
+                pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Float),
                 control: None,
                 script: "float_number.ts".into(),
             },
             NodeUiManifestControl {
-                pin_type: BuiltInPinTypeName::Float,
+                pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Float),
                 control: Some("slider".into()),
                 script: "float_slider.ts".into(),
             },
             NodeUiManifestControl {
-                pin_type: BuiltInPinTypeName::Vector,
+                pin_type: NodeUiControlPinType::BuiltIn(BuiltInPinTypeName::Vector),
                 control: Some("xy_pad".into()),
                 script: "vector_xy_pad.ts".into(),
             },

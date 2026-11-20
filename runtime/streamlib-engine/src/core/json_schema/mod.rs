@@ -146,6 +146,7 @@ fn link_end_of_a_port(
     LinkPortRefOutput {
         node: node_names.name_of(node_run_id),
         port: port_name.to_string(),
+        member: None,
     }
 }
 
@@ -665,11 +666,14 @@ pub(crate) fn rendered_link(
     render_the_state_component_as(&mut components, state);
     let mut rendered = LinkOutput {
         id: link.id.to_string(),
-        source: link_end_of_a_port(
-            link.source.node_run_id(),
-            link.source.port_name(),
-            node_names,
-        ),
+        source: LinkPortRefOutput {
+            member: link.source.member().map(str::to_owned),
+            ..link_end_of_a_port(
+                link.source.node_run_id(),
+                link.source.port_name(),
+                node_names,
+            )
+        },
         target: link_end_of_a_port(
             link.target.node_run_id(),
             link.target.port_name(),
