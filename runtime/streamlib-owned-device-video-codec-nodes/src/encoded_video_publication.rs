@@ -26,8 +26,9 @@ pub trait EncodedVideoOutputPort {
 }
 
 /// One access unit the encoder completed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EncodedVideoAccessUnit {
+    #[serde(with = "serde_bytes")]
     pub annex_b_access_unit_bytes: Vec<u8>,
     pub is_sync_point: bool,
 }

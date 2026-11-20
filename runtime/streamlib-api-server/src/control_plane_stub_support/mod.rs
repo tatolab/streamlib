@@ -231,6 +231,14 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn rebuild_each_node_a_setting_read_at_setup_changed(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::std::vec::Vec<::uuid::Uuid>>,
+        > {
+            ::std::boxed::Box::pin(::std::future::ready(Ok(::std::vec::Vec::new())))
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             _graph_operation: ::streamlib_project_repository::StreamGraphOperation,

@@ -257,6 +257,11 @@ expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
+name = "tatolab-video-encode-host"
+expression = "GPL-3.0-only"
+license-files = []
+
+[[licenses.clarify]]
 name = "tatolab-module-sdk"
 expression = "GPL-3.0-only"
 license-files = []

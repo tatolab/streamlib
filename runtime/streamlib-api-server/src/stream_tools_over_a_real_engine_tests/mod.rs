@@ -60,6 +60,7 @@ mod input_value_set_tests;
 mod link_candidates_checked_before_one_is_made_tests;
 mod link_checked_before_it_is_made_tests;
 mod loop_closing_link_judged_before_commit_tests;
+mod node_rebuilt_by_a_setting_tests;
 mod node_type_group_tests;
 mod node_type_reads_tests;
 mod played_project_end_to_end_tests;

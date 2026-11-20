@@ -14,6 +14,7 @@ from tatolab.stream import (
     AudioWindowContract,
     Channels,
     Description,
+    FormerlyNamed,
     Input,
     InputPin,
     InputValueLifetime,
@@ -290,6 +291,11 @@ class TwoModes:
     gain: Annotated[float, SettingOnly(), WireOnly()] = 1.0
 
 
+class FormerNameOfAnotherField:
+    old: float = 0.0
+    current: Annotated[float, FormerlyNamed("old")] = 1.0
+
+
 @pytest.mark.parametrize(
     ("node_class", "finding_code", "fix"),
     [
@@ -300,6 +306,7 @@ class TwoModes:
         (PinGivenAValue, "pin_has_a_value", "drop the value"),
         (SettingOnlyOnAPin, "pin_annotation_not_taken", "only a class node's field takes"),
         (TwoModes, "pin_annotation_repeated", "keep one"),
+        (FormerNameOfAnotherField, "former_name_finds_no_one_pin", "or rename `old`"),
     ],
 )
 def test_each_mistake_in_a_class_node_is_refused_with_what_to_write(
@@ -310,3 +317,24 @@ def test_each_mistake_in_a_class_node_is_refused_with_what_to_write(
     assert refusal.finding_code == finding_code
     assert refusal.node == node_class.__name__
     assert fix in str(refusal)
+
+
+def test_an_optional_field_and_pin_keep_their_declaration_annotations() -> None:
+    @node
+    class OptionalOnes:
+        gain: Annotated[float, SettingOnly()] | None = None
+        voice: InputPin[Annotated[Audio, StreamDelivery("ordered")] | None]
+
+    gain = input_port(OptionalOnes, "gain")
+    assert gain["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
+    assert gain["pin_default"] is None
+    assert input_port(OptionalOnes, "voice")["delivery_profile"] == "ordered"
+
+
+def test_class_state_annotated_as_a_class_variable_is_no_port() -> None:
+    @node
+    class AnnotatedState:
+        gain: float = 1.0
+        frames_seen: Annotated[ClassVar[int], Description("Frames seen.")] = 0
+
+    assert [port["name"] for port in getattr(AnnotatedState, NODE_DECLARATION_INPUT_PORTS_STAMP)] == ["gain"]

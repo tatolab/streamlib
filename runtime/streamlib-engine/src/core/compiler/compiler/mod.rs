@@ -34,10 +34,12 @@ use crate::core::compiler::compiler_ops::function_node_promotion::{
     record_each_promotion_on_its_nodes_metrics,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_config_fields_its_node_exposes_as_inputs;
+use crate::core::compiler::compiler_ops::running_node_restart::{
+    RunningNodesALiveEditRestarts, forget_the_build_of_each_node_restarted,
+    the_running_nodes_a_rebuild_restarts, unwire_each_link_of_the_nodes_restarted,
+};
 use crate::core::compiler::compiler_ops::shader_node_island::{
-    RunningShaderNodesALiveEditRestarts, forget_the_build_of_each_shader_node_restarted,
     place_each_shader_node_island_on_its_host, the_running_shader_nodes_a_live_edit_restarts,
-    unwire_each_link_of_the_shader_nodes_restarted,
 };
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
@@ -254,17 +256,28 @@ impl Compiler {
             &plan.links_to_remove,
             &plan.config_updates,
         )?;
-        let shader_nodes_restarted = the_running_shader_nodes_a_live_edit_restarts(
-            &graph_arc.read(),
-            &plan.nodes_to_add,
-            &node_ids_to_remove,
-            &[
-                plan.links_to_add.as_slice(),
-                plan.links_to_remove.as_slice(),
-            ]
-            .concat(),
-        )?;
-        plan.add_each_node_and_link_restarted(&shader_nodes_restarted);
+        let links_changed = [
+            plan.links_to_add.as_slice(),
+            plan.links_to_remove.as_slice(),
+        ]
+        .concat();
+        let nodes_restarted = {
+            let graph = graph_arc.read();
+            the_running_shader_nodes_a_live_edit_restarts(
+                &graph,
+                &plan.nodes_to_add,
+                &node_ids_to_remove,
+                &links_changed,
+            )?
+            .joined_with(the_running_nodes_a_rebuild_restarts(
+                &graph,
+                &plan.nodes_to_rebuild,
+                &plan.nodes_to_add,
+                &node_ids_to_remove,
+                &links_changed,
+            )?)
+        };
+        plan.add_each_node_and_link_restarted(&nodes_restarted);
         place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
             &mut graph_arc.write(),
             &plan.nodes_to_add,
@@ -341,11 +354,11 @@ impl Compiler {
 
         let abandoned_in_this_compile = [
             abandoned_in_this_compile,
-            stop_each_shader_node_restarted(
+            stop_each_node_restarted(
                 &graph_arc,
                 runtime_ctx,
                 abandoned_node_threads,
-                &shader_nodes_restarted,
+                &nodes_restarted,
                 &mut plan,
             )?,
         ]
@@ -526,30 +539,30 @@ impl Compiler {
     }
 }
 
-/// Unwire every link of the shader nodes a live edit restarts, stop their
-/// threads, and forget their builds, so the compile builds them again with
-/// their islands placed anew; the nodes an abandoned thread still runs. Such a
+/// Unwire every link of the nodes a live edit restarts, stop their threads, and
+/// forget their builds, so the compile builds them again, a shader node with
+/// its island placed anew; the nodes an abandoned thread still runs. Such a
 /// node, abandoned by this stop or an earlier one, is left unbuilt, its links
 /// with it, since that thread still writes the node's state.
-fn stop_each_shader_node_restarted(
+fn stop_each_node_restarted(
     graph_arc: &Arc<RwLock<Graph>>,
     runtime_ctx: &Arc<RuntimeContext>,
     abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
-    shader_nodes_restarted: &RunningShaderNodesALiveEditRestarts,
+    nodes_restarted: &RunningNodesALiveEditRestarts,
     plan: &mut CompilationPlan,
 ) -> Result<Vec<NodeDisplayNameAndId>> {
-    if shader_nodes_restarted.is_empty() {
+    if nodes_restarted.is_empty() {
         return Ok(Vec::new());
     }
     tracing::info!(
-        "Restarting {} running shader node(s) so their islands are placed again",
-        shader_nodes_restarted.nodes.len()
+        "Restarting {} running node(s) a live edit rebuilds",
+        nodes_restarted.nodes.len()
     );
-    unwire_each_link_of_the_shader_nodes_restarted(&mut graph_arc.write(), shader_nodes_restarted)?;
+    unwire_each_link_of_the_nodes_restarted(&mut graph_arc.write(), nodes_restarted)?;
     stop_node_threads_signalling_every_thread_before_joining_any(
         graph_arc,
         runtime_ctx.loaded_stream_identity(),
-        &shader_nodes_restarted.nodes,
+        &nodes_restarted.nodes,
         NodeThreadJoinBudgets::ENGINE_CHOSEN,
         || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
         runtime_ctx.this_streams_teardown_progress_note(),
@@ -557,7 +570,7 @@ fn stop_each_shader_node_restarted(
     );
     let still_held_by_an_abandoned_thread = the_restarted_nodes_an_abandoned_thread_still_runs(
         abandoned_node_threads,
-        &shader_nodes_restarted.nodes,
+        &nodes_restarted.nodes,
     );
     let abandoned_node_ids: Vec<NodeRunId> = still_held_by_an_abandoned_thread
         .iter()
@@ -565,13 +578,13 @@ fn stop_each_shader_node_restarted(
         .collect();
     let mut graph = graph_arc.write();
     plan.leave_unbuilt_each_node_and_unwired_each_of_its_links(&graph, &abandoned_node_ids);
-    let rebuilt_node_ids: Vec<NodeRunId> = shader_nodes_restarted
+    let rebuilt_node_ids: Vec<NodeRunId> = nodes_restarted
         .nodes
         .iter()
         .filter(|node_id| !abandoned_node_ids.contains(node_id))
         .cloned()
         .collect();
-    forget_the_build_of_each_shader_node_restarted(&mut graph, &rebuilt_node_ids);
+    forget_the_build_of_each_node_restarted(&mut graph, &rebuilt_node_ids);
     Ok(still_held_by_an_abandoned_thread)
 }
 
@@ -850,6 +863,11 @@ fn the_plan_these_operations_make(
                 config_to_apply,
             } => {
                 plan.config_updates.push((node_run_id, config_to_apply));
+            }
+            PendingOperation::RebuildNode(node_run_id) => {
+                if !plan.nodes_to_rebuild.contains(&node_run_id) {
+                    plan.nodes_to_rebuild.push(node_run_id);
+                }
             }
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                 function_node_id,

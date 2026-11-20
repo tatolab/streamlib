@@ -212,6 +212,10 @@ fn the_runtime_unit_binaries_are_read_from_cargos_build_messages() {
             "tatolab-video-poster-frame",
             Some("/target/debug/tatolab-video-poster-frame"),
         ),
+        a_compiler_artifact_message(
+            "tatolab-video-encode-host",
+            Some("/target/debug/tatolab-video-encode-host"),
+        ),
         a_compiler_artifact_message("generate_openapi", Some("/target/debug/generate_openapi")),
         r#"{"reason":"build-finished","success":true}"#.to_owned(),
     ]
@@ -234,6 +238,10 @@ fn the_runtime_unit_binaries_are_read_from_cargos_build_messages() {
             BuiltRuntimeUnitBinary {
                 binary_target_name: "tatolab-video-poster-frame".to_owned(),
                 built_executable: PathBuf::from("/target/debug/tatolab-video-poster-frame"),
+            },
+            BuiltRuntimeUnitBinary {
+                binary_target_name: "tatolab-video-encode-host".to_owned(),
+                built_executable: PathBuf::from("/target/debug/tatolab-video-encode-host"),
             },
         ]
     );
@@ -366,6 +374,8 @@ fn a_unit_for_the_machine_builds_every_binary_package_without_the_test_root_feat
             "tatolab-cli",
             "-p",
             "tatolab-video-poster-frame",
+            "-p",
+            "tatolab-video-encode-host",
             "--release"
         ]
     );
@@ -385,10 +395,13 @@ fn a_unit_under_a_test_root_builds_every_binary_package_with_the_feature() {
             "tatolab-cli",
             "-p",
             "tatolab-video-poster-frame",
+            "-p",
+            "tatolab-video-encode-host",
             "--features",
             "tatolabd/machine-directories-under-a-test-root,\
                  tatolab-cli/machine-directories-under-a-test-root,\
-                 tatolab-video-poster-frame/machine-directories-under-a-test-root",
+                 tatolab-video-poster-frame/machine-directories-under-a-test-root,\
+                 tatolab-video-encode-host/machine-directories-under-a-test-root",
         ]
     );
 }

@@ -766,3 +766,40 @@ fn a_bundle_of_tensors_packs_as_one_array_frame_of_an_attribute_for_each_member(
         assert!(refusal.contains(named), "{value}: {refusal}");
     }
 }
+
+/// A bundle or a List holding a Texture, Audio or encoded unit travels as one Bundle frame, and
+/// holds no stored value to pack; a bundle of small members and one of Tensors keep their kinds,
+/// whose golden bytes the tests above pin.
+///
+/// Mental-revert: without the Bundle frame arm, a bundle with a Texture member is named a
+/// Records message and a List of Textures is too.
+#[test]
+fn a_bundle_or_list_holding_a_heavy_member_travels_as_one_bundle_frame() {
+    for heavy in [
+        json!({"type": "texture", "pixel_formats": []}),
+        json!({"type": "audio"}),
+        json!({"type": "encoded_video", "codecs": []}),
+        json!({"type": "encoded_audio", "codecs": []}),
+    ] {
+        let heavy: PinType = serde_json::from_value(heavy).unwrap();
+        let frame_with_its_label = PinType::Bundle {
+            members: vec![
+                a_member("frame", heavy.clone()),
+                a_member("label", PinType::String {}),
+            ],
+        };
+        for pin_type in [frame_with_its_label, a_list_of(heavy.clone())] {
+            assert_eq!(
+                message_kind_of(&pin_type),
+                Some(DataChannelPayloadDescriptorKind::BundleFrame),
+                "{pin_type}"
+            );
+            let refusal = pack_pin_value(&pin_type, &json!({"label": "cam"}), 0).unwrap_err();
+            assert!(refusal.contains("Bundle frame a node sends"), "{refusal}");
+        }
+    }
+    assert_eq!(
+        message_kind_of(&a_placement()),
+        Some(DataChannelPayloadDescriptorKind::RecordsMessage)
+    );
+}
