@@ -10,6 +10,11 @@
 
 use serde_json::Value as JsonValue;
 
+mod carries_handed_to_the_running_pool;
+pub(crate) use carries_handed_to_the_running_pool::{
+    CarriesHandedToTheRunningFunctionNodePool, hand_the_running_function_node_pool_its_carries,
+};
+
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::NodeRunId;
 use crate::core::descriptors::{
@@ -163,14 +168,6 @@ pub(crate) fn the_function_node_pool_of(graph: &Graph) -> Option<NodeRunId> {
         .map(|node| node.id.clone())
 }
 
-/// The carries a commit hands the stream's pool while it runs: the pool and the config naming
-/// every island it carries, which its helper takes before the new links are wired.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CarriesHandedToTheRunningFunctionNodePool {
-    pub(crate) pool: NodeRunId,
-    pub(crate) config_naming_every_carry: JsonValue,
-}
-
 /// Carry each link of `links_to_add` whose reader cannot evaluate its island through the
 /// stream's function node pool, adding the pool when the stream has none; the carries handed
 /// to a pool already running, which its helper takes without a restart.
@@ -187,10 +184,14 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
     if carried.is_empty() {
         return Ok(None);
     }
-    let mut the_pool_runs = false;
+    let mut the_running_pool_before_the_carries = None;
     let pool_id = match the_function_node_pool_of(graph) {
         Some(running_pool) if !nodes_to_add.contains(&running_pool) => {
-            the_pool_runs = true;
+            the_running_pool_before_the_carries = graph
+                .traversal()
+                .v(&running_pool)
+                .first()
+                .map(|pool| (pool.ports.clone(), pool.config.clone()));
             running_pool
         }
         Some(pool_being_added) => pool_being_added,
@@ -211,25 +212,25 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
             pool_id
         }
     };
+    let mut halves_through_the_pool = Vec::with_capacity(carried.len() * 2);
     for link_id in carried {
         let (into_the_pool, out_of_the_pool) =
             carry_one_link_through_the_pool(graph, &pool_id, &link_id)?;
         links_to_add.retain(|queued| queued != &link_id);
-        links_to_add.push(into_the_pool);
-        links_to_add.push(out_of_the_pool);
+        links_to_add.push(into_the_pool.clone());
+        links_to_add.push(out_of_the_pool.clone());
+        halves_through_the_pool.extend([into_the_pool, out_of_the_pool]);
     }
-    if !the_pool_runs {
+    let Some((ports_before_the_carries, config_before_the_carries)) =
+        the_running_pool_before_the_carries
+    else {
         return Ok(None);
-    }
-    let config_naming_every_carry = graph
-        .traversal()
-        .v(&pool_id)
-        .first()
-        .and_then(|pool| pool.config.clone())
-        .ok_or_else(|| Error::NodeNotFound(pool_id.to_string()))?;
+    };
     Ok(Some(CarriesHandedToTheRunningFunctionNodePool {
         pool: pool_id,
-        config_naming_every_carry,
+        ports_before_the_carries,
+        config_before_the_carries,
+        halves_through_the_pool,
     }))
 }
 
@@ -434,5 +435,7 @@ fn family_name(family: PortFamily) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod carries_handed_to_the_running_pool_tests;
 #[cfg(test)]
 pub(crate) mod tests;

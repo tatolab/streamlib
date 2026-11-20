@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod dyn_generated_node_for_spawn_host;
+mod function_node_pool_carries_handed_to_its_helper;
 mod helper_process_command_exchange;
 mod helper_process_shutdown;
 mod helper_process_spawn;

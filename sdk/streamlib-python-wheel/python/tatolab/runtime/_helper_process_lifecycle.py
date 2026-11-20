@@ -848,6 +848,9 @@ class HelperProcessLifecycle:
                 take_the_carries_a_running_pool_is_handed(
                     type(self._hosted.instance), command.get("config") or {}, self._link_data_access
                 )
+                self._link_data_access.keep_the_last_message_of_output_ports(
+                    command.get("output_ports_keeping_their_last_message") or []
+                )
             else:
                 apply_configuration(self._hosted.instance, command.get("config"))
         except Exception as configuration_failure:

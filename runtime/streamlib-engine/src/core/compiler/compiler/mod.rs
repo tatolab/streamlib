@@ -25,7 +25,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::function_node_pool::{
     carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool,
-    the_links_a_link_is_wired_as,
+    hand_the_running_function_node_pool_its_carries, the_links_a_link_is_wired_as,
 };
 use crate::core::compiler::compiler_ops::function_node_promotion::{
     FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
@@ -434,17 +434,8 @@ impl Compiler {
         // =====================================================================
         // A running pool takes the islands it newly carries before the links into and out of
         // their ports are wired, so its helper has declared those ports by then.
-        if let Some(carries) = carries_handed_to_the_running_pool
-            && super::compiler_ops::apply_node_config_update(
-                &graph_arc,
-                &carries.pool,
-                carries.config_naming_every_carry,
-            )? == NodeConfigUpdateOutcome::NodeNoLongerInTheGraph
-        {
-            return Err(Error::NodeNotFound(format!(
-                "the function node pool `{}` left the graph while it took a new carry",
-                carries.pool
-            )));
+        if let Some(carries) = &carries_handed_to_the_running_pool {
+            hand_the_running_function_node_pool_its_carries(&graph_arc, carries)?;
         }
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);

@@ -32,7 +32,7 @@ fn a_graph_resolving_the_pool_and_three_function_node_types() -> Graph {
     graph
 }
 
-fn a_reader_in_the_app_process(graph: &mut Graph) -> NodeRunId {
+pub(crate) fn a_reader_in_the_app_process(graph: &mut Graph) -> NodeRunId {
     add_a_node(
         graph,
         MockInputOnlyNode::node_class_import_path().as_str(),
@@ -567,7 +567,14 @@ fn a_running_pool_takes_a_new_island_and_names_every_carry_for_its_helper() {
     .expect("a carry into a running pool is handed to its helper");
 
     assert_eq!(handed.pool, pool);
-    let carries = handed.config_naming_every_carry["carries"]
+    assert_eq!(handed.halves_through_the_pool.len(), 2);
+    let config_naming_every_carry = graph
+        .traversal()
+        .v(&pool)
+        .first()
+        .and_then(|pool| pool.config.clone())
+        .expect("the pool holds its config");
+    let carries = config_naming_every_carry["carries"]
         .as_array()
         .expect("the config names its carries")
         .clone();
