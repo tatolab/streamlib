@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use rspirv_reflect::rspirv::dr::{Module, Operand};
-use rspirv_reflect::spirv::{Decoration, Op};
+use rspirv_reflect::rspirv::dr::{Instruction, Module, Operand};
+use rspirv_reflect::spirv::{Decoration, Op, StorageClass};
 
 use crate::core::{Error, Result};
 
@@ -168,7 +168,7 @@ impl ShaderSpecializationData {
 pub(crate) fn specialization_constants_a_shader_declares(
     shader_module: &Module,
 ) -> BTreeMap<u32, ShaderDeclaredSpecializationConstant> {
-    let constant_id_of_each_result_id: BTreeMap<u32, u32> = shader_module
+    let mut constant_id_of_each_result_id: BTreeMap<u32, u32> = shader_module
         .annotations
         .iter()
         .filter(|instruction| instruction.class.opcode == Op::Decorate)
@@ -181,6 +181,25 @@ pub(crate) fn specialization_constants_a_shader_declares(
             _ => None,
         })
         .collect();
+    // A `SpecId` on a decoration group reaches the constants the group is
+    // applied to.
+    let grouped: Vec<(u32, u32)> = shader_module
+        .annotations
+        .iter()
+        .filter(|instruction| instruction.class.opcode == Op::GroupDecorate)
+        .filter_map(|instruction| match instruction.operands.split_first() {
+            Some((Operand::IdRef(group_id), targets)) => {
+                let constant_id = *constant_id_of_each_result_id.get(group_id)?;
+                Some(targets.iter().filter_map(move |target| match target {
+                    Operand::IdRef(target_id) => Some((*target_id, constant_id)),
+                    _ => None,
+                }))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    constant_id_of_each_result_id.extend(grouped);
     let name_of_each_result_id: BTreeMap<u32, &str> = shader_module
         .debug_names
         .iter()
@@ -319,4 +338,81 @@ fn quote_the_declared_constants(
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Refuse a module whose descriptor or push-constant layout holds an array
+/// sized by a specialization constant: that size is known only once the
+/// pipeline is built, so the layout reflected from the module cannot be
+/// checked against it. An array sized so anywhere else is left alone.
+pub(crate) fn refuse_an_array_sized_by_a_specialization_constant(
+    kernel_label: &str,
+    shader_module: &Module,
+) -> Result<()> {
+    let specialization_constant_ids: BTreeSet<u32> = shader_module
+        .types_global_values
+        .iter()
+        .filter(|instruction| {
+            matches!(
+                instruction.class.opcode,
+                Op::SpecConstant
+                    | Op::SpecConstantTrue
+                    | Op::SpecConstantFalse
+                    | Op::SpecConstantComposite
+                    | Op::SpecConstantOp
+            )
+        })
+        .filter_map(|instruction| instruction.result_id)
+        .collect();
+    if specialization_constant_ids.is_empty() {
+        return Ok(());
+    }
+    let type_of_each_id: BTreeMap<u32, &Instruction> = shader_module
+        .types_global_values
+        .iter()
+        .filter_map(|instruction| Some((instruction.result_id?, instruction)))
+        .collect();
+    let mut types_to_visit: Vec<u32> = shader_module
+        .types_global_values
+        .iter()
+        .filter(|instruction| instruction.class.opcode == Op::Variable)
+        .filter(|instruction| {
+            matches!(
+                instruction.operands.first(),
+                Some(Operand::StorageClass(
+                    StorageClass::Uniform
+                        | StorageClass::UniformConstant
+                        | StorageClass::StorageBuffer
+                        | StorageClass::PushConstant
+                ))
+            )
+        })
+        .filter_map(|instruction| instruction.result_type)
+        .collect();
+    let mut visited_types = BTreeSet::new();
+    while let Some(type_id) = types_to_visit.pop() {
+        if !visited_types.insert(type_id) {
+            continue;
+        }
+        let Some(type_instruction) = type_of_each_id.get(&type_id) else {
+            continue;
+        };
+        if let (Op::TypeArray, [_, Operand::IdRef(length_id)]) = (
+            type_instruction.class.opcode,
+            type_instruction.operands.as_slice(),
+        ) && specialization_constant_ids.contains(length_id)
+        {
+            return Err(Error::GpuError(format!(
+                "{kernel_label}: the shader sizes an array in its bindings or push constants \
+                 with a specialization constant, which a kernel cannot take; size that array \
+                 with a constant"
+            )));
+        }
+        types_to_visit.extend(type_instruction.operands.iter().filter_map(
+            |operand| match operand {
+                Operand::IdRef(id) if type_of_each_id.contains_key(id) => Some(*id),
+                _ => None,
+            },
+        ));
+    }
+    Ok(())
 }

@@ -145,3 +145,19 @@ fn each_type_reads_as_the_shader_spells_it() {
     .collect();
     assert_eq!(spelled, vec!["uint32", "float64", "int16"]);
 }
+
+#[test]
+fn a_spec_id_applied_through_a_decoration_group_reaches_its_constant() {
+    let mut builder = Builder::new();
+    let unsigned_32 = builder.type_int(32, 0);
+    let grouped = builder.spec_constant_bit32(unsigned_32, 8);
+    let group = builder.decoration_group();
+    builder.decorate(group, Decoration::SpecId, [Operand::LiteralBit32(5)]);
+    builder.group_decorate(group, [grouped]);
+
+    let declared = specialization_constants_a_shader_declares(&builder.module());
+    assert_eq!(
+        declared.get(&5).map(|constant| constant.constant_type),
+        Some(ShaderSpecializationConstantType::U32)
+    );
+}

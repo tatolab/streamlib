@@ -14,7 +14,7 @@ use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::{Error, Result};
 
-use super::ShaderSpecializationConstant;
+use super::{ShaderSpecializationConstant, refuse_an_array_sized_by_a_specialization_constant};
 
 use super::kernel_binding_names::{
     quote_declared_shader_binding_names, reflect_spirv_without_what_rspirv_refuses,
@@ -223,6 +223,7 @@ pub struct ComputeKernelDescriptor<'a> {
 pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>, u32)> {
     let reflection = reflect_spirv_without_what_rspirv_refuses(spv)
         .map_err(|e| Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}")))?;
+    refuse_an_array_sized_by_a_specialization_constant("Compute kernel", &reflection.0)?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
         Error::GpuError(format!(

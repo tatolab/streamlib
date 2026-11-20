@@ -8,6 +8,7 @@ use rspirv_reflect::DescriptorType as RDescriptorType;
 use crate::core::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
     reflect_spirv_without_what_rspirv_refuses, refuse_a_descriptor_set_other_than_set_0,
+    refuse_an_array_sized_by_a_specialization_constant,
     refuse_specialization_constants_the_shader_does_not_take,
 };
 use crate::core::{Error, Result};
@@ -31,6 +32,10 @@ pub(super) fn validate_against_spirv(
         &reflection.0,
     )?;
 
+    refuse_an_array_sized_by_a_specialization_constant(
+        &format!("Compute kernel '{}'", descriptor.label),
+        &reflection.0,
+    )?;
     refuse_specialization_constants_the_shader_does_not_take(
         &format!("Compute kernel '{}'", descriptor.label),
         descriptor.specialization_constants,

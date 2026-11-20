@@ -107,7 +107,8 @@ pub use shader_specialization_constants::{
     ShaderSpecializationConstant, ShaderSpecializationValue,
 };
 pub(crate) use shader_specialization_constants::{
-    ShaderSpecializationData, refuse_specialization_constants_the_shader_does_not_take,
+    ShaderSpecializationData, refuse_an_array_sized_by_a_specialization_constant,
+    refuse_specialization_constants_the_shader_does_not_take,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg(any(target_os = "linux", target_os = "macos"))]

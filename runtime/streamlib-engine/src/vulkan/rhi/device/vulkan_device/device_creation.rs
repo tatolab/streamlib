@@ -544,9 +544,17 @@ impl HostVulkanDevice {
         // undefined values per dispatch. The shader-side capability
         // pairing is locked by `vulkan_tone_mapper::tests::`
         // `tone_curve_spirv_declares_the_without_format_capabilities`.
+        //
+        // shaderInt64 and shaderFloat64 are requested where the driver serves
+        // them, so a shader using 64-bit values, or taking a 64-bit
+        // specialization constant, runs on every device that can run it.
+        let served_device_features =
+            unsafe { instance.get_physical_device_features(physical_device) };
         let enabled_device_features = vk::PhysicalDeviceFeatures::builder()
             .shader_storage_image_read_without_format(true)
             .shader_storage_image_write_without_format(true)
+            .shader_int64(served_device_features.shader_int64 == vk::TRUE)
+            .shader_float64(served_device_features.shader_float64 == vk::TRUE)
             .build();
 
         let device_create_info = {

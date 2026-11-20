@@ -161,3 +161,120 @@ fn one_shader_specialized_to_two_workgroup_sizes_dispatches_each_size() {
         "a constant left unset keeps the shader's default"
     );
 }
+
+/// Push constants whose array is sized by a specialization constant: the
+/// reflected size is the default's, not the size the pipeline is built with.
+const PUSH_CONSTANTS_SIZED_BY_A_CONSTANT_SLANG: &str = r#"
+[vk::constant_id(0)] const uint TAP_COUNT = 4;
+struct Taps { uint weights[TAP_COUNT]; };
+[[vk::push_constant]] ConstantBuffer<Taps> taps;
+[[vk::binding(0, 0)]] RWStructuredBuffer<uint> written;
+[numthreads(1, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    written[0] = taps.weights[TAP_COUNT - 1];
+}
+"#;
+
+/// A local array sized by a specialization constant, outside every binding.
+const LOCAL_ARRAY_SIZED_BY_A_CONSTANT_SLANG: &str = r#"
+[vk::constant_id(0)] const uint TAP_COUNT = 4;
+[[vk::binding(0, 0)]] RWStructuredBuffer<uint> written;
+[numthreads(1, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint taps[TAP_COUNT];
+    for (uint tap = 0; tap < TAP_COUNT; tap++) { taps[tap] = tap; }
+    written[0] = taps[TAP_COUNT - 1];
+}
+"#;
+
+fn compiled(source: &str, label: &str) -> std::sync::Arc<[u8]> {
+    crate::core::rhi::SlangShaderSourceCompiler::new()
+        .compile_or_reuse(
+            source,
+            crate::core::rhi::ShaderCompilationTargetStage::Compute,
+            "main",
+            label,
+        )
+        .expect("the shader compiles")
+}
+
+fn validated(spv: &[u8], push_constant_size: u32) -> crate::core::Result<Vec<ComputeBindingSpec>> {
+    let bindings = [ComputeBindingSpec::storage_buffer(0)];
+    validate_against_spirv(
+        &ComputeKernelDescriptor {
+            label: "array-sized-by-a-constant",
+            spv,
+            entry_point: "main",
+            bindings: &bindings,
+            push_constant_size,
+            specialization_constants: &workgroup_size(ShaderSpecializationValue::U32(8)),
+        },
+        &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+    )
+}
+
+#[test]
+fn push_constants_sized_by_a_specialization_constant_are_refused() {
+    let spv = compiled(
+        PUSH_CONSTANTS_SIZED_BY_A_CONSTANT_SLANG,
+        "push-constants-sized-by-a-constant",
+    );
+    let refusal = validated(&spv, 32)
+        .expect_err("the layout cannot be checked against the specialized size")
+        .to_string();
+    assert!(
+        refusal.contains("sizes an array in its bindings or push constants"),
+        "{refusal}"
+    );
+    assert!(
+        crate::core::rhi::derive_bindings_from_spirv(&spv).is_err(),
+        "the escalate path, which reflects the shape alone, refuses it too"
+    );
+}
+
+#[test]
+fn a_local_array_sized_by_a_specialization_constant_is_taken() {
+    let spv = compiled(
+        LOCAL_ARRAY_SIZED_BY_A_CONSTANT_SLANG,
+        "local-array-sized-by-a-constant",
+    );
+    validated(&spv, 0).expect("an array outside the bindings and push constants is taken");
+}
+
+/// Writes the low word of a 64-bit constant and a 64-bit float constant's
+/// integer part, so both reach the shader as the values the pipeline took.
+const SIXTY_FOUR_BIT_CONSTANTS_SLANG: &str = r#"
+[vk::constant_id(0)] const uint64_t OFFSET = 1;
+[vk::constant_id(1)] const double SCALE = 1.0;
+[[vk::binding(0, 0)]] RWStructuredBuffer<uint> written;
+[numthreads(1, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    written[0] = uint(OFFSET & 0xffffffff);
+    written[1] = uint(SCALE);
+}
+"#;
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
+fn sixty_four_bit_constants_reach_the_shader_on_a_device_serving_them() {
+    let device = vulkan_device_for_dispatch_tests();
+    let spv = compiled(SIXTY_FOUR_BIT_CONSTANTS_SLANG, "sixty-four-bit-constants");
+    let written = entries_one_workgroup_writes(
+        &device,
+        &spv,
+        &[
+            ShaderSpecializationConstant {
+                constant_id: 0,
+                value: ShaderSpecializationValue::U64((7 << 32) | 40),
+            },
+            ShaderSpecializationConstant {
+                constant_id: 1,
+                value: ShaderSpecializationValue::F64(12.0),
+            },
+        ],
+    );
+    assert_eq!(&written[..2], &[40, 12]);
+}
