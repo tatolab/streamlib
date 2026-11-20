@@ -603,24 +603,29 @@ fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none(
     assert_eq!(value_input(&node).family.family, PortFamily::Channels);
 }
 
-/// A `GraphInput`'s rendered config holds no saved value, under `value` or under `default`, the
-/// name it had, so a graph drawn back from the rendering reads a cleared value as cleared.
+/// A `GraphInput`'s rendered config mirrors the value saved on its `value` input under `default`,
+/// the key a published Tato Studio reads, and holds no `value` or `default` of its own, so a
+/// cleared value renders no key.
 ///
-/// Mental-revert: rendering the saved value under `default` keeps a value a client cleared in the
-/// config, and a graph drawn back from it holds that value again.
+/// Mental-revert: keeping a `default` the config itself holds renders a value a client cleared,
+/// and a graph drawn back from it holds that value again.
 #[test]
-fn a_graph_input_renders_no_saved_value_in_its_config() {
+fn a_graph_input_renders_its_saved_value_under_default_and_a_cleared_one_under_no_key() {
     let graph_input = NodeClassImportPath::new(GRAPH_INPUT_NODE_TYPE.to_string()).unwrap();
+    let saved = serde_json::json!({ "value": { "track": "drop" } });
     assert_eq!(
         the_config_a_graph_interface_node_renders(
             &graph_input,
+            saved.as_object().unwrap(),
             serde_json::json!({ "port": "cue", "default": { "track": "intro" } }),
         ),
-        serde_json::json!({ "port": "cue" })
+        serde_json::json!({ "port": "cue", "default": { "track": "drop" } })
     );
+    let cleared = serde_json::json!({ "value": null });
     assert_eq!(
         the_config_a_graph_interface_node_renders(
             &graph_input,
+            cleared.as_object().unwrap(),
             serde_json::json!({ "port": "cue", "value": { "track": "drop" },
                                 "default": { "track": "intro" } }),
         ),

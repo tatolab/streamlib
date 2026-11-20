@@ -60,6 +60,16 @@ fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin
     );
     let value_declared = value.declared_pin().expect("`value` declares a pin");
     assert_eq!(value_declared.former_names, ["default"]);
+    assert!(
+        value_declared.may_be_unset,
+        "a client clears the value, as the Python class's `object | None` says"
+    );
+    assert!(
+        !descriptor.outputs[0]
+            .declared_pin()
+            .expect("the `value` output declares a pin")
+            .may_be_unset
+    );
     for value in [value_declared.pin_type, the_output_value_type(&descriptor)] {
         assert_eq!(
             value,

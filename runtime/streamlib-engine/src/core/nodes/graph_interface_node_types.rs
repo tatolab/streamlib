@@ -101,12 +101,13 @@ pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
         value_port(
             "What a client sets on the Input; it takes no wire.",
             vec![GRAPH_INPUT_VALUE_FORMER_NAME.to_string()],
+            true,
         )
         .with_input_mode(NodeInputMode::SettingOnly {
             read: SettingReadTime::EachRun,
         }),
     ];
-    descriptor.outputs = vec![value_port("What enters the Input.", Vec::new())];
+    descriptor.outputs = vec![value_port("What enters the Input.", Vec::new(), false)];
     Ok(descriptor)
 }
 
@@ -123,7 +124,7 @@ pub(crate) fn the_node_type_of_a_graph_output() -> Result<NodeDescriptor> {
         port_setting("The Output's name on the stream."),
         pin_type_setting("The type of what leaves the Output; unset, `family` decides it."),
         family_setting(),
-        value_port("The port the Output offers.", Vec::new()),
+        value_port("The port the Output offers.", Vec::new(), false),
     ];
     Ok(descriptor)
 }
@@ -214,8 +215,9 @@ fn family_setting() -> PortDescriptor {
 
 /// A `value` port stating `description` and `former_names`, carried as a value of the type the
 /// `pin_type` setting chooses, of the family
-/// [`the_family_a_graph_interface_value_port_declares`] until it is resolved.
-fn value_port(description: &str, former_names: Vec<String>) -> PortDescriptor {
+/// [`the_family_a_graph_interface_value_port_declares`] until it is resolved; one a client may
+/// clear when `may_be_unset`.
+fn value_port(description: &str, former_names: Vec<String>, may_be_unset: bool) -> PortDescriptor {
     PortDescriptor::new(
         GRAPH_INTERFACE_VALUE_PORT_NAME,
         description,
@@ -229,6 +231,6 @@ fn value_port(description: &str, former_names: Vec<String>) -> PortDescriptor {
         flow: PinFlow::Value,
         annotations: PinAnnotations::default(),
         former_names,
-        may_be_unset: false,
+        may_be_unset,
     })
 }

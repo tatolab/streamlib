@@ -300,7 +300,11 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
         .expect("the GraphOutput renders");
     assert_eq!(
         camera_out["components"]["graph_interface"],
-        serde_json::json!({"direction": "output", "port": "camera", "family": "image"})
+        serde_json::json!({
+            "direction": "output", "port": "camera", "family": "image",
+            "pin_type": {"type": "texture"},
+        }),
+        "a GraphOutput renders the type its link carries"
     );
     assert_eq!(
         the_spec_without_its_node_uuids_in(rendered.clone()),

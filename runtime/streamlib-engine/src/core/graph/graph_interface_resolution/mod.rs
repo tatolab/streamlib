@@ -40,7 +40,8 @@ use streamlib_node_schema::output_port_family_resolved_against_config;
 use streamlib_runtime_client_contract::local_api_wire_contract::InputValueComesFromOnTheWire;
 
 pub(crate) use what_a_value_port_carries::{
-    carry_on_every_value_port, what_the_value_port_of_an_interface_node_carries,
+    an_interface_node_states_what_its_value_port_carries, carry_on_every_value_port,
+    what_the_value_port_of_an_interface_node_carries,
 };
 
 use interface_node_config::{
@@ -240,6 +241,7 @@ impl GraphInterfaceNodeAsDrawn {
             &self.node.input_values,
             the_config_a_graph_interface_node_renders(
                 &self.node.node_type,
+                &self.node.input_values,
                 config_of_a_node_holding_no_pin_value(&self.node.input_values),
             ),
         );
@@ -302,29 +304,46 @@ impl GraphInterfaceNodeAsDrawn {
     }
 }
 
-/// The config an interface node of `node_type` holding `config` renders: a `GraphInput`'s with no
-/// saved value, which renders on its `value` input alone, as
-/// [`leave_the_saved_value_out_of_a_graph_input_config`] leaves it.
+/// The config an interface node of `node_type` holding `input_values` renders: a `GraphInput`'s
+/// saved value, on its `value` input or under the `default` it had, is rendered as
+/// [`render_the_saved_value_of_a_graph_input_as_its_default`] puts it.
 pub(crate) fn the_config_a_graph_interface_node_renders(
     node_type: &NodeClassImportPath,
+    input_values: &serde_json::Map<String, serde_json::Value>,
     mut config: serde_json::Value,
 ) -> serde_json::Value {
     if is_the_graph_input_type(node_type)
         && let Some(config) = config.as_object_mut()
     {
-        leave_the_saved_value_out_of_a_graph_input_config(config);
+        let saved_value = [
+            GRAPH_INTERFACE_VALUE_PORT_NAME,
+            GRAPH_INPUT_VALUE_FORMER_NAME,
+        ]
+        .into_iter()
+        .filter_map(|key| input_values.get(key))
+        .find(|held| !held.is_null());
+        render_the_saved_value_of_a_graph_input_as_its_default(config, saved_value);
     }
     config
 }
 
-/// Leave the saved value of a `GraphInput`'s `value` input out of its rendered `config`, under
-/// `value` and under `default`, the name it had: it renders on the `value` input alone, so a
-/// graph drawn back from the rendering reads a cleared value as cleared.
-pub(crate) fn leave_the_saved_value_out_of_a_graph_input_config(
+/// Render `saved_value`, the saved value of a `GraphInput`'s `value` input, in its rendered
+/// `config` under `default`, the key a published Tato Studio reads it by until TAT-484. A
+/// `value` or `default` the config itself holds is dropped first, so a `GraphInput` saving no
+/// value renders neither and a graph drawn back from the rendering reads a cleared value as
+/// cleared.
+pub(crate) fn render_the_saved_value_of_a_graph_input_as_its_default(
     config: &mut serde_json::Map<String, serde_json::Value>,
+    saved_value: Option<&serde_json::Value>,
 ) {
     config.remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
     config.remove(GRAPH_INPUT_VALUE_FORMER_NAME);
+    if let Some(saved_value) = saved_value.filter(|held| !held.is_null()) {
+        config.insert(
+            GRAPH_INPUT_VALUE_FORMER_NAME.to_string(),
+            saved_value.clone(),
+        );
+    }
 }
 
 /// The range a `GraphInput`'s `config` declares a number of its `value` takes, as

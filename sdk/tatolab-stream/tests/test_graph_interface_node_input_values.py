@@ -86,6 +86,17 @@ def test_a_pin_type_that_is_not_a_choice_is_refused() -> None:
         )
 
 
+def test_a_chosen_type_no_family_carries_is_refused_as_the_runtime_refuses_it() -> None:
+    with pytest.raises(
+        TypeError,
+        match=(
+            r"chooses List of Float, which no stream's port carries yet\. To fix: choose a type "
+            r"a single message carries, such as a Float, a String or a Texture"
+        ),
+    ):
+        PinTypeChoice(list[float])
+
+
 def test_the_value_ports_are_the_names_a_link_takes() -> None:
     stream_builder = StreamBuilder("rig")
     source = stream_builder.add(GraphInput, input_values={"port": "video", "family": Image})
@@ -118,6 +129,7 @@ def test_a_graph_inputs_fields_declare_the_settings_and_the_value_the_runtime_de
     assert inputs["value"]["input_mode"] == {"mode": "setting_only", "read": "each_run"}
     assert inputs["value"]["pin_declaration"]["pin_type"] == set_by_pin_type
     assert inputs["value"]["pin_declaration"]["former_names"] == ["default"]
+    assert inputs["value"]["pin_declaration"]["may_be_unset"] is True
     assert list(outputs) == ["value"]
     assert outputs["value"]["pin_declaration"] == {"pin_type": set_by_pin_type, "flow": "value"}
     assert ports_by_name(GraphOutput, NODE_DECLARATION_INPUT_PORTS_STAMP)["value"][

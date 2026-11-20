@@ -7,7 +7,10 @@
 
 use streamlib_node_schema::output_port_family_resolved_against_config;
 
-use super::{GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_VALUE_PORT_NAME};
+use super::{
+    GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PIN_TYPE_SETTING,
+    GRAPH_INTERFACE_VALUE_PORT_NAME,
+};
 use crate::core::descriptors::{
     DeclaredPinType, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration, ResolvedPin,
 };
@@ -74,6 +77,19 @@ pub(crate) fn what_the_value_port_of_an_interface_node_carries(
         )?,
     };
     Ok((chosen, family))
+}
+
+/// Whether the interface node holding `settings` states what its `value` port carries, a pin type
+/// its `pin_type` chooses or a family its `family` names, so no link decides it.
+pub(crate) fn an_interface_node_states_what_its_value_port_carries(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    [
+        GRAPH_INTERFACE_PIN_TYPE_SETTING,
+        GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+    ]
+    .iter()
+    .any(|setting| settings.get(*setting).is_some_and(|held| !held.is_null()))
 }
 
 /// A port of an interface node that the family and pin type its `value` carries are written onto:

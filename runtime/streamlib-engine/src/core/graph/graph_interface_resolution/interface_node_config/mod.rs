@@ -9,6 +9,7 @@ use super::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PIN_TYPE_SETTING,
     GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
     GraphInterfaceLevel, a_top_level_graph_input_runs,
+    an_interface_node_states_what_its_value_port_carries,
     the_value_lifetime_a_graph_input_config_declares,
     what_the_value_port_of_an_interface_node_carries,
 };
@@ -34,12 +35,15 @@ pub(super) struct WhatAnInterfaceNodeDeclares {
     pub(super) family: Option<PortFamily>,
     /// The pin type its `pin_type` setting chooses; `None` while it holds none.
     pub(super) pin_type: Option<PinType>,
+    /// Whether it states what the port carries, a pin type or a family, so no link decides it,
+    /// as [`an_interface_node_states_what_its_value_port_carries`] reads it.
+    states_what_the_port_carries: bool,
 }
 
 impl WhatAnInterfaceNodeDeclares {
     /// Whether it states what the port carries, a pin type or a family, so no link decides it.
     pub(super) fn states_what_the_port_carries(&self) -> bool {
-        self.pin_type.is_some() || self.family.is_some()
+        self.states_what_the_port_carries
     }
 }
 
@@ -67,14 +71,13 @@ pub(super) fn what_an_interface_nodes_settings_declare(
         &serde_json::Value::Object(node.input_values.clone()),
     ))
     .map_err(|why| Error::GraphError(format!("`{kind}` node `{}`: {why}", node.name)))?;
-    let names_a_family = node
-        .input_values
-        .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
-        .is_some_and(|family| !family.is_null());
+    let states_what_the_port_carries =
+        an_interface_node_states_what_its_value_port_carries(&node.input_values);
     Ok(WhatAnInterfaceNodeDeclares {
         port: port.to_string(),
-        family: (pin_type.is_some() || names_a_family).then_some(family),
+        family: states_what_the_port_carries.then_some(family),
         pin_type,
+        states_what_the_port_carries,
     })
 }
 

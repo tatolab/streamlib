@@ -54,6 +54,44 @@ fn config_and_pins_fold_into_input_values_with_a_pin_over_a_config_field() {
     );
 }
 
+/// A `graph` render of a `GraphInput` whose value was cleared holds no `value` in its input values
+/// and the Studio's `default` mirror in its config from before; read back, it holds no value. A
+/// document written before `value` was an input, holding only a `config` `default`, keeps it.
+///
+/// Mental-revert: folding the rendered `default` gives the cleared `GraphInput` its old value
+/// back, as its former name.
+#[test]
+fn a_rendered_graph_inputs_default_is_not_folded_and_a_legacy_one_is() {
+    let node = |fields: Value| {
+        let mut node = json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "warmth_base",
+            "type": "tatolab.stream:GraphInput",
+        });
+        node.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        json!({ "nodes": [node], "links": [] })
+    };
+    let rendered = upgraded_stream_document(&node(json!({
+        "input_values": { "port": "warmth_base" },
+        "config": { "port": "warmth_base", "default": 0.1 },
+    })))
+    .expect("the render's config folds");
+    assert_eq!(
+        rendered["nodes"][0]["input_values"],
+        json!({ "port": "warmth_base" })
+    );
+    let legacy = upgraded_stream_document(&node(json!({
+        "config": { "port": "warmth_base", "default": 0.1 },
+    })))
+    .expect("the legacy config folds");
+    assert_eq!(
+        legacy["nodes"][0]["input_values"],
+        json!({ "port": "warmth_base", "default": 0.1 })
+    );
+}
+
 #[test]
 fn a_name_input_values_already_holds_wins_over_both_old_fields() {
     let document = json!({

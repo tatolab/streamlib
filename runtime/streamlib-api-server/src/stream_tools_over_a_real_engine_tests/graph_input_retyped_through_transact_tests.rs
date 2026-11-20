@@ -43,12 +43,13 @@ fn set_on_warmth_base(stream: Uuid, input: &str, value: Value) -> Value {
             "node": WARMTH_BASE_NODE_UUID, "input": input, "value": value })
 }
 
-/// A Float `GraphInput` whose value is cleared renders no value, under `value` or under the
-/// `default` it had, so the clear holds; and one `transact` clearing its value and range and
+/// A Float `GraphInput` renders its saved value under `config.default`, the key a published Tato
+/// Studio reads, and once cleared renders no value, under `value` or under `default`, so the clear
+/// holds; and one `transact` clearing its value and range and
 /// choosing a String takes.
 ///
-/// Mental-revert: rendering the saved value under `default` in the config draws the cleared
-/// value back from the rendering, and the String is refused for holding 0.1.
+/// Mental-revert: keeping the `default` the config itself holds draws the cleared value back from
+/// the rendering, and the String is refused for holding 0.1.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cleared_graph_input_value_stays_cleared_and_a_transact_clearing_it_retypes_it() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -62,6 +63,13 @@ async fn a_cleared_graph_input_value_stays_cleared_and_a_transact_clearing_it_re
             json!({ "author": an_agent_named("alice"), "operations": operations }),
         )
     };
+
+    let set = the_node_named(&engine.the_live_graph_of(&stream_id), "warmth_base");
+    assert_eq!(
+        set["config"]["default"],
+        json!(0.1),
+        "a published Studio reads it: {set}"
+    );
 
     tool_answer(&transact(json!([set_on_warmth_base(stream, "value", Value::Null)])).await)
         .expect("the value is cleared");

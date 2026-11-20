@@ -11,6 +11,8 @@
 
 use serde_json::{Map, Value};
 
+use crate::stream_graph_document::GRAPH_INPUT_NODE_TYPE;
+
 use merged_inputs::{MERGED_INPUTS, MergedInput};
 
 mod merged_inputs;
@@ -334,7 +336,14 @@ fn the_type_a_node_type_was_renamed_to(node_type: &str) -> Option<&'static str> 
         .map(|(_, to)| *to)
 }
 
-/// Fold `config` and `pins` into `input_values`; whether the node held either. A node holding
+/// The key a `graph` render of a `GraphInput` repeats its saved `value` under in its `config`, for
+/// a published Tato Studio until TAT-484, and the name `value` had before it was an input.
+const GRAPH_INPUT_VALUE_RENDERED_FOR_TATO_STUDIO_KEY: &str = "default";
+
+/// Fold `config` and `pins` into `input_values`; whether the node held either. A `GraphInput`
+/// holding `input_values` beside its `config` is a `graph` render, whose `value` its input values
+/// hold, so the `default` its `config` repeats it under is not folded: a cleared `value` stays
+/// cleared. A node holding
 /// one of the three as anything but an object (or `null`) is left as written, for the reader
 /// after this to refuse by name.
 fn the_nodes_retired_fields_folded(node: &mut Map<String, Value>) -> bool {
@@ -350,11 +359,19 @@ fn the_nodes_retired_fields_folded(node: &mut Map<String, Value>) -> bool {
     {
         return false;
     }
+    let holds_input_values = node.contains_key(NODE_INPUT_VALUES_KEY);
+    let mut config = node.remove(RETIRED_NODE_CONFIG_KEY);
+    if holds_input_values
+        && node.get("type").and_then(Value::as_str) == Some(GRAPH_INPUT_NODE_TYPE)
+        && let Some(Value::Object(config)) = &mut config
+    {
+        config.remove(GRAPH_INPUT_VALUE_RENDERED_FOR_TATO_STUDIO_KEY);
+    }
     let mut input_values = object_or_empty(node.remove(NODE_INPUT_VALUES_KEY));
     fold_the_retired_fields_into(
         &mut input_values,
         node.remove(RETIRED_NODE_PINS_KEY),
-        node.remove(RETIRED_NODE_CONFIG_KEY),
+        config,
     );
     put_input_values(node, input_values);
     true

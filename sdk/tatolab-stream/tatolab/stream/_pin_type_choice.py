@@ -14,6 +14,36 @@ __all__ = ["PinTypeChoice", "PinTypeFromSetting"]
 
 _WHAT_A_CHOICE_IS_READ_AS: Final = "PinTypeChoice"
 
+_TYPES_NO_FAMILY_CARRIES: Final[frozenset[str]] = frozenset(
+    {"list_of", "bundle", "named", "node_reference", "pin_type_choice"}
+)
+"""The types whose values no family's message carries, as the runtime's `PortFamily::carrying`
+reads them: a List, a bundle, a named type and the types that take no wire."""
+
+
+def _in_words(pin_type: "PinType") -> str:
+    """`pin_type` named as the runtime's errors name it."""
+    from ._pin_value_stored_form import PIN_TYPE_DESCRIPTION_BY_NAME
+
+    held: dict[str, Any] = dict(pin_type)
+    label = PIN_TYPE_DESCRIPTION_BY_NAME[held["type"]].label
+    if held["type"] == "list_of":
+        return f"{label} of {_in_words(held['element_type'])}"
+    if held["type"] == "bundle":
+        members = ", ".join(
+            f"{member['name']}: {_in_words(member['member_type'])}" for member in held["members"]
+        )
+        return f"{label} ({members})"
+    if held["type"] == "named":
+        return f"{label} `{held['named_pin_type']}`"
+    if held["type"] in ("integer", "float") and held.get("exact_size"):
+        size = str(held["exact_size"]).replace("uint", "UInt").replace("int", "Int")
+        return f"{label} ({size.replace('float', 'Float')})"
+    if held["type"] == "vector":
+        components = {"two": 2, "three": 3, "four": 4}[held["component_count"]]
+        return f"{label} of {components}"
+    return label
+
 
 class PinTypeChoice:
     """A chosen pin type: `PinTypeChoice(T, *annotations)` takes one type a pin is written
@@ -45,7 +75,14 @@ class PinTypeChoice:
                 f"`PinTypeChoice` chooses one type, and {annotation!r} declares a type found "
                 f"another way. To fix: name one type, such as `PinTypeChoice(float)`"
             )
-        self.chosen = declared["pin_type"]
+        chosen = declared["pin_type"]
+        if chosen["type"] in _TYPES_NO_FAMILY_CARRIES:
+            raise TypeError(
+                f"`PinTypeChoice` chooses {_in_words(chosen)}, which no stream's port carries "
+                f"yet. To fix: choose a type a single message carries, such as a Float, a String "
+                f"or a Texture"
+            )
+        self.chosen = chosen
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, PinTypeChoice) and other.chosen == self.chosen
