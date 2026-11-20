@@ -32,7 +32,7 @@ import dataclasses
 import functools
 import inspect
 import typing
-from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
+from typing import Any, Callable, Final, Generic, Optional, ParamSpec, TypeVar
 
 from ._contract_pin_types import PinDeclarationOnTheWire
 from ._description import description_and_annotation_without_it
@@ -43,7 +43,11 @@ from ._node_config_schema import (
     json_schema_for_a_node_declaring_no_config,
 )
 from ._named_pin_type_declaration import named_pin_type_declared_by
-from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
+from ._node_meta_declaration import (
+    NodeDeclaredBy,
+    take_node_meta_held_for_the_kind_decorator,
+    the_conversion_a_node_states,
+)
 from ._pin_declaration import (
     NO_DEFAULT,
     DeclaredPin,
@@ -73,7 +77,7 @@ type State[StateRecord] = StateRecord
 type Stateful[FunctionNodeOutput, StateRecord] = tuple[FunctionNodeOutput, StateRecord]
 """What a stateful function node returns: its output, then the state its next call takes."""
 
-FUNCTION_NODE_KIND = "function"
+FUNCTION_NODE_KIND: Final = "function"
 PYTHON_FUNCTION_NODE_LANGUAGE = "python"
 
 # Wire contract with the runtime's reader: how the signature is called, stamped
@@ -147,7 +151,7 @@ def declare_function_node(
     typed grammar of bare `@node`, where each pin declares its pin type and a mistake is a
     `NodeDeclarationRefusal`; otherwise it reads the family grammar of `@node.function`.
     """
-    decorator = "@node" if reads_pin_types else "@node.function"
+    decorator: NodeDeclaredBy = "@node" if reads_pin_types else "@node.function"
     _refuse_what_is_not_a_plain_module_level_function(function, decorator)
     declared_meta = take_node_meta_held_for_the_kind_decorator(function)
     signature_reading = _FunctionNodeSignatureReading(function, reads_pin_types=reads_pin_types)
@@ -168,6 +172,15 @@ def declare_function_node(
         ),
         declaration_stamps["description"]: declared_meta.get("description", ""),
         declaration_stamps["category"]: declared_meta.get("category"),
+        declaration_stamps["conversion"]: the_conversion_a_node_states(
+            function.__name__,
+            declared_meta,
+            declared_by=decorator,
+            kind=FUNCTION_NODE_KIND,
+            input_ports=signature_reading.input_ports,
+            output_ports=signature_reading.output_ports,
+        ),
+        declaration_stamps["declared_by"]: decorator,
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
@@ -227,12 +240,17 @@ class _FunctionNodeSignatureReading:
         `reads_values_typed_beside_images` reads each input typed by a port family's read type,
         an `ImageFrame` among them, under the family grammar and every other under the typed
         grammar, as a shader's signature is read: its Images are the pictures it computes over,
-        and its values carry their pin types.
+        written `Texture` or `ImageFrame`, and its values carry their pin types.
         """
         self._function_name = function.__name__
         self._reads_pin_types = reads_pin_types
         self._reads_values_typed_beside_images = reads_values_typed_beside_images
         annotations = self._resolved_annotations(function)
+        if reads_values_typed_beside_images:
+            annotations = {
+                name: _a_texture_read_as_an_image(annotation)
+                for name, annotation in annotations.items()
+            }
         self.input_ports: "list[dict[str, Any]]" = []
         self._signature_inputs: "list[dict[str, Any]]" = []
         self._time_parameter: Optional[str] = None
@@ -901,6 +919,20 @@ def _families_by_read_type() -> "dict[Any, tuple[str, str]]":
         ChannelsBlock: ("channels_block", "channels"),
         PacketsUnit: ("packets_unit", "packets"),
     }
+
+
+def _a_texture_read_as_an_image(annotation: Any) -> Any:
+    """`annotation` with a `Texture`, also one `Annotated`, read as the `ImageFrame` it arrives as."""
+    from ._pin_types import Texture
+    from .image_frame import ImageFrame
+
+    if annotation is Texture:
+        return ImageFrame
+    if typing.get_origin(annotation) is typing.Annotated:
+        annotated, *metadata = typing.get_args(annotation)
+        if annotated is Texture:
+            return typing.Annotated[(ImageFrame, *metadata)]
+    return annotation
 
 
 def _names_a_port_family(annotation: Any) -> bool:

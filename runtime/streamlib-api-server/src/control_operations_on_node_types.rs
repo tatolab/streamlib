@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
-use streamlib::sdk::descriptors::{FunctionNodeLanguage, NodeDescriptor, NodeKind, PinType};
+use streamlib::sdk::descriptors::{
+    FunctionNodeLanguage, NodeDescriptor, NodeKind, PinConversion, PinType,
+};
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeTypePortsDescribedOnTheWire};
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
@@ -50,18 +52,10 @@ impl ControlOperationDispatcher {
         let project = self
             .the_project_in(ListPinTypes::METHOD_NAME, project_directory.clone())
             .await?;
-        let described = self
-            .the_node_types_the_projects_loaded_streams_described(project)
-            .await?;
-        let conversions: Vec<PinTypeConversionListed> = NODE_REGISTRY
-            .pin_conversions()
-            .iter()
-            .cloned()
-            .chain(
-                described
-                    .values()
-                    .filter_map(|descriptor| descriptor.pin_conversion().ok().flatten()),
-            )
+        let conversions: Vec<PinTypeConversionListed> = self
+            .the_conversions_the_projects_loaded_streams_resolve(project)
+            .await?
+            .into_values()
             .map(|conversion| PinTypeConversionListed {
                 from: conversion.input_pin_type,
                 to: conversion.output_pin_type,
@@ -245,6 +239,40 @@ impl ControlOperationDispatcher {
         .await
     }
 
+    /// The conversion each node type the project's loaded streams resolve states, as each
+    /// stream's link verdict reads them, by type: the native ones when no stream is loaded, and
+    /// a type two streams resolve the first's.
+    async fn the_conversions_the_projects_loaded_streams_resolve(
+        &self,
+        project: Uuid,
+    ) -> Result<BTreeMap<String, PinConversion>, ControlOperationRefusal> {
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        tokio::task::spawn_blocking(move || {
+            let mut conversions: BTreeMap<String, PinConversion> = NODE_REGISTRY
+                .pin_conversions()
+                .iter()
+                .map(|conversion| (conversion.node_type.to_string(), conversion.clone()))
+                .collect();
+            for stream in the_loaded_streams_of(operations_on_the_loaded_streams.as_ref(), project)
+            {
+                for conversion in operations_on_the_loaded_streams
+                    .pin_conversions_of_the_stream_a_call_names(&stream)
+                    .unwrap_or_else(|_| Arc::from([]))
+                    .iter()
+                {
+                    conversions
+                        .entry(conversion.node_type.to_string())
+                        .or_insert_with(|| conversion.clone());
+                }
+            }
+            conversions
+        })
+        .await
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "the read of the conversions the project's streams resolve",
+        ))
+    }
+
     /// Every node type the loaded streams of `project` described in their own interpreter,
     /// those its installed modules declare among them; none while no stream of it is loaded.
     async fn the_node_types_the_projects_loaded_streams_described(
@@ -272,15 +300,8 @@ fn the_node_types_described_in_the_interpreter_of_each_stream_of(
     project: Uuid,
 ) -> NodeTypesDescribedInTheProjectsInterpreter {
     let mut described = NodeTypesDescribedInTheProjectsInterpreter::new();
-    for listing in operations_on_the_loaded_streams.list_streams() {
-        if listing
-            .stream_location
-            .as_ref()
-            .is_none_or(|location| location.project != project)
-        {
-            continue;
-        }
-        let stream = listing.stream_id.as_str();
+    for stream in the_loaded_streams_of(operations_on_the_loaded_streams, project) {
+        let stream = stream.as_str();
         let in_its_interpreter = operations_on_the_loaded_streams
             .node_types_described_in_the_interpreter_of_the_stream_a_call_names(stream)
             .unwrap_or_default();
@@ -299,6 +320,24 @@ fn the_node_types_described_in_the_interpreter_of_each_stream_of(
         }
     }
     described
+}
+
+/// The id of each stream of `project` this runtime lists.
+fn the_loaded_streams_of(
+    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
+    project: Uuid,
+) -> Vec<String> {
+    operations_on_the_loaded_streams
+        .list_streams()
+        .into_iter()
+        .filter(|listing| {
+            listing
+                .stream_location
+                .as_ref()
+                .is_some_and(|location| location.project == project)
+        })
+        .map(|listing| listing.stream_id)
+        .collect()
 }
 
 /// The UUID a listing names its project by.

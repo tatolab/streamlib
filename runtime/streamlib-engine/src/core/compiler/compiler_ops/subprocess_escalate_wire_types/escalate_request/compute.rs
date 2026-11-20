@@ -183,9 +183,9 @@ pub(crate) struct EscalateRequestRunComputeKernelBatchDispatch {
     pub(crate) group_count_z: u32,
 
     /// Handle returned by a prior `register_compute_kernel` response. No
-    /// kernel_id may appear twice in one batch: a kernel owns a single
-    /// descriptor set, so the second bind would retarget the dispatch already
-    /// recorded against it. Refused with an `err` response.
+    /// kernel_id may appear twice in one batch: a recording binds a kernel
+    /// through one descriptor set, so the second bind would retarget the
+    /// dispatch already recorded against it. Refused with an `err` response.
     pub(crate) kernel_id: String,
 
     /// Push-constant payload for this dispatch alone, encoded as lowercase hex.

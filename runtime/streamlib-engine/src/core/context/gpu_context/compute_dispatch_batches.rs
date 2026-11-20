@@ -45,23 +45,23 @@ pub struct BatchedComputeKernelDispatchBinding {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl BatchedComputeKernelDispatchBinding {
-    /// Stage this binding on `kernel`, as the kind the shader declares it.
+    /// Stage this binding on `dispatch`, as the kind the shader declares it.
     ///
     /// The one place a binding kind becomes a descriptor write: every
     /// dispatch, batched or alone, records its writes through here.
-    pub fn write_into_kernel(
+    pub fn stage_into(
         &self,
-        kernel: &crate::vulkan::rhi::VulkanComputeKernel,
+        dispatch: &mut crate::vulkan::rhi::ComputeKernelDispatch<'_>,
     ) -> Result<()> {
         match &self.surface_bound_resource {
             SurfaceBoundKernelBindingResource::StorageImage(registration) => {
-                kernel.set_storage_image(self.binding, registration.texture())
+                dispatch.set_storage_image(self.binding, registration.texture())
             }
             SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
-                kernel.set_sampled_texture(self.binding, registration.texture())
+                dispatch.set_sampled_texture(self.binding, registration.texture())
             }
             SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
-                kernel.set_storage_buffer_storage(self.binding, buffer)
+                dispatch.set_storage_buffer_storage(self.binding, buffer)
             }
         }
     }
@@ -146,6 +146,13 @@ pub(super) fn binding_location_in_this_recording(
     }
 }
 
+/// The latest queue submission that recorded through each batch descriptor
+/// set of each compute kernel, keyed by the kernel's handle and the set's
+/// index.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) type LatestSubmissionPerBatchDescriptorSet =
+    HashMap<(usize, usize), crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot>;
+
 impl GpuContext {
     /// Record every dispatch in `batch` into one command buffer, submit once,
     /// and return when that submission has retired.
@@ -168,10 +175,15 @@ impl GpuContext {
     /// wrote it before the batch is not the batch's to know — and narrows to
     /// compute-to-compute once this recording is the writer.
     ///
-    /// One kernel may appear only once. A kernel records into one descriptor
-    /// set, so a second bind would retarget the dispatch already recorded
-    /// against it — silently, since nothing has executed yet. Refused by name rather than
-    /// dispatched wrong.
+    /// Each dispatch records through a batch descriptor set of its kernel that
+    /// no running submission uses, waiting with nothing shared held when every
+    /// set is in flight, so two streams dispatching one kernel both have work
+    /// on the GPU at once.
+    ///
+    /// One kernel may appear only once. A recording binds a kernel through one
+    /// descriptor set, so a second bind would retarget the dispatch already
+    /// recorded against it — silently, since nothing has executed yet. Refused
+    /// by name rather than dispatched wrong.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn dispatch_compute_kernel_batch(
         &self,
@@ -188,8 +200,8 @@ impl GpuContext {
             {
                 return Err(Error::GpuError(format!(
                     "dispatch {index} of this batch names the kernel dispatch {earlier} already \
-                     names; a kernel records into one descriptor set, so binding it twice in one \
-                     recording would give dispatch {earlier} this dispatch's bindings. Build a \
+                     names; a recording binds a kernel through one descriptor set, so binding \
+                     it twice would give dispatch {earlier} this dispatch's bindings. Build a \
                      second kernel, or run them as separate batches"
                 )));
             }
@@ -214,51 +226,76 @@ impl GpuContext {
         Ok(())
     }
 
-    /// Lock `latest_submission_per_compute_kernel` once no kernel in
-    /// `kernel_keys` has a submission still running, waiting for those
-    /// submissions with the lock released.
+    /// Lock `latest_submission_per_compute_kernel_batch_descriptor_set` once
+    /// each kernel in `kernel_keys` has a batch descriptor set no running
+    /// submission uses, waiting for one with the lock released. Returns, per
+    /// kernel, the key of the set it records through.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) fn lock_latest_submissions_once_these_kernels_are_free(
+    pub(super) fn lock_latest_submissions_once_each_kernel_has_a_free_set(
         &self,
         kernel_keys: &[usize],
-    ) -> Result<
-        parking_lot::MutexGuard<
-            '_,
-            HashMap<usize, crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot>,
-        >,
-    > {
-        loop {
-            let latest_submission_per_compute_kernel =
-                self.latest_submission_per_compute_kernel.lock();
-            let previous_submissions_of_these_kernels = kernel_keys
-                .iter()
-                .filter_map(|kernel_key| latest_submission_per_compute_kernel.get(kernel_key))
-                .fold(
-                    crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot::default(),
-                    |covered, previous_submission| covered.covering_both(previous_submission),
-                );
-            if self
-                .device
-                .inner
-                .every_queue_submission_in_snapshot_has_completed(
-                    &previous_submissions_of_these_kernels,
-                )?
-            {
-                return Ok(latest_submission_per_compute_kernel);
+    ) -> Result<(
+        parking_lot::MutexGuard<'_, LatestSubmissionPerBatchDescriptorSet>,
+        Vec<(usize, usize)>,
+    )> {
+        'retry: loop {
+            let latest_submissions = self
+                .latest_submission_per_compute_kernel_batch_descriptor_set
+                .lock();
+            let mut picked = Vec::with_capacity(kernel_keys.len());
+            for &kernel_key in kernel_keys {
+                match self.free_batch_descriptor_set(&latest_submissions, kernel_key)? {
+                    Ok(set) => picked.push((kernel_key, set)),
+                    Err(running) => {
+                        drop(latest_submissions);
+                        self.device
+                            .inner
+                            .wait_for_queue_submissions_blocking_counted(
+                                &running,
+                                format_args!(
+                                    "a compute dispatch waiting for a free batch descriptor set"
+                                ),
+                            )?;
+                        continue 'retry;
+                    }
+                }
             }
-            drop(latest_submission_per_compute_kernel);
-            self.device
-                .inner
-                .wait_for_queue_submissions_blocking_counted(
-                    &previous_submissions_of_these_kernels,
-                    format_args!("a compute dispatch waiting for its kernel's previous dispatch"),
-                )?;
+            return Ok((latest_submissions, picked));
         }
     }
 
+    /// The first batch descriptor set of `kernel_key` no running submission
+    /// uses, or the running submission of the last set looked at.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn free_batch_descriptor_set(
+        &self,
+        latest_submissions: &LatestSubmissionPerBatchDescriptorSet,
+        kernel_key: usize,
+    ) -> Result<std::result::Result<usize, crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot>>
+    {
+        const _: () = assert!(crate::vulkan::rhi::COMPUTE_BATCH_DESCRIPTOR_SETS > 0);
+        let mut a_running_submission = None;
+        for set in 0..crate::vulkan::rhi::COMPUTE_BATCH_DESCRIPTOR_SETS {
+            match latest_submissions.get(&(kernel_key, set)) {
+                Some(running)
+                    if !self
+                        .device
+                        .inner
+                        .every_queue_submission_in_snapshot_has_completed(running)? =>
+                {
+                    a_running_submission = Some(*running);
+                }
+                _ => return Ok(Ok(set)),
+            }
+        }
+        Ok(Err(
+            a_running_submission.expect("every set was looked at and found running")
+        ))
+    }
+
     /// Begin `recorder`, then record `batch` into it and submit it while
-    /// holding `latest_submission_per_compute_kernel`, once every kernel it
-    /// names is free of its previous submission.
+    /// holding `latest_submission_per_compute_kernel_batch_descriptor_set`,
+    /// once every kernel it names has a free batch descriptor set.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn record_and_submit_compute_kernel_batch(
         &self,
@@ -273,25 +310,17 @@ impl GpuContext {
         // previous submission may wait on its fence. From here on every early
         // return closes the recording, or the next batch's begin() refuses.
         recorder.begin()?;
-        let mut latest_submission_per_compute_kernel =
-            match self.lock_latest_submissions_once_these_kernels_are_free(&kernel_keys) {
-                Ok(locked) => locked,
-                Err(e) => {
-                    recorder.abort_recording();
-                    return Err(e);
-                }
-            };
-        let layout_each_image_landed_in = match Self::record_compute_kernel_batch(recorder, batch) {
-            Ok(landed_in) => landed_in,
-            Err(e) => {
-                recorder.abort_recording();
-                return Err(e);
-            }
-        };
+        let (mut latest_submissions, picked_sets, layout_each_image_landed_in) = self
+            .lock_latest_submissions_once_each_kernel_has_a_free_set(&kernel_keys)
+            .and_then(|(latest_submissions, picked_sets)| {
+                let landed_in = Self::record_compute_kernel_batch(recorder, batch, &picked_sets)?;
+                Ok((latest_submissions, picked_sets, landed_in))
+            })
+            .inspect_err(|_| recorder.abort_recording())?;
         recorder.submit()?;
         let this_submission = recorder.latest_submission();
-        for kernel_key in kernel_keys {
-            latest_submission_per_compute_kernel.insert(kernel_key, this_submission);
+        for kernel_key_and_set in picked_sets {
+            latest_submissions.insert(kernel_key_and_set, this_submission);
         }
 
         // Published between the submit and the wait, not after both: once the
@@ -323,12 +352,15 @@ impl GpuContext {
     /// The recording half of [`Self::dispatch_compute_kernel_batch`], split out
     /// so every failure path funnels through one `abort_recording`.
     ///
-    /// Returns the layout each bound texture ends the recording in, for the
-    /// caller to publish once the submission has retired.
+    /// Each dispatch records through the batch descriptor set picked for it,
+    /// at its index in `picked_sets`. Returns the layout each bound texture ends the
+    /// recording in, for the caller to publish once the submission has
+    /// retired.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn record_compute_kernel_batch(
         recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
         batch: &[BatchedComputeKernelDispatch],
+        picked_sets: &[(usize, usize)],
     ) -> Result<HashMap<vulkanalia::vk::Image, VulkanLayout>> {
         use crate::vulkan::rhi::{VulkanAccess, VulkanBufferLike as _, VulkanStage};
 
@@ -367,7 +399,9 @@ impl GpuContext {
             }
         };
 
-        for (dispatch_index, dispatch) in batch.iter().enumerate() {
+        for ((dispatch_index, dispatch), (_, batch_descriptor_set)) in
+            batch.iter().enumerate().zip(picked_sets)
+        {
             for binding in &dispatch.bindings {
                 if let Some(buffer) = binding.surface_bound_resource.storage_buffer() {
                     let (from_stage, from_access) = barrier_source_stage_and_access_for_touch(
@@ -425,21 +459,20 @@ impl GpuContext {
                 layout_during_recording.insert(image, required_layout);
             }
 
+            let mut staged = dispatch.kernel.begin_dispatch();
             for binding in &dispatch.bindings {
-                binding.write_into_kernel(&dispatch.kernel)?;
+                binding.stage_into(&mut staged)?;
             }
             // A kernel that declares push constants must be given them even
             // when the payload is empty, so `set_push_constants` produces the
-            // size mismatch rather than the dispatch running against whatever
-            // the kernel's staged buffer last held.
+            // size mismatch rather than the dispatch running without them.
             if dispatch.kernel.push_constant_size() > 0 || !dispatch.push_constants.is_empty() {
-                dispatch
-                    .kernel
-                    .set_push_constants(&dispatch.push_constants)?;
+                staged.set_push_constants(&dispatch.push_constants)?;
             }
 
-            recorder.record_dispatch(
-                &dispatch.kernel,
+            recorder.record_staged_dispatch(
+                staged,
+                *batch_descriptor_set,
                 dispatch.group_count_x,
                 dispatch.group_count_y,
                 dispatch.group_count_z,

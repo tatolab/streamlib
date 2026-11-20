@@ -31,7 +31,10 @@ import tatolab.runtime
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 from tatolab.stream._node_config_schema import json_schema_for_a_node_declaring_no_config
-from tatolab.stream._node_declaration import NODE_DECLARATION_CATEGORY_STAMP
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_CATEGORY_STAMP,
+    NODE_DECLARATION_CONVERSION_STAMP,
+)
 
 #: The directory holding the `tatolab/runtime/` this process imported.
 LEND_DIRECTORY = Path(tatolab.runtime.__file__).resolve().parent.parent.parent
@@ -206,6 +209,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                     }
                 ],
                 "category": "Audio/Relays",
+                "conversion": False,
             }
         ],
         "refused_node_types": [],
@@ -236,7 +240,32 @@ def test_a_node_paced_by_real_time_is_described_as_one(project_directory: Path):
 def test_the_bootstrap_spells_each_stamp_an_older_tatolab_stream_lacks_as_tatolab_stream_does():
     assert dict(
         node_interpreter_bootstrap.DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE
-    ) == {"category": NODE_DECLARATION_CATEGORY_STAMP}
+    ) == {
+        "category": NODE_DECLARATION_CATEGORY_STAMP,
+        "conversion": NODE_DECLARATION_CONVERSION_STAMP,
+    }
+
+
+def test_a_node_stating_a_conversion_is_described_as_one(tmp_path: Path):
+    write_project_module(
+        tmp_path,
+        "described_nodes",
+        """
+        from tatolab.stream import node
+
+
+        @node.meta(conversion=True)
+        @node
+        def LevelAsText(level: float = 0.0) -> str:
+            return f"{level:.2f}"
+        """,
+    )
+
+    described = describe(tmp_path, "described_nodes:LevelAsText")
+
+    assert described.returncode == 0, described.stderr
+    (level_as_text,) = described_document(described)["described_node_types"]
+    assert level_as_text["conversion"] is True
 
 
 def test_a_node_its_tatolab_stream_stamped_no_category_is_described_without_one(

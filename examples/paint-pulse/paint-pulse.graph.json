@@ -448,12 +448,18 @@
       },
       "input_values": {
         "angle": 0.25,
-        "start_red": 0.12,
-        "start_green": 0.15,
-        "start_blue": 0.27,
-        "end_red": 0.05,
-        "end_green": 0.05,
-        "end_blue": 0.08
+        "end": {
+          "alpha": 1.0,
+          "blue": 0.08,
+          "green": 0.05,
+          "red": 0.05
+        },
+        "start": {
+          "alpha": 1.0,
+          "blue": 0.27,
+          "green": 0.15,
+          "red": 0.12
+        }
       }
     },
     {

@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The pin types a function or shader node's signature states exactly: its number and Boolean
-//! values. Its picture ports are typed by their Image family, as every picture port is.
+//! values, and a shader's output Texture in the one format every shader writes. Its other
+//! picture ports are typed by their Image family, as every picture port is.
 
-use crate::core::descriptors::{FloatSize, NodeDescriptor, PinDeclaration, PinType};
+use crate::core::descriptors::{
+    FloatSize, NodeDescriptor, PinDeclaration, PinType, TexturePixelFormat,
+};
 
-use super::super::shader_node_program::ShaderNodeProgram;
+use super::super::shader_node_program::{SHADER_NODE_OUTPUT_TEXTURE_FORMAT, ShaderNodeProgram};
 
 /// The described key a function node's signature sits under.
 const DESCRIBED_FUNCTION_SIGNATURE_KEY: &str = "function_signature";
@@ -78,22 +81,35 @@ pub(super) fn ports_a_function_node_signature_types(
 
 /// Each port a shader node's program types exactly, by name, with its declaration: its inputs
 /// of numbers, a Float exactly a 32-bit Float, the four bytes its push constant holds, and a
-/// Color or a Vector as its signature states it, each part a 32-bit push constant too.
+/// Color or a Vector as its signature states it, each part a 32-bit push constant too; and its
+/// output, a Texture of the format the runtime writes every shader's output in.
 pub(super) fn ports_a_shader_node_program_types(
     program: &ShaderNodeProgram,
 ) -> Vec<(String, PinDeclaration)> {
-    program
-        .number_inputs()
-        .map(|(port, pin_type)| {
-            let pin_type = match pin_type {
-                PinType::Float { .. } => PinType::Float {
-                    exact_size: Some(FloatSize::Float32),
-                },
-                other => other.clone(),
-            };
-            (port.to_string(), PinDeclaration::exactly(pin_type))
-        })
-        .collect()
+    let number_inputs = program.number_inputs().map(|(port, pin_type)| {
+        let pin_type = match pin_type {
+            PinType::Float { .. } => PinType::Float {
+                exact_size: Some(FloatSize::Float32),
+            },
+            other => other.clone(),
+        };
+        (port.to_string(), PinDeclaration::exactly(pin_type))
+    });
+    let output = (
+        program.output_port.clone(),
+        PinDeclaration::exactly(shader_node_output_texture()),
+    );
+    number_inputs.chain(std::iter::once(output)).collect()
+}
+
+/// The Texture every shader node's output is: of the one format the runtime writes it in.
+fn shader_node_output_texture() -> PinType {
+    let pixel_format =
+        TexturePixelFormat::from_wire_name(SHADER_NODE_OUTPUT_TEXTURE_FORMAT.wire_name())
+            .expect("a shader node's output format is a Texture pixel format");
+    PinType::Texture {
+        pixel_formats: vec![pixel_format],
+    }
 }
 
 /// Declare each of `typed_ports` on the port of its name, unless that port's author states its

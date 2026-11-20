@@ -11,26 +11,28 @@ use uuid::Uuid;
 
 use super::NODE_INPUT_VALUES_KEY;
 
-/// The core node type that makes a Color from its parts.
-const COMBINE_COLOR_NODE_TYPE: &str =
-    "imports/core-nodes/core_nodes.combine_and_separate:CombineColor";
-/// The core node type that makes a Vector of any size from its parts.
-const COMBINE_VECTOR_NODE_TYPE: &str =
-    "imports/core-nodes/core_nodes.combine_and_separate:CombineVector";
+/// The core node type that makes a Color from its parts, as the Core Nodes project names it.
+const COMBINE_COLOR_NODE_TYPE: &str = "core_nodes.combine_and_separate:CombineColor";
+/// The core node type that makes a Vector of any size from its parts, as the Core Nodes project
+/// names it.
+const COMBINE_VECTOR_NODE_TYPE: &str = "core_nodes.combine_and_separate:CombineVector";
 /// The output of a combining node.
 const COMBINED_OUTPUT: &str = "result";
+/// The key of the Studio's layout contract in a node's `studio`, which a combining node takes
+/// from the node it feeds so the Studio reads its position the same way.
+const STUDIO_CONTRACT_KEY: &str = "contract";
 /// How far left of the node it feeds a combining node is drawn, and how far apart the
 /// combining nodes of one node are.
 const COMBINING_NODE_OFFSET: (f64, f64) = (-240.0, 120.0);
 
-/// Each input of a node type that became one input. The first shipped rows are the colour and
-/// composite nodes'.
-pub(super) const MERGED_INPUTS: &[MergedInput] = &[];
+pub(super) use core_node_rows::MERGED_INPUTS;
 
 /// One input that a node type's old inputs became.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct MergedInput {
-    /// The node type's import path, as it is named after any rename.
+    /// The node type's path as the project that declares it names it, after any rename. A node
+    /// of a project that imports it names it under the import's folder, `imports/<folder>/`,
+    /// and its combining node is named under the same folder.
     pub(super) node_type: &'static str,
     /// The input the old ones became.
     pub(super) input: &'static str,
@@ -42,10 +44,6 @@ pub(super) struct MergedInput {
 }
 
 /// What a merged input holds.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no shipped row merges an input yet")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MergedInto {
     /// A Color, of four parts.
@@ -71,10 +69,6 @@ impl MergedInto {
 }
 
 /// How one part of a merged value was fed.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no shipped row merges an input yet")
-)]
 #[derive(Debug, Clone, Copy)]
 pub(super) enum MergedPart {
     /// By an old input, and its default when the row was written.
@@ -126,14 +120,31 @@ pub(super) fn the_inputs_of_a_node_merged(
         return false;
     };
     let mut any_merged = false;
-    let rows_of_the_type = rows.iter().filter(|row| row.node_type == node_type);
-    for (row_index, row) in rows_of_the_type.enumerate() {
-        if let Some(merged) = the_input_merged(node, links, row, row_index) {
+    let rows_of_the_type = rows.iter().filter_map(|row| {
+        the_folder_a_node_type_is_named_under(&node_type, row.node_type)
+            .map(|folder| (row, folder.to_owned()))
+    });
+    for (row_index, (row, folder)) in rows_of_the_type.enumerate() {
+        if let Some(merged) = the_input_merged(node, links, row, &folder, row_index) {
             any_merged = true;
             combining_nodes.extend(merged);
         }
     }
     any_merged
+}
+
+/// The folder `node_type` names `declared_type` under: empty in the project that declares it,
+/// `imports/<folder>/` in one that imports it; `None` when it names another type.
+fn the_folder_a_node_type_is_named_under<'a>(
+    node_type: &'a str,
+    declared_type: &str,
+) -> Option<&'a str> {
+    let folder = node_type.strip_suffix(declared_type)?;
+    let is_an_import_folder = folder
+        .strip_prefix("imports/")
+        .and_then(|rest| rest.strip_suffix('/'))
+        .is_some_and(|name| !name.is_empty() && !name.contains('/'));
+    (folder.is_empty() || is_an_import_folder).then_some(folder)
 }
 
 /// `wanted`, or the first of `wanted_2`, `wanted_3`, … that no node of `nodes` is named.
@@ -156,6 +167,7 @@ fn the_input_merged(
     node: &mut Map<String, Value>,
     links: &mut Vec<Value>,
     row: &MergedInput,
+    folder: &str,
     row_index: usize,
 ) -> Option<Option<Value>> {
     let node_id = node.get("id").and_then(Value::as_str)?.to_owned();
@@ -226,6 +238,7 @@ fn the_input_merged(
         Some(the_combining_node(
             node,
             row,
+            folder,
             row_index,
             &combining_node_id,
             combining_values,
@@ -252,10 +265,12 @@ fn the_combining_node_id(node_id: &str, input: &str) -> String {
     Uuid::new_v5(&namespace, format!("combines {input}").as_bytes()).to_string()
 }
 
-/// The combining node `row` places beside `node`, holding `values`.
+/// The combining node `row` places beside `node`, holding `values`, its type named under
+/// `folder` as the node's is.
 fn the_combining_node(
     node: &Map<String, Value>,
     row: &MergedInput,
+    folder: &str,
     row_index: usize,
     combining_node_id: &str,
     values: Map<String, Value>,
@@ -264,21 +279,43 @@ fn the_combining_node(
     let mut combining_node = json!({
         "id": combining_node_id,
         "name": format!("{node_name}_{}", row.input),
-        "type": row.merged_into.combining_node_type(),
+        "type": format!("{folder}{}", row.merged_into.combining_node_type()),
         NODE_INPUT_VALUES_KEY: values,
     });
-    let position = node
-        .get("studio")
-        .and_then(|studio| studio.get("position"))
-        .and_then(|position| Some((position.get("x")?.as_f64()?, position.get("y")?.as_f64()?)));
-    if let Some((x, y)) = position {
+    let studio = node.get("studio");
+    if let Some(position) = studio.and_then(|studio| studio.get("position")) {
         let (left, apart) = COMBINING_NODE_OFFSET;
-        combining_node["studio"] = json!({
-            "position": {"x": x + left, "y": y + apart * row_index as f64}
-        });
+        let offset = |x: f64, y: f64| (x + left, y + apart * row_index as f64);
+        let placed = match position {
+            Value::Object(at) => at
+                .get("x")
+                .and_then(Value::as_f64)
+                .zip(at.get("y").and_then(Value::as_f64))
+                .map(|(x, y)| {
+                    let (x, y) = offset(x, y);
+                    json!({"x": x, "y": y})
+                }),
+            Value::Array(at) => match at.as_slice() {
+                [x, y] => x.as_f64().zip(y.as_f64()).map(|(x, y)| {
+                    let (x, y) = offset(x, y);
+                    json!([x, y])
+                }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(placed) = placed {
+            let mut placed_studio = Map::new();
+            if let Some(contract) = studio.and_then(|studio| studio.get(STUDIO_CONTRACT_KEY)) {
+                placed_studio.insert(STUDIO_CONTRACT_KEY.to_owned(), contract.clone());
+            }
+            placed_studio.insert("position".to_owned(), placed);
+            combining_node["studio"] = Value::Object(placed_studio);
+        }
     }
     combining_node
 }
 
+mod core_node_rows;
 #[cfg(test)]
 mod tests;

@@ -293,6 +293,25 @@ impl RhiCommandRecorder {
             .record_dispatch(kernel, group_x, group_y, group_z)
     }
 
+    /// Record one staged dispatch through the kernel's batch descriptor set
+    /// `batch_descriptor_set`. See [`VulkanComputeKernel::begin_dispatch`].
+    pub(crate) fn record_staged_dispatch(
+        &mut self,
+        dispatch: crate::vulkan::rhi::ComputeKernelDispatch<'_>,
+        batch_descriptor_set: usize,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+    ) -> Result<()> {
+        self.host_inner_mut().record_staged_dispatch(
+            dispatch,
+            batch_descriptor_set,
+            group_x,
+            group_y,
+            group_z,
+        )
+    }
+
     /// Submit signaling a timeline semaphore.
     pub fn submit_signaling_timeline(
         &mut self,

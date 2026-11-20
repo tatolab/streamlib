@@ -17,7 +17,7 @@ use super::{PendingState, VulkanComputeKernelInner};
 ///
 /// The kernel runs [`COMPUTE_DISPATCH_SLOTS`](super::COMPUTE_DISPATCH_SLOTS)
 /// dispatches at once; a dispatch past that waits for a slot to finish.
-#[must_use = "a dispatch runs nothing until its `dispatch` is called"]
+#[must_use = "a dispatch runs nothing until it is dispatched or recorded"]
 pub struct ComputeKernelDispatch<'kernel> {
     kernel: &'kernel VulkanComputeKernelInner,
     staged: PendingState,
@@ -110,5 +110,28 @@ impl<'kernel> ComputeKernelDispatch<'kernel> {
     ) -> Result<()> {
         self.kernel
             .dispatch_staged(self.staged, group_count_x, group_count_y, group_count_z)
+    }
+
+    /// Record the dispatch into `command_buffer` through the kernel's batch
+    /// descriptor set `batch_descriptor_set`, without submitting.
+    ///
+    /// The caller keeps that set to this recording until its submission has
+    /// retired: Vulkan disallows rewriting a descriptor set still in use.
+    pub(crate) fn record_into_batch_descriptor_set(
+        self,
+        command_buffer: vk::CommandBuffer,
+        batch_descriptor_set: usize,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        self.kernel.record_staged_into_batch_descriptor_set(
+            command_buffer,
+            batch_descriptor_set,
+            &self.staged,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        )
     }
 }

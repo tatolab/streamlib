@@ -30,7 +30,7 @@ struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
     descriptor: NodeDescriptor,
     input_and_output_port_info: GraphNodePorts,
     how_its_nodes_run: HowANodeOfADescribedTypeRuns,
-    /// The conversion it states, which only a type an installed module declares may.
+    /// The conversion it states.
     conversion: Option<PinConversion>,
 }
 
@@ -190,8 +190,8 @@ impl NodeTypesOneStreamResolves {
                 );
                 continue;
             }
-            let descriptor = match the_project_node_type_as_registered(descriptor) {
-                Ok(descriptor) => descriptor,
+            let descriptor = match the_node_type_as_registered(descriptor) {
+                Ok(NodeTypeAsRegistered { descriptor, .. }) => descriptor,
                 Err(refusal) => {
                     why_no_node_takes_each_view.insert(
                         node_type,
@@ -264,25 +264,6 @@ impl NodeTypesOneStreamResolves {
         descriptors
     }
 
-    /// Register `descriptor`, which this stream's interpreter described, its nodes run as
-    /// `how_its_nodes_run`; a conversion it states is refused unless an installed module is
-    /// recorded as declaring it.
-    pub(crate) fn register_a_type_described_in_this_streams_node_interpreter(
-        &self,
-        descriptor: NodeDescriptor,
-        how_its_nodes_run: HowANodeOfADescribedTypeRuns,
-    ) -> Result<()> {
-        let an_installed_module_declares_it = self
-            .installed_module_declaring_each_described_type
-            .read()
-            .contains_key(&descriptor.node_class_import_path);
-        self.register_a_described_type(
-            descriptor,
-            how_its_nodes_run,
-            an_installed_module_declares_it,
-        )
-    }
-
     /// Register `descriptor` as a type this stream's interpreter described, for a test in
     /// another crate: a function node runs inside the read of each node it feeds, and any other
     /// node, driven as `execution` says, is built by nothing. Neither runs a node.
@@ -327,26 +308,25 @@ impl NodeTypesOneStreamResolves {
         installed_module: InstalledModuleOfANodeType,
     ) -> Result<()> {
         let node_type = descriptor.node_class_import_path.clone();
-        self.register_a_described_type(descriptor, how_its_nodes_run, true)?;
+        self.register_a_type_described_in_this_streams_node_interpreter(
+            descriptor,
+            how_its_nodes_run,
+        )?;
         self.record_the_installed_module_declaring(node_type, installed_module);
         Ok(())
     }
 
-    fn register_a_described_type(
+    /// Register `descriptor`, which this stream's interpreter described, its nodes run as
+    /// `how_its_nodes_run`, with the conversion it states.
+    pub(crate) fn register_a_type_described_in_this_streams_node_interpreter(
         &self,
         descriptor: NodeDescriptor,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns,
-        may_state_a_conversion: bool,
     ) -> Result<()> {
         let NodeTypeAsRegistered {
             descriptor,
             conversion,
         } = the_node_type_as_registered(descriptor)?;
-        if conversion.is_some() && !may_state_a_conversion {
-            return Err(the_refusal_of_a_conversion_a_project_states(
-                &descriptor.node_class_import_path,
-            ));
-        }
         let node_type = descriptor.node_class_import_path.clone();
         if self.is_a_natively_compiled_node_type(&node_type) {
             return Err(Error::Configuration(format!(
@@ -848,16 +828,25 @@ impl NodeTypesOneStreamResolves {
         }
     }
 
-    /// The conversion each node type this stream resolves states, the native types' and the
-    /// installed modules', sorted by node type: the native list itself when no installed
-    /// module's type states one.
-    pub(crate) fn pin_conversions(&self) -> Arc<[PinConversion]> {
+    /// The conversion each node type this stream resolves states, the native types', the
+    /// installed modules' and the project's, sorted by node type: the native list itself when no
+    /// described type states one. Each described type's is read from the type its name resolves
+    /// to, so one a view of the project shadows, which states none, is left out.
+    pub fn pin_conversions(&self) -> Arc<[PinConversion]> {
         let native = NODE_REGISTRY.pin_conversions();
-        let described: Vec<PinConversion> = self
+        let described_types: Vec<NodeClassImportPath> = self
             .described_in_this_streams_node_interpreter
             .read()
-            .values()
-            .filter_map(|described| described.conversion.clone())
+            .keys()
+            .cloned()
+            .collect();
+        let described: Vec<PinConversion> = described_types
+            .iter()
+            .filter_map(|node_type| {
+                self.the_type_this_stream_resolves_beyond_the_native_ones(node_type)?
+                    .conversion
+                    .clone()
+            })
             .collect();
         if described.is_empty() {
             return native;
@@ -871,25 +860,6 @@ impl NodeTypesOneStreamResolves {
         catalog.extend(self.descriptors_described_in_this_streams_node_interpreter());
         catalog
     }
-}
-
-/// `descriptor` as a project's node type is registered, refusing one that states a conversion.
-fn the_project_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
-    let registered = the_node_type_as_registered(descriptor)?;
-    if registered.conversion.is_some() {
-        return Err(the_refusal_of_a_conversion_a_project_states(
-            &registered.descriptor.node_class_import_path,
-        ));
-    }
-    Ok(registered.descriptor)
-}
-
-/// The refusal of `node_type`, a project's own, stating that it is a conversion.
-fn the_refusal_of_a_conversion_a_project_states(node_type: &NodeClassImportPath) -> Error {
-    Error::Configuration(format!(
-        "`{node_type}` states that it is a conversion, and a project's node type cannot state a \
-         conversion yet; only a node type the runtime or an installed module registers can"
-    ))
 }
 
 #[cfg(test)]

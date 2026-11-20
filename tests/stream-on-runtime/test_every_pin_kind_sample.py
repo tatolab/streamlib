@@ -6,8 +6,10 @@ from the copy the runtime unit carries, played, saved and opened again.
 
 `examples/every-pin-kind` holds typed function and shader nodes, a Graph Input of a family, one
 whose `pin_type` setting chooses Float, one node not yet typed that holds a setting, a node type
-whose inputs each name the control the Studio draws, and two nodes whose Texture pins state different formats, which `connect` links through
-a `TextureFormatConvert`. The pin types `graph` names here are what the Studio's
+whose inputs each name the control the Studio draws, and two nodes whose Texture pins state
+different formats, which `connect` links through a `TextureFormatConvert`. Its `SweepPosition`
+states that it converts the sample's own `Sweep` to a Float, so a link from a `Sweep` into a
+Float input is refused naming it. The pin types `graph` names here are what the Studio's
 recordings are made from, so each later type, mode and flow joins the sample and this check.
 """
 
@@ -310,6 +312,34 @@ def assert_the_colour_bars_connect_through_a_texture_format_convert(
     ], graph_undone
 
 
+def assert_a_link_only_sweep_position_bridges_is_refused_naming_it(
+    local_api: LocalApiClient, stream_id: str, graph: dict[str, Any]
+) -> None:
+    """`check_link` refuses a link from `SweepAt`'s `Sweep` into `Warmth`'s Float `base` with
+    `link_needs_a_module_conversion`, naming the sample's `SweepPosition`, and suggests the
+    `transact` that places it between the two."""
+    sweep = node_named(graph, "sweep")["id"]
+    warmth = node_named(graph, "warmth")["id"]
+    checked = local_api.call_tool(
+        "check_link",
+        {
+            "stream": stream_id,
+            "source": {"node": sweep, "port": "result"},
+            "target": {"node": warmth, "port": "base"},
+        },
+    )
+    assert checked["outcome"] == "refused", checked
+    refusal = checked["refusal"]
+    assert refusal["refusal_code"] == "link_needs_a_module_conversion", checked
+    assert "`nodes.sweep:SweepPosition`" in refusal["runtime_words"], checked
+    suggested = refusal["suggested_call"]
+    assert suggested["operation"] == "transact", checked
+    placed, into_it, out_of_it = suggested["params"]["operations"]
+    assert placed["type"] == "nodes.sweep:SweepPosition", checked
+    assert into_it["source"] == {"node": sweep, "port": "result"}, checked
+    assert out_of_it["target"] == {"node": warmth, "port": "base"}, checked
+
+
 def play(local_api: LocalApiClient, project_directory: str, stream_id: str) -> None:
     queued_playback = local_api.call_tool(
         "start_playback", {"project_directory": project_directory}
@@ -392,6 +422,7 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
         pin["name"]: pin.get("annotations", {}).get("control") for pin in caption["inputs"]
     } == CONTROL_NAMED_BY_EACH_CAPTION_INPUT, caption
     assert_the_stream_runs_cleanly_through_its_links(graph)
+    assert_a_link_only_sweep_position_bridges_is_refused_naming_it(local_api, stream_id, graph)
     assert_the_colour_bars_connect_through_a_texture_format_convert(
         tatolabd, local_api, project_directory, stream_id, graph
     )

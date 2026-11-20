@@ -13,7 +13,9 @@ finding code, the node and the pin, so the declaration check can answer it as da
 A pin whose type its link finds is wire only and takes no default: `object` and an unbounded
 type parameter take any type, a union and a type parameter bounded by one take each of its
 types, and an output typed by a type parameter takes the type linked into the one input that
-parameter types.
+parameter types. A type only a pin carries, such as `Texture`, holds no stored value, so a
+function takes it only as a type parameter's bound, whose value its body hands on unread, and
+only when it flows as a Value, since a function reads the newest message on each input.
 """
 
 from __future__ import annotations
@@ -23,10 +25,9 @@ import types
 import typing
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Literal, Optional, final
+from typing import Final, Literal, Optional, final
 
 from ._contract_pin_types import (
-    PinAnnotationName,
     PinAnnotations,
     DeclaredPinType,
     PinDeclarationOnTheWire,
@@ -41,8 +42,16 @@ from ._input_declaration_annotations import (
     StreamDelivery,
 )
 from ._named_pin_type_declaration import named_pin_type_declared_by
-from ._number_range import NumberRange
-from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
+from ._pin_annotations_on_the_wire import (
+    ANNOTATION_NAME_OF_EACH_CLASS,
+    annotation_classes_named,
+    annotation_on_the_wire,
+)
+from ._pin_declaration_refusal_words import (
+    TypeParameterLimit,
+    words_refusing_a_function_pin_of,
+    words_refusing_a_type_parameter_limited_to,
+)
 from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
 from ._pin_typed_by_a_setting import declaration_of_a_pin_a_setting_types
 from ._pin_value_stored_form import (
@@ -110,6 +119,9 @@ type NodeDeclarationFindingCode = Literal[
     "init_takes_parameters",
     "class_takes_a_config",
     "class_declares_a_retired_port",
+    "conversion_under_a_family_grammar",
+    "conversion_not_one_input_to_one_output",
+    "conversion_end_states_no_one_pin_type",
 ]
 """What a refused declaration got wrong, as the declaration check's finding names it."""
 
@@ -173,15 +185,6 @@ _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
     ExactNumberSize(size).written_form for size in INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS
 )
 
-# Each annotation class, by the contract key it states.
-_ANNOTATION_NAME_OF_EACH_CLASS: Final[dict[type, PinAnnotationName]] = {
-    NumberRange: "range",
-    NumberStep: "step",
-    NumberUnit: "unit",
-    PinMeaning: "meaning",
-    PinControl: "control",
-}
-
 # The read types of the family grammar, by the typed spelling that replaces each.
 _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME: Final[dict[str, str]] = {
     "ImageFrame": "Texture",
@@ -242,7 +245,7 @@ class _PinReading:
     ) -> None:
         self._node = node
         self._pin_name = pin_name
-        self._direction = direction
+        self._direction: PinDirection = direction
         self._form = form
         self._of_the_runtimes_own_node = of_the_runtimes_own_node
         self._a_setting = a_setting
@@ -455,22 +458,24 @@ class _PinReading:
     ) -> "tuple[DeclaredPinType, PinFlow]":
         if type_parameter is not None:
             if type_parameter.__constraints__:
-                return self._one_of(type_parameter.__constraints__)
+                return self._one_of(type_parameter.__constraints__, limit="constrained to")
             bound = type_parameter.__bound__
             if bound is None or bound is object:
                 return {"kind": "any"}, "value"
             if _is_a_union(bound):
-                return self._one_of(typing.get_args(bound))
-            pin_type = self._a_member_pin_type(bound)
-            return {"kind": "is", "pin_type": pin_type}, _the_default_flow_of(pin_type)
+                return self._one_of(typing.get_args(bound), limit="bound to")
+            pin_type = self._a_member_pin_type(bound, limit="bound to")
+            return {"kind": "is", "pin_type": pin_type}, _the_flow_a_function_input_reads(pin_type)
         if written_type is object:
             return {"kind": "any"}, "value"
         return self._one_of(typing.get_args(written_type))
 
-    def _one_of(self, members: "Sequence[object]") -> "tuple[DeclaredPinType, PinFlow]":
+    def _one_of(
+        self, members: "Sequence[object]", *, limit: Optional[TypeParameterLimit] = None
+    ) -> "tuple[DeclaredPinType, PinFlow]":
         pin_types: list[PinType] = []
         for member in members:
-            pin_type = self._a_member_pin_type(member)
+            pin_type = self._a_member_pin_type(member, limit=limit)
             if pin_type in pin_types:
                 raise self._refusal(
                     f"{self._pin_named} is typed one of several types, and names "
@@ -478,10 +483,18 @@ class _PinReading:
                     "pin_annotation_repeated",
                 )
             pin_types.append(pin_type)
-        return {"kind": "one_of", "pin_types": pin_types}, _the_default_flow_of(pin_types[0])
+        return {"kind": "one_of", "pin_types": pin_types}, _the_flow_a_function_input_reads(
+            pin_types[0]
+        )
 
-    def _a_member_pin_type(self, member: object) -> PinType:
-        """The pin type one type of a union or a type parameter's bound names."""
+    def _a_member_pin_type(
+        self, member: object, *, limit: Optional[TypeParameterLimit] = None
+    ) -> PinType:
+        """The pin type one type of a union or a type parameter's bound names.
+
+        A type parameter's bound may name a type only a pin carries: its value is handed on
+        unread, so the body never holds it as a value.
+        """
         member_type, metadata, optional = self._written_type_metadata_and_optional(member)
         if optional or member_type is object or isinstance(member_type, typing.TypeVar) or (
             member_type is typing.Any
@@ -498,7 +511,11 @@ class _PinReading:
                     f"carries {entry!r}, which only a pin of one type takes. To fix: drop it.",
                     "pin_annotation_not_taken",
                 )
-        return self._pin_type_of(member_type, self._exact_size_among(metadata))
+        return self._pin_type_of(
+            member_type,
+            self._exact_size_among(metadata),
+            limit=limit,
+        )
 
     def _output_pin_type_found_from_an_input(
         self,
@@ -583,11 +600,17 @@ class _PinReading:
         exact_size: Optional[ExactNumberSize],
         *,
         as_an_element: bool = False,
+        limit: Optional[TypeParameterLimit] = None,
     ) -> PinType:
         written_form = self._written_form_of(written_type, exact_size)
         spelling = pin_type_spelling_written_as(written_form)
         row = _PIN_TYPE_DESCRIPTION_BY_NAME[spelling.pin_type_name]
-        if spelling.only_a_pin_carries and (self._form != "pin" or as_an_element):
+        if spelling.only_a_pin_carries and limit is not None and "value" not in row.flows:
+            raise self._refusal(
+                words_refusing_a_type_parameter_limited_to(self._pin_named, self._pin_name, row, limit),
+                "pin_flow_not_taken",
+            )
+        if spelling.only_a_pin_carries and limit is None and (self._form != "pin" or as_an_element):
             raise self._refusal_of_a_type_only_a_pin_carries(row, as_an_element=as_an_element)
         if spelling.not_read_yet_because is not None and not self._reads_a_type_choice(written_form):
             typed_as = (
@@ -651,11 +674,9 @@ class _PinReading:
                 "field_typed_as_a_stream",
             )
         return self._refusal(
-            f"{self._pin_named} is typed `{row.python_forms[0]}`, a {row.label}, which a "
-            f"function under bare `@node` does not take: it holds no stored value, so only a "
-            f"class node's pin carries it. To fix: keep this node on `@node.function`, or "
-            f"declare a class node with "
-            f"`{self._pin_name}: InputPin[{row.python_forms[0]}]`.",
+            words_refusing_a_function_pin_of(
+                self._pin_named, self._node, self._pin_name, self._direction, row
+            ),
             "pin_type_not_read_yet",
         )
 
@@ -795,7 +816,7 @@ class _PinReading:
                 continue
             if isinstance(entry, INPUT_DECLARATION_ANNOTATION_CLASSES):
                 raise self._refusal_of_an_input_declaration_annotation(entry)
-            annotation_name = _ANNOTATION_NAME_OF_EACH_CLASS.get(type(entry))
+            annotation_name = ANNOTATION_NAME_OF_EACH_CLASS.get(type(entry))
             if annotation_name is None:
                 raise self._refusal(
                     f"{self._pin_named} carries {entry!r}, which no pin reads. To fix: drop "
@@ -812,11 +833,11 @@ class _PinReading:
             if annotation_name not in row.annotations:
                 raise self._refusal(
                     f"{self._pin_named} carries `{type(entry).__name__}`, which a {row.label} "
-                    f"pin does not take; it takes {_annotation_classes_named(row)}. To fix: "
+                    f"pin does not take; it takes {annotation_classes_named(row)}. To fix: "
                     f"drop it.",
                     "pin_annotation_not_taken",
                 )
-            annotations[annotation_name] = _annotation_on_the_wire(entry)
+            annotations[annotation_name] = annotation_on_the_wire(entry)
         return annotations
 
     def _refusal_of_an_input_declaration_annotation(self, entry: object) -> NodeDeclarationRefusal:
@@ -910,6 +931,12 @@ _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
 )
 
 
+# The pin types that hold no stored value, so only a pin carries them.
+_PIN_TYPE_NAMES_ONLY_A_PIN_CARRIES: Final[frozenset[str]] = frozenset(
+    spelling.pin_type_name for spelling in PIN_TYPE_SPELLINGS if spelling.only_a_pin_carries
+)
+
+
 def _written_forms_a_list_element_takes() -> str:
     return ", ".join(
         f"`{spelling.written_form}`"
@@ -920,31 +947,6 @@ def _written_forms_a_list_element_takes() -> str:
 
 def _is_a_value_class_of_parts(written_type: object) -> typing.TypeGuard[type[PinValueOfParts]]:
     return written_type in PIN_VALUE_CLASSES
-
-
-def _annotation_on_the_wire(annotation: object) -> Any:
-    match annotation:
-        case NumberRange():
-            return {
-                bound: value
-                for bound, value in (("minimum", annotation.minimum), ("maximum", annotation.maximum))
-                if value is not None
-            }
-        case NumberStep():
-            return annotation.step
-        case NumberUnit() | PinMeaning() | PinControl():
-            return annotation.text
-        case _:
-            raise AssertionError(f"{annotation!r} is not a pin annotation")
-
-
-def _annotation_classes_named(row: PinTypeDescription) -> str:
-    names = [
-        f"`{annotation_class.__name__}`"
-        for annotation_class, annotation_name in _ANNOTATION_NAME_OF_EACH_CLASS.items()
-        if annotation_name in row.annotations
-    ]
-    return ", ".join(names) if names else "none of them"
 
 
 def _spellings_read_today() -> str:
@@ -958,7 +960,11 @@ def _spellings_read_today() -> str:
     return ", ".join(read_today)
 
 
-def _the_default_flow_of(pin_type: PinType) -> PinFlow:
+def _the_flow_a_function_input_reads(pin_type: PinType) -> PinFlow:
+    """How a function's input of `pin_type` reads: a type only a pin carries as a Value, since a
+    function reads the newest message on each input, and any other type by its first flow."""
+    if pin_type["type"] in _PIN_TYPE_NAMES_ONLY_A_PIN_CARRIES:
+        return "value"
     return _PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]].flows[0]
 
 
