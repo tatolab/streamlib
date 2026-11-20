@@ -65,6 +65,9 @@ pub struct GraphNode {
     /// The upstream entries this node's inbound links reach.
     #[serde(skip)]
     upstream_stream_facts_by_inbound_link: Arc<UpstreamStreamFactsByInboundLink>,
+    /// The pin groups the node's type declares, whose slots' ports its ports hold.
+    #[serde(skip)]
+    pub(super) pin_groups: Arc<[crate::core::descriptors::PinGroupDescriptor]>,
 }
 
 impl PartialEq for GraphNode {
@@ -149,6 +152,7 @@ impl GraphNode {
             component_renderers: Vec::new(),
             stream_facts_of_output_ports,
             upstream_stream_facts_by_inbound_link: Arc::default(),
+            pin_groups: Arc::from([]),
         }
     }
 
@@ -228,14 +232,42 @@ impl GraphNode {
             .resolved_against_the_config(&self.node_type, Some(&settings));
     }
 
-    /// Refuse a link into input `input` when it is a setting, which takes a stored value and
-    /// never a wire.
+    /// Refuse a link into input `input` when it is a setting that takes no wire: one read each
+    /// run, one of a type no message carries, and every setting of a `GraphInput`, which
+    /// declares its stream's interface rather than running on a value.
     pub(crate) fn refuse_a_link_into_a_setting(&self, input: &str) -> crate::core::Result<()> {
         match self.input_port(input) {
-            Some(port) if !port.takes_a_wire() => Err(the_refusal_of_a_link_into_a_setting(
-                &port.name,
-                &self.display_name,
-            )),
+            Some(port) if !port.takes_a_wire_on_a_node_of(&self.node_type) => Err(
+                the_refusal_of_a_link_into_a_setting(&port.name, &self.display_name),
+            ),
+            _ => Ok(()),
+        }
+    }
+
+    /// Refuse a link from this node into input `input` of `reader`, a setting read at setup,
+    /// when this node is a function or shader node: its value is worked out inside the read
+    /// of each node it feeds, and a setting is read by no run.
+    pub(crate) fn refuse_a_link_from_it_into_a_setting_of(
+        &self,
+        reader: &GraphNode,
+        input: &str,
+    ) -> crate::core::Result<()> {
+        let into_a_setting_read_at_setup = reader
+            .input_port(input)
+            .is_some_and(PortInfo::is_a_setting_read_at_setup);
+        match self.node_kind() {
+            Some(kind @ (NodeKind::Function { .. } | NodeKind::Shader))
+                if into_a_setting_read_at_setup =>
+            {
+                Err(crate::core::Error::PinLinkRefused(Box::new(
+                    crate::core::descriptors::PinLinkRefusal::ComputedValueIntoASetting {
+                        output_node_name: self.display_name.clone(),
+                        output_node_kind: kind,
+                        node_name: reader.display_name.clone(),
+                        input_name: input.to_owned(),
+                    },
+                )))
+            }
             _ => Ok(()),
         }
     }
@@ -243,7 +275,7 @@ impl GraphNode {
     /// Whether this node is a `GraphInput`; one in a graph that runs is at its stream's top
     /// level, since a fragment's own are flattened away.
     pub fn is_a_graph_input(&self) -> bool {
-        crate::core::graph::graph_interface_resolution::is_the_graph_input_type(&self.node_type)
+        self.node_type.is_the_graph_input_type()
     }
 
     pub fn node_type(&self) -> &NodeClassImportPath {
@@ -368,7 +400,7 @@ impl GraphNodeWithComponents for GraphNode {
     }
 }
 
-/// The refusal of a link into input `input` of node `node`, a setting, which takes no wire.
+/// The refusal of a link into input `input` of node `node`, a setting that takes no wire.
 pub(crate) fn the_refusal_of_a_link_into_a_setting(input: &str, node: &str) -> crate::core::Error {
     crate::core::Error::PinLinkRefused(Box::new(
         crate::core::descriptors::PinLinkRefusal::input_takes_no_wire(node, input),

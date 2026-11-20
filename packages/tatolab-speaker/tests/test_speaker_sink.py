@@ -26,9 +26,16 @@ from tatolab.speaker import (
     SPEAKER_SAMPLE_RATE,
     SPEAKER_WINDOW_SIZE,
     SpeakerSink,
-    SpeakerSinkConfig,
 )
 from tatolab.stream import RuntimeContextFullAccess, log
+from tatolab.stream._class_node_construction import construct_class_node
+from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
+
+
+def a_speaker(**field_values: object) -> SpeakerSink:
+    """A `SpeakerSink` built as its helper builds it, `audio` bound to a stand-in: its native half reads the port."""
+    return construct_class_node(SpeakerSink, field_values=field_values, pins={"audio": object()})
+
 
 #: Long enough for any arm to drain a few blocks, which first opens a device or
 #: starts the null backend's clock.
@@ -118,7 +125,7 @@ def speaker_wired_to_a_writer(
 
 
 def test_a_started_speaker_plays_every_block_in_its_format(speaker_wired_to_a_writer):
-    speaker = SpeakerSink(SpeakerSinkConfig())
+    speaker = a_speaker()
     context = speaker_wired_to_a_writer.speaker_context
     speaker.setup(context)
     playback = speaker._opened_playback()
@@ -151,7 +158,7 @@ def test_a_started_speaker_plays_every_block_in_its_format(speaker_wired_to_a_wr
 def test_a_block_in_another_format_is_refused_and_counted_never_played(
     speaker_wired_to_a_writer,
 ):
-    speaker = SpeakerSink(SpeakerSinkConfig())
+    speaker = a_speaker()
     context = speaker_wired_to_a_writer.speaker_context
     speaker.setup(context)
     playback = speaker._opened_playback()
@@ -169,7 +176,7 @@ def test_a_block_in_another_format_is_refused_and_counted_never_played(
 def test_the_audio_port_is_lent_to_native_code_so_python_cannot_read_it(
     speaker_wired_to_a_writer,
 ):
-    speaker = SpeakerSink(SpeakerSinkConfig())
+    speaker = a_speaker()
     context = speaker_wired_to_a_writer.speaker_context
     speaker.setup(context)
     try:
@@ -180,13 +187,13 @@ def test_the_audio_port_is_lent_to_native_code_so_python_cannot_read_it(
 
 
 def test_a_device_the_backend_cannot_open_refuses_setup_naming_it(speaker_wired_to_a_writer):
-    speaker = SpeakerSink(SpeakerSinkConfig(device_id="tatolab-no-such-speaker"))
+    speaker = a_speaker(device_id="tatolab-no-such-speaker")
     with pytest.raises(RuntimeError, match="tatolab-no-such-speaker"):
         speaker.setup(speaker_wired_to_a_writer.speaker_context)
 
 
 def test_a_speaker_stopped_and_started_again_keeps_playing(speaker_wired_to_a_writer):
-    speaker = SpeakerSink(SpeakerSinkConfig())
+    speaker = a_speaker()
     context = speaker_wired_to_a_writer.speaker_context
     speaker.setup(context)
     playback = speaker._opened_playback()
@@ -203,7 +210,7 @@ def test_a_speaker_stopped_and_started_again_keeps_playing(speaker_wired_to_a_wr
 
 
 def test_a_speaker_never_set_up_or_started_tears_down_cleanly(speaker_wired_to_a_writer):
-    speaker = SpeakerSink(SpeakerSinkConfig())
+    speaker = a_speaker()
     context = speaker_wired_to_a_writer.speaker_context
     speaker.stop(context)
     speaker.teardown(context)
@@ -213,7 +220,7 @@ def test_a_speaker_never_set_up_or_started_tears_down_cleanly(speaker_wired_to_a
 
 
 def test_start_before_setup_is_refused_by_name(speaker_wired_to_a_writer):
-    speaker = SpeakerSink(SpeakerSinkConfig())
+    speaker = a_speaker()
     with pytest.raises(RuntimeError, match="before setup"):
         speaker.start(speaker_wired_to_a_writer.speaker_context)
 
@@ -232,3 +239,22 @@ def test_the_distribution_declares_the_node_for_the_node_catalog():
     assert set(declared) == {"SpeakerSink"}
     assert declared["SpeakerSink"].value == "tatolab.speaker:SpeakerSink"
     assert declared["SpeakerSink"].load() is SpeakerSink
+
+
+def test_the_audio_pin_shows_a_meter_and_reads_ordered_windows_in_the_format_it_plays():
+    audio = next(
+        port
+        for port in getattr(SpeakerSink, NODE_DECLARATION_INPUT_PORTS_STAMP)
+        if port["name"] == AUDIO_INPUT_PORT
+    )
+
+    assert audio["pin_declaration"] == {
+        "pin_type": {"kind": "is", "pin_type": {"type": "audio"}},
+        "flow": "stream",
+        "annotations": {"control": "meter"},
+    }
+    assert audio["delivery_profile"] == "ordered"
+    assert audio["audio_window"]["sample_rate"] == SPEAKER_SAMPLE_RATE
+    assert audio["audio_window"]["channels"] == SPEAKER_CHANNELS
+    assert audio["audio_window"]["dtype"] == SPEAKER_SAMPLE_FORMAT
+    assert audio["audio_window"]["window_size"] == SPEAKER_WINDOW_SIZE

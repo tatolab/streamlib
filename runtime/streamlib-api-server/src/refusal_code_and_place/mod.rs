@@ -171,9 +171,10 @@ impl RefusalCodeAndPlace {
     /// A variant with fields is coded by what it names.
     pub(crate) fn of_an_engine_error(refusal: &Error) -> Self {
         use ControlOperationRefusalCode::{
-            InputTakesNoWire, LinkAlreadyExists, LinkNeedsAModuleConversion,
-            LinkPinTypesDoNotConnect, NodeNameTaken, NodeNotFound, NodeNotRunning,
-            NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
+            InputTakesNoWire, LinkAlreadyExists, LinkFromAFunctionNodeIntoASetting,
+            LinkNeedsAModuleConversion, LinkPinTypesDoNotConnect, LinkStreamsIntoASetting,
+            NodeNameTaken, NodeNotFound, NodeNotRunning, NodeTypeNotFound, PortNotFound, Refused,
+            RuntimeFailed,
         };
         match refusal {
             Error::NodeOfAStreamIsNotRunning {
@@ -233,6 +234,24 @@ impl RefusalCodeAndPlace {
                     refused_field: Some(input_name.clone()),
                     ..Self::coded(InputTakesNoWire)
                 },
+                PinLinkRefusal::StreamIntoASetting {
+                    node_name,
+                    input_name,
+                    ..
+                } => Self {
+                    refused_node: Some(node_name.clone()),
+                    refused_field: Some(input_name.clone()),
+                    ..Self::coded(LinkStreamsIntoASetting)
+                },
+                PinLinkRefusal::ComputedValueIntoASetting {
+                    node_name,
+                    input_name,
+                    ..
+                } => Self {
+                    refused_node: Some(node_name.clone()),
+                    refused_field: Some(input_name.clone()),
+                    ..Self::coded(LinkFromAFunctionNodeIntoASetting)
+                },
                 PinLinkRefusal::PinTypesDoNotConnect {
                     conversions_that_bridge,
                     ..
@@ -249,7 +268,8 @@ impl RefusalCodeAndPlace {
                         ..Self::coded(LinkNeedsAModuleConversion)
                     }
                 }
-                PinLinkRefusal::PinTypesDoNotConnect { .. } => {
+                PinLinkRefusal::PinTypesDoNotConnect { .. }
+                | PinLinkRefusal::BundleFrameIntoAnUntypedInput { .. } => {
                     Self::coded(LinkPinTypesDoNotConnect)
                 }
             },

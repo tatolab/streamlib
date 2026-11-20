@@ -158,9 +158,9 @@ history and applies it to the running stream.
 | `device_id` | `microphonesource` | Capture device. Absent: the audio backend's default device. |
 | `bitrate_bps` | `h264encoder`, `opusencoder` | Target bitrate. Absent: the encoder's own default. |
 
-Each node's keys are its module's config dataclass: `CameraSourceConfig` in
-`tatolab.camera`, `H264EncoderConfig` in `tatolab.h264`, `MicrophoneSourceConfig`
-in `tatolab.microphone`, and `OpusEncoderConfig` in `tatolab.opus`.
+Each node's keys are its node's settings: the fields of `CameraSource` in
+`tatolab.camera`, `H264Encoder` in `tatolab.h264`, `MicrophoneSource` in
+`tatolab.microphone`, and `OpusEncoder` in `tatolab.opus`.
 
 ## One known offset
 

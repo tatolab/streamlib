@@ -9,15 +9,7 @@ host table from CEF's threads; nothing here links the engine.
 """
 
 from .browser_source import BrowserSource as BrowserSource
-from .browser_source import BrowserSourceConfig as BrowserSourceConfig
 from .browser_source_output_probe import BrowserSourceOutputProbe as BrowserSourceOutputProbe
-from .browser_source_output_probe import (
-    BrowserSourceOutputProbeConfig as BrowserSourceOutputProbeConfig,
-)
+from .page_message import PageMessage as PageMessage
 
-__all__ = [
-    "BrowserSource",
-    "BrowserSourceConfig",
-    "BrowserSourceOutputProbe",
-    "BrowserSourceOutputProbeConfig",
-]
+__all__ = ["BrowserSource", "BrowserSourceOutputProbe", "PageMessage"]

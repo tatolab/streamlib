@@ -175,6 +175,12 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::std::option::Option<::streamlib::sdk::graph::GraphNodePorts> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn the_pin_groups_a_node_type_declares(
+            &self,
+            _node_type: &str,
+        ) -> ::std::vec::Vec<::streamlib::sdk::descriptors::PinGroupDescriptor> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn the_config_a_node_holding_the_input_values_takes(
             &self,
             _node_type: &str,

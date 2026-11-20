@@ -16,70 +16,98 @@ at frame cadence.
 
 from __future__ import annotations
 
-import dataclasses
 import os
 from typing import Annotated, Any
 
-from tatolab.stream import Image, Input, Output, Records, RuntimeContextFullAccess, node
+from tatolab.stream import (
+    Description,
+    InputPin,
+    NumberRange,
+    OutputPin,
+    RuntimeContextFullAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
+    node,
+)
 
 from . import _native
+from .view_model_values import ViewModelValues
 
 VIDEO_OUTPUT_PORT = "video"
 RENDERED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 DATA_INPUT_PORT = "data"
 
 
-@dataclasses.dataclass
-class RiveSourceConfig:
-    """What a `RiveSource` is configured with."""
-
-    riv_path: Annotated[
-        "str | None",
-        "The `.riv` file to play; until it names one that is there, the node is not ready and sends transparent frames.",
-    ] = None
-    artboard: Annotated["str | None", "The artboard to play; the file's default when absent."] = None
-    state_machine: Annotated[
-        "str | None", "The artboard's state machine to play; its default when absent."
-    ] = None
-    width: Annotated[int, "Frame width in pixels; the artboard is fit inside, centred."] = 1920
-    height: Annotated[int, "Frame height in pixels."] = 1080
-    frame_rate: Annotated[int, "Frames drawn and published per second."] = 60
-    output_pool_rotation_depth: Annotated[
-        int, "How many frames the output pool rotates before reusing a free slot."
-    ] = 4
-
-
 @node.meta(
     description="Plays a Rive state machine, drawing each frame straight into the stream on the GPU",
 )
-@node.process(execution="manual")
+@node(execution="manual")
 class RiveSource:
-    """A `.riv` file's state machine, published as RGBA Image frames over transparency.
+    """A `.riv` file's state machine, published as RGBA pictures over transparency.
 
-    Each `data` record is a map from view-model property path to value,
-    applied to the artboard's default view-model instance: a number to a number
-    property, text to a string or enum property, a boolean to a boolean
-    property, `0xAARRGGBB` or `"#RRGGBB"` to a colour property, and anything but
-    `false` fires a trigger. A path the instance lacks, or a value its property
-    cannot take, is logged once and skipped.
+    Each setting is read at start, where the animation is loaded, so a change loads it again.
+    Each `data` message's values are applied to the artboard's default view-model instance; a
+    path the instance lacks, or a value its property cannot take, is logged once and skipped.
     """
 
-    def __init__(self, config: RiveSourceConfig) -> None:
-        self._config = config
+    riv_path: Annotated[
+        str | None,
+        SettingOnly(),
+        Description(
+            "The `.riv` file to play; until it names one that is there, the node is not ready "
+            "and sends transparent frames."
+        ),
+    ] = None
+    artboard: Annotated[
+        str | None, SettingOnly(), Description("The artboard to play; the file's default when unset.")
+    ] = None
+    state_machine: Annotated[
+        str | None,
+        SettingOnly(),
+        Description("The artboard's state machine to play; its default when unset."),
+    ] = None
+    width: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("Frame width in pixels; the artboard is fit inside, centred."),
+    ] = 1920
+    height: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("Frame height in pixels.")
+    ] = 1080
+    frame_rate: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("Frames drawn and published per second."),
+    ] = 60
+    output_pool_rotation_depth: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("How many frames the output pool rotates before reusing a free slot."),
+    ] = 4
+    data: InputPin[
+        Annotated[
+            ViewModelValues,
+            StreamDelivery("ordered"),
+            Description("Values for the artboard's view-model properties"),
+        ]
+    ]
+    video: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(RENDERED_FRAME_TEXTURE_FORMAT),
+            Description("RGBA frames of the animation, colour unspecified"),
+        ]
+    ]
+
+    def __init__(self) -> None:
         self._rendering: "_native.RiveSceneRendering | None" = None
         self._context: "RuntimeContextFullAccess | None" = None
         self._module_host_table: Any = None
-
-    data = Input(
-        Records,
-        delivery="ordered",
-        description="Maps from view-model property path to value",
-    )
-    video = Output(
-        Image,
-        formats=(RENDERED_FRAME_TEXTURE_FORMAT,),
-        description="RGBA frames of the animation, colour unspecified",
-    )
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both ports to this wheel's frame thread, or report the node not
@@ -91,17 +119,10 @@ class RiveSource:
         self._context = ctx
         self._start_rendering_or_report_why_not()
 
-    def configure(self, config: RiveSourceConfig) -> None:
-        """Play what `config` names from now on, once the node has started."""
-        self._stop_rendering()
-        self._config = config
-        if self._context is not None:
-            self._start_rendering_or_report_why_not()
-
     def _start_rendering_or_report_why_not(self) -> None:
         ctx = self._context
         assert ctx is not None
-        riv_path = self._config.riv_path
+        riv_path = self.riv_path
         if not riv_path:
             self._report_not_ready("`riv_path` is not set; it takes the `.riv` file to play")
             return
@@ -118,12 +139,12 @@ class RiveSource:
                 VIDEO_OUTPUT_PORT,
                 DATA_INPUT_PORT,
                 riv_path,
-                self._config.artboard,
-                self._config.state_machine,
-                self._config.width,
-                self._config.height,
-                self._config.frame_rate,
-                self._config.output_pool_rotation_depth,
+                self.artboard,
+                self.state_machine,
+                self.width,
+                self.height,
+                self.frame_rate,
+                self.output_pool_rotation_depth,
             )
         except RuntimeError as refusal:
             self._report_not_ready(str(refusal))
@@ -134,8 +155,8 @@ class RiveSource:
         assert self._context is not None
         self._context.report_not_ready(
             f"RiveSource: {reason}",
-            image_width=max(self._config.width, 1),
-            image_height=max(self._config.height, 1),
+            image_width=max(self.width, 1),
+            image_height=max(self.height, 1),
         )
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:

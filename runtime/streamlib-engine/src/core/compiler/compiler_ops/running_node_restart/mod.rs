@@ -90,11 +90,7 @@ pub(crate) fn the_running_nodes_a_rebuild_restarts(
             return Err(Error::Configuration(format!(
                 "`{}` is a {} node, which reads no setting at setup, so no edit rebuilds it",
                 name_of(node_id),
-                if matches!(kind, NodeKind::Shader) {
-                    "shader"
-                } else {
-                    "function"
-                },
+                kind.name(),
             )));
         }
         let links_of_the_node: Vec<(LinkUniqueId, NodeRunId, NodeRunId)> = graph

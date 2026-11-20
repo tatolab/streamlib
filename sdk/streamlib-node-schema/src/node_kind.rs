@@ -30,6 +30,17 @@ pub enum NodeKind {
     Process,
 }
 
+impl NodeKind {
+    /// The word a node of this kind is named by: `shader`, `function` or `process`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shader => "shader",
+            Self::Function { .. } => "function",
+            Self::Process => "process",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

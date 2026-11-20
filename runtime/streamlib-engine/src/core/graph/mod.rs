@@ -57,8 +57,8 @@ pub(crate) use pin_type_link_checks::{
     refuse_a_link_its_pin_types_or_families_refuse,
     refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
     refuse_the_names_and_codec_the_links_through_a_convert_node_refuse,
-    the_ends_a_link_is_judged_by, the_verdict_of_a_link_between_declared_ports,
-    the_verdict_on_a_link_between_typed_ends,
+    the_bundle_frame_type_an_output_may_carry, the_ends_a_link_is_judged_by,
+    the_verdict_of_a_link_between_declared_ports, the_verdict_on_a_link_between_typed_ends,
 };
 pub(crate) use pin_type_resolution::the_pin_a_port_resolves_to;
 pub(crate) use port_family_link_checks::{
@@ -104,7 +104,10 @@ pub use nodes::{
     GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PinTypeAsDeclared,
     PortInfo,
 };
-pub(crate) use nodes::{PortAnnotations, the_refusal_of_a_link_into_a_setting};
+pub(crate) use nodes::{
+    PortAnnotations, grow_a_pin_group_to_hold_the_port, reshape_the_pin_group_slots_of,
+    the_refusal_of_a_link_into_a_setting,
+};
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{
     LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut, TraversalSource,

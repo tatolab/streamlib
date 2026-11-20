@@ -22,14 +22,18 @@ use super::{
     PendingDeletionComponent, PortInfo,
 };
 use crate::core::descriptors::{
-    BundleMember, ConvertNodeToInsert, DeclaredPinType, PinConversion, PinLinkEnd, PinLinkInputEnd,
-    PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType, PortFamilyDeclaration,
-    PortFamilyLinkEndpoint, pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
+    BundleMember, ConvertNodeToInsert, DeclaredPinType, NodeClassImportPath, PinConversion,
+    PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType,
+    PortFamilyDeclaration, PortFamilyLinkEndpoint, pin_link_verdict,
+    refusal_of_the_names_and_codec_a_link_carries,
 };
 use crate::core::{Error, PortDirection, Result};
 
+mod bundle_frames_into_an_untyped_input;
 mod wired_links_past_an_input;
 
+use bundle_frames_into_an_untyped_input::refuse_bundle_frames_into_an_untyped_input;
+pub(crate) use bundle_frames_into_an_untyped_input::the_bundle_frame_type_an_output_may_carry;
 use wired_links_past_an_input::{
     the_first_wired_link_past_an_input_refused, the_wired_links_out_of,
 };
@@ -93,12 +97,13 @@ impl TypedLinkEnds<'_> {
 }
 
 /// The verdict of a link from `output_port` of the node named `output_node_name` to
-/// `input_port` of the one named `input_node_name`, judged by the one type each port states, as
+/// `input_port` of the one named `input_node_name`, of `input_node_type`, judged by the one
+/// type each port states, as
 /// their node types declare them, among `conversions`, before either node is in a graph; `None`
 /// when either port states no one type.
 pub(crate) fn the_verdict_of_a_link_between_declared_ports(
     (output_node_name, output_port): (&str, &PortInfo),
-    (input_node_name, input_port): (&str, &PortInfo),
+    (input_node_name, input_node_type, input_port): (&str, &NodeClassImportPath, &PortInfo),
     conversions: &[PinConversion],
 ) -> Option<PinLinkVerdict> {
     let the_one_type_it_states = |port: &PortInfo| {
@@ -128,12 +133,14 @@ pub(crate) fn the_verdict_of_a_link_between_declared_ports(
             member_name: None,
             pin_type,
             meaning: port.meaning(),
+            flow: port.pin.as_ref().map(|pin| pin.flow),
         }
     }
     Some(pin_link_verdict(
         end(output_node_name, output_port, &output_pin_type),
         PinLinkInputEnd {
             end: end(input_node_name, input_port, &input_pin_type),
+            node_type: input_node_type,
             input_mode: input_port.input_mode,
         },
         conversions,
@@ -161,6 +168,7 @@ impl<'end> TypedEnd<'end> {
                 Some(member) => member.meaning.as_deref(),
                 None => self.port.meaning(),
             },
+            flow: self.port.pin.as_ref().map(|pin| pin.flow),
         }
     }
 
@@ -193,8 +201,22 @@ fn verdict_between(
     conversions: &[PinConversion],
 ) -> PinLinkVerdict {
     if matches!(input.pin_type, PinTypeInItsGraph::Any) {
+        // A setting of any type takes the output's own, judged by its mode and its flow alone.
+        if input.port.is_a_setting()
+            && let Some(output_pin_type) = output.the_types_it_may_carry().first()
+        {
+            return pin_link_verdict(
+                output.link_end(output_pin_type),
+                PinLinkInputEnd {
+                    end: input.link_end(output_pin_type),
+                    node_type: &input.node.node_type,
+                    input_mode: input.port.input_mode,
+                },
+                &[],
+            );
+        }
         return PinLinkVerdict {
-            outcome: if input.port.takes_a_wire() {
+            outcome: if input.port.takes_a_wire_on_a_node_of(&input.node.node_type) {
                 PinLinkOutcome::Connects
             } else {
                 PinLinkOutcome::Refused(Box::new(PinLinkRefusal::input_takes_no_wire(
@@ -212,6 +234,7 @@ fn verdict_between(
                 output.link_end(output_pin_type),
                 PinLinkInputEnd {
                     end: input.link_end(input_pin_type),
+                    node_type: &input.node.node_type,
                     input_mode: input.port.input_mode,
                 },
                 conversions,
@@ -579,6 +602,7 @@ fn the_link_its_pin_types_or_families_take(
                  the member from a typed output, or link the whole port"
             )));
         }
+        refuse_bundle_frames_into_an_untyped_input(graph, from, to)?;
         let families = refuse_a_link_between_ports_whose_families_do_not_match(
             graph,
             from,

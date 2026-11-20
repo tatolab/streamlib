@@ -9,6 +9,6 @@ here links the engine.
 """
 
 from .rive_source import RiveSource as RiveSource
-from .rive_source import RiveSourceConfig as RiveSourceConfig
+from .view_model_values import ViewModelValues as ViewModelValues
 
-__all__ = ["RiveSource", "RiveSourceConfig"]
+__all__ = ["RiveSource", "ViewModelValues"]

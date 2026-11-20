@@ -3,39 +3,37 @@
 
 """`LowerThirdTitleTicker`: a numbered title for a `RiveSource`'s `data` input once a second."""
 
-import dataclasses
 from typing import Annotated
 
-from tatolab.stream import Output, Records, RuntimeContextLimitedAccess, node
+from tatolab.rive import ViewModelValues
+from tatolab.stream import Description, OutputPin, RuntimeContextLimitedAccess, node
 
 
-@dataclasses.dataclass
-class LowerThirdTitleTickerConfig:
-    """What a `LowerThirdTitleTicker` is configured with."""
-
-    property_path: Annotated[str, "The view-model string property each title is assigned to."] = "title"
-    entrance_trigger_paths: Annotated[
-        "list[str]", "View-model triggers fired, in order, with the first title, to bring the card in."
-    ] = dataclasses.field(default_factory=list)
-
-
-@node.process(execution="continuous", interval_ms=1000)
+@node(execution="continuous", interval_ms=1000)
 class LowerThirdTitleTicker:
     """Sends a numbered title to a `RiveSource`'s `data` input once a second."""
 
-    def __init__(self, config: LowerThirdTitleTickerConfig) -> None:
-        self._property_path = config.property_path
-        self._entrance_trigger_paths = config.entrance_trigger_paths
+    property_path: Annotated[
+        str, Description("The view-model string property each title is assigned to.")
+    ] = "title"
+    entrance_trigger_paths: Annotated[
+        list[str],
+        Description("View-model triggers fired, in order, with the first title, to bring the card in."),
+    ] = []  # noqa: RUF012
+    data: OutputPin[
+        Annotated[ViewModelValues, Description("View-model values for a `RiveSource`")]
+    ]
+
+    def __init__(self) -> None:
         self._titles_sent = 0
 
-    data = Output(Records, description="View-model data records for a `RiveSource`")
-
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        del ctx
         self._titles_sent += 1
-        view_model_values: dict[str, object] = {
-            self._property_path: f"Live title {self._titles_sent}"
+        view_model_values: dict[str, "str | bool"] = {
+            self.property_path: f"Live title {self._titles_sent}"
         }
         if self._titles_sent == 1:
-            for entrance_trigger_path in self._entrance_trigger_paths:
+            for entrance_trigger_path in self.entrance_trigger_paths:
                 view_model_values[entrance_trigger_path] = True
-        ctx.outputs.write(self.data, view_model_values)
+        self.data.write(ViewModelValues(view_model_values))

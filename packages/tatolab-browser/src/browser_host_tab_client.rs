@@ -36,14 +36,13 @@ use tatolab_module_sdk::{
     ModuleHostHostMemoryPixelsToFill, ModuleHostInputPort, ModuleHostLogLevel,
     ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort, ModuleHostReadMessage,
     ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState, ModuleHostSurface,
-    records_message_payload_descriptor,
+    ModuleHostTablePayloadDescriptor,
 };
 
 use crate::page_audio_blocks::{PageAudioStreamTimeline, samples_of_little_endian_f32_bytes};
 use crate::page_audio_silence_watch::PageAudioSilenceWatch;
 use crate::page_data_messages::{
-    DataMessagesHeldForTheBrowserHost, events_msgpack_map_of_published_json,
-    page_data_detail_json_of_msgpack_map,
+    DataMessagesHeldForTheBrowserHost, page_detail_json_of_message, page_message_of_published_json,
 };
 use crate::page_input_messages::{PageInputAudioBlock, PageInputVideoFrameExtent};
 use crate::painted_page_image_frame::image_frame_payload_descriptor_of_a_painted_page;
@@ -845,9 +844,10 @@ impl BrowserHostTabOfOneNode {
         if self.closing.load(Ordering::Acquire) {
             return;
         }
-        let written = events_msgpack_map_of_published_json(published_json).and_then(|payload| {
+        let written = page_message_of_published_json(published_json).and_then(|payload| {
+            let bytes = ModuleHostTablePayloadDescriptor::bytes();
             self.events_output_port
-                .write_described(&payload, None, true, &records_message_payload_descriptor())
+                .write_described(&payload, None, true, &bytes)
                 .map_err(|refusal| refusal.to_string())
         });
         match written {
@@ -1274,7 +1274,7 @@ fn deliver_data_and_page_inputs_to_the_page(
                     return;
                 }
             };
-            match page_data_detail_json_of_msgpack_map(message.payload()) {
+            match page_detail_json_of_message(message.payload()) {
                 Ok(detail_json) => {
                     for _ in 0..held_while_the_browser_host_is_away.hold_newest(detail_json) {
                         count_a_data_message_that_did_not_reach_the_page(

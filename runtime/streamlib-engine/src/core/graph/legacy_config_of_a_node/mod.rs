@@ -89,7 +89,19 @@ impl LegacyConfigOfANodeType {
 
     /// Whether a node holds its input value `name` as a config field rather than on an input.
     pub(crate) fn is_a_config_field(&self, name: &str) -> bool {
-        self.fields_its_config_schema_lists.contains(name) || !self.its_input_ports.contains(name)
+        self.fields_its_config_schema_lists.contains(name) || !self.is_one_of_its_inputs(name)
+    }
+
+    /// Whether `name` names an input of the type: one its ports hold, or one of a slot of a pin
+    /// group past the first, whose pin the first slot holds.
+    fn is_one_of_its_inputs(&self, name: &str) -> bool {
+        self.its_input_ports.contains(name)
+            || crate::core::descriptors::PinGroupSlotPort::named(name)
+                .filter(|port| port.slot < crate::core::descriptors::PIN_GROUP_MOST_SLOTS)
+                .is_some_and(|port| {
+                    self.its_input_ports
+                        .contains(&port.named_in_the_first_slot())
+                })
     }
 
     /// The config a node holding `input_values` takes whole.

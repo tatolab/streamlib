@@ -32,7 +32,7 @@ pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
     LinkCarriedThroughTheFunctionNodePoolOnTheWire, MachineWideGraphOnTheWire,
-    PinLinkMarksOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+    PinGroupSlotOnTheWire, PinLinkMarksOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
 };
 
 // =============================================================================
@@ -388,13 +388,6 @@ pub struct NodeDescriptorOutput {
     pub examples: CodeExamplesOutput,
 }
 
-impl NodeDescriptorOutput {
-    /// Each input a link may end at: every input but a setting.
-    pub fn inputs_taking_a_wire(&self) -> impl Iterator<Item = &PortDescriptorOutput> {
-        self.inputs.iter().filter(|input| input.takes_a_wire())
-    }
-}
-
 /// Descriptor for a node port.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct PortDescriptorOutput {
@@ -439,8 +432,8 @@ pub struct PortDescriptorOutput {
     #[schema(value_type = Option<Object>)]
     pub input_mode: Option<NodeInputMode>,
     /// The value a setting reads while no value is set on its node, as its
-    /// schema or its declaration states it. Absent on an input that takes a
-    /// wire, and on a setting that states none.
+    /// schema or its declaration states it. Absent on an input that is no
+    /// setting, and on a setting that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
     /// What it states besides its type: a port's range, step, unit, meaning and
@@ -454,13 +447,8 @@ pub struct PortDescriptorOutput {
 }
 
 impl PortDescriptorOutput {
-    /// Whether a link may end at this input: every input but a setting.
-    pub fn takes_a_wire(&self) -> bool {
-        self.input_mode.is_none_or(NodeInputMode::takes_a_wire)
-    }
-
-    /// The input a config field of a node type not yet typed is: one that takes
-    /// no wire, read when the node is set up.
+    /// The input a config field of a node type not yet typed is: a setting read
+    /// when the node is set up, which takes no wire until its type is typed.
     fn of_a_config_field(setting: ConfigFieldDescribedAsASetting) -> Self {
         Self {
             name: setting.name,
@@ -564,12 +552,23 @@ fn ports_rendered_over_their_settled_contracts(
     let settled = node
         .get::<crate::core::graph::DeviceMatchedAudioWindowContractsComponent>()
         .map(|component| &*component.0);
+    let pin_group_slot = |port_name: &str| {
+        node.the_pin_group_slot_of(port_name)
+            .map(|(group, slot_port)| PinGroupSlotOnTheWire {
+                group: group.name.clone(),
+                slot: slot_port.slot,
+                pin: slot_port.pin.to_owned(),
+            })
+    };
     GraphNodePortsOnTheWire {
         inputs: node
             .ports
             .inputs
             .iter()
-            .map(|port| input_port_rendered_over_any_settled_contract(port, settled))
+            .map(|port| GraphNodePortOnTheWire {
+                pin_group_slot: pin_group_slot(&port.name),
+                ..input_port_rendered_over_any_settled_contract(node, port, settled)
+            })
             .collect(),
         outputs: node
             .ports
@@ -579,19 +578,24 @@ fn ports_rendered_over_their_settled_contracts(
                 stream_facts: node
                     .stream_facts_of_output_ports()
                     .current_facts_of(&port.name),
+                pin_group_slot: pin_group_slot(&port.name),
                 ..GraphNodePortOnTheWire::from(port)
             })
             .collect(),
     }
 }
 
-/// One input port, with a `match_device` declaration replaced by whatever its own device stream
-/// settled it to.
+/// One input port of `node`, saying whether a link may end at it, with a `match_device`
+/// declaration replaced by whatever its own device stream settled it to.
 fn input_port_rendered_over_any_settled_contract(
+    node: &crate::core::graph::GraphNode,
     port: &crate::core::graph::PortInfo,
     settled: Option<&crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort>,
 ) -> GraphNodePortOnTheWire {
-    let mut rendered = GraphNodePortOnTheWire::from(port);
+    let mut rendered = GraphNodePortOnTheWire {
+        takes_a_wire: Some(port.takes_a_wire_on_a_node_of(node.node_type())),
+        ..GraphNodePortOnTheWire::from(port)
+    };
     if !matches!(
         rendered.audio_window,
         Some(crate::core::descriptors::AudioWindowContract::MatchDevice {})
@@ -629,7 +633,9 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
             annotations: port.annotations.0.clone(),
+            takes_a_wire: None,
             value_read: None,
+            pin_group_slot: None,
         }
     }
 }
@@ -885,7 +891,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             input_mode: port.input_mode,
             default_value: port
                 .input_mode
-                .filter(|input_mode| !input_mode.takes_a_wire())
+                .filter(|input_mode| input_mode.is_a_setting())
                 .and(port.pin_default.clone()),
             annotations,
         }

@@ -7,7 +7,9 @@
 //! on the same GPU as a module receives a frame, encoded there, decoded back on
 //! an owned decode device, and scored inside the bands — Y and both chroma
 //! planes at 30 dB or better over BT.709 full-range 4:2:0. `complex_pattern`'s
-//! chroma holds each codec's lock.
+//! chroma holds each codec's lock. Decode sessions in the video codec host
+//! decode the same stream side by side on its one shared decode device, each
+//! sent every picture buffer once.
 //!
 //! Rig tier — it needs Vulkan Video encode and decode queues, so it runs only
 //! under `hardware-tests`.
@@ -19,7 +21,9 @@ mod codec_round_trip_scoring;
 #[path = "../../streamlib-engine/tests/support/rig_only_capability_skip.rs"]
 mod rig_only_capability_skip;
 
+use std::collections::HashSet;
 use std::os::fd::{FromRawFd as _, OwnedFd};
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, OnceLock};
 
 use codec_round_trip_scoring::{
@@ -32,6 +36,15 @@ use streamlib_consumer_rhi::h273_color_vui::{H273ColorVui, primaries, transfer};
 use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, OwnedVulkanVideoCodecDevice, VulkanVideoCodecDirection,
 };
+use streamlib_owned_device_video_codec_nodes::video_codec_host::{
+    VideoCodecDevicesOfTheHost, serve_one_video_codec_session,
+};
+use streamlib_owned_device_video_codec_nodes::video_codec_host_protocol::{
+    MOST_PICTURE_BUFFERS_A_DECODE_SENDS, VIDEO_CODEC_HOST_PROTOCOL_VERSION,
+    VideoAccessUnitToDecode, VideoCodecHostConnection, VideoCodecHostElementaryStream,
+    VideoCodecHostReply, VideoCodecHostRequest, VideoDecodeGroupStart, VideoDecodeSessionRequest,
+};
+use streamlib_owned_device_video_codec_nodes::video_decoder_settings::VideoDecoderSettings;
 use streamlib_vulkan_video::{
     Codec, DecodedPictureDelivery, Preset, RgbaPixelBufferVideoEncoder, SimpleDecoder,
     SimpleDecoderConfig, SimpleEncoder, SimpleEncoderConfig, VulkanVideoCodecDevice,
@@ -277,4 +290,150 @@ fn round_trip_every_psnr_reference_on_owned_devices(codec: Codec) {
         "{codec:?}: complex_pattern's chroma is {complex_pattern_chroma_db:.3} dB, under the \
          {lock_db} dB lock"
     );
+}
+
+/// Decode sessions the host's shared decode device serves side by side.
+const DECODE_SESSIONS_SHARING_ONE_DEVICE: usize = 4;
+
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn h264_decode_sessions_share_the_video_codec_hosts_decode_device() {
+    decode_sessions_share_the_video_codec_hosts_decode_device(Codec::H264);
+}
+
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn h265_decode_sessions_share_the_video_codec_hosts_decode_device() {
+    decode_sessions_share_the_video_codec_hosts_decode_device(Codec::H265);
+}
+
+/// The access units of two seconds of the first reference, encoded on an
+/// owned device.
+fn two_seconds_of_access_units(
+    owned_encode_device: &Arc<OwnedVulkanVideoCodecDevice>,
+    codec: Codec,
+) -> Vec<(Vec<u8>, bool)> {
+    let mut encoder = owned_device_encoder(owned_encode_device, codec);
+    let reference = Rgba8Picture::read_png(&psnr_reference_paths()[0]);
+    let pixel_buffer = reference_imported_onto_the_owned_device(&reference, owned_encode_device);
+    (0..2 * FRAMES_PER_REFERENCE as i64)
+        .flat_map(|frame_index| {
+            encoder
+                .encode_rgba_pixel_buffer(
+                    &pixel_buffer,
+                    u64::from(REFERENCE_WIDTH) * 4,
+                    REFERENCE_WIDTH,
+                    REFERENCE_HEIGHT,
+                    1_000_000_000 + frame_index * FRAME_INTERVAL_NS,
+                )
+                .expect("the frame encodes on the owned device")
+                .into_iter()
+                .map(|packet| (packet.data, packet.is_keyframe))
+        })
+        .collect()
+}
+
+fn decode_sessions_share_the_video_codec_hosts_decode_device(codec: Codec) {
+    let Some(owned_encode_device) =
+        owned_device_on_the_runtimes_gpu(VulkanVideoCodecDirection::Encode)
+    else {
+        return;
+    };
+    let access_units = two_seconds_of_access_units(&owned_encode_device, codec);
+    let vulkan_device_uuid = gpu_context()
+        .device()
+        .vulkan_device()
+        .physical_device_uuid();
+    let elementary_stream = match codec {
+        Codec::H264 => VideoCodecHostElementaryStream::H264,
+        Codec::H265 => VideoCodecHostElementaryStream::H265,
+    };
+    let devices = VideoCodecDevicesOfTheHost::default();
+    std::thread::scope(|scope| {
+        let sessions: Vec<_> = (0..DECODE_SESSIONS_SHARING_ONE_DEVICE)
+            .map(|_| {
+                let (node_end, host_end) = UnixStream::pair().expect("a socket pair");
+                let devices = &devices;
+                scope.spawn(move || serve_one_video_codec_session(host_end, devices));
+                let mut node = VideoCodecHostConnection::over(node_end);
+                node.send(&VideoCodecHostRequest::OpenDecodeSession(
+                    VideoDecodeSessionRequest {
+                        protocol_version: VIDEO_CODEC_HOST_PROTOCOL_VERSION,
+                        elementary_stream,
+                        settings: VideoDecoderSettings::default(),
+                        vulkan_device_uuid,
+                    },
+                ))
+                .expect("the opening is sent");
+                let opened = node
+                    .receive::<VideoCodecHostReply>()
+                    .expect("the opening is answered");
+                assert!(
+                    matches!(opened, Some(VideoCodecHostReply::SessionOpened { .. })),
+                    "{codec:?}: {opened:?}"
+                );
+                node
+            })
+            .collect();
+        let decoding: Vec<_> = sessions
+            .into_iter()
+            .map(|mut node| {
+                let access_units = &access_units;
+                scope.spawn(move || {
+                    let mut picture_buffers_sent = HashSet::new();
+                    let mut pictures = 0;
+                    for (index, (annex_b_access_unit, is_keyframe)) in
+                        access_units.iter().enumerate()
+                    {
+                        let group_start = is_keyframe.then_some(if index == 0 {
+                            VideoDecodeGroupStart::EnteringTheStream
+                        } else {
+                            VideoDecodeGroupStart::ContinuingTheStream
+                        });
+                        node.send(&VideoCodecHostRequest::DecodeAccessUnit(
+                            VideoAccessUnitToDecode {
+                                annex_b_access_unit: annex_b_access_unit.clone(),
+                                group_start,
+                            },
+                        ))
+                        .expect("the access unit is sent");
+                        let (reply, fds) = node
+                            .receive_with_fds::<VideoCodecHostReply>(
+                                MOST_PICTURE_BUFFERS_A_DECODE_SENDS,
+                            )
+                            .expect("the decode is answered")
+                            .expect("the host keeps the session open");
+                        let decoded = reply.into_the_decode().expect("the access unit decodes");
+                        assert_eq!(fds.len(), decoded.picture_buffers_sent());
+                        for picture in &decoded.pictures {
+                            assert_eq!(
+                                (picture.width, picture.height),
+                                (REFERENCE_WIDTH, REFERENCE_HEIGHT),
+                                "{codec:?}: the display window"
+                            );
+                            let first_time = picture_buffers_sent.insert(picture.picture_buffer);
+                            assert_eq!(
+                                first_time, picture.picture_buffer_is_sent_with_it,
+                                "{codec:?}: a picture buffer is sent once, the first time"
+                            );
+                        }
+                        pictures += decoded.pictures.len();
+                    }
+                    (pictures, picture_buffers_sent.len())
+                })
+            })
+            .collect();
+        for session in decoding {
+            let (pictures, picture_buffers) = session.join().expect("a decoding session");
+            assert_eq!(
+                pictures,
+                access_units.len(),
+                "{codec:?}: one picture per access unit"
+            );
+            assert!(
+                picture_buffers < pictures,
+                "{codec:?}: {picture_buffers} buffers for {pictures} pictures, so buffers are                  reused"
+            );
+        }
+    });
 }

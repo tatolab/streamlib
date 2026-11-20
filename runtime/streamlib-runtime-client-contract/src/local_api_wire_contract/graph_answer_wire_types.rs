@@ -319,11 +319,32 @@ pub struct GraphNodePortOnTheWire {
     /// states none.
     #[serde(default, skip_serializing_if = "PinAnnotations::is_empty")]
     pub annotations: PinAnnotations,
+    /// On an input, whether a link may end at it: `false` on a setting read each run, a setting
+    /// of a type no message carries, and every setting of a `GraphInput`. Absent on an output,
+    /// and on a port of a graph interface or graph variable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takes_a_wire: Option<bool>,
     /// On an input, the value it reads while unlinked, as `value`, and where that value comes
     /// from, as `value_comes_from`; on a bundle input, each member's, as `member_values`. All
     /// are absent on an input that takes no stored value and no link feeds, and on an output.
     #[serde(flatten, deserialize_with = "a_read_only_when_either_key_is_present")]
     pub value_read: Option<InputValueReadOnTheWire>,
+    /// The slot of the node type's pin group this port belongs to; absent on a port of no
+    /// group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_group_slot: Option<PinGroupSlotOnTheWire>,
+}
+
+/// The slot of a pin group a port belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct PinGroupSlotOnTheWire {
+    /// The group's name, as `describe_node_types` lists it.
+    pub group: String,
+    /// The slot's index, from 0.
+    pub slot: usize,
+    /// The pin's name in the slot.
+    pub pin: String,
 }
 
 /// The kind a port was once declared as; every port is `data`.

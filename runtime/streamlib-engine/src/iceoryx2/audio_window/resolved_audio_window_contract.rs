@@ -270,7 +270,7 @@ pub(crate) fn audio_windowing_declared_by_input_port(
     let Some(ports) = node_types.port_info(node_type) else {
         return Ok(None);
     };
-    let Some(port) = ports.input_named(port_name) else {
+    let Some(port) = ports.the_input_of_the_type_a_name_finds(port_name) else {
         return Ok(None);
     };
     let Some(contract) = port.audio_window.as_ref() else {

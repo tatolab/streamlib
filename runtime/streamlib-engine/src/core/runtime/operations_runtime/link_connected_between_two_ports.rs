@@ -186,7 +186,7 @@ fn refuse_a_link_connect_refuses(
     a_link_connected: ALinkConnected,
 ) -> Result<(Option<PinLinkVerdict>, ChannelName)> {
     refuse_a_source_this_graph_cannot_take(graph, from)?;
-    refuse_a_destination_this_graph_cannot_take(graph, to)?;
+    refuse_a_destination_this_graph_cannot_take(graph, from, to)?;
     let verdict =
         refuse_a_link_its_pin_types_or_families_refuse(graph, from, to, a_link_connected)?;
     let channel =
@@ -222,6 +222,19 @@ fn the_verdict_connect_takes_in(
     to: InputLinkPortRef,
 ) -> Result<Option<PinLinkVerdict>> {
     let (from, to) = the_ends_connect_links(graph, from, to)?;
+    graph.grow_the_pin_groups_holding_the_ends(&from, &to);
+    let verdict = the_verdict_of_ends_held_in(graph, from.clone(), to.clone());
+    graph.reshape_the_pin_groups_holding_the_ends(&from, &to);
+    verdict
+}
+
+/// The verdict a connect made now takes on a link from `from` to `to`, the ends `graph` holds,
+/// as [`the_verdict_connect_takes_in`] answers it.
+fn the_verdict_of_ends_held_in(
+    graph: &mut Graph,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+) -> Result<Option<PinLinkVerdict>> {
     match the_verdict_a_connect_made_now_takes(graph, from.clone(), to.clone()) {
         Ok(verdict) => Ok(verdict),
         Err(refusal @ Error::PinLinkRefused(_)) => {
@@ -778,7 +791,8 @@ fn the_node_a_placed_level_builds(
 }
 
 /// Add the link from `from` to `to` to the graph and queue it for wiring, or, when the engine
-/// cannot wire it, refuse it or set it aside as `when_the_engine_cannot_wire_it` says.
+/// cannot wire it, refuse it or set it aside as `when_the_engine_cannot_wire_it` says; a pin
+/// group grows to hold a slot either end names, and gives it back when no link is made.
 fn apply_a_link(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
@@ -787,13 +801,23 @@ fn apply_a_link(
     when_the_engine_cannot_wire_it: WhenTheEngineCannotWireALink,
 ) -> Result<ALinkConnectedOrSetAside> {
     compiler.scope(|graph, tx| {
-        let (_, channel) = refuse_a_link_connect_refuses(graph, &from, &to, a_link_connected)?;
-        let made = add_a_link_unless_the_engine_cannot_wire_it(
-            graph,
-            from,
-            to,
-            when_the_engine_cannot_wire_it,
-        )?;
+        graph.grow_the_pin_groups_holding_the_ends(&from, &to);
+        let made = refuse_a_link_connect_refuses(graph, &from, &to, a_link_connected).and_then(
+            |(_, channel)| {
+                add_a_link_unless_the_engine_cannot_wire_it(
+                    graph,
+                    from.clone(),
+                    to.clone(),
+                    when_the_engine_cannot_wire_it,
+                )
+                .map(|made| (made, channel))
+            },
+        );
+        if !matches!(made, Ok((ALinkConnectedOrSetAside::Connected(_), _))) {
+            // A slot grown for a link refused, or set aside, is given back.
+            graph.reshape_the_pin_groups_holding_the_ends(&from, &to);
+        }
+        let (made, channel) = made?;
         if let ALinkConnectedOrSetAside::Connected(link_id) = &made {
             tx.log(PendingOperation::AddLink(link_id.clone()));
             tracing::debug!(

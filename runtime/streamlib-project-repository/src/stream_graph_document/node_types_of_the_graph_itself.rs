@@ -8,16 +8,7 @@ use crate::stream_graph_default_port_and_variable_names::{
     GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE,
 };
 
-/// The import path a graph names `GraphInput` by, in the built-in node module.
-pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
-
-/// Whether `node_type` is `GraphInput`.
-pub fn is_the_graph_input_type(node_type: &streamlib_node_schema::NodeClassImportPath) -> bool {
-    node_type.as_str() == GRAPH_INPUT_NODE_TYPE
-}
-
-/// The import path a graph names `GraphOutput` by, in the built-in node module.
-pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
+pub use streamlib_node_schema::{GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE};
 
 /// The config key an interface node names the port it declares under.
 pub const GRAPH_INTERFACE_PORT_CONFIG_KEY: &str = "port";

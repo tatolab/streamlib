@@ -243,7 +243,8 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Apply `request` as [`Self::apply_one_request`] does, as each operation it stands for: a
     /// `set_node_config` sets each input value it names and, on a node type that
     /// takes a config, takes off each config field it does not name; a `set_exposed_config_fields`
-    /// on a node type that takes no config records nothing.
+    /// on a node type that takes no config records nothing; a `disconnect` closes the gap it
+    /// leaves in a pin group.
     pub(super) fn apply_one_action(
         &self,
         request: StreamGraphAction,
@@ -302,6 +303,10 @@ impl StreamGraphTransactionExecutor<'_> {
                 {
                     return Ok(Vec::new());
                 }
+            }
+            StreamGraphAction::Disconnect { .. } => {
+                return self
+                    .apply_a_disconnect_closing_the_gap_it_leaves(request, stream_id, staged);
             }
             _ => {}
         }

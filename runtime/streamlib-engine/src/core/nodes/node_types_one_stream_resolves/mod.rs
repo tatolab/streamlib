@@ -42,10 +42,7 @@ static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
     let descriptor =
         the_node_type_of_a_graph_input().expect("the GraphInput node type's names are valid");
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
-        input_and_output_port_info: GraphNodePorts {
-            inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
-            outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
-        },
+        input_and_output_port_info: GraphNodePorts::of_a_node_just_placed(&descriptor),
         descriptor,
         conversion: None,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
@@ -205,10 +202,7 @@ impl NodeTypesOneStreamResolves {
                 }
             };
             why_no_node_takes_each_view.remove(&node_type);
-            let input_and_output_port_info = GraphNodePorts {
-                inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
-                outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
-            };
+            let input_and_output_port_info = GraphNodePorts::of_a_node_just_placed(&descriptor);
             let descriptor_for_constructor = descriptor.clone();
             view_types.insert(
                 node_type,
@@ -336,10 +330,7 @@ impl NodeTypesOneStreamResolves {
                  Python class or its module"
             )));
         }
-        let input_and_output_port_info = GraphNodePorts {
-            inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
-            outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
-        };
+        let input_and_output_port_info = GraphNodePorts::of_a_node_just_placed(&descriptor);
         self.described_in_this_streams_node_interpreter
             .write()
             .insert(
@@ -367,6 +358,19 @@ impl NodeTypesOneStreamResolves {
                 described.descriptor.clone()
             })
         })
+    }
+
+    /// The pin groups the node type `node_type` names repeats; none for a type this stream does
+    /// not resolve.
+    pub fn the_pin_groups_of(
+        &self,
+        node_type: &str,
+    ) -> Vec<crate::core::descriptors::PinGroupDescriptor> {
+        NodeClassImportPath::new(node_type)
+            .ok()
+            .and_then(|node_type| self.descriptor(&node_type))
+            .map(|descriptor| descriptor.pin_groups)
+            .unwrap_or_default()
     }
 
     /// The program of shader node type `node_type`; `None` for any other type.
@@ -627,7 +631,7 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &NodeClassImportPath,
     ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
-        if crate::core::graph::graph_interface_resolution::is_the_graph_input_type(node_type) {
+        if node_type.is_the_graph_input_type() {
             return Some(Arc::clone(&THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS));
         }
         self.view_types_this_streams_project_brings

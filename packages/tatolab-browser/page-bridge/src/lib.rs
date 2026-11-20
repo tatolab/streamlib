@@ -7,7 +7,7 @@
 //!
 //! A page calls `window.tatolab.publish(object)`; the bridge sends the object as
 //! JSON to the browser process in one process message, which the node publishes
-//! as one msgpack map on `events`.
+//! as one `PageMessage`, its JSON text, on `events`.
 
 use cef::rc::Rc as _;
 use cef::*;

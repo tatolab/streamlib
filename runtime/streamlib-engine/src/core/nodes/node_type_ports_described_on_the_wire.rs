@@ -7,12 +7,13 @@
 //! its value.
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    NodeTypeInputDescribed, NodeTypeInputMode, NodeTypePortDescribed, NodeTypePortPin,
+    NodeTypeInputDescribed, NodeTypeInputMode, NodeTypePinGroupDescribed, NodeTypePinGroupSlots,
+    NodeTypePortDescribed, NodeTypePortPin,
 };
 
 use crate::core::descriptors::{
-    NodeDescriptor, NodeInputMode, NodeKind, NodeValueLifetime, PinDeclaration, PortDescriptor,
-    SettingReadTime,
+    NodeDescriptor, NodeInputMode, NodeKind, NodeValueLifetime, PinDeclaration, PinGroupSlotCount,
+    PortDescriptor, SettingReadTime,
 };
 use crate::core::graph::PortInfo;
 use crate::core::graph::input_values::the_input_port_takes_a_value;
@@ -31,6 +32,8 @@ pub struct NodeTypePortsDescribedOnTheWire {
     pub outputs: Vec<NodeTypePortDescribed>,
     /// The settings of a node type not yet typed that `set_exposed_config_fields` takes.
     pub exposable_config_fields: Vec<String>,
+    /// Each pin group, its slot's ports each named as its pin.
+    pub pin_groups: Vec<NodeTypePinGroupDescribed>,
 }
 
 impl NodeTypePortsDescribedOnTheWire {
@@ -38,9 +41,9 @@ impl NodeTypePortsDescribedOnTheWire {
     pub fn of(descriptor: &NodeDescriptor) -> Self {
         Self {
             inputs: descriptor
-                .inputs
+                .the_inputs_with_slots(&vec![0; descriptor.pin_groups.len()])
                 .iter()
-                .map(|port| an_input_port_described(descriptor.node_kind, port))
+                .map(|port| an_input_port_described(descriptor, port))
                 .chain(
                     the_config_fields_described_as_settings(descriptor)
                         .into_iter()
@@ -55,6 +58,28 @@ impl NodeTypePortsDescribedOnTheWire {
             .into_iter()
             .map(|(field, _)| field)
             .collect(),
+            pin_groups: descriptor
+                .pin_groups
+                .iter()
+                .map(|group| NodeTypePinGroupDescribed {
+                    name: group.name.clone(),
+                    documentation: group.description.clone(),
+                    slots: match group.slot_count() {
+                        PinGroupSlotCount::FollowsItsWires => {
+                            NodeTypePinGroupSlots::FollowTheirWires
+                        }
+                        PinGroupSlotCount::SetByItsInput => {
+                            NodeTypePinGroupSlots::SetByTheInputOfTheGroupsName
+                        }
+                    },
+                    inputs: group
+                        .inputs
+                        .iter()
+                        .map(|port| an_input_port_described(descriptor, port))
+                        .collect(),
+                    outputs: group.outputs.iter().map(a_port_described).collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -82,25 +107,28 @@ fn a_port_described(port: &PortDescriptor) -> NodeTypePortDescribed {
     }
 }
 
-/// `port`, an input of a node of `node_kind`, as an input: its mode, the one it declares, else
-/// the one its pin type and the node's kind give it; and the JSON Schema of a value it takes,
-/// only where it takes one.
-fn an_input_port_described(node_kind: NodeKind, port: &PortDescriptor) -> NodeTypeInputDescribed {
+/// `port`, an input of a node of the type `descriptor` describes, as an input: its mode, the
+/// one it declares, else the one its pin type and the node's kind give it; whether a link may
+/// end at it; and the JSON Schema of a value it takes, only where it takes one.
+fn an_input_port_described(
+    descriptor: &NodeDescriptor,
+    port: &PortDescriptor,
+) -> NodeTypeInputDescribed {
+    let node_kind = descriptor.node_kind;
     let declared = port.declared_pin();
     let mode = port
         .input_mode
         .unwrap_or_else(|| the_mode_of_an_input_declaring_none(node_kind, port));
-    let takes_a_value = the_input_port_takes_a_value(
-        Some(node_kind),
-        &PortInfo {
-            input_mode: Some(mode),
-            ..PortInfo::from(port)
-        },
-    );
+    let port_info = PortInfo {
+        input_mode: Some(mode),
+        ..PortInfo::from(port)
+    };
+    let takes_a_value = the_input_port_takes_a_value(Some(node_kind), &port_info);
     let (mode, read) = NodeTypeInputMode::of(mode);
     NodeTypeInputDescribed {
         port: a_port_described(port),
         mode: Some(mode),
+        takes_a_wire: port_info.takes_a_wire_on_a_node_of(&descriptor.node_class_import_path),
         read,
         default_value: port.pin_default.clone(),
         lifetime: Some(port.lifetime),
@@ -159,6 +187,7 @@ fn a_setting_described(setting: ConfigFieldDescribedAsASetting) -> NodeTypeInput
             annotation: None,
         },
         mode: Some(mode),
+        takes_a_wire: false,
         read,
         default_value: setting.default_value,
         lifetime: Some(NodeValueLifetime::Kept),

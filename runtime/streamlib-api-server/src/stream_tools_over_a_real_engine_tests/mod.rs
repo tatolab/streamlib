@@ -46,6 +46,7 @@ use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 mod a_stream_outliving_its_connection_tests;
 mod an_edit_recorded_before_the_update_tests;
+mod bundle_frame_link_tests;
 mod bundle_member_link_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
@@ -68,6 +69,7 @@ mod node_rebuilt_by_a_setting_tests;
 mod node_type_group_tests;
 mod node_type_reads_tests;
 mod node_types_of_the_graph_itself_tests;
+mod pin_group_gap_closed_by_a_disconnect_tests;
 mod played_project_end_to_end_tests;
 mod project_conversion_named_on_a_link_tests;
 mod project_create_open_and_cancel_tests;

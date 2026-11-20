@@ -3,15 +3,13 @@
 
 """H.264 encode and decode for StreamLib, on a Vulkan device the module owns.
 
-An extension wheel: the Rust is inside this package and the `@node.process` classes
+An extension wheel: the Rust is inside this package and the `@node` classes
 below are the binding. Nothing here links the engine — the wheel depends on
 `tatolab-stream`, and the node runs in its own node interpreter like
 any other Python node.
 """
 
 from .nodes import H264Decoder as H264Decoder
-from .nodes import H264DecoderConfig as H264DecoderConfig
 from .nodes import H264Encoder as H264Encoder
-from .nodes import H264EncoderConfig as H264EncoderConfig
 
-__all__ = ["H264Decoder", "H264DecoderConfig", "H264Encoder", "H264EncoderConfig"]
+__all__ = ["H264Decoder", "H264Encoder"]

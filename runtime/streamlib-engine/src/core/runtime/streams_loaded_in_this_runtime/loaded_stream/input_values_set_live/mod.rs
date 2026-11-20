@@ -31,7 +31,7 @@ use crate::core::graph::input_values::{
     the_words_of_an_input_set_twice_live,
 };
 use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
-use crate::core::graph::{Graph, GraphNode, NodeRunId};
+use crate::core::graph::{Graph, GraphNode, NodeRunId, PortInfo};
 use crate::core::nodes::{NodeTypesOneStreamResolves, is_the_input_of_an_output_a_panel_writes};
 use crate::core::pubsub::RuntimeEvent;
 
@@ -440,7 +440,7 @@ pub(super) fn is_held_on_the_graph(graph: &Graph, set_on: &GraphNode, input: &st
             && crate::core::graph::graph_interface_resolution::is_an_annotation_setting_of_a_graph_input(input))
         || set_on
             .input_port(input)
-            .is_none_or(|port| !port.takes_a_wire() && !port.is_a_setting_read_each_run())
+            .is_none_or(PortInfo::is_a_setting_read_at_setup)
 }
 
 /// Refuse `value`, set live on input `input` of `set_on`, a function node run in a helper of its

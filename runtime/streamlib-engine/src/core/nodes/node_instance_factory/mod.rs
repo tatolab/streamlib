@@ -12,7 +12,7 @@ use crate::core::descriptors::{NodeClassImportPath, NodeKind};
 use crate::core::descriptors::{PinConversion, PinConversionOutputPick, PortDescriptor};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
-use crate::core::graph::{GraphNode, GraphNodePorts, PortInfo, is_in_exposed_name_cast_form};
+use crate::core::graph::{GraphNode, GraphNodePorts, is_in_exposed_name_cast_form};
 use crate::core::nodes::{Config, DynGeneratedNode, GeneratedNode};
 
 pub struct NodeInstance(Box<dyn DynGeneratedNode + Send>);
@@ -365,8 +365,7 @@ impl NodeInstanceFactory {
         }
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
-        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
-        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
+        let ports = GraphNodePorts::of_a_node_just_placed(&descriptor);
 
         // The `descriptors` guard spans the check and the claim, so two threads
         // registering one path cannot both pass it. Checked against
@@ -378,10 +377,9 @@ impl NodeInstanceFactory {
             return Err(duplicate_class_import_path(&node_class_import_path));
         }
 
-        self.port_info.write().insert(
-            node_class_import_path.clone(),
-            GraphNodePorts { inputs, outputs },
-        );
+        self.port_info
+            .write()
+            .insert(node_class_import_path.clone(), ports);
 
         self.registrations
             .write()
@@ -405,8 +403,7 @@ impl NodeInstanceFactory {
         let NodeTypeAsRegistered { descriptor, .. } = the_node_type_as_registered(descriptor)?;
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
-        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
-        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
+        let ports = GraphNodePorts::of_a_node_just_placed(&descriptor);
 
         // One guard across the check and the claim — see
         // `register_with_constructor`.
@@ -415,10 +412,9 @@ impl NodeInstanceFactory {
             return Err(duplicate_class_import_path(&node_class_import_path));
         }
 
-        self.port_info.write().insert(
-            node_class_import_path.clone(),
-            GraphNodePorts { inputs, outputs },
-        );
+        self.port_info
+            .write()
+            .insert(node_class_import_path.clone(), ports);
 
         descriptors.insert(node_class_import_path.clone(), descriptor);
         drop(descriptors);
@@ -654,9 +650,11 @@ fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> 
 pub(crate) fn the_node_type_as_registered(
     descriptor: NodeDescriptor,
 ) -> Result<NodeTypeAsRegistered> {
-    refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
-    refuse_former_port_names_that_do_not_find_one_port(&descriptor)?;
-    refuse_an_output_that_may_be_unset(&descriptor)?;
+    refuse_a_pin_group_no_node_type_may_declare(&descriptor)?;
+    let with_one_slot_in_each_pin_group = descriptor.with_one_slot_in_each_pin_group();
+    refuse_port_names_not_cast_or_declared_twice(&with_one_slot_in_each_pin_group)?;
+    refuse_former_port_names_that_do_not_find_one_port(&with_one_slot_in_each_pin_group)?;
+    refuse_an_output_that_may_be_unset(&with_one_slot_in_each_pin_group)?;
     let conversion = descriptor
         .pin_conversion()
         .map_err(|refusal| Error::Configuration(refusal.to_string()))?;
@@ -670,6 +668,39 @@ pub(crate) fn the_node_type_as_registered(
         descriptor,
         conversion,
     })
+}
+
+/// Refuse a pin group the node type may not declare, naming it: one
+/// [`crate::core::descriptors::PinGroupDescriptor::refusal_of_its_declaration`] refuses, one
+/// named as another group or as a port the type declares, and one a port of the type is named
+/// as a port of a slot of.
+fn refuse_a_pin_group_no_node_type_may_declare(descriptor: &NodeDescriptor) -> Result<()> {
+    let refused = |why: String| {
+        Err(Error::Configuration(format!(
+            "`{}`: {why}",
+            descriptor.node_class_import_path
+        )))
+    };
+    let mut group_names = HashSet::new();
+    for group in &descriptor.pin_groups {
+        if let Some(why) = group.refusal_of_its_declaration() {
+            return refused(why);
+        }
+        if !group_names.insert(group.name.as_str())
+            || descriptor
+                .inputs
+                .iter()
+                .chain(&descriptor.outputs)
+                .any(|port| port.name == group.name || group.holds_the_slot_port(&port.name))
+        {
+            return refused(format!(
+                "pin group `{}` is named as another pin group or a port of the type, or a port \
+                 of the type is named as a port of one of its slots",
+                group.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A node type as it is registered, with the conversion it states.
@@ -708,7 +739,7 @@ fn refuse_port_names_not_cast_or_declared_twice(descriptor: &NodeDescriptor) -> 
     }
     for output in &descriptor.outputs {
         let publishes_the_setting_of_its_name = |input: &&PortDescriptor| {
-            input.input_mode.is_some_and(|mode| !mode.takes_a_wire())
+            input.input_mode.is_some_and(|mode| mode.is_a_setting())
                 && input.flows_as_a_value()
                 && output.flows_as_a_value()
         };

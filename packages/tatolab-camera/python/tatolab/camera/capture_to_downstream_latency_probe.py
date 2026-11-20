@@ -11,42 +11,53 @@ captured.
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Annotated
 
-from tatolab.stream import Image, ImageFrame, Input, RuntimeContextLimitedAccess, log, node
+from tatolab.stream import (
+    Description,
+    ImageFrame,
+    InputPin,
+    NumberRange,
+    RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    log,
+    node,
+)
 from tatolab.stream.clock import monotonic_now_ns
 
 from ._duration_samples import DurationSamplesInOneReportingWindow
 
-@dataclasses.dataclass
-class CaptureToDownstreamLatencyProbeConfig:
-    """What a `CaptureToDownstreamLatencyProbe` is configured with."""
-
-    camera_label: Annotated[str, "Names the camera under test in every report."] = "camera"
-    frames_between_reports: Annotated[int, "How many frames one report summarises."] = 600
-
-
 @node.meta(description="Logs the frame rate and capture-to-read latency of the frames it receives")
-@node.process
+@node
 class CaptureToDownstreamLatencyProbe:
-    """Video frames in; a report every `frames_between_reports` frames."""
+    """Video frames in; a report every `frames_between_reports` frames.
 
-    def __init__(self, config: CaptureToDownstreamLatencyProbeConfig) -> None:
-        self._camera_label = config.camera_label
-        self._frames_between_reports = config.frames_between_reports
+    Its label and its count follow their values from the next frame on.
+    """
+
+    camera_label: Annotated[str, Description("Names the camera under test in every report.")] = (
+        "camera"
+    )
+    frames_between_reports: Annotated[
+        int, NumberRange(minimum=1), Description("How many frames one report summarises.")
+    ] = 600
+    video_from_upstream: InputPin[
+        Annotated[
+            Texture, StreamDelivery("ordered"), Description("Frames from the camera under test")
+        ]
+    ]
+
+    def __init__(self) -> None:
         self._capture_to_read = DurationSamplesInOneReportingWindow()
         self._capture_interval = DurationSamplesInOneReportingWindow()
         self._frames_read = 0
         self._window_first_read_ns: "int | None" = None
         self._previous_capture_ns: "int | None" = None
 
-    video_from_upstream = Input(
-        Image, delivery="ordered", description="Frames from the camera under test"
-    )
-
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        while (frame := ctx.inputs.read(self.video_from_upstream)) is not None:
+        del ctx
+        while (frame := self.video_from_upstream.read()) is not None:
             read_ns = monotonic_now_ns()
             self._capture_to_read.add(read_ns - frame.timestamp_ns)
             if self._previous_capture_ns is not None:
@@ -55,15 +66,15 @@ class CaptureToDownstreamLatencyProbe:
             if self._window_first_read_ns is None:
                 self._window_first_read_ns = read_ns
             self._frames_read += 1
-            if self._frames_read % self._frames_between_reports == 0:
+            if self._frames_read % self.frames_between_reports == 0:
                 self._report(frame, read_ns)
 
     def _report(self, frame: ImageFrame, read_ns: int) -> None:
         window_first_read_ns = self._window_first_read_ns or read_ns
         window_seconds = max(read_ns - window_first_read_ns, 1) / 1_000_000_000
-        frames_per_second = (self._frames_between_reports - 1) / window_seconds
+        frames_per_second = (self.frames_between_reports - 1) / window_seconds
         log.info(
-            f"CaptureToDownstreamLatencyProbe[{self._camera_label}]: "
+            f"CaptureToDownstreamLatencyProbe[{self.camera_label}]: "
             f"{frame.width}x{frame.height} frames_read={self._frames_read} "
             f"fps={frames_per_second:.2f} "
             f"capture_to_read_ms {self._capture_to_read.summary_in_milliseconds()} | "

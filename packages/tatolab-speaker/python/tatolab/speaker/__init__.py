@@ -14,10 +14,20 @@ never per block.
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Annotated
 
-from tatolab.stream import AudioWindowContract, Channels, Input, RuntimeContextFullAccess, log, node
+from tatolab.stream import (
+    Audio,
+    AudioWindowContract,
+    Description,
+    InputPin,
+    PinControl,
+    RuntimeContextFullAccess,
+    SettingOnly,
+    StreamDelivery,
+    log,
+    node,
+)
 
 from . import _native
 
@@ -28,7 +38,6 @@ __all__ = [
     "SPEAKER_SAMPLE_RATE",
     "SPEAKER_WINDOW_SIZE",
     "SpeakerSink",
-    "SpeakerSinkConfig",
 ]
 
 AUDIO_INPUT_PORT = "audio"
@@ -48,25 +57,13 @@ milliseconds at `SPEAKER_SAMPLE_RATE`, which the playback ring absorbs whatever
 the device's own period is."""
 
 
-@dataclasses.dataclass
-class SpeakerSinkConfig:
-    """What a `SpeakerSink` is configured with."""
-
-    device_id: Annotated[
-        "str | None",
-        "Backend-named playback device. Absent: the backend's default device. A name the "
-        "backend cannot open raises rather than landing on a different device — a wrong "
-        "device id is a wiring error.",
-    ] = None
-
-
 @node.meta(
     description=(
         "Plays timestamped Channels blocks on the machine's audio backend "
         "(discarding where no backend exists)."
     ),
 )
-@node.process(execution="manual", scheduling="realtime", paced_by_real_time=True)
+@node(execution="manual", scheduling="realtime", paced_by_real_time=True)
 class SpeakerSink:
     """Plays timestamped Channels blocks on the machine's audio backend
     (discarding where no backend exists).
@@ -85,21 +82,32 @@ class SpeakerSink:
     changes.
     """
 
-    def __init__(self, config: SpeakerSinkConfig) -> None:
-        self._device_id = config.device_id
-        self._playback: "_native.SpeakerPlayback | None" = None
-
-    audio = Input(
-        Channels,
-        delivery="ordered",
-        window=AudioWindowContract(
-            sample_rate=SPEAKER_SAMPLE_RATE,
-            channels=SPEAKER_CHANNELS,
-            dtype=SPEAKER_SAMPLE_FORMAT,
-            window_size=SPEAKER_WINDOW_SIZE,
+    device_id: Annotated[
+        str | None,
+        SettingOnly(),
+        Description(
+            "Backend-named playback device. Unset: the backend's default device. A name the "
+            "backend cannot open raises rather than landing on a different device — a wrong "
+            "device id is a wiring error."
         ),
-        description="Timestamped blocks of samples to play",
-    )
+    ] = None
+    audio: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            AudioWindowContract(
+                sample_rate=SPEAKER_SAMPLE_RATE,
+                channels=SPEAKER_CHANNELS,
+                dtype=SPEAKER_SAMPLE_FORMAT,
+                window_size=SPEAKER_WINDOW_SIZE,
+            ),
+            PinControl("meter"),
+            Description("Timestamped blocks of samples to play"),
+        ]
+    ]
+
+    def __init__(self) -> None:
+        self._playback: "_native.SpeakerPlayback | None" = None
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend `audio` to the native half and open the playback stream, so a
@@ -110,11 +118,11 @@ class SpeakerSink:
             sample_rate=SPEAKER_SAMPLE_RATE,
             channels=SPEAKER_CHANNELS,
             sample_format=SPEAKER_SAMPLE_FORMAT,
-            device_id=self._device_id,
+            device_id=self.device_id,
         )
         log.info(
             f"SpeakerSink: playback stream opened on "
-            f"{self._device_id or '<default>'} at {self._playback.sample_rate} Hz × "
+            f"{self.device_id or '<default>'} at {self._playback.sample_rate} Hz × "
             f"{self._playback.channels} ch, {self._playback.sample_format}, device period "
             f"{self._playback.device_period_in_per_channel_samples or 'unreported'}"
         )

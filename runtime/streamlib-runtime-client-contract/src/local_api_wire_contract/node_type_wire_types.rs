@@ -330,6 +330,39 @@ pub struct NodeTypeDescription {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub exposable_config_fields: Vec<String>,
+    /// Each pin group: a slot of inputs and outputs that repeats on each node, each slot's ports
+    /// named `<group>.<index>.<pin>` among the node's ports in `graph`; absent when it declares
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pin_groups: Vec<NodeTypePinGroupDescribed>,
+}
+
+/// A pin group of a node type: a slot of inputs and outputs that repeats on each node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct NodeTypePinGroupDescribed {
+    /// The group's name, the first part of each of its slots' port names.
+    pub name: String,
+    /// What the group is for.
+    pub documentation: String,
+    /// How many slots a node holds.
+    pub slots: NodeTypePinGroupSlots,
+    /// The inputs each slot holds, each named as its pin; a slot's port is named
+    /// `<group>.<index>.<pin>`.
+    pub inputs: Vec<NodeTypeInputDescribed>,
+    /// The outputs each slot holds, each named as its pin.
+    pub outputs: Vec<NodeTypePortDescribed>,
+}
+
+/// How many slots a node holds in a pin group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum NodeTypePinGroupSlots {
+    /// One empty slot after the last a link reaches: wiring the empty slot adds the next.
+    FollowTheirWires,
+    /// As many as the node's input named after the group says, a setting read at setup.
+    SetByTheInputOfTheGroupsName,
 }
 
 /// A node type named that the runtime could not describe.
@@ -393,6 +426,11 @@ pub struct NodeTypeInputDescribed {
     /// node type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<NodeTypeInputMode>,
+    /// Whether a link may end at it: `false` on a setting read each run, a setting of a type no
+    /// message carries, every setting of a `GraphInput`, and each legacy field of a node type
+    /// not yet typed, which is no port.
+    #[serde(default = "an_input_takes_a_wire_unless_it_says_not")]
+    pub takes_a_wire: bool,
     /// When the node reads a setting: once at setup, a change rebuilding the node, or each run.
     /// Absent on an input that takes a wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,6 +453,11 @@ pub struct NodeTypeInputDescribed {
     pub value_json_schema: Option<Value>,
 }
 
+/// An input that does not say whether it takes a wire is a port that takes one.
+fn an_input_takes_a_wire_unless_it_says_not() -> bool {
+    true
+}
+
 /// Whether an input takes a wire, a stored value, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -424,7 +467,8 @@ pub enum NodeTypeInputMode {
     WireOrValue,
     /// A link only, read each run.
     WireOnly,
-    /// A stored value only, never a link: a setting.
+    /// A setting: a stored value, read when its `read` says; one read at setup also takes a
+    /// link from an output that flows as a value, each change of either rebuilding its node.
     SettingOnly,
 }
 

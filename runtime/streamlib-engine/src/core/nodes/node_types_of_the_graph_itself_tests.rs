@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{DeclaredPinType, NodeInputMode, PinType, PortDescriptor};
+use crate::core::NodeClassImportPath;
+use crate::core::descriptors::{
+    DeclaredPinType, NodeInputMode, PinType, PortDescriptor, SettingReadTime,
+};
+use crate::core::graph::PortInfo;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
 };
@@ -59,13 +63,25 @@ fn a_set_variable_takes_any_type_on_value_and_a_get_variable_gives_any_type_on_v
         .iter()
         .find(|input| input.name == "value")
         .expect("a SetVariable takes `value`");
-    assert!(takes_a_wire(set_value));
+    assert!(takes_a_wire(SET_VARIABLE_NODE_TYPE, set_value));
     assert_eq!(
         set_value.pin_declaration.as_ref().map(|pin| &pin.pin_type),
         Some(&DeclaredPinType::Any)
     );
     let get = of(GET_VARIABLE_NODE_TYPE);
-    assert!(get.inputs.iter().all(|input| !takes_a_wire(input)));
+    assert_eq!(
+        get.inputs
+            .iter()
+            .map(|input| (input.name.as_str(), input.input_mode))
+            .collect::<Vec<_>>(),
+        [(
+            "variable",
+            Some(NodeInputMode::SettingOnly {
+                read: SettingReadTime::AtSetup
+            })
+        )],
+        "a GetVariable takes only its `variable`, a setting read at setup"
+    );
     assert_eq!(
         get.outputs
             .iter()
@@ -87,7 +103,9 @@ fn a_set_variable_takes_any_type_on_value_and_a_get_variable_gives_any_type_on_v
     );
 }
 
-/// Whether `input` takes a wire: it declares no mode, or one that does.
-fn takes_a_wire(input: &PortDescriptor) -> bool {
-    input.input_mode.is_none_or(NodeInputMode::takes_a_wire)
+/// Whether `input` of a node of `node_type` takes a wire, by the runtime's one rule.
+fn takes_a_wire(node_type: &str, input: &PortDescriptor) -> bool {
+    PortInfo::from(input).takes_a_wire_on_a_node_of(
+        &NodeClassImportPath::new(node_type).expect("a legal import path"),
+    )
 }

@@ -4,8 +4,11 @@
 """The record the page reads: the keys `templates/lower_third.html` reads, and a variant it styles."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from tatolab.browser import PageMessage
+from tatolab.stream._class_node_construction import construct_class_node
 
 from lower_third.lower_third_template import (
     DEMO_RUNDOWN,
@@ -28,10 +31,28 @@ def test_a_lower_third_reaches_the_page_as_the_map_it_reads() -> None:
     }
 
 
-def test_the_rundown_output_declares_every_key_the_page_reads() -> None:
-    page = LOWER_THIRD_PAGE.read_text()
+class MessagesWritten:
+    """Stands in for the rundown's output pin, holding each message written on it."""
 
-    assert LowerThirdRundown.lower_third_to_page.names == LOWER_THIRD_RECORD_NAMES
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+
+    def write(self, value: Any) -> None:
+        self.messages.append(value)
+
+
+def test_each_rundown_message_carries_every_key_the_page_reads() -> None:
+    page = LOWER_THIRD_PAGE.read_text()
+    written = MessagesWritten()
+    rundown = construct_class_node(
+        LowerThirdRundown, field_values={}, pins={"lower_third_to_page": written}
+    )
+
+    rundown.process(None)  # type: ignore[arg-type]
+
+    [message] = written.messages
+    assert isinstance(message, PageMessage)
+    assert tuple(message.members) == LOWER_THIRD_RECORD_NAMES
     for name in LOWER_THIRD_RECORD_NAMES:
         assert f"template.{name}" in page
 

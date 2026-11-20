@@ -17,4 +17,4 @@ def a_camera_source_alone(stream_builder: StreamBuilder) -> None:
 
 @graph_generator
 def a_camera_naming_a_device_no_backend_can_open(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(CameraSource, config={"device_id": UNOPENABLE_DEVICE_ID})
+    stream_builder.add(CameraSource, input_values={"device_id": UNOPENABLE_DEVICE_ID})

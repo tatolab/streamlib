@@ -30,7 +30,7 @@ class LowerThirdTemplate:
             )
 
     def as_record(self) -> dict[str, str]:
-        """The Records message this lower third is sent to the page as."""
+        """The members of the `PageMessage` this lower third is sent to the page as."""
         return {name: getattr(self, name) for name in LOWER_THIRD_RECORD_NAMES}
 
 

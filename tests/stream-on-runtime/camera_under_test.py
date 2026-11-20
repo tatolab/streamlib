@@ -20,7 +20,7 @@ LINUX_DEFAULT_CAMERA_DEVICE = "/dev/video0"
 
 
 def camera_source_config() -> "dict[str, object]":
-    """The `CameraSource` config that opens this rig's camera."""
+    """The `CameraSource` input values that open this rig's camera."""
     named = os.environ.get(CAMERA_DEVICE_ENVIRONMENT_VARIABLE)
     if named:
         return {"device_id": named}

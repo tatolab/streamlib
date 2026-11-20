@@ -19,7 +19,9 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
-use crate::core::graph::input_values::{LiveInputValuesOfAStream, the_value_an_input_reads};
+use crate::core::graph::input_values::{
+    LiveInputValuesOfAStream, ValuesWiresCarryIntoSettings, the_value_an_input_reads,
+};
 use crate::core::graph::pin_type_link_checks::the_verdict_on_a_link_between_typed_ends;
 use crate::core::graph::the_pin_a_port_resolves_to;
 use crate::core::json_schema::{
@@ -71,6 +73,10 @@ pub struct Graph {
 
     /// The values set live on this graph's inputs, held apart from its nodes.
     live_input_values: Arc<LiveInputValuesOfAStream>,
+
+    /// The values the Value wires into this graph's settings read at setup carry, held apart
+    /// from its nodes and kept across a Stop.
+    values_wires_carry_into_settings: Arc<ValuesWiresCarryIntoSettings>,
 }
 
 /// Why a node leaves its stream's graph, which decides what the stream forgets of it.
@@ -91,6 +97,96 @@ impl Default for Graph {
 }
 
 impl Graph {
+    /// Give the node `node_run_id` the slots its pin groups hold by its links and its values;
+    /// answers whether a port came or went.
+    pub(crate) fn reshape_the_pin_group_slots_of_the_node(
+        &mut self,
+        node_run_id: &NodeRunId,
+    ) -> bool {
+        self.digraph
+            .node_indices()
+            .find(|node_index| self.digraph[*node_index].id == *node_run_id)
+            .is_some_and(|node_index| {
+                super::nodes::reshape_the_pin_group_slots_of(&mut self.digraph, node_index)
+            })
+    }
+
+    /// Grow the pin group of the node `node_run_id` holding port `port_name` of `direction` to
+    /// hold it, when the slot it names is past the group's last: a link into it is judged with
+    /// the port there.
+    pub(crate) fn grow_the_pin_group_holding_the_port(
+        &mut self,
+        node_run_id: &NodeRunId,
+        direction: PortDirection,
+        port_name: &str,
+    ) {
+        if let Some(node_index) = self
+            .digraph
+            .node_indices()
+            .find(|node_index| self.digraph[*node_index].id == *node_run_id)
+        {
+            super::nodes::grow_a_pin_group_to_hold_the_port(
+                &mut self.digraph,
+                node_index,
+                direction,
+                port_name,
+            );
+        }
+    }
+
+    /// Grow the pin group holding each of `from` and `to`, as
+    /// [`Self::grow_the_pin_group_holding_the_port`] does, for a link between them to be judged.
+    pub(crate) fn grow_the_pin_groups_holding_the_ends(
+        &mut self,
+        from: &super::OutputLinkPortRef,
+        to: &super::InputLinkPortRef,
+    ) {
+        self.grow_the_pin_group_holding_the_port(
+            from.node_run_id(),
+            PortDirection::Output,
+            from.port_name(),
+        );
+        self.grow_the_pin_group_holding_the_port(
+            to.node_run_id(),
+            PortDirection::Input,
+            to.port_name(),
+        );
+    }
+
+    /// Give the nodes of `from` and `to` the slots their links and values hold, a slot grown for
+    /// a link not made given back.
+    pub(crate) fn reshape_the_pin_groups_holding_the_ends(
+        &mut self,
+        from: &super::OutputLinkPortRef,
+        to: &super::InputLinkPortRef,
+    ) {
+        self.reshape_the_pin_group_slots_of_the_node(from.node_run_id());
+        self.reshape_the_pin_group_slots_of_the_node(to.node_run_id());
+    }
+
+    /// Refuse `value` as the count of the node `node_run_id`'s pin group named `input` when it
+    /// leaves out a slot a link reaches.
+    pub(crate) fn refuse_a_slot_count_leaving_out_a_linked_slot(
+        &self,
+        node_run_id: &NodeRunId,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> crate::core::Result<()> {
+        match self
+            .digraph
+            .node_indices()
+            .find(|node_index| self.digraph[*node_index].id == *node_run_id)
+        {
+            Some(node_index) => super::nodes::refuse_a_slot_count_leaving_out_a_linked_slot(
+                &self.digraph,
+                node_index,
+                input,
+                value,
+            ),
+            None => Ok(()),
+        }
+    }
+
     /// Create a new empty Graph that resolves the natively compiled node types alone.
     pub fn new() -> Self {
         Self::new_resolving_node_types_through(Arc::new(NodeTypesOneStreamResolves::new()))
@@ -123,12 +219,28 @@ impl Graph {
             compiled_at: None,
             state: GraphState::Idle,
             live_input_values: Arc::new(live_input_values),
+            values_wires_carry_into_settings: Arc::default(),
         }
     }
 
     /// The values set live on this graph's inputs, which change under its read lock.
     pub fn live_input_values(&self) -> &Arc<LiveInputValuesOfAStream> {
         &self.live_input_values
+    }
+
+    /// The values the Value wires into this graph's settings read at setup carry, which change
+    /// under its read lock.
+    pub(crate) fn values_wires_carry_into_settings(&self) -> &Arc<ValuesWiresCarryIntoSettings> {
+        &self.values_wires_carry_into_settings
+    }
+
+    /// Whether input `input` of the node `node_run_id` is a setting its node reads at setup;
+    /// `false` when this graph holds no such node or input.
+    pub(crate) fn is_a_setting_read_at_setup(&self, node_run_id: &NodeRunId, input: &str) -> bool {
+        self.traversal().v(node_run_id).first().is_some_and(|node| {
+            node.input_port(input)
+                .is_some_and(super::PortInfo::is_a_setting_read_at_setup)
+        })
     }
 
     /// Each `GraphInput` of this graph, each at its stream's top level.
@@ -240,6 +352,10 @@ impl Graph {
                 why,
                 &inputs_its_replacement_declares_alike,
             );
+            if why == WhyTheNodeLeaves::Removed && self.node_by_uuid(node_uuid).is_none() {
+                self.values_wires_carry_into_settings
+                    .forget_the_node(node_uuid);
+            }
         }
         dropped
     }

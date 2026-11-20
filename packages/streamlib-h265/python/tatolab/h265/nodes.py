@@ -11,15 +11,30 @@ writes with no Python attached. The engine is never on the data path.
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Annotated
 
-from tatolab.stream import Image, Input, Output, Packets, RuntimeContextFullAccess, log, node
+from tatolab.stream import (
+    Description,
+    EncodedCodecs,
+    EncodedVideo,
+    InputPin,
+    NumberRange,
+    OutputPin,
+    RuntimeContextFullAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
+    log,
+    node,
+)
 
 from . import _native
 
 VIDEO_INPUT_PORT = "video"
 ENCODED_VIDEO_OUTPUT_PORT = "encoded_video"
+CODEC = "h265"
+DECODED_PICTURE_TEXTURE_FORMAT = "rgba8_unorm"
 
 #: How long `stop()` waits for the coding thread. Its own wait for a message
 #: is bounded at a tenth of a second; an encode or decode in flight finishes
@@ -28,36 +43,11 @@ ENCODING_THREAD_JOIN_TIMEOUT_SECONDS = 2.0
 DECODING_THREAD_JOIN_TIMEOUT_SECONDS = ENCODING_THREAD_JOIN_TIMEOUT_SECONDS
 
 
-@dataclasses.dataclass
-class H265EncoderConfig:
-    """What an `H265Encoder` is configured with; every key is optional."""
-
-    width: Annotated[
-        "int | None",
-        "Expected frame width — a guardrail, not a resize: a mismatching frame "
-        "wins with a warning.",
-    ] = None
-    height: Annotated["int | None", "Expected frame height — a guardrail like `width`."] = None
-    fps: Annotated["int | None", "The frame rate the encoder's rate control assumes. Absent: 60."] = None
-    bitrate_bps: Annotated[
-        "int | None",
-        "Target bitrate in bits per second. Absent: constant-QP encoding at the "
-        "session's balanced preset.",
-    ] = None
-    keyframe_interval_seconds: Annotated[
-        "int | None", "Seconds between IDR sync points. Absent: 2."
-    ] = None
-    effort_level: Annotated[
-        "int | None",
-        "Encoder-effort index (the hardware encoder's analysis budget, not a codec "
-        "quality knob). Absent: the codec's default.",
-    ] = None
-
-
 @node.meta(
     description="Encodes published video surfaces to H.265 (HEVC) on Vulkan Video or VideoToolbox",
+    conversion=True,
 )
-@node.process(execution="manual")
+@node(execution="manual")
 class H265Encoder:
     """Video frames in, H.265 access units out, encoded with Vulkan Video or VideoToolbox.
 
@@ -82,14 +72,64 @@ class H265Encoder:
     reaching Python.
     """
 
-    def __init__(self, config: H265EncoderConfig) -> None:
-        self._config = config
-        self._encoding_thread: "_native.H265EncoderThread | None" = None
+    width: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description(
+            "Expected frame width — a guardrail, not a resize: a mismatching frame wins with a "
+            "warning."
+        ),
+    ] = None
+    height: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("Expected frame height — a guardrail like `width`."),
+    ] = None
+    fps: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("The frame rate the encoder's rate control assumes. Unset: 60."),
+    ] = None
+    bitrate_bps: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description(
+            "Target bitrate in bits per second. Unset: constant-QP encoding at the session's "
+            "balanced preset."
+        ),
+    ] = None
+    keyframe_interval_seconds: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("Seconds between IDR sync points. Unset: 2."),
+    ] = None
+    effort_level: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=0),
+        Description(
+            "Encoder-effort index (the hardware encoder's analysis budget, not a codec quality "
+            "knob). Unset: the codec's default."
+        ),
+    ] = None
+    video: InputPin[
+        Annotated[Texture, StreamDelivery("ordered"), Description("Video frames to encode")]
+    ]
+    encoded_video: OutputPin[
+        Annotated[
+            EncodedVideo,
+            EncodedCodecs(CODEC),
+            Description("H.265 access units, Annex-B, one per message"),
+        ]
+    ]
 
-    video = Input(Image, delivery="ordered", description="Video frames to encode")
-    encoded_video = Output(
-        Packets, codec="h265", description="H.265 access units, Annex-B, one per message"
-    )
+    def __init__(self) -> None:
+        self._encoding_thread: "_native.H265EncoderThread | None" = None
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both ports to an encoding thread of this wheel's Rust.
@@ -102,12 +142,12 @@ class H265Encoder:
         )
         self._encoding_thread = _native.H265EncoderThread(
             module_host_table,
-            width=self._config.width,
-            height=self._config.height,
-            fps=self._config.fps,
-            bitrate_bps=self._config.bitrate_bps,
-            keyframe_interval_seconds=self._config.keyframe_interval_seconds,
-            effort_level=self._config.effort_level,
+            width=self.width,
+            height=self.height,
+            fps=self.fps,
+            bitrate_bps=self.bitrate_bps,
+            keyframe_interval_seconds=self.keyframe_interval_seconds,
+            effort_level=self.effort_level,
         )
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
@@ -126,25 +166,11 @@ class H265Encoder:
         self._encoding_thread = None
 
 
-@dataclasses.dataclass
-class H265DecoderConfig:
-    """What an `H265Decoder` is configured with; every key is optional."""
-
-    max_width: Annotated[
-        "int | None",
-        "Upper bound on the coded width the decoded picture buffer is allocated "
-        "for, together with `max_height` or not at all. Absent: sized from the "
-        "stream's first SPS.",
-    ] = None
-    max_height: Annotated[
-        "int | None", "Upper bound on the coded height, paired with `max_width`."
-    ] = None
-
-
 @node.meta(
     description="Decodes H.265 access units to published video textures on Vulkan Video or VideoToolbox",
+    conversion=True,
 )
-@node.process(execution="manual")
+@node(execution="manual")
 class H265Decoder:
     """H.265 access units in, video frames out, decoded with Vulkan Video or VideoToolbox.
 
@@ -171,17 +197,45 @@ class H265Decoder:
     decoder discards every access unit after with no exception reaching Python.
     """
 
-    def __init__(self, config: H265DecoderConfig) -> None:
-        self._config = config
-        self._decoding_thread: "_native.H265DecoderThread | None" = None
+    max_width: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description(
+            "Upper bound on the coded width the decoded picture buffer is allocated for, "
+            "together with `max_height` or not at all. Unset: sized from the stream's first SPS."
+        ),
+    ] = None
+    max_height: Annotated[
+        int | None,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("Upper bound on the coded height, paired with `max_width`."),
+    ] = None
+    encoded_video: InputPin[
+        Annotated[
+            EncodedVideo,
+            EncodedCodecs(CODEC),
+            StreamDelivery("ordered"),
+            Description("H.265 access units to decode"),
+        ]
+    ]
+    video: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(DECODED_PICTURE_TEXTURE_FORMAT),
+            Description("Decoded video frames"),
+        ]
+    ]
 
-    encoded_video = Input(
-        Packets,
-        delivery="ordered",
-        requires_codec=("h265",),
-        description="H.265 access units to decode",
-    )
-    video = Output(Image, description="Decoded video frames")
+    def __init__(self) -> None:
+        if (self.max_width is None) != (self.max_height is None):
+            raise ValueError(
+                f"H265Decoder: `max_width` is {self.max_width!r} and `max_height` is "
+                f"{self.max_height!r}; set both, or neither to size the picture buffer from the "
+                f"stream's first SPS"
+            )
+        self._decoding_thread: "_native.H265DecoderThread | None" = None
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both ports to a decoding thread of this wheel's Rust.
@@ -194,8 +248,8 @@ class H265Decoder:
         )
         self._decoding_thread = _native.H265DecoderThread(
             module_host_table,
-            max_width=self._config.max_width,
-            max_height=self._config.max_height,
+            max_width=self.max_width,
+            max_height=self.max_height,
         )
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
