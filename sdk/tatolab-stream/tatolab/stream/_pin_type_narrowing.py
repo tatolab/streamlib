@@ -4,9 +4,10 @@
 """What a pin's type narrows to, written beside it, and how an output's messages flow.
 
 `Annotated[Texture, TexturePixelFormats("rgba8_unorm")]` names the formats a Texture holds, and
-`Annotated[Asset, AssetMedia("image")]` the media an Asset must hold. Each fills a member of the
-pin type itself, its `pixel_formats` or its `media`, so the runtime judges a link and a picker
-offers assets by it; neither is a key of the contract's `PinAnnotations`.
+`Annotated[Asset, AssetMedia("image")]` the media an Asset must hold, and
+`Annotated[EncodedVideo, EncodedCodecs("h264")]` the codecs encoded media is in. Each fills a
+member of the pin type itself, its `pixel_formats`, its `media` or its `codecs`, so the runtime
+judges a link and a picker offers assets by it; none is a key of the contract's `PinAnnotations`.
 
 `FlowsAsValue()` on an output says its messages flow as a value: the runtime keeps its last
 message and sends it to a reader linked after it was written.
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AssetMedia",
+    "EncodedCodecs",
     "FlowsAsValue",
     "PinAnnotationNotTaken",
     "PinTypeNarrowing",
@@ -60,8 +62,8 @@ class PinTypeNarrowing:
 
     __slots__ = ()
 
-    #: The pin type it narrows, as the contract tags it.
-    narrows: typing.ClassVar[BuiltInPinTypeName]
+    #: Each pin type it narrows, as the contract tags it.
+    narrows: typing.ClassVar["tuple[BuiltInPinTypeName, ...]"]
     #: The member of that pin type it fills.
     member: typing.ClassVar[str]
 
@@ -80,7 +82,7 @@ class TexturePixelFormats(PinTypeNarrowing):
 
     __slots__ = ("_formats",)
 
-    narrows = "texture"
+    narrows = ("texture",)
     member = "pixel_formats"
 
     def __init__(self, pixel_format: TexturePixelFormat, /, *more: TexturePixelFormat) -> None:
@@ -110,7 +112,7 @@ class AssetMedia(PinTypeNarrowing):
 
     __slots__ = ("_media",)
 
-    narrows = "asset"
+    narrows = ("asset",)
     member = "media"
 
     def __init__(self, media: ProjectAssetMedia, /, *more: ProjectAssetMedia) -> None:
@@ -129,6 +131,44 @@ class AssetMedia(PinTypeNarrowing):
 
     def __repr__(self) -> str:
         return f"AssetMedia({', '.join(repr(each) for each in self._media)})"
+
+
+@final
+class EncodedCodecs(PinTypeNarrowing):
+    """The codecs encoded media is in: `Annotated[EncodedVideo, EncodedCodecs("h264")]`.
+
+    On an output, the codecs it may send; one it names alone is the codec of every message it
+    sends. On an input, the codecs it decodes, so a link from another codec is refused.
+    Each is a codec string as a stream's facts spell it, such as `h264`, `h265` or `opus`.
+    """
+
+    __slots__ = ("_codecs",)
+
+    narrows = ("encoded_video", "encoded_audio")
+    member = "codecs"
+
+    def __init__(self, codec: str, /, *more: str) -> None:
+        codecs = (codec, *more)
+        for each in codecs:
+            if not isinstance(each, str) or not each:  # pyright: ignore[reportUnnecessaryIsInstance]
+                raise ValueError(
+                    f"EncodedCodecs(...) takes each codec as a non-empty string, got {each!r}."
+                )
+        if len(set(codecs)) != len(codecs):
+            raise ValueError("EncodedCodecs(...) lists a codec twice. To fix: list each once.")
+        self._codecs = codecs
+
+    def values(self) -> "list[str]":
+        return list(self._codecs)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, EncodedCodecs) and other._codecs == self._codecs
+
+    def __hash__(self) -> int:
+        return hash((EncodedCodecs, self._codecs))
+
+    def __repr__(self) -> str:
+        return f"EncodedCodecs({', '.join(repr(each) for each in self._codecs)})"
 
 
 @final
@@ -179,11 +219,11 @@ def pin_type_narrowed_by(metadata: "list[object]", pin_type: PinType, pin_named:
     for entry in metadata:
         if not isinstance(entry, PinTypeNarrowing):
             continue
-        if entry.narrows != pin_type["type"]:
+        if pin_type["type"] not in entry.narrows:
             raise PinAnnotationNotTaken(
                 f"{pin_named} carries `{entry!r}`, which narrows the type "
-                f"{_label_of(entry.narrows)}, and the pin's type is "
-                f"{_label_of(pin_type['type'])}. To fix: drop it.",
+                f"{' or '.join(_label_of(each) for each in entry.narrows)}, and the pin's type "
+                f"is {_label_of(pin_type['type'])}. To fix: drop it.",
                 "pin_annotation_not_taken",
             )
         if entry.member in narrowed:
