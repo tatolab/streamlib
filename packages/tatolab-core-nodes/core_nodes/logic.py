@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, NamedTuple
 
-from tatolab.stream import NumberRange, State, Stateful, UnreadMessage, node
+from tatolab.stream import NumberRange, State, Stateful, Texture, UnreadMessage, node
 
 
 class Comparison(NamedTuple):
@@ -133,7 +133,7 @@ class HeldFrame:
     description="Freeze a picture: hold the first frame until refresh takes a newer one.",
 )
 @node
-def HoldFrame[Frame](  # noqa: N802
+def HoldFrame[Frame: Texture](  # noqa: N802
     frame: Frame | None = None,
     refresh: bool = False,
     *,
