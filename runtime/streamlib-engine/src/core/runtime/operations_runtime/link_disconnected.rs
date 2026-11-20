@@ -8,6 +8,7 @@ use super::{
     GraphEditsHeldForOneCommit, LiveGraphChangeOnOneStream, announce_or_hold,
     commit_live_graph_change,
 };
+use crate::core::compiler::compiler_ops::links_carried_through_the_function_node_pool_by_their_ends::the_links_a_disconnect_takes_out;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{GraphEdgeWithComponents, LinkUniqueId, PendingDeletionComponent};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -38,24 +39,22 @@ pub(in crate::core::runtime) async fn disconnect_impl(
     Ok(())
 }
 
-/// Mark `link_id` pending deletion and log its removal, so the next commit takes it out;
-/// answers its ends.
+/// Mark each link `link_id` is held as pending deletion, itself or the two halves the function
+/// node pool carries it as, and log their removal, so the next commit takes them out; answers
+/// the ends it was given with.
 fn take_the_link_out_with_the_next_commit(
     compiler: &Compiler,
     link_id: &LinkUniqueId,
 ) -> Result<(OutputLinkPortRef, InputLinkPortRef)> {
     compiler.scope(|graph, tx| {
-        let ends = graph
-            .traversal()
-            .e(link_id)
-            .first()
-            .map(|link| (link.source().clone(), link.to_port().clone()))
-            .ok_or_else(|| Error::NotFound(format!("Link '{link_id}' not found")))?;
-        if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-            link.insert(PendingDeletionComponent);
+        let (source, target, wired_as) = the_links_a_disconnect_takes_out(graph, link_id)?;
+        for wired in wired_as {
+            if let Some(link) = graph.traversal_mut().e(&wired).first_mut() {
+                link.insert(PendingDeletionComponent);
+            }
+            tx.log(PendingOperation::RemoveLink(wired));
         }
-        tx.log(PendingOperation::RemoveLink(link_id.clone()));
-        Ok(ends)
+        Ok((source, target))
     })
 }
 

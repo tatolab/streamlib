@@ -10,6 +10,9 @@ pub(crate) mod function_node_pool;
 pub(crate) mod function_node_promotion;
 pub(crate) mod graph_generator_run_in_the_projects_interpreter;
 pub(crate) mod input_port_pin_values;
+pub(crate) mod links_carried_through_the_function_node_pool_by_their_ends;
+#[cfg(test)]
+mod links_carried_through_the_function_node_pool_by_their_ends_tests;
 pub(crate) mod node_interpreter_describe;
 pub(crate) mod node_interpreter_shutdown_ladder;
 pub(crate) mod node_interpreter_spawn_host;

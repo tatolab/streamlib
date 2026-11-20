@@ -24,6 +24,7 @@ use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
     LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
 };
+use crate::core::compiler::compiler_ops::links_carried_through_the_function_node_pool_by_their_ends::the_link_carried_through_the_function_node_pool_between;
 use crate::core::compiler::compiler_ops::node_interpreter_describe::a_node_interpreter_describes;
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::runtime::operations::{
@@ -143,9 +144,9 @@ impl LoadedStreamInThisRuntime {
                         return Err(Error::GraphError(format!(
                             "stream `{}` holds no link {}/{} -> {}/{}",
                             self.stream_id(),
-                            link.source.node,
+                            self.the_name_of_the_node(link.source.node),
                             link.source.port,
-                            link.target.node,
+                            self.the_name_of_the_node(link.target.node),
                             link.target.port
                         )));
                     }
@@ -475,6 +476,15 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
+    /// The name the node `node` was given, or its UUID when the stream holds no such node.
+    fn the_name_of_the_node(&self, node: Uuid) -> String {
+        self.compiler.scope_reading(|graph| {
+            graph
+                .node_by_uuid(node)
+                .map_or_else(|| node.to_string(), |held| held.display_name.clone())
+        })
+    }
+
     fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {
         self.compiler.scope_reading(|graph| {
             let standing = || graph.traversal().v(()).iter().filter(|held| held.stands());
@@ -711,8 +721,9 @@ impl LoadedStreamInThisRuntime {
         .ok()
     }
 
-    /// The live link `link` names by its ends; `None` when the live graph holds none, and
-    /// refused when either end names a node it does not hold or a name that does not cast.
+    /// The live link `link` names by its ends, one the function node pool carries by the id it
+    /// was given; `None` when the live graph holds none, and refused when either end names a
+    /// node it does not hold or a name that does not cast.
     fn the_link_held_between(
         &self,
         link: &StreamGraphDocumentLink,
@@ -734,6 +745,15 @@ impl LoadedStreamInThisRuntime {
                         && held.target.port_name() == target_port
                 })
                 .map(|held| held.id.clone())
+                .or_else(|| {
+                    the_link_carried_through_the_function_node_pool_between(
+                        graph,
+                        &source,
+                        &source_port,
+                        &target,
+                        &target_port,
+                    )
+                })
         }))
     }
 }
