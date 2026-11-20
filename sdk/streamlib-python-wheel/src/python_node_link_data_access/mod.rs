@@ -44,10 +44,11 @@ mod input_port_reads;
 mod output_port_writes_and_loans;
 
 pub(crate) use input_port_reads::{
-    PortFamiliesOfTheRead, PortFamilyOfTheRead, PortPayloadReadShape,
+    PortFamiliesOfTheRead, PortFamilyOfTheRead, PortPayloadReadShape, image_frame_of_the_read,
 };
 pub(crate) use output_port_writes_and_loans::{
     ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape,
+    image_frame_descriptor_of_the_image,
 };
 
 /// One node's links, as seen from Python.
