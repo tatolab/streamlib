@@ -27,3 +27,12 @@ def test_bytes_that_are_not_one_json_object_are_refused() -> None:
 def test_a_float_json_cannot_hold_is_refused_rather_than_sent() -> None:
     with pytest.raises(ValueError, match="not JSON compliant"):
         PageMessage({"ratio": float("nan")}).to_bytes()
+
+
+def test_any_mapping_travels_as_its_json_object_nested_or_not() -> None:
+    from collections import UserDict
+    from types import MappingProxyType
+
+    message = PageMessage(MappingProxyType({"speaker": UserDict({"name": "Ada"})}))
+
+    assert json.loads(message.to_bytes()) == {"speaker": {"name": "Ada"}}
