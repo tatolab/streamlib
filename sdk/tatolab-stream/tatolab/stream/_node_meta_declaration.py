@@ -101,8 +101,8 @@ def the_conversion_a_node_states(
     `declared_by` is the decorator that read the node's ports, `kind` the kind it declared, and
     `input_ports` and `output_ports` those ports as the engine reads them. A conversion is
     declared under bare `@node` or `@node.shader`, whose pins state the types the link verdict
-    reads, and has exactly one input that takes a wire and exactly one output; every other
-    input is a setting.
+    reads, and has exactly one input that takes a wire and exactly one output, each stating
+    exactly one pin type a wire carries; every other input is a setting.
     """
     if not declared_meta.get("conversion", False):
         return False
@@ -130,7 +130,49 @@ def the_conversion_a_node_states(
             "keep only the output it converts to",
             pin=outputs[1],
         )
+    _refuse_an_end_stating_no_one_pin_type(node, "input", wired_inputs[0])
+    _refuse_an_end_stating_no_one_pin_type(node, "output", output_ports[0])
     return True
+
+
+# The pin types a wire never carries, which the engine refuses on a conversion's end.
+_PIN_TYPES_TAKING_NO_WIRE: Final = ("node_reference", "pin_type_choice")
+
+
+def _refuse_an_end_stating_no_one_pin_type(
+    node: str, direction: Literal["input", "output"], port: "dict[str, Any]"
+) -> None:
+    """Refuse `node` when its wired `port` states no one pin type a wire carries.
+
+    The engine reads a conversion's two ends as exactly one pin type each, and refuses any
+    other end when the stream describes the node type; this names it at decoration instead.
+    A shader's port states no declaration, and its Image family is that one type.
+    """
+    if "pin_declaration" not in port:
+        return
+    declared = port["pin_declaration"]["pin_type"]
+    name = port["name"]
+    if declared["kind"] == "is":
+        pin_type = declared["pin_type"]["type"]
+        if pin_type not in _PIN_TYPES_TAKING_NO_WIRE:
+            return
+        takes = f"a {pin_type}, which no wire carries"
+    elif declared["kind"] == "any":
+        takes = "any type"
+    elif declared["kind"] == "one_of":
+        takes = "one of several types"
+    elif declared["kind"] == "same_as_input":
+        takes = f"the type of `{declared['input_port_name']}`'s link"
+    else:
+        takes = f"the type `{declared['input_name']}` chooses"
+    raise NodeDeclarationRefusal(
+        f"`{node}` states `conversion=True`, and its {direction} `{name}` takes {takes}, and a "
+        f"conversion is judged by the one pin type each end states. To fix: type `{name}` by "
+        f"exactly one pin type, or leave `conversion=True` out.",
+        finding_code="conversion_end_states_no_one_pin_type",
+        node=node,
+        pin=name,
+    )
 
 
 def _refuse_more_than_one_input_taking_a_wire(

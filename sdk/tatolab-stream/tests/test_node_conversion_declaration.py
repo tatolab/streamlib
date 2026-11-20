@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeVar
 
 import pytest
 
@@ -89,6 +89,21 @@ def level_as_count(level: float) -> int:
     return round(level)
 
 
+def LevelOfAnyType(level: object) -> float:
+    return 0.0
+
+
+def LevelOfAnIntegerOrAFloat(level: int | float) -> str:
+    return str(level)
+
+
+_Passed = TypeVar("_Passed", int, float)
+
+
+def PassedOn(value: _Passed) -> _Passed:
+    return value
+
+
 @pytest.mark.parametrize(
     "declared",
     [
@@ -138,6 +153,29 @@ def test_a_class_with_a_second_input_taking_a_wire_is_refused_naming_it_and_the_
     assert refused.value.finding_code == "conversion_not_one_input_to_one_output"
     assert refused.value.node == "H264Encoder"
     assert refused.value.pin == "bitrate_bps"
+
+
+@pytest.mark.parametrize(
+    ("function", "pin", "typed"),
+    [
+        (LevelOfAnyType, "level", "any type"),
+        (LevelOfAnIntegerOrAFloat, "level", "one of several types"),
+        (PassedOn, "value", "one of several types"),
+    ],
+)
+def test_a_conversion_whose_wired_input_states_no_one_pin_type_is_refused(
+    function: Any, pin: str, typed: str
+):
+    with pytest.raises(NodeDeclarationRefusal) as refused:
+        node.meta(conversion=True)(node(function))
+
+    assert str(refused.value) == (
+        f"`{function.__name__}` states `conversion=True`, and its input `{pin}` takes {typed}, "
+        f"and a conversion is judged by the one pin type each end states. To fix: type "
+        f"`{pin}` by exactly one pin type, or leave `conversion=True` out."
+    )
+    assert refused.value.finding_code == "conversion_end_states_no_one_pin_type"
+    assert refused.value.pin == pin
 
 
 def test_a_class_whose_field_comes_before_its_stream_is_refused_naming_the_field_to_mark():

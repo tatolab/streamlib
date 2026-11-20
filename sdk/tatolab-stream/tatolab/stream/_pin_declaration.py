@@ -111,6 +111,7 @@ type NodeDeclarationFindingCode = Literal[
     "class_declares_a_retired_port",
     "conversion_under_a_family_grammar",
     "conversion_not_one_input_to_one_output",
+    "conversion_end_states_no_one_pin_type",
 ]
 """What a refused declaration got wrong, as the declaration check's finding names it."""
 
