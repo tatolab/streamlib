@@ -1,15 +1,16 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The `@node.shader` grammar: a Slang function from Images and values to an Image.
+"""The `@node.shader` grammar: a Slang function from Textures and values to a Texture.
 
 The decorated function's signature declares the ports and its body is `...`;
 the Slang source passed to the decorator is the node's body, a function named
-for the node. An `ImageFrame` parameter arrives in Slang as an `ImageInput`
+for the node. A `Texture` parameter arrives in Slang as an `ImageInput`
 and each value under the typed grammar: a `float` as a `float`, a `Color` as a
 `float4` of red, green, blue and alpha, and a `Vector2`, `Vector3` or `Vector4`
 as a `float2`, `float3` or `float4` of its parts. The return is one
-`ImageFrame`, the output `result`.
+`Texture`, the output `result`, in the one pixel format the runtime writes.
+The older spelling `ImageFrame` reads as `Texture`.
 Decorating registers nothing: it reads the signature once and stamps the
 declaration the runtime reads, with the Slang source the runtime compiles.
 No Python runs when the node is evaluated.
@@ -152,13 +153,13 @@ def _refuse_a_signature_a_shader_cannot_take(
         if value_type != IMAGE_VALUE_TYPE and value_type not in _SLANG_TYPE_OF_EACH_VALUE_TYPE:
             raise TypeError(
                 f"{name}'s input `{signature_input['parameter']}` is a {value_type}, and a "
-                f"shader takes `ImageFrame` inputs and `float`, `Color`, `Vector2`, `Vector3` "
+                f"shader takes `Texture` inputs and `float`, `Color`, `Vector2`, `Vector3` "
                 f"and `Vector4` values only. To fix: type it as one of them."
             )
     if not any(each["value_type"] == IMAGE_VALUE_TYPE for each in signature["inputs"]):
         raise TypeError(
-            f"{name} takes no `ImageFrame`, so nothing sets the extent of the Image it "
-            f"returns. To fix: take at least one `ImageFrame` input."
+            f"{name} takes no `Texture`, so nothing sets the extent of the Texture it "
+            f"returns. To fix: take at least one `Texture` input."
         )
     outputs = signature["outputs"]
     if (
@@ -167,8 +168,8 @@ def _refuse_a_signature_a_shader_cannot_take(
         or outputs[0]["may_hand_out_nothing"]
     ):
         raise TypeError(
-            f"{name} must return one `ImageFrame`, the Image its Slang function computes pixel "
-            f"by pixel. To fix: `-> ImageFrame`."
+            f"{name} must return one `Texture`, the picture its Slang function computes pixel "
+            f"by pixel. To fix: `-> Texture`."
         )
 
 

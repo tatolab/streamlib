@@ -92,7 +92,14 @@ def test_each_shader_takes_in_slang_what_its_signature_declares_in_the_same_orde
     in_slang = [
         tuple(parameter.split()) for parameter in slang_parameters.group(1).split(",")
     ]
-    slang_type_of = {"image_frame": "ImageInput", "float": "float"}
+    slang_type_of = {
+        "image_frame": "ImageInput",
+        "float": "float",
+        "color": "float4",
+        "vector2": "float2",
+        "vector3": "float3",
+        "vector4": "float4",
+    }
     assert in_slang == [
         (slang_type_of[each["value_type"]], each["port"]) for each in signature["inputs"]
     ]

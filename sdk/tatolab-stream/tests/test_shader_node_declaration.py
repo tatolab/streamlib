@@ -6,14 +6,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated
 
 import pytest
 from tatolab.stream import (
     ChannelsBlock,
     Color,
+    Description,
     ImageFrame,
     ShaderNode,
     StreamBuilder,
+    Texture,
     Time,
     Vector2,
     Vector3,
@@ -75,6 +78,27 @@ def test_the_signature_stamp_names_the_function_each_input_in_order_and_the_outp
     }
 
 
+@node.shader(BLEND_SLANG.replace("blend", "blend_of_textures"))
+def blend_of_textures(
+    a: Texture, b: Annotated[Texture, Description("The picture faded in.")], amount: float = 0.5
+) -> Texture: ...
+
+
+def test_a_texture_reads_as_the_image_an_image_frame_does():
+    texture_input_ports = getattr(blend_of_textures, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    assert texture_input_ports == [
+        {**port, "description": "The picture faded in." if port["name"] == "b" else ""}
+        for port in getattr(blend, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    ]
+    assert getattr(blend_of_textures, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == getattr(
+        blend, NODE_DECLARATION_OUTPUT_PORTS_STAMP
+    )
+    assert (
+        getattr(blend_of_textures, NODE_DECLARATION_SHADER_SIGNATURE_STAMP)["inputs"]
+        == getattr(blend, NODE_DECLARATION_SHADER_SIGNATURE_STAMP)["inputs"]
+    )
+
+
 def test_a_shader_node_declares_no_config():
     assert getattr(blend, NODE_DECLARATION_CONFIG_SCHEMA_STAMP)["additionalProperties"] is False
 
@@ -118,7 +142,7 @@ def test_a_source_that_defines_no_function_named_for_the_node_is_refused():
 
 
 def test_a_shader_with_no_image_input_is_refused():
-    with pytest.raises(TypeError, match="takes no `ImageFrame`"):
+    with pytest.raises(TypeError, match="takes no `Texture`"):
         node.shader("float4 flat(float level) { return float4(level); }")(flat)
 
 
@@ -128,7 +152,7 @@ def test_an_input_that_is_neither_an_image_nor_a_float_is_refused_naming_it():
 
 
 def test_a_return_that_is_not_one_image_is_refused():
-    with pytest.raises(TypeError, match="must return one `ImageFrame`"):
+    with pytest.raises(TypeError, match="must return one `Texture`"):
         node.shader("float4 brightness(ImageInput image) { return image.pixel; }")(brightness)
 
 
