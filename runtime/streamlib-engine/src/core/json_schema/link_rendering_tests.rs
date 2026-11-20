@@ -172,11 +172,12 @@ fn a_link_whose_input_reads_its_output_for_free_says_it_converts_for_free() {
     assert!(rendered.get("warnings").is_none(), "{rendered}");
 }
 
-/// A link the verdict warns of carries each warning as `check_link` answers it.
+/// A link the verdict warns of carries each warning as `check_link` answers it, in the words
+/// the runtime writes for it.
 #[test]
 fn a_warned_link_carries_the_warnings_its_verdict_gave() {
     use crate::core::descriptors::PinType;
-    use streamlib_node_schema::pin_type::VectorComponentCount;
+    use streamlib_node_schema::pin_type::{PinLinkWarning, VectorComponentCount};
     let link = Link::between(
         OutputLinkPortRef::new("Psrc", "out1"),
         InputLinkPortRef::new("Pdst", "in1"),
@@ -197,7 +198,10 @@ fn a_warned_link_carries_the_warnings_its_verdict_gave() {
 
     assert_eq!(
         rendered["warnings"],
-        serde_json::json!([{ "warning": "vector_read_as_a_color" }]),
+        serde_json::json!([{
+            "warning": "vector_read_as_a_color",
+            "words": PinLinkWarning::VectorReadAsAColor.to_string(),
+        }]),
         "{rendered}"
     );
     assert_eq!(rendered["free_conversion"], true, "{rendered}");

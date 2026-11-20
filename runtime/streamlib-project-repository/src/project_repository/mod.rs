@@ -27,7 +27,7 @@ use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
 use crate::project_file_access::{
-    ProjectFileListed, ProjectRelativeFilePath, project_files_a_listing_shows,
+    ProjectFileListed, ProjectRelativeFilePath, project_files_listed_under_a_checked_folder,
 };
 use crate::project_history_repository::{
     PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit,

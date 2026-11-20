@@ -8962,6 +8962,10 @@
                 "type": "string",
                 "description": "The input's meaning."
               },
+              "words": {
+                "type": "string",
+                "description": "The warning in the runtime's words, for a person to read."
+              },
               "warning": {
                 "type": "string",
                 "const": "meanings_differ"
@@ -8970,7 +8974,8 @@
             "required": [
               "warning",
               "output_meaning",
-              "input_meaning"
+              "input_meaning",
+              "words"
             ],
             "description": "The two ends state different meanings for what they carry."
           },
@@ -8989,6 +8994,10 @@
                 "type": "string",
                 "description": "The input member's meaning."
               },
+              "words": {
+                "type": "string",
+                "description": "The warning in the runtime's words, for a person to read."
+              },
               "warning": {
                 "type": "string",
                 "const": "member_meanings_differ"
@@ -8998,20 +9007,26 @@
               "warning",
               "member",
               "output_meaning",
-              "input_meaning"
+              "input_meaning",
+              "words"
             ],
             "description": "A member of two bundles states a different meaning at each end."
           },
           {
             "type": "object",
             "properties": {
+              "words": {
+                "type": "string",
+                "description": "The warning in the runtime's words, for a person to read."
+              },
               "warning": {
                 "type": "string",
                 "const": "vector_read_as_a_color"
               }
             },
             "required": [
-              "warning"
+              "warning",
+              "words"
             ],
             "description": "A Vector is read as a Color: x, y, z and w become red, green, blue and alpha."
           },
@@ -9025,6 +9040,10 @@
                 },
                 "description": "Each such option, as the output names it."
               },
+              "words": {
+                "type": "string",
+                "description": "The warning in the runtime's words, for a person to read."
+              },
               "warning": {
                 "type": "string",
                 "const": "menu_options_the_input_does_not_list"
@@ -9032,38 +9051,49 @@
             },
             "required": [
               "warning",
-              "option_names"
+              "option_names",
+              "words"
             ],
             "description": "The output may send Menu options the input does not list."
           },
           {
             "type": "object",
             "properties": {
+              "words": {
+                "type": "string",
+                "description": "The warning in the runtime's words, for a person to read."
+              },
               "warning": {
                 "type": "string",
                 "const": "texture_output_states_no_format"
               }
             },
             "required": [
-              "warning"
+              "warning",
+              "words"
             ],
             "description": "The output states no pixel format, so it may send one the input cannot take."
           },
           {
             "type": "object",
             "properties": {
+              "words": {
+                "type": "string",
+                "description": "The warning in the runtime's words, for a person to read."
+              },
               "warning": {
                 "type": "string",
                 "const": "type_found_only_once_placed"
               }
             },
             "required": [
-              "warning"
+              "warning",
+              "words"
             ],
             "description": "The candidate, a node type's port, finds its type from a link into its node or from a\nsetting, so it is judged as taking the other end's type; a node of the type, once placed\nand given them, may still refuse the link."
           }
         ],
-        "description": "What a link does that a person may not expect, tagged by its `warning`."
+        "description": "What a link does that a person may not expect, tagged by its `warning`, with the runtime's\nsentence for it in `words`."
       },
       "GraphLinkComponentsOnTheWire": {
         "type": "object",

@@ -238,7 +238,8 @@ impl ConvertNodeToInsertOnTheWire {
     }
 }
 
-/// What a link does that a person may not expect, tagged by its `warning`.
+/// What a link does that a person may not expect, tagged by its `warning`, with the runtime's
+/// sentence for it in `words`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "warning", rename_all = "snake_case")]
@@ -249,6 +250,8 @@ pub enum PinLinkWarningOnTheWire {
         output_meaning: String,
         /// The input's meaning.
         input_meaning: String,
+        /// The warning in the runtime's words, for a person to read.
+        words: String,
     },
     /// A member of two bundles states a different meaning at each end.
     MemberMeaningsDiffer {
@@ -258,25 +261,39 @@ pub enum PinLinkWarningOnTheWire {
         output_meaning: String,
         /// The input member's meaning.
         input_meaning: String,
+        /// The warning in the runtime's words, for a person to read.
+        words: String,
     },
     /// A Vector is read as a Color: x, y, z and w become red, green, blue and alpha.
-    VectorReadAsAColor,
+    VectorReadAsAColor {
+        /// The warning in the runtime's words, for a person to read.
+        words: String,
+    },
     /// The output may send Menu options the input does not list.
     MenuOptionsTheInputDoesNotList {
         /// Each such option, as the output names it.
         option_names: Vec<String>,
+        /// The warning in the runtime's words, for a person to read.
+        words: String,
     },
     /// The output states no pixel format, so it may send one the input cannot take.
-    TextureOutputStatesNoFormat,
+    TextureOutputStatesNoFormat {
+        /// The warning in the runtime's words, for a person to read.
+        words: String,
+    },
     /// The candidate, a node type's port, finds its type from a link into its node or from a
     /// setting, so it is judged as taking the other end's type; a node of the type, once placed
     /// and given them, may still refuse the link.
-    TypeFoundOnlyOncePlaced,
+    TypeFoundOnlyOncePlaced {
+        /// The warning in the runtime's words, for a person to read.
+        words: String,
+    },
 }
 
 impl PinLinkWarningOnTheWire {
-    /// The wire form of `warning`.
-    fn of(warning: &PinLinkWarning) -> Self {
+    /// The wire form of `warning`, in the words the runtime writes for it everywhere else.
+    pub fn of(warning: &PinLinkWarning) -> Self {
+        let words = warning.to_string();
         match warning {
             PinLinkWarning::MeaningsDiffer {
                 output_meaning,
@@ -284,6 +301,7 @@ impl PinLinkWarningOnTheWire {
             } => Self::MeaningsDiffer {
                 output_meaning: output_meaning.clone(),
                 input_meaning: input_meaning.clone(),
+                words,
             },
             PinLinkWarning::MemberMeaningsDiffer {
                 member_name,
@@ -293,15 +311,19 @@ impl PinLinkWarningOnTheWire {
                 member: member_name.clone(),
                 output_meaning: output_meaning.clone(),
                 input_meaning: input_meaning.clone(),
+                words,
             },
-            PinLinkWarning::VectorReadAsAColor => Self::VectorReadAsAColor,
+            PinLinkWarning::VectorReadAsAColor => Self::VectorReadAsAColor { words },
             PinLinkWarning::MenuOptionsTheInputDoesNotList { option_names } => {
                 Self::MenuOptionsTheInputDoesNotList {
                     option_names: option_names.clone(),
+                    words,
                 }
             }
-            PinLinkWarning::TextureOutputStatesNoFormat => Self::TextureOutputStatesNoFormat,
-            PinLinkWarning::TypeFoundOnlyOncePlaced => Self::TypeFoundOnlyOncePlaced,
+            PinLinkWarning::TextureOutputStatesNoFormat => {
+                Self::TextureOutputStatesNoFormat { words }
+            }
+            PinLinkWarning::TypeFoundOnlyOncePlaced => Self::TypeFoundOnlyOncePlaced { words },
         }
     }
 }
