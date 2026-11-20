@@ -43,12 +43,12 @@ pub const BROWSER_HOST_EXECUTABLE_FILE_NAME: &str = "tatolab-browser-host";
 /// The name a node leases the browser host by, as `tatolab-browser` spells it.
 pub const BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME: &str = "browser-host";
 
-/// The encode host's executable, in the runtime unit's `bin/` beside
+/// The video codec host's executable, in the runtime unit's `bin/` beside
 /// `tatolabd`.
-pub const VIDEO_ENCODE_HOST_EXECUTABLE_FILE_NAME: &str = "tatolab-video-encode-host";
+pub const VIDEO_CODEC_HOST_EXECUTABLE_FILE_NAME: &str = "tatolab-video-codec-host";
 
-/// The name an encoder node leases the encode host by.
-pub const VIDEO_ENCODE_HOST_SHARED_NATIVE_SERVICE_NAME: &str = "video-encode-host";
+/// The name a video encoder or decoder node leases the video codec host by.
+pub const VIDEO_CODEC_HOST_SHARED_NATIVE_SERVICE_NAME: &str = "video-codec-host";
 
 /// The lent `tatolab.runtime` package, relative to the lend.
 pub const LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND: &str = "tatolab/runtime";

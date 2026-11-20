@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! H.264 or H.265 encode with Vulkan Video: each frame is encoded in the
-//! machine's encode host, on the one encode device it shares among every
+//! machine's video codec host, on the one encode device it shares among every
 //! encoder on the GPU, and its access units are published here.
 
 use streamlib_consumer_rhi::runtime_vulkan_device_uuid_named_at_spawn;
@@ -11,11 +11,11 @@ use tatolab_module_sdk::ModuleHost;
 use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{EncodedVideoOutputPort, EncodedVideoPublication};
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
-use crate::video_encode_host_protocol::{
-    VIDEO_ENCODE_HOST_PROTOCOL_VERSION, VideoEncodeHostSessionRequest,
+use crate::video_codec_host_protocol::{
+    VIDEO_CODEC_HOST_PROTOCOL_VERSION, VideoEncodeSessionRequest,
 };
-use crate::video_encode_host_session_of_the_node::VideoEncodeHostSessionOfTheNode;
 use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
+use crate::video_encode_session_of_the_node::VideoEncodeSessionOfTheNode;
 use crate::video_encoder_settings::VideoEncoderSettings;
 
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
@@ -26,7 +26,7 @@ const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 /// publication of their access units on its `encoded_video` port.
 pub struct VulkanVideoEncoder {
     node: VideoCodecNodeIdentity,
-    session: VideoEncodeHostSessionOfTheNode,
+    session: VideoEncodeSessionOfTheNode,
     next_frame_must_be_a_sync_point: bool,
     publication: EncodedVideoPublication,
     frames_encoded: u64,
@@ -34,7 +34,7 @@ pub struct VulkanVideoEncoder {
 }
 
 impl VulkanVideoEncoder {
-    /// Open a session in the machine's encode host on the GPU the runtime
+    /// Open a session in the machine's video codec host on the GPU the runtime
     /// named.
     pub fn open(
         node: VideoCodecNodeIdentity,
@@ -57,15 +57,15 @@ impl VulkanVideoEncoder {
             Err(std::env::VarError::NotUnicode(_)) => {
                 return Err(format!(
                     "{node_type_name}: {SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE} is not UTF-8, so \
-                     the encode host cannot be told where frames are checked out"
+                     the video codec host cannot be told where frames are checked out"
                 ));
             }
         };
-        let session = VideoEncodeHostSessionOfTheNode::open(
+        let session = VideoEncodeSessionOfTheNode::open(
             node,
             module_host,
-            VideoEncodeHostSessionRequest {
-                protocol_version: VIDEO_ENCODE_HOST_PROTOCOL_VERSION,
+            VideoEncodeSessionRequest {
+                protocol_version: VIDEO_CODEC_HOST_PROTOCOL_VERSION,
                 elementary_stream: node.elementary_stream.into(),
                 settings,
                 vulkan_device_uuid,

@@ -3,8 +3,8 @@
 
 use streamlib_consumer_rhi::ConsumerRhiError;
 
-use crate::owned_device_video_decoder::why_the_decode_device_was_refused;
 use crate::video_codec_retry_gate::VideoCodecRefusal;
+use crate::video_decode_on_a_device::why_the_decode_device_was_refused;
 
 #[test]
 fn a_decode_device_the_gpu_lacked_a_resource_for_is_refused_for_now_by_name() {
@@ -18,7 +18,7 @@ fn a_decode_device_the_gpu_lacked_a_resource_for_is_refused_for_now_by_name() {
         panic!("refused for good: {refusal:?}");
     };
     assert!(
-        refusal.starts_with("H264Decoder: the owned Vulkan Video decode device was refused: "),
+        refusal.starts_with("H264Decoder: the Vulkan Video decode device was refused: "),
         "{refusal}"
     );
 }

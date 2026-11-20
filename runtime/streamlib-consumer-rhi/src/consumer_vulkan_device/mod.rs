@@ -198,7 +198,7 @@ pub struct ConsumerVulkanDevice {
 
 /// Which way a Vulkan Video queue codes: pictures into a bitstream, or a
 /// bitstream into pictures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VulkanVideoCodecDirection {
     /// A `VIDEO_ENCODE` queue family with the encode extensions.
     Encode,

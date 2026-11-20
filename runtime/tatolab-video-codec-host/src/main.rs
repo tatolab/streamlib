@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `tatolab-video-encode-host`: the machine's encode host, run by the runtime
-//! as a shared native service. It listens on the socket the runtime names,
-//! and every connection is one encoder node's session on the one encode
-//! device it opens per GPU. `SIGTERM` ends it.
+//! `tatolab-video-codec-host`: the machine's video codec host, run by the
+//! runtime as a shared native service. It listens on the socket the runtime
+//! names, and every connection is one encoder or decoder node's session on
+//! the one device it opens per GPU and direction. `SIGTERM` ends it.
 
 use std::process::ExitCode;
 
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
         .with_ansi(false)
         .init();
     let command_line = match SharedNativeServiceCommandLine::of_the_arguments(
-        "the encode host",
+        "the video codec host",
         std::env::args().skip(1),
     ) {
         Ok(command_line) => command_line,
@@ -25,7 +25,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match serve_encode_sessions_on(&command_line.listen_socket) {
+    match serve_codec_sessions_on(&command_line.listen_socket) {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => {
             tracing::error!("{failure}");
@@ -35,24 +35,24 @@ fn main() -> ExitCode {
 }
 
 #[cfg(target_os = "linux")]
-fn serve_encode_sessions_on(listen_socket: &std::path::Path) -> Result<(), String> {
+fn serve_codec_sessions_on(listen_socket: &std::path::Path) -> Result<(), String> {
     // The runtime made the socket's directory; replace a socket file an
     // earlier host left in it.
     let _ = std::fs::remove_file(listen_socket);
     let listener = std::os::unix::net::UnixListener::bind(listen_socket)
         .map_err(|failure| format!("{} could not be bound: {failure}", listen_socket.display()))?;
     tracing::info!(
-        "the encode host {} serves encode sessions on {}",
+        "the video codec host {} serves codec sessions on {}",
         std::process::id(),
         listen_socket.display()
     );
-    streamlib_owned_device_video_codec_nodes::video_encode_host::serve_video_encode_sessions(
+    streamlib_owned_device_video_codec_nodes::video_codec_host::serve_video_codec_sessions(
         listener,
     );
     Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
-fn serve_encode_sessions_on(_listen_socket: &std::path::Path) -> Result<(), String> {
-    Err("the encode host encodes with Vulkan Video, on Linux only".to_string())
+fn serve_codec_sessions_on(_listen_socket: &std::path::Path) -> Result<(), String> {
+    Err("the video codec host codes with Vulkan Video, on Linux only".to_string())
 }

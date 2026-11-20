@@ -47,7 +47,7 @@ png = "0.17"
 # the owned encode device as a module receives a frame.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk" }
-# Holds the socket a stand-in encode host listens on.
+# Holds the socket a stand-in video codec host listens on.
 tempfile.workspace = true
 
 [lints]

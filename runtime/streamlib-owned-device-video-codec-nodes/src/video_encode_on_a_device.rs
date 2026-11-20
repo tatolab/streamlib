@@ -3,7 +3,7 @@
 
 //! One encoder node's session on a Vulkan Video encode device: each frame
 //! checked out over surface-share, imported onto the device and encoded
-//! there. The device is the machine's encode host's, shared by every
+//! there. The device is the machine's video codec host's, shared by every
 //! session it runs on that GPU, or one the node's helper opened for itself.
 
 use std::collections::HashMap;
@@ -33,6 +33,7 @@ use streamlib_vulkan_video::{
 use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::EncodedVideoAccessUnit;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
+use crate::video_codec_host_protocol::H273ColorVuiAsItCrosses;
 use crate::video_codec_retry_gate::{
     VIDEO_CODEC_RETRY_INTERVAL, VideoCodecRefusal, VideoCodecRetryGate,
 };
@@ -52,16 +53,6 @@ pub struct VideoFrameToEncode {
     pub timestamp_ns: i64,
     #[serde(with = "H273ColorVuiAsItCrosses")]
     pub color_vui: H273ColorVui,
-}
-
-/// [`H273ColorVui`]'s fields, as a frame carries them to the encode host.
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "H273ColorVui")]
-struct H273ColorVuiAsItCrosses {
-    primaries: Option<u8>,
-    transfer: Option<u8>,
-    matrix: Option<u8>,
-    full_range: Option<bool>,
 }
 
 impl VideoFrameToEncode {

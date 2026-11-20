@@ -6248,7 +6248,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tatolab-video-encode-host"
+name = "tatolab-video-codec-host"
 version = "0.68.82"
 dependencies = [
  "streamlib-owned-device-video-codec-nodes",
