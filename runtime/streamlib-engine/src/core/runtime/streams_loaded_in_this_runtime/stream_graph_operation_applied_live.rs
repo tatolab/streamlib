@@ -263,7 +263,7 @@ impl LoadedStreamInThisRuntime {
     pub(crate) async fn reconcile_each_stream_fragment_to_the_stream_it_references(
         &self,
     ) -> Result<()> {
-        let graph_as_drawn = self.to_json()?;
+        let graph_as_drawn = self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?;
         self.reconcile_the_live_graph_to_the_graph_document(
             graph_as_drawn,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
@@ -277,7 +277,7 @@ impl LoadedStreamInThisRuntime {
         &self,
         mut graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
-        let graph_as_drawn = self.to_json()?;
+        let graph_as_drawn = self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?;
         let mut graph_document =
             StreamGraphDocument::from_value(graph_as_drawn.clone()).map_err(Error::GraphError)?;
         if let StreamGraphOperation::AddNode { node, .. } = &mut graph_operation {
@@ -327,6 +327,25 @@ impl LoadedStreamInThisRuntime {
             return Err(refusal);
         }
         Ok(graph_operation)
+    }
+
+    /// This stream's graph as drawn without the nodes and links an earlier edit of the graph
+    /// edits held for one commit took out, which stay drawn, pending deletion, until it closes:
+    /// a reconcile to a document holding them would place them again.
+    fn the_graph_as_drawn_once_what_is_pending_deletion_leaves(&self) -> Result<serde_json::Value> {
+        let mut graph_as_drawn = self.to_json()?;
+        let is_pending_deletion = |drawn: &serde_json::Value| {
+            drawn
+                .pointer("/components/pending_deletion")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
+        for drawn_entities in ["nodes", "links"] {
+            if let Some(serde_json::Value::Array(drawn)) = graph_as_drawn.get_mut(drawn_entities) {
+                drawn.retain(|drawn| !is_pending_deletion(drawn));
+            }
+        }
+        Ok(graph_as_drawn)
     }
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are

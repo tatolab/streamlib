@@ -8,8 +8,9 @@
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 use super::convert_node_inserted_on_a_link_tests::{
-    CAMERA_NODE_UUID, MODEL_NODE_UUID, a_project_whose_main_stream_holds_a_camera_and_a_model,
-    camera_into_model, connected_by_alice, link, the_inserted_node_in, the_links_in,
+    CAMERA_NODE_UUID, ConvertNodeTestEnd, MODEL_NODE_UUID,
+    a_project_whose_main_stream_holds_a_camera_and_a_model, camera_into_model, connected_by_alice,
+    link, register_the_convert_node_test_node_types_once, the_inserted_node_in, the_links_in,
 };
 use super::*;
 
@@ -143,5 +144,74 @@ async fn two_textures_whose_formats_no_conversion_covers_are_refused_naming_both
             );
         }
         assert_eq!(project.the_graph_document_of("main"), saved_before);
+    }
+}
+
+const GRAPH_INPUT_NODE_UUID: &str = "9019522b-3430-40db-9a66-4f763eb3feb7";
+
+/// The camera and the model with a `GraphInput` that still stores its value under `default`,
+/// the name it had before it was an input, which the first commit rewrites as `value`.
+fn a_project_whose_main_stream_holds_a_graph_input_saved_with_a_default()
+-> ProjectWithGraphDocuments {
+    register_the_convert_node_test_node_types_once();
+    let node_type = ConvertNodeTestEnd::node_class_import_path();
+    ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [
+            { "id": CAMERA_NODE_UUID, "name": "camera", "type": node_type.as_str(),
+              "config": {}, "studio": { "position": [0.0, 0.0] } },
+            { "id": MODEL_NODE_UUID, "name": "model", "type": node_type.as_str(),
+              "config": {}, "studio": { "position": [200.0, 100.0] } },
+            { "id": GRAPH_INPUT_NODE_UUID, "name": "brightness",
+              "type": "tatolab.stream:GraphInput",
+              "input_values": { "port": "brightness", "family": "channels",
+                                "default": 0.5, "range": [0.0, 1.0] } },
+        ],
+        "links": [],
+    }))
+}
+
+/// One `undo` of the first commit, which carries the rewrite of a `GraphInput`'s `default` as
+/// `value`, takes the commit back whole: with a `TextureFormatConvert` the commit inserted, and
+/// with a plain link.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_undo_of_a_commit_carrying_the_rewrite_of_a_graph_inputs_default_takes_it_back() {
+    for (output_port, input_port) in [("video", "rgba_video"), ("bgra_video_out", "rgba_video")] {
+        let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+        let project = a_project_whose_main_stream_holds_a_graph_input_saved_with_a_default();
+        let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+        let saved_before = project.the_graph_document_of("main");
+
+        engine
+            .the_answer_or_the_refusal_of(
+                "connect",
+                connected_by_alice(&camera_into_model(
+                    project.stream_asset_of("main"),
+                    output_port,
+                    input_port,
+                )),
+            )
+            .await
+            .unwrap_or_else(|refusal| panic!("{output_port} connects: {refusal:?}"));
+        engine
+            .the_answer_or_the_refusal_of(
+                "undo",
+                json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+            )
+            .await
+            .unwrap_or_else(|refusal| panic!("the undo of {output_port} applies: {refusal:?}"));
+
+        let saved_after = project.the_graph_document_of("main");
+        assert_eq!(
+            sorted_node_names_in(&saved_after),
+            sorted_node_names_in(&saved_before),
+            "{output_port}"
+        );
+        assert_eq!(the_links_in(&saved_after), [], "{saved_after}");
+        assert_eq!(
+            links_by_node_name_in(&engine.the_live_graph_of(&stream_id)),
+            Vec::<String>::new(),
+            "{output_port}"
+        );
     }
 }
