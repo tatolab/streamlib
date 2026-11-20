@@ -7,9 +7,8 @@
 //! the control operation registry's agent surface ([`crate::mcp_agent_tools`]): the operations
 //! the registry lists as tools of their own, and `list_operation_groups`,
 //! `describe_operations` and `call_operation`, which reach every other operation. Beside them
-//! it serves the node catalog and the live graph as resources ([`crate::mcp_resources`]) and
-//! recipes over those operations as prompts ([`crate::mcp_prompts`]). `rmcp` owns the
-//! protocol; this module owns only what the runtime says through it.
+//! it serves the node catalog and the live graph as resources ([`crate::mcp_resources`]).
+//! `rmcp` owns the protocol; this module owns only what the runtime says through it.
 //!
 //! A graph edit answers when the engine accepted the change into its graph;
 //! the wiring itself commits on the engine's own compile task, whose failure
@@ -22,14 +21,12 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
     Implementation, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
     ResultType, ServerCapabilities, ServerConfig, SubscriptionFilter, Tool,
 };
-use rmcp::prompt_handler;
 use rmcp::service::{RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
@@ -88,7 +85,7 @@ pub(crate) enum LocalApiMcpConnection {
     McpStdio,
 }
 
-/// The runtime's MCP server handler: its tools, resources and prompts over the
+/// The runtime's MCP server handler: its tools and resources over the
 /// streams the runtime loads, for one connection.
 #[derive(Clone)]
 pub(crate) struct LocalApiMcpServerHandler {
@@ -104,7 +101,6 @@ pub(crate) struct LocalApiMcpServerHandler {
     project_node_types_last_listed:
         Arc<crate::project_node_types_followed_for_changes::ProjectNodeTypesLastListed>,
     agent_tools_listed: Arc<Vec<Tool>>,
-    prompt_router: Arc<PromptRouter<Self>>,
 }
 
 impl LocalApiMcpServerHandler {
@@ -152,7 +148,6 @@ impl LocalApiMcpServerHandler {
             asset_media_facts_reads_in_this_runtime,
             project_node_types_last_listed: Arc::default(),
             agent_tools_listed: Arc::new(crate::mcp_agent_tools::the_agent_tools_listed_over_mcp()),
-            prompt_router: Arc::new(Self::prompt_router()),
         }
     }
 
@@ -354,7 +349,6 @@ pub(crate) fn describe_stream_action_tool_result_of(
     }
 }
 
-#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for LocalApiMcpServerHandler {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(
@@ -362,7 +356,6 @@ impl ServerHandler for LocalApiMcpServerHandler {
                 .enable_tools()
                 .enable_resources()
                 .enable_resources_subscribe()
-                .enable_prompts()
                 .build(),
         )
         .with_server_info(Implementation::new(MCP_SERVER_NAME, MCP_SERVER_VERSION))

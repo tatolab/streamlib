@@ -22,11 +22,11 @@ use streamlib::sdk::runtime::{
 use streamlib_runtime_client_contract::machine_directories_test_root::TestMachineRoot;
 use uuid::Uuid;
 
-use crate::mcp::tests::{first_text_block_json, prompt_text, resource_document, tool_call_result};
+use crate::mcp::tests::{first_text_block_json, resource_document, tool_call_result};
 
 /// A native node with nothing to do, added to each stream so each graph has a
-/// node of its own to tell it apart; its one output gives a prompt a port.
-#[streamlib::sdk::node(execution = manual, output("video", family = Image))]
+/// node of its own to tell it apart.
+#[streamlib::sdk::node(execution = manual)]
 pub struct TwoStreamsTestIdleNode;
 
 impl ManualNode for TwoStreamsTestIdleNode::Node {
@@ -256,7 +256,7 @@ async fn graph_without_a_stream_renders_both_and_a_one_stream_tool_naming_none_i
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
+async fn the_resources_render_every_stream() {
     let loaded = AnEngineLoadingTwoStreams::load();
 
     let graph = resource_document(
@@ -295,25 +295,6 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
             { "stream": "second", "nodes": [], "installed": [] },
         ]),
         "each stream lists the types its own interpreter described"
-    );
-
-    let recipe = prompt_text(
-        loaded.operations_on_the_loaded_streams(),
-        "fan_output_to_another_consumer",
-        json!({
-            "stream": "second",
-            "from_node": "idle-in-second",
-            "from_port": "video",
-            "type": TwoStreamsTestIdleNode::node_class_import_path().as_str(),
-        }),
-    )
-    .await;
-    assert!(
-        recipe.contains("`stream`: `second`")
-            && recipe.contains(&format!("`stream`: `{SECOND_STREAM_ASSET}`"))
-            && recipe.contains("idle-in-second")
-            && !recipe.contains("`stream`: `first`"),
-        "{recipe}"
     );
 }
 

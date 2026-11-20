@@ -536,33 +536,6 @@ async fn a_request_inside_a_placed_stream_reaches_a_link_saved_there_under_old_p
     );
 }
 
-/// A wiring prompt naming an output by the name it had renders its recipe under the output's
-/// current name, which the `connect` it tells an agent to call takes.
-///
-/// Mental-revert: matching the caller's port name exactly refuses the prompt, the dimmer
-/// having no output `out`.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_wiring_prompt_naming_an_output_by_its_old_name_renders_its_current_name() {
-    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = a_project_saved_under_the_names_the_pins_had();
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
-
-    let text = crate::mcp::tests::prompt_text(
-        engine.operations_on_the_loaded_streams(),
-        "fan_output_to_another_consumer",
-        json!({ "stream": stream_id, "from_node": "dimmer", "from_port": "out",
-                "type": "effects:Blur" }),
-    )
-    .await;
-    assert!(
-        text.contains(&format!(
-            "{{\"node\": \"{DIMMER_NODE_UUID}\", \"port\": \"signal\"}}"
-        )),
-        "{text}"
-    );
-    assert!(text.contains("`dimmer` port `signal`"), "{text}");
-}
-
 /// A request to connect a link the stream already holds is refused, whether it names the ports
 /// by their current names or by names they had, and the running stream keeps its one link.
 ///

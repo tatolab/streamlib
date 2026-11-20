@@ -32,7 +32,7 @@ async fn listed_tools(runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime
 }
 
 #[tokio::test]
-async fn discover_over_post_mcp_answers_the_latest_revision_alone_with_the_tools_resources_and_prompts_capabilities()
+async fn discover_over_post_mcp_answers_the_latest_revision_alone_with_the_tools_and_resources_capabilities_and_no_prompts()
  {
     let (_served, client) =
         connected_mcp_client(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
@@ -62,7 +62,7 @@ async fn discover_over_post_mcp_answers_the_latest_revision_alone_with_the_tools
         discovered.capabilities.resources.is_some(),
         "{discovered:?}"
     );
-    assert!(discovered.capabilities.prompts.is_some(), "{discovered:?}");
+    assert!(discovered.capabilities.prompts.is_none(), "{discovered:?}");
     assert_eq!(
         discovered.instructions.as_deref(),
         Some(LOCAL_API_MCP_SERVER_INSTRUCTIONS)

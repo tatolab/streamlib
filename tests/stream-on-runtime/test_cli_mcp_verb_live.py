@@ -87,7 +87,7 @@ def start_the_verb(
     )
 
 
-def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_and_prompts(
+def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_and_resources(
     runtime_unit: RuntimeUnitUnderTest,
     private_machine_directories: PrivateMachineDirectories,
     make_tatolab_project: "Callable[..., Path]",
@@ -122,15 +122,6 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
                     LIVE_GRAPH_RESOURCE_URI,
                 )
             }
-            prompt = await client.get_prompt(
-                "fan_output_to_another_consumer",
-                {
-                    "stream": stream_id,
-                    "from_node": source_name,
-                    "from_port": "video",
-                    "type": "nodes.effect:Effect",
-                },
-            )
             return {
                 "protocol_version": client.protocol_version,
                 "tool_names": [tool.name for tool in tools.tools],
@@ -138,7 +129,6 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
                 "stream_graph": stream_graph,
                 "source_name": source_name,
                 "resources": resources,
-                "prompt": prompt,
             }
 
     answered = asyncio.run(
@@ -157,9 +147,6 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
         (document,) = contents
         assert isinstance(document, TextResourceContents), (uri, document)
         json.loads(document.text)
-    (prompt_message,) = answered["prompt"].messages
-    assert isinstance(prompt_message.content, TextContent), prompt_message
-    assert answered["source_name"] in prompt_message.content.text
 
 
 def test_closing_stdin_ends_the_verb_promptly(
