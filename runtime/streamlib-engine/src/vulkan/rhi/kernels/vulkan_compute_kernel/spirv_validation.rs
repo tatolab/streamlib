@@ -7,7 +7,8 @@ use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
-    reflect_spirv_without_its_debug_source_strings, refuse_a_descriptor_set_other_than_set_0,
+    reflect_spirv_without_what_rspirv_refuses, refuse_a_descriptor_set_other_than_set_0,
+    refuse_specialization_constants_the_shader_does_not_take,
 };
 use crate::core::{Error, Result};
 use crate::vulkan::rhi::kernels::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
@@ -18,16 +19,21 @@ pub(super) fn validate_against_spirv(
     descriptor: &ComputeKernelDescriptor<'_>,
     subgroup_operation_support: &VulkanSubgroupOperationSupport,
 ) -> Result<Vec<ComputeBindingSpec>> {
-    let reflection =
-        reflect_spirv_without_its_debug_source_strings(descriptor.spv).map_err(|e| {
-            Error::GpuError(format!(
-                "Compute kernel '{}': failed to reflect SPIR-V: {e:?}",
-                descriptor.label
-            ))
-        })?;
+    let reflection = reflect_spirv_without_what_rspirv_refuses(descriptor.spv).map_err(|e| {
+        Error::GpuError(format!(
+            "Compute kernel '{}': failed to reflect SPIR-V: {e:?}",
+            descriptor.label
+        ))
+    })?;
     subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
         &format!("Compute kernel '{}'", descriptor.label),
         vk::ShaderStageFlags::COMPUTE,
+        &reflection.0,
+    )?;
+
+    refuse_specialization_constants_the_shader_does_not_take(
+        &format!("Compute kernel '{}'", descriptor.label),
+        descriptor.specialization_constants,
         &reflection.0,
     )?;
 

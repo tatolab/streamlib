@@ -163,6 +163,7 @@ fn run_compute_kernel_round_trip(
             spv: CPU_REF_DOUBLER_SPV,
             bindings: CPU_REF_DOUBLER_BINDINGS,
             push_constant_size: std::mem::size_of::<u32>() as u32,
+            specialization_constants: &[],
         })
         .map_err(|e| Error::Runtime(format!("create_compute_kernel: {e}")))?;
 

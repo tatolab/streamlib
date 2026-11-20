@@ -43,6 +43,7 @@ fn a_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_
             entry_point: "main",
             bindings: &bindings,
             push_constant_size,
+            specialization_constants: &[],
         },
     );
     let support = device.subgroup_operation_support();
@@ -76,6 +77,7 @@ fn a_shader_whose_only_set_is_not_set_0_is_refused_at_validation() {
         entry_point: "main",
         bindings: &bindings,
         push_constant_size: 0,
+        specialization_constants: &[],
     };
     let refusal = validate_against_spirv(
         &descriptor,
@@ -106,6 +108,7 @@ fn kernel_bindings_reflect_descriptor() {
                 spv: blend_spv(input_count),
                 bindings: &bindings,
                 push_constant_size: 4,
+                specialization_constants: &[],
             },
         )
         .expect("kernel creation");
@@ -141,6 +144,7 @@ fn rejects_descriptor_with_mismatched_binding_kind() {
             spv: blend_spv(1),
             bindings: &bindings,
             push_constant_size: 4,
+            specialization_constants: &[],
         },
     );
     let err = result.expect_err("expected validation failure");
@@ -173,6 +177,7 @@ fn rejects_descriptor_missing_a_binding_the_shader_declares() {
             spv: blend_spv(4),
             bindings: &bindings,
             push_constant_size: 4,
+            specialization_constants: &[],
         },
     );
     let err = result.expect_err("expected validation failure");
@@ -204,6 +209,7 @@ fn rejects_descriptor_with_extra_binding_not_in_shader() {
             spv: blend_spv(1),
             bindings: &bindings,
             push_constant_size: 4,
+            specialization_constants: &[],
         },
     );
     let err = result.expect_err("expected validation failure");
@@ -230,6 +236,7 @@ fn rejects_push_constant_size_mismatch() {
             spv: blend_spv(1),
             bindings: &bindings,
             push_constant_size: 16, // SPIR-V declares 4 bytes
+            specialization_constants: &[],
         },
     );
     let err = result.expect_err("expected validation failure");

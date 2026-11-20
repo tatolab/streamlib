@@ -492,6 +492,14 @@ impl HostVulkanDevice {
             .synchronization2(true)
             .build();
 
+        // maintenance4 (required of every Vulkan 1.3 device) lets a compute
+        // shader take its workgroup size from specialization constants through
+        // `LocalSizeId`, which Slang emits for one. Requested through its
+        // standalone struct for the same reason as the 1.2 features below.
+        let mut maintenance4_features = vk::PhysicalDeviceMaintenance4Features::builder()
+            .maintenance4(true)
+            .build();
+
         // samplerYcbcrConversion is required to create NV12 image views / samplers
         // with VK_KHR_sampler_ycbcr_conversion (core in 1.1) on the codec layer's path.
         // Without it, VUID-vkCreateSamplerYcbcrConversion-None-01648 fires every frame.
@@ -553,6 +561,7 @@ impl HostVulkanDevice {
                 .push_next(&mut dynamic_rendering_features)
                 .push_next(&mut timeline_semaphore_features)
                 .push_next(&mut synchronization2_features)
+                .push_next(&mut maintenance4_features)
                 .push_next(&mut vulkan_1_1_features);
             #[cfg(target_os = "linux")]
             if has_ray_tracing_pipeline {

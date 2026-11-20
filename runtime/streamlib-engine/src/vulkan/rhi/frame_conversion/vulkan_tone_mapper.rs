@@ -224,6 +224,7 @@ impl VulkanToneMapper {
                 spv,
                 bindings: IMAGE_TO_IMAGE_BINDINGS,
                 push_constant_size: TONE_MAPPER_PUSH_CONSTANT_SIZE,
+                specialization_constants: &[],
             },
         )
     }

@@ -73,3 +73,4 @@ fn blend_spv(input_count: u32) -> &'static [u8] {
 mod binding_validation_and_subgroup_operations;
 mod dispatch_and_sampled_images;
 mod pipeline_cache_on_disk;
+mod specialization_constants;

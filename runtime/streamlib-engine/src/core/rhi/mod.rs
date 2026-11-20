@@ -22,6 +22,9 @@ mod pixel_planes_within_one_allocation;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod plane_fd_under_test;
 mod ray_tracing_kernel;
+mod shader_specialization_constants;
+#[cfg(test)]
+mod shader_specialization_constants_tests;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod slang_shader_source_compiler;
 #[cfg(test)]
@@ -71,7 +74,7 @@ pub use graphics_kernel::{
 pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use index_buffer::IndexBuffer;
-pub(crate) use kernel_binding_names::reflect_spirv_without_its_debug_source_strings;
+pub(crate) use kernel_binding_names::reflect_spirv_without_what_rspirv_refuses;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use kernel_binding_names::{
     KernelShaderStageMask, quote_declared_shader_binding_names, quote_shader_stage_names,
@@ -99,6 +102,12 @@ pub use ray_tracing_kernel::{
     RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
     derive_ray_tracing_bindings_from_spirv_multistage, ray_tracing_stages_covered_by,
     validate_shader_groups,
+};
+pub use shader_specialization_constants::{
+    ShaderSpecializationConstant, ShaderSpecializationValue,
+};
+pub(crate) use shader_specialization_constants::{
+    ShaderSpecializationData, refuse_specialization_constants_the_shader_does_not_take,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
