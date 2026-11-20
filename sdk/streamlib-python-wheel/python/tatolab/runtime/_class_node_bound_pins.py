@@ -309,7 +309,9 @@ class BoundOutputPin:
                 node_id=node_id,
                 output_port=member.port,
             )
-        self._write_through: Any = _named(Output(family or Records), member.port)
+        codecs = pin_type.get("codecs") or []
+        codec = codecs[0] if family is Packets and len(codecs) == 1 else None
+        self._write_through: Any = _named(Output(family or Records, codec=codec), member.port)
         self._writes = pin_type["type"]
 
     def write(
@@ -332,7 +334,7 @@ class BoundOutputPin:
                 )
             self._outputs.write(self._write_through, {}, timestamp_ns)
         elif self._writes in ("encoded_video", "encoded_audio"):
-            self._outputs.write(self._port, value, timestamp_ns, starts_group)
+            self._outputs.write(self._write_through, value, timestamp_ns, starts_group)
         elif self._writes == "audio" and sample_rate is not None:
             if start_sample is None:
                 raise TypeError(

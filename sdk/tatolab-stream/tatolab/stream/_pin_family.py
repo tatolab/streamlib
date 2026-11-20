@@ -45,7 +45,7 @@ def family_declaration_of_a_typed_output(
 ) -> dict[str, Any]:
     """The family declaration of the output `port_name` a pin of exactly one type declares: a
     value on Channels names one channel per part, or the port itself for a number, each a 64-bit
-    float."""
+    float, and encoded media whose type names one codec states it as the codec of every packet."""
     pin_type = _the_one_pin_type_declared(declaration)
     family = family_a_pin_type_travels_on(pin_type)
     family_declaration: dict[str, Any] = {"family": family}
@@ -56,6 +56,10 @@ def family_declaration_of_a_typed_output(
         )
         channel_names = [port_name] if value_class is None else list(value_class.part_names())
         family_declaration.update({"names": {"stated": channel_names}, "dtype": "f64"})
+    if pin_type["type"] in ("encoded_video", "encoded_audio"):
+        codecs = pin_type.get("codecs") or []
+        if len(codecs) == 1:
+            family_declaration["codec"] = codecs[0]
     return family_declaration
 
 

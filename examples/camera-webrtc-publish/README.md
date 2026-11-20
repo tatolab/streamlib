@@ -159,9 +159,8 @@ history and applies it to the running stream.
 | `bitrate_bps` | `h264encoder`, `opusencoder` | Target bitrate. Absent: the encoder's own default. |
 
 Each node's keys are its node's settings: the fields of `CameraSource` in
-`tatolab.camera` and `MicrophoneSource` in `tatolab.microphone`, and the config
-dataclasses `H264EncoderConfig` in `tatolab.h264` and `OpusEncoderConfig` in
-`tatolab.opus`.
+`tatolab.camera`, `H264Encoder` in `tatolab.h264`, `MicrophoneSource` in
+`tatolab.microphone`, and `OpusEncoder` in `tatolab.opus`.
 
 ## One known offset
 
