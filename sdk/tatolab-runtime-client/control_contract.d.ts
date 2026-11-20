@@ -907,13 +907,19 @@ export interface GraphNodePortOnTheWire {
    */
   flow?: PinFlow;
   /**
-   * The value it reads, null when it reads nothing; absent when a link feeds it.
+   * The value it reads, null when it reads nothing; absent when a link feeds it, and on a
+   * bundle input.
    */
   value?: unknown;
   /**
-   * Where the value comes from; absent when it reads nothing.
+   * Where the value comes from; absent when it reads nothing, and on a bundle input.
    */
   value_comes_from?: InputValueComesFromOnTheWire | null;
+  /**
+   * On a bundle input, the value each member reads and where it comes from, in the order the
+   * bundle declares its members; absent on every other input.
+   */
+  member_values?: Array<BundleMemberValueReadOnTheWire> | null;
 }
 
 /**
@@ -925,6 +931,26 @@ export type PortKindOnTheWire = "data" | "event" | "control";
  * Where the value an input reads comes from, as `graph` renders it.
  */
 export type InputValueComesFromOnTheWire = "live" | "saved" | "default" | "wire";
+
+/**
+ * The value one member of a bundle input reads, resolved alone: `wire`, with no `value`, when a
+ * link ends at the member or at the whole input; else its live value, else its saved one, else
+ * its default; `value` null and no `value_comes_from` when it reads nothing.
+ */
+export interface BundleMemberValueReadOnTheWire {
+  /**
+   * The member, by the name the bundle declares.
+   */
+  member: string;
+  /**
+   * The value it reads, null when it reads nothing; absent when a link feeds it.
+   */
+  value?: unknown;
+  /**
+   * Where the value comes from; absent when it reads nothing.
+   */
+  value_comes_from?: InputValueComesFromOnTheWire | null;
+}
 
 /**
  * What the runtime keeps on a node, each under its own key. `failed_because`,
@@ -1900,7 +1926,7 @@ export type StreamGraphAction = ({
    */
   group: string;
   operation: "remove_group";
-} | {
+} | ({
   /**
    * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
@@ -1918,11 +1944,15 @@ export type StreamGraphAction = ({
    */
   input: string;
   /**
+   * The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off.
+   */
+  member?: string | null;
+  /**
    * The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped.
    */
   value?: unknown;
   operation: "set_node_input_value";
-};
+});
 
 /**
  * One end of a link a graph action names: a node, one of its ports, and the member of a bundle
@@ -2616,6 +2646,10 @@ export interface SetNodeInputValueRequest {
    * The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`.
    */
   input: string;
+  /**
+   * The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off.
+   */
+  member?: string | null;
   /**
    * The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped.
    */
@@ -6404,13 +6438,19 @@ export interface InputValueChangedNotificationParams {
    */
   input: string;
   /**
-   * The value the input reads now, as `graph` renders it: null when a link feeds it or it
-   * reads nothing.
+   * The member of a bundle input whose value changed, by name, as each row of `graph`'s
+   * `member_values` names it; named for every change of a bundle input, absent for any other
+   * input.
+   */
+  member?: string | null;
+  /**
+   * The value the input, or its member `member`, reads now, as `graph` renders it: null when
+   * a link feeds it or it reads nothing.
    */
   value?: unknown;
   /**
-   * Where `value` comes from; `wire` when a link feeds the input, absent when it reads
-   * nothing.
+   * Where `value` comes from; `wire` when a link feeds the input or the member, absent when
+   * it reads nothing.
    */
   value_comes_from?: InputValueComesFromOnTheWire | null;
 }
@@ -6704,6 +6744,7 @@ export interface ControlContractComponents {
   NamedPinTypeImportPath: NamedPinTypeImportPath;
   PinFlow: PinFlow;
   InputValueComesFromOnTheWire: InputValueComesFromOnTheWire;
+  BundleMemberValueReadOnTheWire: BundleMemberValueReadOnTheWire;
   GraphNodeComponentsOnTheWire: GraphNodeComponentsOnTheWire;
   NodeStateOnTheWire: NodeStateOnTheWire;
   NodeHealthOnTheWire: NodeHealthOnTheWire;
@@ -7014,7 +7055,7 @@ export interface ControlOperations {
   /**
    * Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.
    *
-   * Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
+   * Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. A bundle input's change is sent for each member it changes, naming the `member`, with the `value` and `value_comes_from` of that member's row of `member_values`. Changes are sent at most once each 33 ms for one input, or one member of a bundle input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
    *
    * Since contract version 3, experimental.
    */
@@ -7990,7 +8031,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 23;
+export declare const CONTROL_CONTRACT_REVISION: 24;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

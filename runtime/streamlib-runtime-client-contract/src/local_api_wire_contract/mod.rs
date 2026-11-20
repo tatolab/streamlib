@@ -33,9 +33,10 @@ pub use graph_answer_node_component_wire_types::{
     NodeThreadHandleOnTheWire, ShaderNodeFusedGroupOnTheWire,
 };
 pub use graph_answer_wire_types::{
-    ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
-    GraphNodeKindOnTheWire, GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
-    GraphToolResult, InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
+    BundleMemberValueReadOnTheWire, ConfigNodeReferenceEdgeOnTheWire,
+    FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire, GraphNodeKindOnTheWire,
+    GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphToolResult,
+    InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
     MachineWideGraphOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
 };
 pub use graph_wire_types::{

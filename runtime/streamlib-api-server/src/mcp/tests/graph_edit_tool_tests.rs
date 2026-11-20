@@ -447,6 +447,7 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
     assert_eq!(
         recorded[0],
         StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: camera,
             input: "fps".to_owned(),
             from: Some(json!(30)),
@@ -456,6 +457,7 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
     assert_eq!(
         recorded[1],
         StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: effect,
             input: "strength".to_owned(),
             from: Some(json!(0.5)),

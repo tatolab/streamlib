@@ -139,6 +139,7 @@ fn the_uuid_of(graph: &Graph, node_run_id: &NodeRunId) -> Uuid {
 
 fn a_fire(node: Uuid) -> InputValueToSetLive {
     InputValueToSetLive {
+        member: None,
         node,
         input: "go".to_owned(),
         value: None,
@@ -174,6 +175,7 @@ fn each_fire_of_a_node_in_this_process_queues_one_message_and_holds_no_value() {
     sets.insert(
         3,
         InputValueToSetLive {
+            member: None,
             node,
             input: "level".to_owned(),
             value: Some(json!(0.25)),
@@ -304,4 +306,42 @@ fn a_fire_with_a_value_on_a_linked_trigger_or_of_a_node_that_does_not_run_is_ref
         ),
         other => panic!("a fire of a node not built is refused: {:?}", other.err()),
     }
+}
+
+/// A fire naming a member of a Trigger input is refused before anything is queued, naming the
+/// input and the member: a Trigger is no bundle, so it holds no member to fire.
+///
+/// Mental-revert: firing without checking the member queues the whole input's fire.
+#[test]
+fn a_fire_naming_a_member_is_refused_and_queues_nothing() {
+    let mut graph = a_graph_resolving_a_node_type_with_a_trigger_input();
+    let (button, input_mailboxes) = a_button_in_this_process(&mut graph);
+    let node = the_uuid_of(&graph, &button);
+    let graph = RwLock::new(graph);
+
+    let Err(refusal) = the_fires(
+        &graph,
+        &[InputValueToSetLive {
+            member: Some("level".to_owned()),
+            ..a_fire(node)
+        }],
+        while_playing(),
+    ) else {
+        panic!("a Trigger holds no member to fire");
+    };
+
+    let LiveInputValueSetRefusal::TheInputDoesNotTakeIt { set_index, refusal } = refusal else {
+        panic!("refused as a fire its input does not take: {refusal:?}");
+    };
+    assert_eq!(set_index, 0);
+    assert_eq!(refusal.code, InputValueRefusalCode::InputValueNotValid);
+    assert!(
+        refusal.words.contains("no member `level` to fire"),
+        "{}",
+        refusal.words
+    );
+    assert!(
+        !matches!(input_mailboxes.read_raw("go"), Ok(Some(_))),
+        "no fire is queued"
+    );
 }

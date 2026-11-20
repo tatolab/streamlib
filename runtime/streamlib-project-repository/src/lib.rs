@@ -155,8 +155,9 @@ pub use stream_graph_action::{
     IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
-    NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
-    NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
+    NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION, NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION,
+    NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION, NOTE_ARGUMENT_DESCRIPTION,
+    NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
 };
 pub use stream_graph_default_port_and_variable_names::{
@@ -172,7 +173,9 @@ pub use stream_graph_document::{
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, asset_references_made_references_into_the_import,
     assets_a_nodes_input_values_reference, fragment_with_each_node_uuid_kept_by_its_name,
-    is_a_graph_interface_node_type, is_the_graph_input_type,
+    input_values_after_the_set, is_a_graph_interface_node_type, is_the_graph_input_type,
+    the_input_value_after_the_set, the_input_value_held_on,
+    the_value_held_on_the_input_or_its_member,
 };
 pub use stream_graph_fragment_fold::{
     StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,

@@ -312,7 +312,11 @@ impl StreamGraphTransactionExecutor<'_> {
                 stream,
                 graph_operation:
                     StreamGraphOperation::SetNodeInputValue {
-                        node, input, to, ..
+                        node,
+                        input,
+                        member,
+                        to,
+                        ..
                     },
             }) = operation
             else {
@@ -334,13 +338,18 @@ impl StreamGraphTransactionExecutor<'_> {
             let stream_operations = self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(stream_id)?;
-            let input_values_after_the_set =
-                input_values_after_the_set(&set_on.input_values, input, to.as_ref());
+            let input_values_after_the_set = input_values_after_the_set(
+                &set_on.input_values,
+                input,
+                member.as_deref(),
+                to.as_ref(),
+            );
             refuse_a_value_the_input_does_not_take(
                 stream_operations.as_ref(),
                 &set_on,
                 &input_values_after_the_set,
                 input,
+                member.as_deref(),
                 to.as_ref(),
                 None,
             )?;

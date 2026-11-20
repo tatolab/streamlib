@@ -703,6 +703,7 @@ fn a_clear_of_an_exposed_config_fields_input_is_refused_and_any_other_set() {
     assert_eq!(
         StreamGraphOperation::set_pin_value_of(&tone, "pitch".to_owned(), Some(Value::Null)),
         Ok(StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: tone.id,
             input: "pitch".to_owned(),
             from: Some(json!(220)),

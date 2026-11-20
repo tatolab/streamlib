@@ -29,6 +29,7 @@ fn the_refusal_of(
             input_values_after_the_set: &input_values_after_the_set,
         },
         input,
+        None,
         value.as_ref(),
     )
 }
@@ -221,4 +222,26 @@ fn a_setting_is_taken_off_as_a_config_field() {
         ),
         Ok(())
     );
+}
+
+/// In one live transaction a set of another member of a bundle input replaces nothing set on it,
+/// and a set of the same member, of the whole input after a member, or of a member after the
+/// whole input, replaces the earlier one, whichever order they come in.
+///
+/// Mental-revert: telling sets apart by their input alone refuses `gain` beside `level`.
+#[test]
+fn a_live_set_replaces_an_earlier_one_only_on_the_member_or_the_whole_input_it_sets() {
+    assert!(!a_live_set_replaces_an_earlier_one(&[], None));
+    assert!(!a_live_set_replaces_an_earlier_one(&[], Some("gain")));
+    assert!(!a_live_set_replaces_an_earlier_one(
+        &[Some("level")],
+        Some("gain")
+    ));
+    assert!(a_live_set_replaces_an_earlier_one(
+        &[Some("level"), Some("gain")],
+        Some("gain")
+    ));
+    assert!(a_live_set_replaces_an_earlier_one(&[Some("level")], None));
+    assert!(a_live_set_replaces_an_earlier_one(&[None], Some("level")));
+    assert!(a_live_set_replaces_an_earlier_one(&[None], None));
 }

@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 23
+    "x-contract-revision": 24
   },
   "methods": [
     {
@@ -191,7 +191,7 @@
     {
       "name": "subscribe_input_value_changes",
       "summary": "Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.",
-      "description": "Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.",
+      "description": "Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. A bundle input's change is sent for each member it changes, naming the `member`, with the `value` and `value_comes_from` of that member's row of `member_values`. Changes are sent at most once each 33 ms for one input, or one member of a bundle input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -9393,7 +9393,7 @@
             "description": "How its messages are read."
           },
           "value": {
-            "description": "The value it reads, null when it reads nothing; absent when a link feeds it."
+            "description": "The value it reads, null when it reads nothing; absent when a link feeds it, and on a\nbundle input."
           },
           "value_comes_from": {
             "anyOf": [
@@ -9404,7 +9404,17 @@
                 "type": "null"
               }
             ],
-            "description": "Where the value comes from; absent when it reads nothing."
+            "description": "Where the value comes from; absent when it reads nothing, and on a bundle input."
+          },
+          "member_values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BundleMemberValueReadOnTheWire"
+            },
+            "description": "On a bundle input, the value each member reads and where it comes from, in the order the\nbundle declares its members; absent on every other input."
           }
         },
         "required": [
@@ -10063,6 +10073,33 @@
           }
         ],
         "description": "Where the value an input reads comes from, as `graph` renders it."
+      },
+      "BundleMemberValueReadOnTheWire": {
+        "type": "object",
+        "properties": {
+          "member": {
+            "type": "string",
+            "description": "The member, by the name the bundle declares."
+          },
+          "value": {
+            "description": "The value it reads, null when it reads nothing; absent when a link feeds it."
+          },
+          "value_comes_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputValueComesFromOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the value comes from; absent when it reads nothing."
+          }
+        },
+        "required": [
+          "member"
+        ],
+        "description": "The value one member of a bundle input reads, resolved alone: `wire`, with no `value`, when a\nlink ends at the member or at the whole input; else its live value, else its saved one, else\nits default; `value` null and no `value_comes_from` when it reads nothing."
       },
       "GraphNodeComponentsOnTheWire": {
         "type": "object",
@@ -12025,6 +12062,13 @@
                 "type": "string",
                 "description": "The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`."
               },
+              "member": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off."
+              },
               "value": {
                 "description": "The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped."
               },
@@ -13218,6 +13262,13 @@
           "input": {
             "type": "string",
             "description": "The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`."
+          },
+          "member": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off."
           },
           "value": {
             "description": "The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped."
@@ -20169,8 +20220,15 @@
             "type": "string",
             "description": "The input, by name."
           },
+          "member": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The member of a bundle input whose value changed, by name, as each row of `graph`'s\n`member_values` names it; named for every change of a bundle input, absent for any other\ninput."
+          },
           "value": {
-            "description": "The value the input reads now, as `graph` renders it: null when a link feeds it or it\nreads nothing."
+            "description": "The value the input, or its member `member`, reads now, as `graph` renders it: null when\na link feeds it or it reads nothing."
           },
           "value_comes_from": {
             "anyOf": [
@@ -20181,7 +20239,7 @@
                 "type": "null"
               }
             ],
-            "description": "Where `value` comes from; `wire` when a link feeds the input, absent when it reads\nnothing."
+            "description": "Where `value` comes from; `wire` when a link feeds the input or the member, absent when\nit reads nothing."
           }
         },
         "required": [

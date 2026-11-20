@@ -467,6 +467,11 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
                      "delivery_profile": "newest", "pin_default": null, "value": null},
                     {"name": "video", "description": "", "port_kind": "data",
                      "delivery_profile": "newest"},
+                    {"name": "reading", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest", "member_values": [
+                        {"member": "level", "value": 1.0, "value_comes_from": "live"},
+                        {"member": "label", "value": null},
+                     ]},
                 ],
                 "outputs": [
                     {"name": "out", "description": "", "port_kind": "data",
@@ -520,6 +525,7 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             Some(InputValueComesFromOnTheWire::Wire),
             None,
             None,
+            None,
         ]
     );
     assert_eq!(
@@ -527,6 +533,7 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         Some(InputValueReadOnTheWire {
             value: Some(serde_json::Value::Null),
             value_comes_from: None,
+            member_values: None,
         }),
         "an input reading nothing reads a null value"
     );
@@ -539,6 +546,26 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         "an input with neither key, and an output, read no value"
     );
     assert_eq!(
+        inputs[6].value_read,
+        Some(InputValueReadOnTheWire {
+            value: None,
+            value_comes_from: None,
+            member_values: Some(vec![
+                BundleMemberValueReadOnTheWire {
+                    member: "level".to_owned(),
+                    value: Some(serde_json::json!(1.0)),
+                    value_comes_from: Some(InputValueComesFromOnTheWire::Live),
+                },
+                BundleMemberValueReadOnTheWire {
+                    member: "label".to_owned(),
+                    value: Some(serde_json::Value::Null),
+                    value_comes_from: None,
+                },
+            ]),
+        }),
+        "a bundle input reads each member alone, a member reading nothing a null value"
+    );
+    assert_eq!(
         inputs
             .iter()
             .map(|input| input.pin_default.clone())
@@ -549,6 +576,7 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             Some(serde_json::json!(0.0)),
             None,
             Some(serde_json::Value::Null),
+            None,
             None
         ],
         "a declared null default reads apart from no default"
