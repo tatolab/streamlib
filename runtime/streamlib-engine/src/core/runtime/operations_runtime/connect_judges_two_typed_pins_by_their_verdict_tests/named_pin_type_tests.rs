@@ -11,6 +11,7 @@ use crate::core::descriptors::DeclaredPinType;
 const UNTYPED_RECORDS_SOURCE: &str = "VerdictCheckUntypedRecordsSource";
 const UNTYPED_RECORDS_SINK: &str = "VerdictCheckUntypedRecordsSink";
 const ANY_RECORDS_SINK: &str = "VerdictCheckAnyRecordsSink";
+const ANY_RECORDS_RELAY: &str = "VerdictCheckAnyRecordsRelay";
 
 fn an_untyped_records_port(name: &str) -> PortDescriptor {
     PortDescriptor::new(
@@ -44,6 +45,23 @@ fn register_the_named_type_fixture_node_types() {
                 }),
             ],
             Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(ANY_RECORDS_RELAY),
+            vec![
+                an_untyped_records_port("in").with_pin_declaration(PinDeclaration {
+                    pin_type: DeclaredPinType::Any,
+                    ..PinDeclaration::exactly(PinType::String {})
+                }),
+            ],
+            vec![
+                an_untyped_records_port("out").with_pin_declaration(PinDeclaration {
+                    pin_type: DeclaredPinType::SameAsInput {
+                        input_port_name: "in".to_owned(),
+                    },
+                    ..PinDeclaration::exactly(PinType::String {})
+                }),
+            ],
         ));
     });
 }
@@ -159,5 +177,39 @@ fn an_input_of_any_type_takes_a_named_type() {
         InputLinkPortRef::new(sink, "anything"),
     )
     .expect("an input of any type takes every typed output, a named type's among them");
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// An output following an input of any type carries what is linked into that input, so a named
+/// type linked in would reach the untyped input its wired link feeds; the link is refused
+/// naming the type and that wired link.
+///
+/// Mental-revert: checking only the two ends of the link made takes it, as an Any input takes a
+/// named type.
+#[test]
+fn a_named_type_carried_past_a_relay_into_an_untyped_input_is_refused_naming_the_wired_link() {
+    register_the_named_type_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(KELVIN_SOURCE));
+    let relay = a_node_of(&compiler, class_path(ANY_RECORDS_RELAY));
+    let sink = a_node_of(&compiler, class_path(UNTYPED_RECORDS_SINK));
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(relay.clone(), "out"),
+        InputLinkPortRef::new(sink, "records"),
+    )
+    .expect("nothing is linked into the relay yet");
+
+    let refused = connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(source, "temperature"),
+        InputLinkPortRef::new(relay, "in"),
+    )
+    .expect_err("the named type would reach the untyped input");
+
+    let words = refused.to_string();
+    assert!(words.contains("`verdict_check:Kelvin`"), "{words}");
+    assert!(words.contains(".records"), "{words}");
+    assert!(words.contains("states no pin type"), "{words}");
     assert_eq!(the_links_in(&compiler), 1);
 }

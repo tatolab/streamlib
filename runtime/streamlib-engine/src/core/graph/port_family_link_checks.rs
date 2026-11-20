@@ -310,7 +310,9 @@ fn refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(
 }
 
 /// The first named type among what a port carries in its graph; `None` when it carries none.
-fn the_named_type_among(pin_type: &PinTypeInItsGraph) -> Option<&NamedPinTypeImportPath> {
+pub(super) fn the_named_type_among(
+    pin_type: &PinTypeInItsGraph,
+) -> Option<&NamedPinTypeImportPath> {
     let pin_types = match pin_type {
         PinTypeInItsGraph::Is(pin_type) => std::slice::from_ref(pin_type),
         PinTypeInItsGraph::OneOf(pin_types) => pin_types.as_slice(),

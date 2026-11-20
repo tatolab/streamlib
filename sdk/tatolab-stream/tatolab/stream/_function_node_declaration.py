@@ -686,7 +686,10 @@ class _FunctionNodeSignatureReading:
             described_output_annotation, f"output `{output_name}`"
         )
         value_annotation, _ = _value_annotation_and_whether_optional(output_annotation)
-        if value_annotation not in PIN_VALUE_CLASSES and (
+        if (
+            value_annotation not in PIN_VALUE_CLASSES
+            and named_pin_type_declared_by(value_annotation) is None
+        ) and (
             typing.get_origin(value_annotation) is tuple
             or value_annotation is tuple
             or (isinstance(value_annotation, type) and issubclass(value_annotation, tuple))
@@ -905,6 +908,7 @@ def _is_a_named_tuple(annotation: Any) -> bool:
         and issubclass(annotation, tuple)
         and hasattr(annotation, "_fields")
         and annotation not in PIN_VALUE_CLASSES
+        and named_pin_type_declared_by(annotation) is None
     )
 
 
