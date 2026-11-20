@@ -4,8 +4,8 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use crate::video_codec_retry_gate::VIDEO_CODEC_RETRY_INTERVAL;
-use crate::video_decoder_opening::{VideoDecoderNotOpened, VideoDecoderOpening};
+use crate::video_codec_retry_gate::{VIDEO_CODEC_RETRY_INTERVAL, VideoCodecRefusal};
+use crate::video_decoder_opening::VideoDecoderOpening;
 
 #[derive(Debug, PartialEq)]
 struct DecoderStandIn(u32);
@@ -33,7 +33,7 @@ fn a_decoder_refused_for_now_opens_once_the_retry_interval_has_passed_and_the_gp
     let refused_at = Instant::now();
     let refuse_for_now = || {
         opens.set(opens.get() + 1);
-        Err(VideoDecoderNotOpened::ForNow("BAR1 is full".to_owned()))
+        Err(VideoCodecRefusal::ForNow("BAR1 is full".to_owned()))
     };
     assert!(opening.the_decoder_at(refused_at, refuse_for_now).is_none());
     let within_the_interval = refused_at + VIDEO_CODEC_RETRY_INTERVAL - Duration::from_millis(1);
@@ -54,7 +54,7 @@ fn a_decoder_refused_for_good_is_never_opened_again() {
     let mut opening = VideoDecoderOpening::<DecoderStandIn>::not_yet_opened("H264Decoder");
     let refused_at = Instant::now();
     let refused = opening.the_decoder_at(refused_at, || {
-        Err(VideoDecoderNotOpened::ForGood(
+        Err(VideoCodecRefusal::ForGood(
             "no Vulkan Video decode".to_owned(),
         ))
     });

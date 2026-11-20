@@ -1,23 +1,15 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A decoder node's decoder, opened at the first media frame and, while the
-//! GPU refuses it for want of something another client may free, opened
+//! A decoder node's decoder, opened as the node starts and, while the GPU
+//! refuses it for want of something another client may free, opened
 //! again once a retry interval after each refusal.
 
 use std::time::Instant;
 
-use crate::video_codec_retry_gate::{VIDEO_CODEC_RETRY_INTERVAL, VideoCodecRetryGate};
-
-/// Why a decoder did not open.
-#[derive(Debug)]
-pub enum VideoDecoderNotOpened {
-    /// The GPU lacked a resource another client of it may free, so a later
-    /// open may succeed.
-    ForNow(String),
-    /// A later open would meet the same refusal.
-    ForGood(String),
-}
+use crate::video_codec_retry_gate::{
+    VIDEO_CODEC_RETRY_INTERVAL, VideoCodecRefusal, VideoCodecRetryGate,
+};
 
 /// A decoder node's decoder, or the state of its opening.
 pub(crate) struct VideoDecoderOpening<D> {
@@ -41,7 +33,7 @@ impl<D> VideoDecoderOpening<D> {
     pub(crate) fn the_decoder_at(
         &mut self,
         now: Instant,
-        open: impl FnOnce() -> Result<D, VideoDecoderNotOpened>,
+        open: impl FnOnce() -> Result<D, VideoCodecRefusal>,
     ) -> Option<&mut D> {
         if self.decoder.is_none() && self.retry_gate.a_try_may_be_made_at(now) {
             match open() {
@@ -56,18 +48,18 @@ impl<D> VideoDecoderOpening<D> {
                     }
                     self.decoder = Some(decoder);
                 }
-                Err(VideoDecoderNotOpened::ForNow(refusal)) => {
+                Err(VideoCodecRefusal::ForNow(refusal)) => {
                     let tries_refused = self.retry_gate.refused_for_now_at(now);
                     if tries_refused.is_power_of_two() {
                         tracing::error!(
                             tries_refused,
                             "{refusal}; media frames are discarded and the decoder is opened \
                              again every {VIDEO_CODEC_RETRY_INTERVAL:?} until the GPU frees what \
-                             it refused ({tries_refused} refused so far)"
+                             it refused"
                         );
                     }
                 }
-                Err(VideoDecoderNotOpened::ForGood(refusal)) => {
+                Err(VideoCodecRefusal::ForGood(refusal)) => {
                     self.retry_gate.failed_for_good();
                     tracing::error!("{refusal}; every media frame is discarded");
                 }

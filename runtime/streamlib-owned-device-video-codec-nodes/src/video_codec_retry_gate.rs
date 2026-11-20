@@ -9,6 +9,16 @@
 
 use std::time::{Duration, Instant};
 
+/// Why a codec node's GPU refused it what it asked for.
+#[derive(Debug)]
+pub enum VideoCodecRefusal {
+    /// The GPU lacked something another of its clients may free (a video
+    /// session, memory, the BAR1 aperture), so a later try may succeed.
+    ForNow(String),
+    /// A later try would meet the same refusal.
+    ForGood(String),
+}
+
 /// How long after a refusal for now the next try is made.
 pub(crate) const VIDEO_CODEC_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 

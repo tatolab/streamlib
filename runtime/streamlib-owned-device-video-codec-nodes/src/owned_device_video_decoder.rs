@@ -33,7 +33,7 @@ use crate::encoded_video_group_entry_gate::{
 use crate::image_frame_on_the_video_port::{
     H273ColorVuiWireNames, image_frame_payload_descriptor_of_a_decoded_picture,
 };
-use crate::video_decoder_opening::VideoDecoderNotOpened;
+use crate::video_codec_retry_gate::VideoCodecRefusal;
 use crate::video_decoder_settings::VideoDecoderSettings;
 
 /// The node output pool decoded pictures are converted into.
@@ -53,14 +53,12 @@ const DECODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 pub(crate) fn why_the_decode_device_was_refused(
     node_type_name: &str,
     refusal: ConsumerRhiError,
-) -> VideoDecoderNotOpened {
-    let for_now = matches!(refusal, ConsumerRhiError::GpuOutOfResourcesForNow(_));
-    let refusal =
+) -> VideoCodecRefusal {
+    let message =
         format!("{node_type_name}: the owned Vulkan Video decode device was refused: {refusal}");
-    if for_now {
-        VideoDecoderNotOpened::ForNow(refusal)
-    } else {
-        VideoDecoderNotOpened::ForGood(refusal)
+    match refusal {
+        ConsumerRhiError::GpuOutOfResourcesForNow(_) => VideoCodecRefusal::ForNow(message),
+        _ => VideoCodecRefusal::ForGood(message),
     }
 }
 
@@ -98,12 +96,12 @@ impl OwnedDeviceVideoDecoder {
         node: VideoCodecNodeIdentity,
         module_host: ModuleHost,
         settings: VideoDecoderSettings,
-    ) -> Result<Self, VideoDecoderNotOpened> {
+    ) -> Result<Self, VideoCodecRefusal> {
         let node_type_name = node.node_type_name;
         let opening_started = Instant::now();
         let runtime_vulkan_device_uuid =
             runtime_vulkan_device_uuid_named_at_spawn().map_err(|refusal| {
-                VideoDecoderNotOpened::ForGood(format!("{node_type_name}: {refusal}"))
+                VideoCodecRefusal::ForGood(format!("{node_type_name}: {refusal}"))
             })?;
         let owned_device = Arc::new(
             OwnedVulkanVideoCodecDevice::new_on_the_device_the_runtime_named(
@@ -126,7 +124,7 @@ impl OwnedDeviceVideoDecoder {
             },
         )
         .map_err(|refusal| {
-            VideoDecoderNotOpened::ForGood(format!(
+            VideoCodecRefusal::ForGood(format!(
                 "{node_type_name}: the decoder could not be minted: {refusal}"
             ))
         })?;

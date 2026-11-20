@@ -11,7 +11,7 @@ use thiserror::Error;
 ///
 /// Kept deliberately narrow: the carve-out is small (DMA-BUF FD import
 /// + bind + map, sync wait/signal, layout transitions on imported
-///   handles), so three variants cover everything that can go wrong.
+///   handles), so a few variants cover everything that can go wrong.
 ///   `streamlib::sdk::error::Error` provides a `From<ConsumerRhiError>`
 ///   impl, so host-side code can wrap consumer errors with `?`.
 #[derive(Debug, Error)]

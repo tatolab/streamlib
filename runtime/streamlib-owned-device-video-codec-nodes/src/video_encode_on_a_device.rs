@@ -33,7 +33,9 @@ use streamlib_vulkan_video::{
 use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::EncodedVideoAccessUnit;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
-use crate::video_codec_retry_gate::{VIDEO_CODEC_RETRY_INTERVAL, VideoCodecRetryGate};
+use crate::video_codec_retry_gate::{
+    VIDEO_CODEC_RETRY_INTERVAL, VideoCodecRefusal, VideoCodecRetryGate,
+};
 use crate::video_encoder_settings::{VideoEncodeSessionShape, VideoEncoderSettings};
 
 /// Imports kept, one per producer pool slot; a producer's pool is far smaller.
@@ -100,16 +102,6 @@ pub struct VideoFrameEncoded {
     /// Whether this frame minted a new session, so its first access unit
     /// opens a new coded sequence.
     pub minted_a_session: bool,
-}
-
-/// Why no encoder session was minted.
-#[derive(Debug)]
-pub(crate) enum EncodeSessionNotMinted {
-    /// The GPU's driver holds as many video sessions as it allows; a mint
-    /// can succeed once another session ends.
-    AtTheVideoSessionLimit(String),
-    /// Any other failure, which a later mint would meet again.
-    Failed(String),
 }
 
 /// The encoder session and the extent it was minted for.
@@ -552,7 +544,7 @@ impl VideoEncodeOnADevice {
                     self.session_minted_and_not_yet_reported = true;
                     self.minted_session = Some(minted);
                 }
-                Err(EncodeSessionNotMinted::AtTheVideoSessionLimit(refusal)) => {
+                Err(VideoCodecRefusal::ForNow(refusal)) => {
                     let mints_refused = self.session_mint_gate.refused_for_now_at(Instant::now());
                     return Err(format!(
                         "{refusal}; frames are discarded and the mint is tried again every \
@@ -560,7 +552,7 @@ impl VideoEncodeOnADevice {
                          on this machine ends ({mints_refused} refused so far)"
                     ));
                 }
-                Err(EncodeSessionNotMinted::Failed(mint_failure)) => {
+                Err(VideoCodecRefusal::ForGood(mint_failure)) => {
                     self.session_mint_gate.failed_for_good();
                     return Err(format!("{mint_failure}; every later frame is discarded"));
                 }
@@ -573,7 +565,7 @@ impl VideoEncodeOnADevice {
         &self,
         frame: &VideoFrameToEncode,
         shape: VideoEncodeSessionShape,
-    ) -> Result<VideoEncodeSessionMintedFromAFrame, EncodeSessionNotMinted> {
+    ) -> Result<VideoEncodeSessionMintedFromAFrame, VideoCodecRefusal> {
         let node_type_name = self.node.node_type_name;
         let color_vui =
             Some(frame.color_vui).filter(|color_vui| color_vui.is_video_signal_type_block_needed());
@@ -618,13 +610,11 @@ impl VideoEncodeOnADevice {
 pub(crate) fn why_no_session_was_minted(
     node_type_name: &str,
     mint_failure: VideoError,
-) -> EncodeSessionNotMinted {
+) -> VideoCodecRefusal {
     let refusal =
         format!("{node_type_name}: the encoder session could not be minted: {mint_failure}");
     match mint_failure {
-        VideoError::VideoSessionLimitReached { .. } => {
-            EncodeSessionNotMinted::AtTheVideoSessionLimit(refusal)
-        }
-        _ => EncodeSessionNotMinted::Failed(refusal),
+        VideoError::VideoSessionLimitReached { .. } => VideoCodecRefusal::ForNow(refusal),
+        _ => VideoCodecRefusal::ForGood(refusal),
     }
 }

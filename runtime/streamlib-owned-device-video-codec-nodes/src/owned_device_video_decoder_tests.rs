@@ -4,7 +4,7 @@
 use streamlib_consumer_rhi::ConsumerRhiError;
 
 use crate::owned_device_video_decoder::why_the_decode_device_was_refused;
-use crate::video_decoder_opening::VideoDecoderNotOpened;
+use crate::video_codec_retry_gate::VideoCodecRefusal;
 
 #[test]
 fn a_decode_device_the_gpu_lacked_a_resource_for_is_refused_for_now_by_name() {
@@ -14,7 +14,7 @@ fn a_decode_device_the_gpu_lacked_a_resource_for_is_refused_for_now_by_name() {
             "Failed to create consumer logical device: ERROR_INITIALIZATION_FAILED".to_owned(),
         ),
     );
-    let VideoDecoderNotOpened::ForNow(refusal) = refusal else {
+    let VideoCodecRefusal::ForNow(refusal) = refusal else {
         panic!("refused for good: {refusal:?}");
     };
     assert!(
@@ -30,7 +30,7 @@ fn a_decode_device_the_gpu_cannot_give_is_refused_for_good() {
         ConsumerRhiError::Gpu("no video decode queue family".to_owned()),
     );
     assert!(
-        matches!(refusal, VideoDecoderNotOpened::ForGood(_)),
+        matches!(refusal, VideoCodecRefusal::ForGood(_)),
         "{refusal:?}"
     );
 }

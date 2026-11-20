@@ -30,7 +30,7 @@ use crate::encoded_video_group_entry_gate::{
 use crate::image_frame_on_the_video_port::{
     H273ColorVuiWireNames, image_frame_payload_descriptor_of_a_decoded_picture,
 };
-use crate::video_decoder_opening::VideoDecoderNotOpened;
+use crate::video_codec_retry_gate::VideoCodecRefusal;
 use crate::video_decoder_settings::VideoDecoderSettings;
 
 /// The node output pool decoded pictures are converted into.
@@ -79,7 +79,7 @@ impl VideoToolboxVideoDecoder {
         node: VideoCodecNodeIdentity,
         module_host: ModuleHost,
         settings: VideoDecoderSettings,
-    ) -> Result<Self, VideoDecoderNotOpened> {
+    ) -> Result<Self, VideoCodecRefusal> {
         let node_type_name = node.node_type_name;
         let opening_started = Instant::now();
         let maximum_picture_extent =
@@ -90,7 +90,7 @@ impl VideoToolboxVideoDecoder {
         let decompression_session =
             VideoToolboxDecompressionSession::open(node.elementary_stream, maximum_picture_extent)
                 .map_err(|refusal| {
-                    VideoDecoderNotOpened::ForGood(format!("{node_type_name}: {refusal}"))
+                    VideoCodecRefusal::ForGood(format!("{node_type_name}: {refusal}"))
                 })?;
         tracing::info!(
             opened_ms = opening_started.elapsed().as_secs_f64() * 1_000.0,

@@ -25,7 +25,7 @@ pub mod image_frame_on_the_video_port;
 pub mod owned_device_video_decoder;
 #[cfg(all(test, target_os = "linux"))]
 mod owned_device_video_decoder_tests;
-mod video_codec_retry_gate;
+pub mod video_codec_retry_gate;
 #[cfg(test)]
 mod video_codec_retry_gate_tests;
 pub mod video_decoder_opening;
@@ -56,7 +56,8 @@ pub mod vulkan_video_encoder;
 
 use crate::encoded_video_publication::EncodedVideoOutputPort;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
-use crate::video_decoder_opening::{VideoDecoderNotOpened, VideoDecoderOpening};
+use crate::video_codec_retry_gate::VideoCodecRefusal;
+use crate::video_decoder_opening::VideoDecoderOpening;
 use crate::video_decoder_settings::VideoDecoderSettings;
 use crate::video_encoder_settings::VideoEncoderSettings;
 
@@ -385,7 +386,7 @@ fn open_the_decoder(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
     settings: VideoDecoderSettings,
-) -> Result<VideoDecoderOnThisPlatform, VideoDecoderNotOpened> {
+) -> Result<VideoDecoderOnThisPlatform, VideoCodecRefusal> {
     VideoDecoderOnThisPlatform::open(node, module_host.clone(), settings)
 }
 
@@ -413,16 +414,17 @@ fn open_the_decoder(
     node: VideoCodecNodeIdentity,
     _module_host: &ModuleHost,
     _settings: VideoDecoderSettings,
-) -> Result<VideoDecoderOnThisPlatform, VideoDecoderNotOpened> {
-    Err(VideoDecoderNotOpened::ForGood(format!(
+) -> Result<VideoDecoderOnThisPlatform, VideoCodecRefusal> {
+    Err(VideoCodecRefusal::ForGood(format!(
         "{} decodes on Linux and macOS only",
         node.node_type_name
     )))
 }
 
-/// Read, decode and publish until the node stops. The decoder opens at the
-/// first media frame; while it is not open, `encoded_video` is still drained,
-/// so upstream sees a live consumer.
+/// Read, decode and publish until the node stops. The decoder opens as the
+/// node starts and, refused for now, again at a later media frame; while it
+/// is not open, `encoded_video` is still drained, so upstream sees a live
+/// consumer.
 fn decode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
@@ -433,6 +435,9 @@ fn decode_until_stopped(
 ) {
     let node_type_name = node.node_type_name;
     let mut decoder_opening = VideoDecoderOpening::not_yet_opened(node_type_name);
+    decoder_opening.the_decoder_at(Instant::now(), || {
+        open_the_decoder(node, module_host, settings)
+    });
     let mut media_frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
