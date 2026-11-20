@@ -139,6 +139,22 @@ fn the_method_entry_of(
     if let Some(replaced_by) = declaration.replaced_by {
         method["x-replaced-by"] = json!(replaced_by);
     }
+    if let Some(example) = &declaration.example {
+        let mut pairing = json!({
+            "name": format!("{}_example", declaration.method_name),
+            "params": [{ "name": "params", "value": (example.params)() }],
+        });
+        if let Some(answer) = example.answer {
+            pairing["result"] = json!({
+                "name": format!("{}_result", declaration.method_name),
+                "value": answer(),
+            });
+        }
+        method["examples"] = json!([pairing]);
+        if let Some(refusal) = example.refusal {
+            method["x-refusal-example"] = refusal();
+        }
+    }
     method
 }
 
@@ -272,6 +288,58 @@ mod tests {
         ] {
             assert!(!validator.is_valid(&refused), "{refused} is refused");
         }
+    }
+
+    #[test]
+    fn every_worked_example_validates_against_the_schemas_its_method_states() {
+        let document = control_contract_document();
+        let the_validator_of = |schema: &Value| {
+            let mut schema = schema.clone();
+            schema["components"] = document["components"].clone();
+            jsonschema::validator_for(&schema)
+                .unwrap_or_else(|refusal| panic!("a method states a schema: {refusal}"))
+        };
+        let refusal_validator = the_validator_of(
+            &json!({ "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire" }),
+        );
+        let mut examples_seen = 0;
+        for method in document["methods"].as_array().into_iter().flatten() {
+            let name = method["name"].as_str().unwrap_or_default();
+            for example in method["examples"].as_array().into_iter().flatten() {
+                examples_seen += 1;
+                let params = &example["params"][0]["value"];
+                let params_validator = the_validator_of(&method["params"][0]["schema"]);
+                assert!(
+                    params_validator.is_valid(params),
+                    "{name}'s example params: {:?}",
+                    params_validator
+                        .iter_errors(params)
+                        .map(|error| error.to_string())
+                        .collect::<Vec<_>>()
+                );
+                if let Some(answer) = example.get("result").map(|result| &result["value"]) {
+                    let result_validator = the_validator_of(&method["result"]["schema"]);
+                    assert!(
+                        result_validator.is_valid(answer),
+                        "{name}'s example answer: {:?}",
+                        result_validator
+                            .iter_errors(answer)
+                            .map(|error| error.to_string())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+            if let Some(refusal) = method.get("x-refusal-example") {
+                assert!(
+                    refusal_validator.is_valid(refusal),
+                    "{name}'s example refusal"
+                );
+            }
+        }
+        assert!(
+            examples_seen > 70,
+            "{examples_seen} methods carry an example"
+        );
     }
 
     /// A node type as each listing answers it, filed under a group by the project, validates

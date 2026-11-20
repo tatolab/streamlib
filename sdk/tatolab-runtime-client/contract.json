@@ -427,7 +427,18 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "describe_runtime_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {}
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_streams",
@@ -488,7 +499,51 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "list_streams_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {}
+            }
+          ],
+          "result": {
+            "name": "list_streams_result",
+            "value": {
+              "streams": [
+                {
+                  "stream": "night-show-main-3fa2b1",
+                  "display_name": "Main",
+                  "location": {
+                    "project_directory": "/home/ada/Tatolab/night-show",
+                    "project": "5b0f3c1e-8d2a-4e6f-9a7b-1c2d3e4f5a6b",
+                    "stream_asset": "9e4d2b7a-3c1f-4a8e-b5d6-7f8091a2b3c4"
+                  },
+                  "state": "running",
+                  "node_count": 2,
+                  "capture_devices_whose_access_was_never_asked_for": []
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "params_do_not_match_schema",
+        "action": "list_streams",
+        "refused_params_pointer": "/stream",
+        "suggested_call": {
+          "operation": "describe_operations",
+          "params": {
+            "operations": [
+              "list_streams"
+            ]
+          }
+        },
+        "runtime_words": "list_streams failed: the params do not match its params schema at `/stream`: unknown field `stream`, it takes no params"
+      }
     },
     {
       "name": "graph",
@@ -549,7 +604,111 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "graph_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ],
+          "result": {
+            "name": "graph_result",
+            "value": {
+              "asset": "9e4d2b7a-3c1f-4a8e-b5d6-7f8091a2b3c4",
+              "display_name": "Main",
+              "stream": "night-show-main-3fa2b1",
+              "machine": "ada-workstation",
+              "nodes": [
+                {
+                  "id": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                  "type": "tatolab.testpattern:TestPatternSource",
+                  "kind": "process",
+                  "name": "source",
+                  "ports": {
+                    "inputs": [],
+                    "outputs": [
+                      {
+                        "name": "video",
+                        "pin_type": {
+                          "type": "texture"
+                        },
+                        "flow": "stream"
+                      }
+                    ]
+                  },
+                  "components": {
+                    "state": "Running",
+                    "failed_because": null,
+                    "process_raising_because": null,
+                    "not_ready_because": null
+                  }
+                },
+                {
+                  "id": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                  "type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor",
+                  "kind": "process",
+                  "name": "compositor",
+                  "ports": {
+                    "inputs": [
+                      {
+                        "name": "layer_0",
+                        "pin_type": {
+                          "type": "texture"
+                        },
+                        "flow": "stream"
+                      }
+                    ],
+                    "outputs": [
+                      {
+                        "name": "video",
+                        "pin_type": {
+                          "type": "texture"
+                        },
+                        "flow": "stream"
+                      }
+                    ]
+                  },
+                  "components": {
+                    "state": "Running",
+                    "failed_because": null,
+                    "process_raising_because": null,
+                    "not_ready_because": null
+                  }
+                }
+              ],
+              "links": [
+                {
+                  "id": "0e5b9d3f-2c7a-4f1e-8b6d-4a9c1e3f5b70",
+                  "source": {
+                    "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                    "port": "video"
+                  },
+                  "target": {
+                    "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                    "port": "layer_0"
+                  },
+                  "state": "wired",
+                  "components": {}
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "stream_not_found",
+        "action": "graph",
+        "suggested_call": {
+          "operation": "list_streams",
+          "params": {}
+        },
+        "runtime_words": "graph failed: the runtime holds no stream named `night-show-preview`; it holds `night-show-main-3fa2b1`"
+      }
     },
     {
       "name": "transact",
@@ -610,7 +769,114 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "transact_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "operations": [
+                  {
+                    "operation": "add_node",
+                    "stream": "night-show-main-3fa2b1",
+                    "type": "tatolab.testpattern:TestPatternSource",
+                    "as": "source",
+                    "pins": {
+                      "width": 320,
+                      "height": 180
+                    }
+                  },
+                  {
+                    "operation": "connect",
+                    "stream": "night-show-main-3fa2b1",
+                    "source": {
+                      "node": "source",
+                      "port": "video"
+                    },
+                    "target": {
+                      "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                      "port": "layer_0"
+                    }
+                  }
+                ],
+                "author": {
+                  "kind": "agent",
+                  "name": "Assistant"
+                }
+              }
+            }
+          ],
+          "result": {
+            "name": "transact_result",
+            "value": {
+              "mode": "commit",
+              "transaction": "e2b7d4c1-5a8f-4e3b-9c6d-0f1a2b3c4d5e",
+              "commit": "4f9c2e7a1b3d5f8e0a6c9b2d4e7f1a3c5b8d0e2f",
+              "operations": [
+                {
+                  "operation": "add_node",
+                  "stream": "night-show-main-3fa2b1",
+                  "node": "5e1a7c3d-9f2b-4d8e-a6c4-2b0d8f6e4a19",
+                  "type": "tatolab.testpattern:TestPatternSource",
+                  "name": "source"
+                },
+                {
+                  "operation": "connect",
+                  "stream": "night-show-main-3fa2b1",
+                  "source": {
+                    "node": "5e1a7c3d-9f2b-4d8e-a6c4-2b0d8f6e4a19",
+                    "port": "video"
+                  },
+                  "target": {
+                    "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                    "port": "layer_0"
+                  }
+                }
+              ],
+              "added_nodes": [
+                {
+                  "stream": "night-show-main-3fa2b1",
+                  "node": "5e1a7c3d-9f2b-4d8e-a6c4-2b0d8f6e4a19",
+                  "name": "source",
+                  "as": "source"
+                }
+              ],
+              "connected_links": [
+                {
+                  "stream": "night-show-main-3fa2b1",
+                  "source": {
+                    "node": "5e1a7c3d-9f2b-4d8e-a6c4-2b0d8f6e4a19",
+                    "port": "video"
+                  },
+                  "target": {
+                    "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                    "port": "layer_0"
+                  },
+                  "state": "wired"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "link_pin_types_do_not_connect",
+        "action": "transact",
+        "refused_link": {
+          "source": {
+            "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+            "port": "video"
+          },
+          "target": {
+            "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+            "port": "x"
+          }
+        },
+        "runtime_words": "transact failed: the output `video` of `source` carries Texture, and the input `x` of `clamp` takes Float; no conversion bridges them. To fix: link a Float output into `x`, or find the inputs `video` fits with `check_link_candidates`",
+        "refused_operation_index": 1
+      }
     },
     {
       "name": "add_node",
@@ -671,7 +937,26 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "add_node_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "type": "nodes.clamp:Clamp",
+                "name": "clamp",
+                "pins": {
+                  "low": 0.0,
+                  "high": 1.0
+                },
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "connect",
@@ -732,7 +1017,28 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "connect_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "source": {
+                  "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                  "port": "video"
+                },
+                "target": {
+                  "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                  "port": "layer_0"
+                },
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "check_link",
@@ -793,7 +1099,64 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "check_link_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "source": {
+                  "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                  "port": "video"
+                },
+                "target": {
+                  "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                  "port": "x"
+                },
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ],
+          "result": {
+            "name": "check_link_result",
+            "value": {
+              "outcome": "refused",
+              "refusal": {
+                "refusal_code": "link_pin_types_do_not_connect",
+                "action": "connect",
+                "refused_link": {
+                  "source": {
+                    "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                    "port": "video"
+                  },
+                  "target": {
+                    "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                    "port": "x"
+                  }
+                },
+                "runtime_words": "connect failed: the output `video` of `source` carries Texture, and the input `x` of `clamp` takes Float; no conversion bridges them. To fix: link a Float output into `x`, or find the inputs `video` fits with `check_link_candidates`"
+              }
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "port_not_found",
+        "action": "check_link",
+        "refused_node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+        "suggested_call": {
+          "operation": "describe_node_types",
+          "params": {
+            "project_directory": "/home/ada/Tatolab/night-show",
+            "node_types": [
+              "nodes.clamp:Clamp"
+            ]
+          }
+        },
+        "runtime_words": "check_link failed: `clamp` has no input `value`; its inputs are `x`, `low` and `high`"
+      }
     },
     {
       "name": "check_link_candidates",
@@ -854,7 +1217,94 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "check_link_candidates_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "from": {
+                  "output": {
+                    "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                    "port": "video"
+                  }
+                },
+                "among": {
+                  "ends": [
+                    {
+                      "kind": "placed_port",
+                      "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                      "port": "layer_0"
+                    },
+                    {
+                      "kind": "placed_port",
+                      "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                      "port": "x"
+                    }
+                  ]
+                },
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ],
+          "result": {
+            "name": "check_link_candidates_result",
+            "value": {
+              "candidates": [
+                {
+                  "end": {
+                    "kind": "placed_port",
+                    "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                    "port": "layer_0"
+                  },
+                  "check": {
+                    "outcome": "connects"
+                  }
+                },
+                {
+                  "end": {
+                    "kind": "placed_port",
+                    "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                    "port": "x"
+                  },
+                  "check": {
+                    "outcome": "refused",
+                    "refusal": {
+                      "refusal_code": "link_pin_types_do_not_connect",
+                      "action": "connect",
+                      "refused_link": {
+                        "source": {
+                          "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                          "port": "video"
+                        },
+                        "target": {
+                          "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                          "port": "x"
+                        }
+                      },
+                      "runtime_words": "connect failed: the output `video` of `source` carries Texture, and the input `x` of `clamp` takes Float; no conversion bridges them. To fix: link a Float output into `x`, or find the inputs `video` fits with `check_link_candidates`"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "node_not_found",
+        "action": "check_link_candidates",
+        "refused_node": "8b3e6d1a-0c4f-4a7b-9e2d-5f8a1c4e7b30",
+        "suggested_call": {
+          "operation": "graph",
+          "params": {
+            "stream": "night-show-main-3fa2b1"
+          }
+        },
+        "runtime_words": "check_link_candidates failed: the stream `night-show-main-3fa2b1` holds no node `8b3e6d1a-0c4f-4a7b-9e2d-5f8a1c4e7b30`"
+      }
     },
     {
       "name": "import_graph_generator",
@@ -915,7 +1365,25 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "import_graph_generator_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "generator": "generators.looks:night_look",
+                "name": "night_look",
+                "config": {
+                  "warmth": 0.3
+                },
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "remove_node",
@@ -976,7 +1444,21 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "remove_node_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "disconnect",
@@ -1037,7 +1519,28 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "disconnect_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "source": {
+                  "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                  "port": "video"
+                },
+                "target": {
+                  "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
+                  "port": "layer_0"
+                },
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_node_config",
@@ -1222,7 +1725,23 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_node_input_value_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                "input": "high",
+                "value": 0.8,
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "rename_node",
@@ -1283,7 +1802,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "rename_node_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                "name": "brightness_clamp",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_studio_fields",
@@ -1344,7 +1878,28 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_studio_fields_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "node": "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54",
+                "studio": {
+                  "position": [
+                    420.0,
+                    160.0
+                  ],
+                  "comment": "Keeps the level under 1"
+                },
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_exposed_config_fields",
@@ -1405,7 +1960,25 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_exposed_config_fields_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                "exposed_config_fields": [
+                  "width",
+                  "height"
+                ],
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "add_group",
@@ -1466,7 +2039,26 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "add_group_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "title": "Picture",
+                "colour": "#3b82f6",
+                "nodes": [
+                  "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                  "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264"
+                ],
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_group_fields",
@@ -1527,7 +2119,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_group_fields_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "group": "b5d2e8f1-4a7c-4b9e-8d3f-6a0c2e5b7d91",
+                "title": "Picture in",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "collapse_selection_into_subgraph",
@@ -1588,7 +2195,25 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "collapse_selection_into_subgraph_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "nodes": [
+                  "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                  "c4e81b20-7d5a-4c93-a6f2-8b1e0d9c7a54"
+                ],
+                "name": "picture_in",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "unlock_subgraph",
@@ -1649,7 +2274,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "unlock_subgraph_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "fragment": "a3f6c9e2-5b8d-4e1a-9c7f-2d4b6e8a0c13",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "add_note",
@@ -1710,7 +2349,29 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "add_note_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "text": "The compositor's back layer is the camera.",
+                "position": [
+                  80.0,
+                  40.0
+                ],
+                "size": [
+                  240.0,
+                  96.0
+                ],
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_note_fields",
@@ -1771,7 +2432,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_note_fields_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "note": "d8a4c2e6-1f3b-4d5a-9c7e-0b2f4a6c8e13",
+                "text": "The back layer is the test pattern.",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "remove_note",
@@ -1832,7 +2508,21 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "remove_note_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "note": "d8a4c2e6-1f3b-4d5a-9c7e-0b2f4a6c8e13",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "remove_group",
@@ -1893,7 +2583,21 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "remove_group_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "group": "b5d2e8f1-4a7c-4b9e-8d3f-6a0c2e5b7d91",
+                "stream": "night-show-main-3fa2b1"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "open_project",
@@ -1954,7 +2658,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "open_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "reload_project",
@@ -2015,7 +2732,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "reload_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "close_project",
@@ -2076,7 +2806,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "close_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "remove_project",
@@ -2137,7 +2880,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "remove_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "start_playback",
@@ -2198,7 +2954,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "start_playback_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "stop_playback",
@@ -2259,7 +3028,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "stop_playback_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "pause_playback",
@@ -2320,7 +3102,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "pause_playback_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "resume_playback",
@@ -2381,7 +3176,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "resume_playback_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "describe_stream_action",
@@ -2442,7 +3250,20 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "describe_stream_action_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "action": "3c8e1f5a-9b2d-4e7c-a0f6-1d4b7e9a2c5f"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "cancel_stream_action",
@@ -2503,7 +3324,20 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "cancel_stream_action_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "action": "3c8e1f5a-9b2d-4e7c-a0f6-1d4b7e9a2c5f"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "rename_project",
@@ -2564,7 +3398,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "rename_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "name": "Night show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_project_description",
@@ -2625,7 +3473,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_project_description_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "description": "The test pattern over the camera, for the night show."
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_project_cover",
@@ -2686,7 +3548,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_project_cover_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "cover": "6a9c3e1f-7b5d-4f2a-8e0c-4d6b8a1c3e5f"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "duplicate_project",
@@ -2747,7 +3623,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "duplicate_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "into": "/home/ada/Tatolab/night-show-rehearsal"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "delete_project",
@@ -2808,7 +3698,20 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "delete_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show-rehearsal"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_assets",
@@ -2869,7 +3772,21 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_assets_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "kind": "media"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "read_project_changes",
@@ -2990,7 +3907,21 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "describe_asset_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "asset": "6a9c3e1f-7b5d-4f2a-8e0c-4d6b8a1c3e5f"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "read_asset_preview",
@@ -3051,7 +3982,21 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "read_asset_preview_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "asset": "6a9c3e1f-7b5d-4f2a-8e0c-4d6b8a1c3e5f"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "import_asset",
@@ -3112,7 +4057,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "import_asset_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "source": "/home/ada/Videos/opening.mp4",
+                "asset_path": "media/opening.mp4"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "relocate_asset",
@@ -3173,7 +4133,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "relocate_asset_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "asset": "6a9c3e1f-7b5d-4f2a-8e0c-4d6b8a1c3e5f",
+                "to_path": "archive/opening.mp4"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "delete_asset",
@@ -3234,7 +4209,21 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "delete_asset_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "asset": "6a9c3e1f-7b5d-4f2a-8e0c-4d6b8a1c3e5f"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_asset_settings",
@@ -3295,7 +4284,24 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_asset_settings_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "asset": "6a9c3e1f-7b5d-4f2a-8e0c-4d6b8a1c3e5f",
+                "import_settings": {
+                  "loop": true
+                }
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "replace_asset",
@@ -3356,7 +4362,22 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "replace_asset_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "asset": "6a9c3e1f-7b5d-4f2a-8e0c-4d6b8a1c3e5f",
+                "source": "/home/ada/Videos/opening-v2.mp4"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "create_stream",
@@ -3417,7 +4438,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "create_stream_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "path": "streams/preview.graph.json",
+                "display_name": "Preview"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "delete_stream",
@@ -3478,7 +4514,21 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "delete_stream_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "stream_asset": "9e4d2b7a-3c1f-4a8e-b5d6-7f8091a2b3c4"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_stream_display_name",
@@ -3539,7 +4589,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_stream_display_name_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "stream_asset": "9e4d2b7a-3c1f-4a8e-b5d6-7f8091a2b3c4",
+                "display_name": "Main show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "add_dependency",
@@ -3600,7 +4665,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "add_dependency_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "source": "/home/ada/Tatolab/stage-looks"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "update_dependency",
@@ -3661,7 +4740,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "update_dependency_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "project": "f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_dependencies",
@@ -3722,7 +4815,21 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_dependencies_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "check_for_newer": true
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "remove_dependency",
@@ -3783,7 +4890,21 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "remove_dependency_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "project": "f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "use_dependency_stream",
@@ -3844,7 +4965,23 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "use_dependency_stream_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "stream": "night-show-main-3fa2b1",
+                "project": "f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b",
+                "dependency_stream": "c7a2e5f8-1b4d-4e9a-8c3f-6d0b2e5a8c14",
+                "name": "warm_look"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_project_files",
@@ -3905,7 +5042,21 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_project_files_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "under": "nodes"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "read_project_file",
@@ -3966,7 +5117,45 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "read_project_file_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "path": "nodes/tremolo.py"
+              }
+            }
+          ],
+          "result": {
+            "name": "read_project_file_result",
+            "value": {
+              "path": "nodes/tremolo.py",
+              "byte_len": 138,
+              "content_base64": "ZnJvbSB0YXRvbGFiLnN0cmVhbSBpbXBvcnQgbm9kZQoKCkBub2RlCmRlZiBUcmVtb2xvKGxldmVsOiBmbG9hdCA9IDEuMCkgLT4gZmxvYXQ6CiAgICAiIiJEZXNjcmliZSB3aGF0IHRoZSBub2RlIGRvZXMuIiIiCiAgICByZXR1cm4gbGV2ZWwK",
+              "content_sha256": "9dc1b0111c3183e3aff1942bd345b18525ca48bf4f8b1177ba5b1719223774bd"
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "file_not_found",
+        "action": "read_project_file",
+        "refused_file": {
+          "path": "nodes/tremelo.py"
+        },
+        "suggested_call": {
+          "operation": "list_project_files",
+          "params": {
+            "project_directory": "/home/ada/Tatolab/night-show",
+            "under": "nodes"
+          }
+        },
+        "runtime_words": "read_project_file failed: the project has no file `nodes/tremelo.py`"
+      }
     },
     {
       "name": "create_node_file",
@@ -4027,7 +5216,38 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "create_node_file_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "path": "nodes/tremolo.py"
+              }
+            }
+          ],
+          "result": {
+            "name": "create_node_file_result",
+            "value": {
+              "path": "nodes/tremolo.py",
+              "node_type": "nodes.tremolo:Tremolo",
+              "transaction": "e2b7d4c1-5a8f-4e3b-9c6d-0f1a2b3c4d5e",
+              "commit": "4f9c2e7a1b3d5f8e0a6c9b2d4e7f1a3c5b8d0e2f"
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "refused",
+        "action": "create_node_file",
+        "refused_file": {
+          "path": "nodes/tremolo.py"
+        },
+        "runtime_words": "create_node_file failed: `nodes/tremolo.py` already exists; read it with `read_project_file`, or name another file"
+      }
     },
     {
       "name": "create_node_ui_element",
@@ -4088,7 +5308,41 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "create_node_ui_element_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "element": {
+                  "kind": "control",
+                  "pin_type": "float",
+                  "control": "knob"
+                },
+                "script": "knob.ts"
+              }
+            }
+          ],
+          "result": {
+            "name": "create_node_ui_element_result",
+            "value": {
+              "script_path": "node_ui/knob.ts",
+              "manifest_path": "node_ui/tatolab_node_ui.json",
+              "template_from": "/opt/tatolab/extension-sdk-kit/templates/control.ts",
+              "transaction": "e2b7d4c1-5a8f-4e3b-9c6d-0f1a2b3c4d5e",
+              "commit": "4f9c2e7a1b3d5f8e0a6c9b2d4e7f1a3c5b8d0e2f"
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "extension_sdk_not_found",
+        "action": "create_node_ui_element",
+        "runtime_words": "create_node_ui_element failed: this runtime was given no extension SDK kit to take the template from. To fix: start the runtime with `TATOLAB_EXTENSION_SDK_KIT` set to the kit's folder, or write the script with `write_project_file`"
+      }
     },
     {
       "name": "write_project_file",
@@ -4149,7 +5403,47 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "write_project_file_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "path": "nodes/tremolo.py",
+                "content": "from tatolab.stream import node\n\n\n@node\ndef Tremolo(level: float = 1.0, depth: float = 0.5) -> float:\n    \"\"\"`level` dipped by `depth`.\"\"\"\n    return level * (1.0 - depth)\n",
+                "expected_sha256": "9dc1b0111c3183e3aff1942bd345b18525ca48bf4f8b1177ba5b1719223774bd"
+              }
+            }
+          ],
+          "result": {
+            "name": "write_project_file_result",
+            "value": {
+              "path": "nodes/tremolo.py",
+              "content_sha256": "dee38b6e167bbb9c5c32c30cce07d5845cf553971ce025df3f0c6f4bd7e3ffea",
+              "transaction": "e2b7d4c1-5a8f-4e3b-9c6d-0f1a2b3c4d5e",
+              "commit": "4f9c2e7a1b3d5f8e0a6c9b2d4e7f1a3c5b8d0e2f"
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "file_changed_since_it_was_read",
+        "action": "write_project_file",
+        "refused_file": {
+          "path": "nodes/tremolo.py"
+        },
+        "suggested_call": {
+          "operation": "read_project_file",
+          "params": {
+            "project_directory": "/home/ada/Tatolab/night-show",
+            "path": "nodes/tremolo.py"
+          }
+        },
+        "runtime_words": "write_project_file failed: `nodes/tremolo.py` changed since it was read: its SHA-256 is dee38b6e167bbb9c5c32c30cce07d5845cf553971ce025df3f0c6f4bd7e3ffea, not 9dc1b0111c3183e3aff1942bd345b18525ca48bf4f8b1177ba5b1719223774bd. To fix: read it again and write over what it holds now"
+      }
     },
     {
       "name": "check_project_code",
@@ -4210,7 +5504,68 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "check_project_code_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "paths": [
+                  "nodes/tremolo.py"
+                ]
+              }
+            }
+          ],
+          "result": {
+            "name": "check_project_code_result",
+            "value": {
+              "verdict": "failed",
+              "checks": [
+                {
+                  "check": "python_node_declarations",
+                  "state": "failed"
+                }
+              ],
+              "findings": [
+                {
+                  "check": "python_node_declarations",
+                  "finding_code": "value_input_has_no_default",
+                  "severity": "error",
+                  "words": "the value input `level` of `Tremolo` has no default. To fix: give it one, as `level: float = 1.0`",
+                  "path": "nodes/tremolo.py",
+                  "line": 5,
+                  "node_type": "nodes.tremolo:Tremolo",
+                  "port": "level"
+                }
+              ],
+              "files_checked": [
+                {
+                  "path": "nodes/tremolo.py",
+                  "content_sha256": "dee38b6e167bbb9c5c32c30cce07d5845cf553971ce025df3f0c6f4bd7e3ffea"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "file_not_found",
+        "action": "check_project_code",
+        "refused_file": {
+          "path": "nodes/tremelo.py"
+        },
+        "suggested_call": {
+          "operation": "list_project_files",
+          "params": {
+            "project_directory": "/home/ada/Tatolab/night-show",
+            "under": "nodes"
+          }
+        },
+        "runtime_words": "check_project_code failed: `nodes/tremelo.py` is no file of the project"
+      }
     },
     {
       "name": "list_project_node_types",
@@ -4333,7 +5688,20 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_pin_types_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_node_types",
@@ -4394,7 +5762,73 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "list_node_types_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ],
+          "result": {
+            "name": "list_node_types_result",
+            "value": {
+              "project_directory": "/home/ada/Tatolab/night-show",
+              "project": "5b0f3c1e-8d2a-4e6f-9a7b-1c2d3e4f5a6b",
+              "project_name": "night-show",
+              "sources": [
+                {
+                  "source": "project",
+                  "node_types": [
+                    {
+                      "node_type": "nodes.clamp:Clamp",
+                      "documentation": "`x` held between `low` and `high`.",
+                      "category": "Math",
+                      "category_from": "declaration",
+                      "kind": "function",
+                      "described_from": "source"
+                    }
+                  ],
+                  "graph_generators": [],
+                  "unreadable_modules": [
+                    {
+                      "module": "nodes.sketch",
+                      "path": "nodes/sketch.py",
+                      "line": 7,
+                      "column": 5,
+                      "why": "invalid syntax"
+                    }
+                  ]
+                },
+                {
+                  "source": "built_in",
+                  "node_types": [
+                    {
+                      "node_type": "tatolab.testpattern:TestPatternSource",
+                      "documentation": "A test pattern of colour bars and a moving sweep.",
+                      "category": "Sources",
+                      "category_from": "declaration",
+                      "kind": "process",
+                      "described_from": "built_in"
+                    }
+                  ],
+                  "graph_generators": [],
+                  "unreadable_modules": []
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "refused",
+        "action": "list_node_types",
+        "runtime_words": "list_node_types failed: `/home/ada/Tatolab/night-shw` holds no `tatolab-project.json`, so it is no project"
+      }
     },
     {
       "name": "describe_node_types",
@@ -4455,7 +5889,103 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "describe_node_types_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "node_types": [
+                  "nodes.clamp:Clamp"
+                ]
+              }
+            }
+          ],
+          "result": {
+            "name": "describe_node_types_result",
+            "value": {
+              "node_types": [
+                {
+                  "source": "project",
+                  "node_type": "nodes.clamp:Clamp",
+                  "described_from": "source",
+                  "documentation": "`x` held between `low` and `high`.",
+                  "category": "Math",
+                  "category_from": "declaration",
+                  "kind": "function",
+                  "declared_at": {
+                    "path": "nodes/clamp.py",
+                    "line": 5
+                  },
+                  "inputs": [
+                    {
+                      "name": "x",
+                      "documentation": "The number held.",
+                      "pin_type": {
+                        "kind": "is",
+                        "pin_type": {
+                          "type": "float"
+                        }
+                      },
+                      "flow": "value",
+                      "mode": "wire_or_value",
+                      "default_value": 0.0,
+                      "lifetime": "kept",
+                      "value_json_schema": {
+                        "type": "number"
+                      }
+                    },
+                    {
+                      "name": "low",
+                      "documentation": "The least it is held to.",
+                      "pin_type": {
+                        "kind": "is",
+                        "pin_type": {
+                          "type": "float"
+                        }
+                      },
+                      "flow": "value",
+                      "mode": "wire_or_value",
+                      "default_value": 0.0,
+                      "lifetime": "kept",
+                      "value_json_schema": {
+                        "type": "number"
+                      }
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "name": "out",
+                      "documentation": "",
+                      "pin_type": {
+                        "kind": "is",
+                        "pin_type": {
+                          "type": "float"
+                        }
+                      },
+                      "flow": "value"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "node_type_not_found",
+        "action": "describe_node_types",
+        "suggested_call": {
+          "operation": "list_node_types",
+          "params": {
+            "project_directory": "/home/ada/Tatolab/night-show"
+          }
+        },
+        "runtime_words": "describe_node_types failed: the project offers no node type `nodes.clamp:Clip`"
+      }
     },
     {
       "name": "set_node_type_group",
@@ -4516,7 +6046,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_node_type_group_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "node_type": "nodes.tremolo:Tremolo",
+                "group": "Audio/Modulation"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_project_views",
@@ -4577,7 +6122,20 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_project_views_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_project_node_ui_elements",
@@ -4638,7 +6196,67 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_project_node_ui_elements_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show"
+              }
+            }
+          ],
+          "result": {
+            "name": "list_project_node_ui_elements_result",
+            "value": {
+              "project_directory": "/home/ada/Tatolab/night-show",
+              "project": "5b0f3c1e-8d2a-4e6f-9a7b-1c2d3e4f5a6b",
+              "project_name": "night-show",
+              "elements": [
+                {
+                  "module": {
+                    "project": "5b0f3c1e-8d2a-4e6f-9a7b-1c2d3e4f5a6b",
+                    "project_name": "night-show"
+                  },
+                  "script_path": "node_ui/knob.ts",
+                  "element": {
+                    "kind": "control",
+                    "pin_type": "float",
+                    "control": "knob"
+                  }
+                }
+              ],
+              "manifests": [
+                {
+                  "module": {
+                    "project": "5b0f3c1e-8d2a-4e6f-9a7b-1c2d3e4f5a6b",
+                    "project_name": "night-show"
+                  },
+                  "manifest_path": "node_ui/tatolab_node_ui.json",
+                  "manifest": {
+                    "contract": "1.1",
+                    "controls": [
+                      {
+                        "type": "float",
+                        "control": "knob",
+                        "script": "knob.ts"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "unreadable_manifests": []
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "refused",
+        "action": "list_project_node_ui_elements",
+        "runtime_words": "list_project_node_ui_elements failed: `/home/ada/Tatolab/night-shw` holds no `tatolab-project.json`, so it is no project"
+      }
     },
     {
       "name": "write_studio_view_output",
@@ -4823,7 +6441,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "import_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "source": "/home/ada/Downloads/stage-looks-main.zip",
+                "project_directory": "/home/ada/Tatolab/stage-looks"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "logs",
@@ -4884,7 +6516,23 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "logs_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "stream": "night-show-main-3fa2b1",
+                "action": "3c8e1f5a-9b2d-4e7c-a0f6-1d4b7e9a2c5f",
+                "count": 50
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "open_viewer",
@@ -4945,7 +6593,22 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "open_viewer_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "stream": "night-show-main-3fa2b1",
+                "node_id": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                "port": "video"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "close_viewer",
@@ -5006,7 +6669,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "close_viewer_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "viewer": "viewer-2a7c9e41-video"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "set_stream_clock_scale",
@@ -5067,7 +6743,21 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "set_stream_clock_scale_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "stream": "night-show-main-3fa2b1",
+                "scale": 0.5
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "create_project",
@@ -5128,7 +6818,20 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "create_project_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/rehearsal"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "list_samples",
@@ -5189,7 +6892,18 @@
         "public"
       ],
       "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_samples_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {}
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "refresh_fragments",
@@ -5250,7 +6964,23 @@
         "public"
       ],
       "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "refresh_fragments_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "changed_files": [
+                  "generators/looks.py"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "undo",
@@ -5311,7 +7041,58 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "listed_as_a_tool"
+      "x-agent-tool-listing": "listed_as_a_tool",
+      "examples": [
+        {
+          "name": "undo_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "author": {
+                  "kind": "agent",
+                  "name": "Assistant"
+                }
+              }
+            }
+          ],
+          "result": {
+            "name": "undo_result",
+            "value": {
+              "format_version": 2,
+              "transaction": "7c1e4a9d-3b6f-4d2e-8a5c-9f0b3d6e1a47",
+              "commit": "9d3b6e1f4a7c0e2b5d8f1a4c7e0b3d6f9a2c5e8b",
+              "parent_commit": "4f9c2e7a1b3d5f8e0a6c9b2d4e7f1a3c5b8d0e2f",
+              "author_kind": "agent",
+              "author_name": "Assistant",
+              "operations": [
+                {
+                  "operation": "remove_node",
+                  "stream": "night-show-main-3fa2b1",
+                  "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21"
+                }
+              ],
+              "inverse_operations": [
+                {
+                  "operation": "add_node",
+                  "stream": "night-show-main-3fa2b1",
+                  "node": "2a7c9e41-6b3d-4f58-8e1a-0c9d7b5f3e21",
+                  "type": "tatolab.testpattern:TestPatternSource",
+                  "name": "source"
+                }
+              ],
+              "undoes": "e2b7d4c1-5a8f-4e3b-9c6d-0f1a2b3c4d5e",
+              "applied_at": "2026-11-20T09:41:07Z"
+            }
+          }
+        }
+      ],
+      "x-refusal-example": {
+        "refusal_code": "refused",
+        "action": "undo",
+        "runtime_words": "undo failed: Assistant has nothing to undo in `/home/ada/Tatolab/night-show`"
+      }
     },
     {
       "name": "redo",
@@ -5372,7 +7153,24 @@
         "public"
       ],
       "x-effect": "destroys",
-      "x-agent-tool-listing": "reached_through_call_operation"
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "redo_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {
+                "project_directory": "/home/ada/Tatolab/night-show",
+                "author": {
+                  "kind": "agent",
+                  "name": "Assistant"
+                }
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "x-notifications": [
@@ -5498,7 +7296,7 @@
     {
       "name": "describe_operations",
       "summary": "Describe operations: what each does, the params it takes and what it answers.",
-      "description": "Describe operations by name, or every operation of one group: what each reads, changes and answers, the JSON Schema of its params and of its result, whether it only reads, and the contract version it arrived in. Call it before the first `call_operation` of an operation, and send the params exactly as its `params_schema` states them.",
+      "description": "Describe operations by name, or every operation of one group: what each reads, changes and answers, the JSON Schema of its params and of its result, whether it only reads, the contract version it arrived in, and an `example` of the params a call sends; an operation of the three loops (building a graph, writing a Python node, writing a control) also shows what that call answers and a refusal of it. Call it before the first `call_operation` of an operation, and send the params exactly as its `params_schema` states them.",
       "params": {
         "$ref": "#/components/schemas/DescribeOperationsRequest"
       },
@@ -18717,6 +20515,17 @@
           },
           "result_schema": {
             "description": "The JSON Schema of what it answers."
+          },
+          "example": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentOperationExample"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A worked example of a call; absent on an operation another replaces."
           }
         },
         "required": [
@@ -18766,6 +20575,24 @@
           }
         ],
         "description": "What an operation does to what the runtime holds."
+      },
+      "AgentOperationExample": {
+        "type": "object",
+        "properties": {
+          "params": {
+            "description": "The `params` a call sends."
+          },
+          "answer": {
+            "description": "What that call answers; given for an operation the three agent loops call."
+          },
+          "refusal": {
+            "description": "A refusal of a call of it, in the one refusal shape; given for an operation the three\nagent loops call."
+          }
+        },
+        "required": [
+          "params"
+        ],
+        "description": "A worked example of calling one operation."
       },
       "CallOperationRequest": {
         "type": "object",
