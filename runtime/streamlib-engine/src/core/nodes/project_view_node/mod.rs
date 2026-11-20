@@ -22,11 +22,12 @@ use crate::core::descriptors::{
     NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
     PortFamily, PortFamilyDeclaration, SettingReadTime,
 };
+use crate::core::nodes::{THE_FAMILY_A_GRAPH_INPUT_DECLARES, the_node_type_of_a_graph_input};
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-    GRAPH_INTERFACE_VALUE_PORT_NAME,
+    GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME,
+    the_family_a_chosen_pin_type_travels_on, the_pin_type_an_interface_node_chooses,
 };
 use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode};
 use crate::core::graph::{GraphNode, GraphNodePorts};
@@ -241,61 +242,6 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     }
 }
 
-/// The family the `value` ports of a `GraphInput` declare, which they carry while its config
-/// names none.
-pub(crate) const THE_FAMILY_A_GRAPH_INPUT_DECLARES: PortFamily = PortFamily::Records;
-
-/// The descriptor of the node type every top-level `GraphInput` runs as: a `value` input, a
-/// setting read each run that holds what a client sets, and a `value` output carrying it as a
-/// value, which keeps its last message for a reader that connects later; both of the family its
-/// config names.
-pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescriptor> {
-    let mut value_family = PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
-    value_family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
-    let mut descriptor = NodeDescriptor::new(
-        NodeClassShortName::new("GraphInput".to_string())
-            .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
-        NodeClassImportPath::new(GRAPH_INPUT_NODE_TYPE.to_string())
-            .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
-        "One Input of a stream: every port `value` is linked to reads what a client sets."
-            .to_string(),
-    );
-    descriptor.inputs = vec![
-        PortDescriptor::new(
-            GRAPH_INTERFACE_VALUE_PORT_NAME,
-            "What a client sets on the Input, of the declared family; it takes no wire.",
-            false,
-            value_family.clone(),
-        )
-        .with_pin_declaration(carried_as_a_value(vec![
-            GRAPH_INPUT_VALUE_FORMER_NAME.to_string(),
-        ]))
-        .with_input_mode(NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun,
-        }),
-    ];
-    descriptor.outputs = vec![
-        PortDescriptor::new(
-            GRAPH_INTERFACE_VALUE_PORT_NAME,
-            "What a client sets on the Input, of the declared family.",
-            false,
-            value_family,
-        )
-        .with_pin_declaration(carried_as_a_value(Vec::new())),
-    ];
-    Ok(descriptor)
-}
-
-/// The family declaration of a `GraphInput`'s `value` output in `descriptor`.
-fn the_value_family_declared(descriptor: &NodeDescriptor) -> Result<PortFamilyDeclaration> {
-    match descriptor.outputs.as_slice() {
-        [value] => Ok(value.family.clone()),
-        _ => Err(Error::Configuration(
-            "a `GraphInput` declares one output, `value`".to_string(),
-        )),
-    }
-}
-
 /// The node that is the source of the values a client sets, a stream's top-level `GraphInput` or a
 /// view node: it publishes the value each input of the name of one of its outputs reads on that
 /// output, once as it is handed its values when it starts and again each time one changes. Each
@@ -324,17 +270,42 @@ struct MessageToPublish<'value> {
 }
 
 impl ValueSourceNode {
+    /// The value source a top-level `GraphInput` runs as: both its `value` ports of the pin type
+    /// its `pin_type` setting chooses and the family that type travels on, else of the family
+    /// its `family` setting names.
     pub(crate) fn for_a_top_level_graph_input(node: &GraphNode) -> Result<Self> {
-        let mut descriptor = the_node_type_of_a_top_level_graph_input()?;
-        let family = streamlib_node_schema::output_port_family_resolved_against_config(
-            &the_value_family_declared(&descriptor)?,
-            node.config.as_ref(),
-        )
-        .map_err(|why| {
+        let refused = |why: String| {
             Error::Configuration(format!("`GraphInput` node `{}`: {why}", node.display_name))
-        })?;
-        for port in descriptor.inputs.iter_mut().chain(&mut descriptor.outputs) {
+        };
+        let settings = JsonValue::Object(node.input_values());
+        let mut descriptor = the_node_type_of_a_graph_input()?;
+        let chosen = the_pin_type_an_interface_node_chooses(settings.as_object())
+            .map_err(&refused)?;
+        let family = match &chosen {
+            Some(pin_type) => the_family_a_chosen_pin_type_travels_on(pin_type).map_err(&refused)?,
+            None => {
+                let mut declared = PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
+                declared.family_from_config_key =
+                    Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
+                streamlib_node_schema::output_port_family_resolved_against_config(
+                    &declared,
+                    Some(&settings),
+                )
+                .map_err(&refused)?
+            }
+        };
+        for port in descriptor
+            .inputs
+            .iter_mut()
+            .chain(&mut descriptor.outputs)
+            .filter(|port| port.name == GRAPH_INTERFACE_VALUE_PORT_NAME)
+        {
             port.family = PortFamilyDeclaration::of_family(family);
+            if let (Some(pin_type), Some(declaration)) = (&chosen, port.pin_declaration.as_mut()) {
+                declaration.pin_type = DeclaredPinType::Is {
+                    pin_type: pin_type.clone(),
+                };
+            }
         }
         Ok(Self::for_the_node(node, descriptor))
     }

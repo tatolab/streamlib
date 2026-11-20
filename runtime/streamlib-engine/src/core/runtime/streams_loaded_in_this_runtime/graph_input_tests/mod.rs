@@ -33,8 +33,10 @@ use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream
 use crate::core::runtime::{
     LoadedStreamInThisRuntime, OutputPortViewerHeldOpen, Runner, RuntimeOperations,
 };
+use crate::core::pin_value_packing::{PackedPinValueRef, unpack_pin_value};
 use crate::core::test_support::{
-    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+    MockOutputOnlyNode, MockPinTypedNode, a_temporary_directory_at_owner_only_mode,
+    ensure_test_mocks_registered,
 };
 use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 
@@ -218,6 +220,41 @@ fn set_the_saved_input(
         .unwrap_or_else(|refusal| panic!("`{input}` is saved: {refusal}"));
 }
 
+/// The refusal of a saved set of `input` on `node` to `value`, in words.
+fn the_refusal_of_a_saved_input(
+    stream: &LoadedStreamInThisRuntime,
+    async_runtime: &tokio::runtime::Runtime,
+    node: Uuid,
+    input: &str,
+    value: Value,
+) -> String {
+    match async_runtime.block_on(stream.apply_a_stream_graph_operation_live(
+        StreamGraphOperation::SetNodeInputValue {
+            member: None,
+            node,
+            input: input.to_owned(),
+            from: None,
+            to: Some(value),
+        },
+    )) {
+        Ok(_) => panic!("the set of `{input}` is refused"),
+        Err(refusal) => refusal.to_string(),
+    }
+}
+
+/// The value of `pin_type` the next message `reader` reads carries.
+fn the_typed_value_read(reader: &mut OutputPortViewerReader, pin_type: &Value) -> Value {
+    let message = the_next_message_read(reader);
+    unpack_pin_value(
+        &serde_json::from_value(pin_type.clone()).unwrap(),
+        PackedPinValueRef {
+            payload_descriptor: &message.payload_descriptor,
+            payload: &message.payload,
+        },
+    )
+    .expect("the message reads as a value of the chosen type")
+}
+
 fn the_rendered_node(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Value {
     let rendered = stream.to_json().unwrap();
     rendered["nodes"]
@@ -229,9 +266,15 @@ fn the_rendered_node(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Value {
         .clone()
 }
 
-fn the_saved_pins_of(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Value {
+/// The value the `GraphInput` `node` saves on its `value` input, beside its settings.
+fn the_saved_value_of(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Option<Value> {
     stream.compiler.scope_reading(|graph| {
-        serde_json::to_value(&graph.node_by_uuid(node).expect("the graph holds it").pins).unwrap()
+        graph
+            .node_by_uuid(node)
+            .expect("the graph holds it")
+            .pins
+            .get("value")
+            .cloned()
     })
 }
 
@@ -308,8 +351,8 @@ fn a_value_set_live_on_a_graph_input_reaches_each_reader_and_leaves_the_saved_va
         "{rendered}"
     );
     assert_eq!(
-        the_saved_pins_of(&stream, cue),
-        json!({ "value": { "track": "intro" } })
+        the_saved_value_of(&stream, cue),
+        Some(json!({ "track": "intro" }))
     );
     stream.stop().expect("the stream ends");
 }
@@ -337,8 +380,8 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         )],
     );
     assert_eq!(
-        the_saved_pins_of(&stream, fader),
-        json!({ "value": { "level": 0.5 } })
+        the_saved_value_of(&stream, fader),
+        Some(json!({ "level": 0.5 }))
     );
     play(&stream);
     assert_eq!(
@@ -972,4 +1015,115 @@ fn a_document_linking_into_the_value_of_a_graph_input_is_refused_at_load() {
         "{refusal}"
     );
     assert_eq!(stream.node_count(), 0, "the refused load added no node");
+}
+
+/// A `GraphInput` choosing Float publishes its value as a Float, renders the type on its
+/// `value` output and on the stream's interface, and renders its `pin_type` setting reading the
+/// saved choice; one linked into a Float input refuses a change to String.
+///
+/// Mental-revert: without the chosen type typing the port, the value travels as a record and
+/// does not unpack as a Float; without judging the wired links, the change to String is taken.
+#[test]
+#[serial]
+fn a_graph_input_choosing_a_pin_type_publishes_and_renders_it_and_refuses_one_its_link_does_not_take()
+ {
+    let project_directory = a_project_on_disk();
+    let async_runtime = an_async_runtime();
+    let level = Uuid::new_v4();
+    let gain = Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    let float = json!({ "type": "float" });
+    let document = json!({
+        "nodes": [
+            a_graph_input_in_a_document(
+                level, "level", json!({ "port": "level", "pin_type": float, "value": 0.5 }),
+            ),
+            a_graph_input_in_a_document(gain, "gain", json!({ "port": "gain", "pin_type": float })),
+            { "name": "meter", "type": MockPinTypedNode::node_class_import_path().as_str() },
+        ],
+        "links": [{
+            "source": { "node": "gain", "port": VALUE },
+            "target": { "node": "meter", "port": "gain" },
+        }],
+    });
+    stream
+        .load_graph_snapshot_into_this_stream(
+            &GraphSnapshot::from_graph_document(document).unwrap(),
+            None,
+        )
+        .expect("the graph loads");
+    play(&stream);
+    let (_viewer, mut reader) = a_reader_of_the_value_of(&stream, &async_runtime, level);
+
+    assert_eq!(the_typed_value_read(&mut reader, &float), json!(0.5));
+    let rendered = the_rendered_node(&stream, level);
+    assert_eq!(
+        rendered["components"]["graph_interface"]["pin_type"],
+        float,
+        "{rendered}"
+    );
+    let value_output = rendered["ports"]["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|output| output["name"] == VALUE)
+        .unwrap_or_else(|| panic!("`value` renders: {rendered}"));
+    assert_eq!(value_output["pin_type"], float, "{rendered}");
+    let pin_type_input = rendered["ports"]["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|input| input["name"] == "pin_type")
+        .unwrap_or_else(|| panic!("`pin_type` renders: {rendered}"));
+    assert_eq!(pin_type_input["value"], float, "{rendered}");
+    assert_eq!(pin_type_input["value_comes_from"], "saved", "{rendered}");
+
+    let refusal = the_refusal_of_a_saved_input(
+        &stream,
+        &async_runtime,
+        gain,
+        "pin_type",
+        json!({ "type": "string" }),
+    );
+    assert!(refusal.contains("`meter.gain` (Float)"), "{refusal}");
+    assert_eq!(
+        the_rendered_node(&stream, gain)["components"]["graph_interface"]["pin_type"],
+        float
+    );
+    stream.stop().expect("the stream ends");
+}
+
+/// A change of the type a running `GraphInput` chooses leaves it to rebuild, and once rebuilt
+/// its reader reads values of the new type.
+///
+/// Mental-revert: without leaving the node to rebuild when the reconcile changes a setting read
+/// at setup, nothing is rebuilt and the node still publishes a Float.
+#[test]
+#[serial]
+fn a_change_of_the_type_a_running_graph_input_chooses_rebuilds_it() {
+    let project_directory = a_project_on_disk();
+    let async_runtime = an_async_runtime();
+    let level = Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    load_the_graph_inputs(
+        &stream,
+        vec![a_graph_input_in_a_document(
+            level,
+            "level",
+            json!({ "port": "level", "pin_type": { "type": "float" }, "value": 0.5 }),
+        )],
+    );
+    play(&stream);
+
+    set_the_saved_input(&stream, &async_runtime, level, "value", json!(3));
+    let integer = json!({ "type": "integer" });
+    set_the_saved_input(&stream, &async_runtime, level, "pin_type", integer.clone());
+    let rebuilt = async_runtime
+        .block_on(RuntimeOperations::rebuild_each_node_a_setting_read_at_setup_changed(&*stream))
+        .expect("the GraphInput rebuilds with the new type");
+
+    assert_eq!(rebuilt, vec![level]);
+    let (_viewer, mut reader) = a_reader_of_the_value_of(&stream, &async_runtime, level);
+    assert_eq!(the_typed_value_read(&mut reader, &integer), json!(3));
+    stream.stop().expect("the stream ends");
 }

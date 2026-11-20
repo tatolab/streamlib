@@ -24,7 +24,7 @@ use crate::core::graph::legacy_config_of_a_node::{
     input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    ALinkConnected, Graph, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe,
+    ALinkConnected, Graph, GraphNode, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe,
 };
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
@@ -689,10 +689,14 @@ fn set_the_pins_and_studio_fields(
     serde_json::Map<String, serde_json::Value>,
 )> {
     let node = graph.traversal_mut().v(node_run_id).first_mut()?;
-    Some((
+    let former = (
         std::mem::replace(&mut node.pins, pins),
         std::mem::replace(&mut node.studio, studio),
-    ))
+    );
+    node.resolve_the_ports_its_settings_declare();
+    let node = graph.traversal().v(node_run_id).first()?;
+    hold_each_live_value_of_the_node_under_the_lifetime_it_declares(graph, node);
+    Some(former)
 }
 
 /// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, as
@@ -760,8 +764,19 @@ impl SavedSetToPutBack {
             self.lifetime,
         );
         let node = graph.traversal().v(&self.node_run_id).first()?;
+        hold_each_live_value_of_the_node_under_the_lifetime_it_declares(graph, node);
         Some(UnlinkedInputValuesDelivery::of_the_node(graph, node))
     }
+}
+
+/// Hold each value set live on an input of `node` in `graph` under the lifetime the input
+/// declares now, which a setting just set may have changed, as a `GraphInput`'s `lifetime` does.
+fn hold_each_live_value_of_the_node_under_the_lifetime_it_declares(graph: &Graph, node: &GraphNode) {
+    graph
+        .live_input_values()
+        .hold_each_value_of_the_node_whose_lifetime_changed(node.node_uuid, |input| {
+            the_lifetime_of_the_input(node, input)
+        });
 }
 
 /// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, or on its
@@ -821,6 +836,9 @@ fn set_the_saved_value(
     let live_value_before = graph
         .live_input_values()
         .set_on_the_input_or_its_member(node_uuid, input, member, None, lifetime);
+    if let Some(node) = graph.traversal().v(node_run_id).first() {
+        hold_each_live_value_of_the_node_under_the_lifetime_it_declares(graph, node);
+    }
     Ok(SavedSetToPutBack {
         node_run_id: node_run_id.clone(),
         node_uuid,
@@ -837,8 +855,5 @@ fn set_the_pin(
     input: &str,
     value: Option<serde_json::Value>,
 ) -> Option<serde_json::Value> {
-    match value {
-        Some(value) => node.pins.insert(input.to_string(), value),
-        None => node.pins.remove(input),
-    }
+    node.set_pin(input, value)
 }

@@ -542,7 +542,8 @@ fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
     assert_eq!(names, ["camera", "video", "overlay", "display"]);
     assert_eq!(
         serde_json::to_value(&graph_response.nodes[1].components.graph_interface).unwrap(),
-        serde_json::json!({"direction": "output", "port": "video", "family": "image"})
+        serde_json::json!({"direction": "output", "port": "video", "family": "image",
+                           "pin_type": {"type": "texture"}})
     );
     assert_eq!(graph_response.links.len(), 2);
     assert_eq!(graph_response.links[0].target.node, "video");
@@ -567,7 +568,7 @@ fn a_node_whose_name_casts_like_an_interface_nodes_is_refused_as_a_name_taken() 
 /// `array` family and the range it named.
 #[test]
 fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none() {
-    let descriptor = crate::core::nodes::the_node_type_of_a_top_level_graph_input()
+    let descriptor = crate::core::nodes::the_node_type_of_a_graph_input()
         .expect("the GraphInput type builds");
     let mut node = crate::core::graph::GraphNode::new(
         descriptor.node_class_import_path.clone(),
@@ -624,4 +625,214 @@ fn a_graph_input_renders_its_saved_value_else_its_legacy_default_as_its_default(
         ),
         serde_json::json!({ "port": "cue", "default": { "track": "drop" } })
     );
+}
+
+/// A top-level `GraphInput` whose `pin_type` chooses a Float runs as a source node, carries the
+/// Channels family a Float travels on, and states the Float on its port and on the stream's
+/// interface; one choosing a Texture runs nothing.
+///
+/// Mental-revert: reading the port's type from `family` alone leaves a Graph Input choosing a
+/// Float waiting for a link, running nothing and stating no type.
+#[test]
+fn a_graph_input_choosing_a_pin_type_carries_it_on_its_port_and_on_the_interface() {
+    let resolution = resolved_on_the_streams_top_level(a_records_input_read_by_two_nodes(
+        serde_json::json!({"port": "cue", "pin_type": {"type": "float"}, "value": 0.5,
+                           "range": [0, 1]}),
+    ))
+    .expect("a Graph Input choosing a Float resolves");
+    let declared: Vec<&GraphInterfacePort> =
+        resolution.interface_as_drawn.declared_ports().collect();
+    assert!(declared[0].runs_as_a_source_node);
+    assert_eq!(declared[0].family, Some(PortFamily::Channels));
+    assert_eq!(
+        declared[0].pin_type,
+        Some(PinType::Float { exact_size: None })
+    );
+    assert_eq!(
+        serde_json::to_value(declared[0].as_component()).unwrap(),
+        serde_json::json!({"direction": "input", "port": "cue", "family": "channels",
+                           "pin_type": {"type": "float"}})
+    );
+    let value_output = declared[0].rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
+    assert_eq!(
+        value_output.pin.map(|pin| pin.pin_type),
+        Some(PinType::Float { exact_size: None })
+    );
+
+    let texture = resolved_on_the_streams_top_level(a_records_input_read_by_two_nodes(
+        serde_json::json!({"port": "cue", "pin_type": {"type": "texture"}}),
+    ))
+    .expect("a Graph Input choosing a Texture resolves");
+    assert!(texture.graph_the_runtime_runs.nodes.iter().all(|node| node.name != "cue"));
+}
+
+/// A Graph Input choosing a type refuses a saved value its type does not hold, and a choice that
+/// is no pin type.
+///
+/// Mental-revert: checking the saved value by the family alone takes a string on a Float Input,
+/// since the Channels family it travels on is not consulted for a typed port.
+#[test]
+fn a_graph_input_choosing_a_pin_type_refuses_a_value_or_a_choice_it_does_not_take() {
+    let refusal_on_the_top_level = |input_config: serde_json::Value| {
+        resolved_on_the_streams_top_level(a_records_input_read_by_two_nodes(input_config))
+            .expect_err("the input is refused")
+            .to_string()
+    };
+    let string_on_a_float = refusal_on_the_top_level(
+        serde_json::json!({"port": "cue", "pin_type": {"type": "float"}, "value": "loud"}),
+    );
+    assert!(
+        string_on_a_float.contains("`cue`") && string_on_a_float.contains("Float"),
+        "{string_on_a_float}"
+    );
+    let no_pin_type =
+        refusal_on_the_top_level(serde_json::json!({"port": "cue", "pin_type": "float"}));
+    assert!(no_pin_type.contains("`pin_type`"), "{no_pin_type}");
+    let a_setting_type = refusal_on_the_top_level(serde_json::json!({
+        "port": "cue", "pin_type": {"type": "pin_type_choice"}
+    }));
+    assert!(a_setting_type.contains("only a setting"), "{a_setting_type}");
+}
+
+/// A Graph Output and a Graph Input render their settings as inputs, each reading the value it
+/// holds, else its default, beside their `value` port.
+///
+/// Mental-revert: rendering an interface node with only its `value` port leaves Tato Studio no
+/// `pin_type` row to draw the type choice control on.
+#[test]
+fn an_interface_node_renders_its_settings_as_inputs_reading_their_values() {
+    let resolution = resolved(serde_json::json!({
+        "nodes": [
+            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"name": "video", "type": GRAPH_OUTPUT_NODE_TYPE,
+             "config": {"port": "video", "pin_type": {"type": "texture"}}},
+        ],
+        "links": [
+            {"source": {"node": "camera", "port": "video"},
+             "target": {"node": "video", "port": "value"}},
+        ],
+    }))
+    .expect("the interface resolves");
+    let output = resolution.interface_as_drawn.interface_nodes[0].rendered_as_a_node();
+    let input_names: Vec<&str> = output
+        .ports
+        .inputs
+        .iter()
+        .map(|port| port.name.as_str())
+        .collect();
+    assert_eq!(input_names, ["port", "pin_type", "family", "value"]);
+    let pin_type = &output.ports.inputs[1];
+    assert_eq!(
+        pin_type.pin.as_ref().map(|pin| pin.pin_type.clone()),
+        Some(PinType::PinTypeChoice { among: Vec::new() })
+    );
+    let read = pin_type.value_read.as_ref().expect("a setting reads its value");
+    assert_eq!(read.value, Some(serde_json::json!({"type": "texture"})));
+    assert_eq!(
+        read.value_comes_from,
+        Some(InputValueComesFromOnTheWire::Saved)
+    );
+    let family = output.ports.inputs[2]
+        .value_read
+        .as_ref()
+        .expect("a setting reads its value");
+    assert_eq!(family.value, Some(serde_json::Value::Null));
+    assert_eq!(
+        output.ports.inputs[3].pin.as_ref().map(|pin| pin.pin_type.clone()),
+        Some(PinType::Texture {
+            pixel_formats: Vec::new()
+        })
+    );
+}
+
+/// A Graph Output choosing a type refuses a source whose type the link rules do not connect to
+/// it, naming both, and takes one they do.
+///
+/// Mental-revert: leaving the chosen type out of the link judgement answers no refusal for the
+/// Texture source.
+#[test]
+fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to() {
+    let resolved = resolved(serde_json::json!({
+        "nodes": [
+            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"name": "level", "type": GRAPH_OUTPUT_NODE_TYPE,
+             "config": {"port": "level", "pin_type": {"type": "float"}}},
+        ],
+        "links": [
+            {"source": {"node": "camera", "port": "video"},
+             "target": {"node": "level", "port": "value"}},
+        ],
+    }))
+    .expect("the interface resolves");
+    let declared: Vec<&GraphInterfacePort> =
+        resolved.interface_as_drawn.declared_ports().collect();
+    let camera_video = crate::core::graph::PortInfo::from(
+        &crate::core::descriptors::PortDescriptor::new(
+            "video",
+            "",
+            false,
+            PortFamilyDeclaration::of_family(PortFamily::Image),
+        )
+        .with_pin_declaration(crate::core::descriptors::PinDeclaration::exactly(
+            PinType::Texture {
+                pixel_formats: Vec::new(),
+            },
+        )),
+    );
+    let refusal = declared[0]
+        .refusal_of_a_linked_port_by_the_chosen_type(
+            &[],
+            std::slice::from_ref(&camera_video),
+            &declared[0].linked_ports[0],
+        )
+        .expect("a Texture does not connect to a Float");
+    assert!(refusal.contains("camera"), "{refusal}");
+
+    let float_source = crate::core::graph::PortInfo::from(
+        &crate::core::descriptors::PortDescriptor::new(
+            "video",
+            "",
+            false,
+            PortFamilyDeclaration::of_family(PortFamily::Channels),
+        )
+        .with_pin_declaration(crate::core::descriptors::PinDeclaration::exactly(
+            PinType::Boolean {},
+        )),
+    );
+    assert_eq!(
+        declared[0].refusal_of_a_linked_port_by_the_chosen_type(
+            &[],
+            std::slice::from_ref(&float_source),
+            &declared[0].linked_ports[0],
+        ),
+        None
+    );
+}
+
+/// A Graph Input saved before `pin_type` existed, naming a family alone, declares the port it
+/// declared: of its family, and of a Texture where that family is Image.
+///
+/// Mental-revert: deriving the interface's `pin_type` from the chosen type alone states none for
+/// a saved Image Input, which a family declaration states as a Texture.
+#[test]
+fn a_graph_input_saved_with_a_family_alone_declares_the_port_it_declared() {
+    let resolution = resolved(a_camera_offered_as_an_output_and_a_display_fed_by_an_input())
+        .expect("the interface resolves");
+    let declared: Vec<&GraphInterfacePort> =
+        resolution.interface_as_drawn.declared_ports().collect();
+    assert_eq!(declared[1].pin_type, None);
+    assert_eq!(
+        declared[1].the_pin_type_it_carries(),
+        Some(PinType::Texture {
+            pixel_formats: Vec::new()
+        })
+    );
+    let channels = resolved_on_the_streams_top_level(a_records_input_read_by_two_nodes(
+        serde_json::json!({"port": "cue", "family": "channels", "lifetime": "reset"}),
+    ))
+    .expect("a saved Channels Input resolves");
+    let declared: Vec<&GraphInterfacePort> =
+        channels.interface_as_drawn.declared_ports().collect();
+    assert!(declared[0].runs_as_a_source_node);
+    assert_eq!(declared[0].the_pin_type_it_carries(), None);
 }

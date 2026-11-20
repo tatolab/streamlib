@@ -168,6 +168,7 @@ fn a_graph_interface_port_of_the_image_family_is_a_texture_and_of_another_family
             interface_node: "camera".to_string(),
             port: "frames".to_string(),
             family,
+            pin_type: None,
             direction: GraphInterfacePortDirection::Input,
             linked_ports: Vec::new(),
             runs_as_a_source_node: false,

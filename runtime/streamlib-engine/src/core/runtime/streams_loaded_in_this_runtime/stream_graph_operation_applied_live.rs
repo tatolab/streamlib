@@ -12,6 +12,7 @@ use streamlib_project_repository::{
 use uuid::Uuid;
 
 use crate::core::descriptors::{NodeClassImportPath, PortDescriptor};
+use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_PIN_TYPE_SETTING;
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_of_a_document_node,
 };
@@ -870,14 +871,15 @@ fn how_a_node_types_port_is_judged(
     )))
 }
 
-/// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config
-/// names no family, so the family it carries is resolved with the graph's links.
+/// Whether a node of `node_type` holding `input_values` is a `GraphInput` or `GraphOutput` that
+/// chooses no pin type and names no family, so the family it carries is resolved with the
+/// graph's links.
 fn is_a_graph_interface_node_naming_no_family(
     node_type: &str,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> bool {
     is_a_graph_interface_node_type(node_type)
-        && input_values
-            .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
-            .is_none_or(serde_json::Value::is_null)
+        && [GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PIN_TYPE_SETTING]
+            .iter()
+            .all(|setting| input_values.get(*setting).is_none_or(serde_json::Value::is_null))
 }
