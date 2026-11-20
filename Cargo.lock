@@ -5774,6 +5774,7 @@ dependencies = [
  "pyo3",
  "rmp-serde",
  "rmpv",
+ "serde",
  "serde_json",
  "streamlib",
  "streamlib-adapter-cuda",

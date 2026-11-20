@@ -43,7 +43,7 @@ pub struct GraphLinkOnTheWire {
 }
 
 /// One end of a link of a stream's graph: a node by its name, one of its ports, and the member
-/// of a bundle port the link starts at, if any.
+/// of a bundle port the link starts or ends at, if any.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphLinkPortRefOnTheWire {
@@ -51,8 +51,8 @@ pub struct GraphLinkPortRefOnTheWire {
     pub node: String,
     /// The port's own name on that node.
     pub port: String,
-    /// The member of a bundle port the link starts at, which it carries alone; absent for the
-    /// whole port. Only a link's `source` names one.
+    /// The member of a bundle port the link starts or ends at, which it carries alone; absent
+    /// for the whole port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
 }

@@ -8,8 +8,8 @@ use crate::core::graph::{
 use super::super::traversal_source::node_index_of;
 
 impl<'a> TraversalSourceMut<'a> {
-    /// Add a new edge (link) between two ports, each end under its port's current name, the
-    /// output end keeping the member of a bundle it starts at.
+    /// Add a new edge (link) between two ports, each end under its port's current name and
+    /// keeping the member of a bundle it starts or ends at.
     ///
     /// Type-safe: `from` must be an output port, `to` must be an input port.
     pub fn add_e(self, from: OutputLinkPortRef, to: InputLinkPortRef) -> LinkTraversalMut<'a> {
@@ -26,7 +26,10 @@ impl<'a> TraversalSourceMut<'a> {
         else {
             return self.no_link();
         };
-        let Some(to) = self.graph[to_idx].try_input(to.port_name()) else {
+        let Some(to) = self.graph[to_idx]
+            .try_input(to.port_name())
+            .map(|current| current.at_member(to.member().map(str::to_owned)))
+        else {
             return self.no_link();
         };
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 pub use streamlib_error::{
-    AMemberTheOutputDoesNotHold, ChannelTrustTierLabel, DeviceMemoryHeapBudgetSource,
+    AMemberTheLinkEndDoesNotHold, ChannelTrustTierLabel, DeviceMemoryHeapBudgetSource,
     DeviceMemoryHeapLocality, Error, OutputPortNotExposedToTheReader, PortDirection,
     PrivacyGatedCaptureDevice, Result, WhyANodeOfAStreamIsNotRunning,
 };

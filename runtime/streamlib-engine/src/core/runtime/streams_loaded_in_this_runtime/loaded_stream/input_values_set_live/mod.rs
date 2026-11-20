@@ -306,7 +306,12 @@ fn set_the_input_values_live(
                 the_lifetime_of_the_input(set_on, &set.input),
             ),
             saved_value: set_on.pins.get(&set.input).cloned(),
-            linked_from: the_output_feeding_the_input(graph, set_on, &set.input),
+            linked_from: the_output_feeding_the_input(
+                graph,
+                set_on,
+                &set.input,
+                set.member.as_deref(),
+            ),
         });
     let made: Vec<InputValueSetLive> = sets
         .iter()
@@ -516,13 +521,18 @@ fn put_back_the_live_set(
         .collect()
 }
 
-/// The output that a link of `graph` feeds input `input` of `node` from, as `(node UUID, port)`.
+/// The output that a link of `graph` feeds input `input` of `node` from, as `(node UUID, port)`:
+/// the link feeding the whole input, else, for a set of `member`, the one ending at that member.
 pub(crate) fn the_output_feeding_the_input(
     graph: &Graph,
     node: &GraphNode,
     input: &str,
+    member: Option<&str>,
 ) -> Option<(Uuid, String)> {
-    let source = graph.link_into(&node.id, input)?.source();
+    let source = graph
+        .link_into(&node.id, input)
+        .or_else(|| graph.link_into_the_input_or_its_member(&node.id, input, Some(member?)))?
+        .source();
     graph
         .traversal()
         .v(source.node_run_id())
@@ -530,6 +540,8 @@ pub(crate) fn the_output_feeding_the_input(
         .map(|feeding| (feeding.node_uuid, source.port_name().to_owned()))
 }
 
+#[cfg(test)]
+mod bundle_member_links_tests;
 #[cfg(test)]
 mod bundle_member_sets_tests;
 #[cfg(test)]

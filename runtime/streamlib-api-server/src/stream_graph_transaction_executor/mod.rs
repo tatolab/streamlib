@@ -84,12 +84,10 @@ use former_port_names::{
 };
 use input_value_sets::*;
 pub(crate) use request_to_graph_operation::WhatAConnectAsks;
+pub(crate) use request_to_graph_operation::the_node_a_connects_end_names;
 use request_to_graph_operation::{
     graph_operation_for_the_request, refuse_a_link_the_graph_already_holds,
     the_operation_a_connect_asks,
-};
-pub(crate) use request_to_graph_operation::{
-    refuse_a_member_named_on_an_input_end, the_node_a_connects_end_names,
 };
 use streams_each_operation_names::the_stream_each_operation_names;
 use transaction_answers::{WhatAnAnswerNamesBesideItsOperations, the_links_an_operation_makes};

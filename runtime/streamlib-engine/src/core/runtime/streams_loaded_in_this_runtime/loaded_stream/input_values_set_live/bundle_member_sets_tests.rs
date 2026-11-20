@@ -25,7 +25,7 @@ use crate::core::descriptors::{
 use crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery;
 use crate::iceoryx2::Iceoryx2Node;
 
-const BUNDLE_READER: &str = "test_ops:bundle_reader";
+pub(super) const BUNDLE_READER: &str = "test_ops:bundle_reader";
 
 fn a_member(name: &str, member_type: PinType, default_value: Option<Value>) -> BundleMember {
     BundleMember {
@@ -55,7 +55,7 @@ fn a_typed_input(name: &str, pin_type: PinType) -> PortDescriptor {
 
 /// A graph resolving a function node type reading `reading`, a bundle of a Float `level` and a
 /// String `label`, neither with a default, and a Float `gain` defaulting to 1; and `x`, a Float.
-fn a_graph_resolving_a_bundle_reader() -> Graph {
+pub(super) fn a_graph_resolving_a_bundle_reader() -> Graph {
     let bundle_reader = a_function_node_type(BUNDLE_READER, &[], &["result"])
         .with_input(a_typed_input(
             "reading",
@@ -72,7 +72,7 @@ fn a_graph_resolving_a_bundle_reader() -> Graph {
 }
 
 /// A bundle reader holding the saved reading `{level: 0.2, label: "kitchen"}`.
-fn a_bundle_reader_with_a_saved_reading() -> (RwLock<Graph>, NodeRunId, Uuid) {
+pub(super) fn a_bundle_reader_with_a_saved_reading() -> (RwLock<Graph>, NodeRunId, Uuid) {
     let mut graph = a_graph_resolving_a_bundle_reader();
     let reader = add_a_node(&mut graph, BUNDLE_READER, Value::Null);
     let reader_uuid = graph.traversal().v(&reader).first().unwrap().node_uuid;
@@ -88,7 +88,7 @@ fn a_bundle_reader_with_a_saved_reading() -> (RwLock<Graph>, NodeRunId, Uuid) {
     (graph, reader, reader_uuid)
 }
 
-fn a_member_set(
+pub(super) fn a_member_set(
     node: Uuid,
     input: &str,
     member: Option<&str>,
@@ -102,7 +102,7 @@ fn a_member_set(
     }
 }
 
-fn the_values_set_live(
+pub(super) fn the_values_set_live(
     graph: &RwLock<Graph>,
     sets: &[InputValueToSetLive],
 ) -> std::result::Result<Option<InputValuesHeldLive>, LiveInputValueSetRefusal> {
@@ -116,7 +116,7 @@ fn the_values_set_live(
 }
 
 /// The `member_values` `graph` renders for input `reading` of the bundle reader.
-fn the_member_rows(graph: &Graph) -> Vec<BundleMemberValueReadOnTheWire> {
+pub(super) fn the_member_rows(graph: &Graph) -> Vec<BundleMemberValueReadOnTheWire> {
     let rendered =
         serde_json::to_value(graph.to_graph_response("this-machine".to_owned())).unwrap();
     let reading = rendered["nodes"]
@@ -151,7 +151,10 @@ fn a_row(
 }
 
 /// The change announced for `row`, the row of one member of input `reading` of `node`.
-fn the_change_of_the_row(node: Uuid, row: &BundleMemberValueReadOnTheWire) -> RuntimeEvent {
+pub(super) fn the_change_of_the_row(
+    node: Uuid,
+    row: &BundleMemberValueReadOnTheWire,
+) -> RuntimeEvent {
     RuntimeEvent::InputValueDidChange {
         node,
         input: "reading".to_owned(),

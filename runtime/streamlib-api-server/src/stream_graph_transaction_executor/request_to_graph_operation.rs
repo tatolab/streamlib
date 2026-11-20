@@ -31,29 +31,12 @@ pub(crate) fn the_node_a_connects_end_names(node: &str) -> Result<Uuid, GraphReq
     the_node_named(node, &HashMap::new())
 }
 
-/// Refuse `target`, the input end of a link, when it names a member: a link ends at a whole
-/// input port.
-pub(crate) fn refuse_a_member_named_on_an_input_end(
-    target: &StreamGraphActionLinkEnd,
-) -> Result<(), GraphRequestRefusal> {
-    match &target.member {
-        None => Ok(()),
-        Some(member) => Err(streamlib::sdk::error::Error::InvalidLink(format!(
-            "a link ends at a whole input port, and the end at input '{}' names member `{member}`",
-            target.port
-        ))
-        .into()),
-    }
-}
-
-/// The link from `source` to `target`, each node as [`the_node_named`] reads it; refused when
-/// `target` names a member.
+/// The link from `source` to `target`, each node as [`the_node_named`] reads it.
 pub(super) fn the_link_named(
     source: &StreamGraphActionLinkEnd,
     target: &StreamGraphActionLinkEnd,
     node_by_label: &HashMap<String, Uuid>,
 ) -> Result<StreamGraphDocumentLink, GraphRequestRefusal> {
-    refuse_a_member_named_on_an_input_end(target)?;
     Ok(StreamGraphDocumentLink {
         source: StreamGraphDocumentLinkEnd {
             node: the_node_named(&source.node, node_by_label)?,
@@ -63,7 +46,7 @@ pub(super) fn the_link_named(
         target: StreamGraphDocumentLinkEnd {
             node: the_node_named(&target.node, node_by_label)?,
             port: target.port.clone(),
-            member: None,
+            member: target.member.clone(),
         },
     })
 }

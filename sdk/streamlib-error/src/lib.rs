@@ -180,10 +180,10 @@ pub enum Error {
         output_ports_the_node_has: String,
     },
 
-    /// A link starts at a member of an output port that holds no member of that name, or
-    /// carries no bundle.
+    /// A link starts at a member of an output port, or ends at one of an input port, that holds
+    /// no member of that name, or carries no bundle.
     #[error("{0}")]
-    OutputPortHasNoMemberNamed(Box<AMemberTheOutputDoesNotHold>),
+    PortHasNoMemberNamed(Box<AMemberTheLinkEndDoesNotHold>),
 
     /// A node of a stream that a caller reached for does not run.
     #[error("{runtime_words}")]
@@ -429,20 +429,26 @@ pub enum Error {
     Other(#[from] anyhow::Error),
 }
 
-/// The member a link starts at, which its output port does not hold.
+/// The member a link starts or ends at, which its port does not hold.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 #[error(
-    "a link starts at member `{member}` of output `{node}.{port}`, which carries {pin_type}{}. \
-     To fix: start the link at one of its members, or at the whole port",
+    "a link {} at member `{member}` of {} `{node}.{port}`, which carries {pin_type}{}. To fix: \
+     {} the link at one of its members, or at the whole port",
+    the_words_of_a_link_end_at(*.direction).0,
+    the_words_of_a_link_end_at(*.direction).1,
     match .members_it_has.as_slice() {
         [] => ", no bundle, so it has no member".to_owned(),
         members => format!("; its members are {}", names_in_backticks_or_none(members)),
-    }
+    },
+    the_words_of_a_link_end_at(*.direction).2,
 )]
-pub struct AMemberTheOutputDoesNotHold {
+pub struct AMemberTheLinkEndDoesNotHold {
+    /// The direction of the port the link end names a member of: an output where the link
+    /// starts, an input where it ends.
+    pub direction: PortDirection,
     /// The node's name.
     pub node: String,
-    /// The output port.
+    /// The port.
     pub port: String,
     /// The member the link names.
     pub member: String,
@@ -450,6 +456,17 @@ pub struct AMemberTheOutputDoesNotHold {
     pub pin_type: String,
     /// The port's bundle members, in declared order; empty when it carries no bundle.
     pub members_it_has: Vec<String>,
+}
+
+/// The words of a link end at a port of `direction`: the verb it takes, the port's word and the
+/// verb of its fix.
+fn the_words_of_a_link_end_at(
+    direction: PortDirection,
+) -> (&'static str, &'static str, &'static str) {
+    match direction {
+        PortDirection::Output => ("starts", "output", "start"),
+        PortDirection::Input => ("ends", "input", "end"),
+    }
 }
 
 /// StreamLib result alias.

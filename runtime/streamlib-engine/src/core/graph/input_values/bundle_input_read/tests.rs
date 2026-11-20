@@ -30,7 +30,7 @@ fn each_member_resolves_alone_live_over_saved_over_its_default() {
         input_default: None,
     };
 
-    let read = held.each_member_read(&members, false);
+    let read = held.each_member_read(&members, &WhatTheLinksIntoAnInputFeed::default());
 
     let rows: Vec<(String, Option<Value>, Option<InputValueComesFromOnTheWire>)> = read
         .into_iter()
@@ -72,12 +72,39 @@ fn a_linked_bundle_input_reads_each_member_from_the_wire() {
         input_default: None,
     };
 
-    let read = held.each_member_read(&[member("level", None)], true);
+    let read = held.each_member_read(
+        &[member("level", None)],
+        &WhatTheLinksIntoAnInputFeed::feeding(true, &[]),
+    );
 
     assert_eq!(read[0].value, None);
     assert_eq!(
         read[0].value_comes_from,
         Some(InputValueComesFromOnTheWire::Wire)
+    );
+}
+
+#[test]
+fn a_member_a_link_ends_at_reads_from_the_wire_and_every_other_alone() {
+    let saved = json!({ "level": 0.2, "gain": 2.0 });
+    let held = ValuesABundleInputHolds {
+        live: None,
+        saved: Some(&saved),
+        input_default: None,
+    };
+
+    let read = held.each_member_read(
+        &[member("level", None), member("gain", None)],
+        &WhatTheLinksIntoAnInputFeed::feeding(false, &["level"]),
+    );
+
+    assert_eq!(
+        (read[0].value.clone(), read[0].value_comes_from),
+        (None, Some(InputValueComesFromOnTheWire::Wire))
+    );
+    assert_eq!(
+        (read[1].value.clone(), read[1].value_comes_from),
+        (Some(json!(2.0)), Some(InputValueComesFromOnTheWire::Saved))
     );
 }
 

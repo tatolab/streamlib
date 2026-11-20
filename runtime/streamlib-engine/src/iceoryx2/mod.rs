@@ -72,7 +72,8 @@ pub use iceoryx2_domain_for_this_test_process::{
     iceoryx2_domain_for_this_test_process,
 };
 pub use input::{
-    InputMailboxes, InputMailboxesInner, MemberTakenAtTheRead, MessageReadFromInputPort,
+    BundleMembersAtTheRead, InputMailboxes, InputMailboxesInner, MemberPutAtTheRead,
+    MemberTakenAtTheRead, MessageReadFromInputPort, WhatTheMembersArePutInto,
 };
 pub use input_port_borrow_quota::{
     DEFAULT_INPUT_PORT_BORROW_QUOTA, MAX_INPUT_PORT_BORROW_QUOTA, input_port_borrow_quota,

@@ -678,7 +678,8 @@ pub(in crate::core::runtime) fn what_a_connect_makes_of_each_link_at_a_placed_le
             };
             let from = OutputLinkPortRef::new(source, &link.source.port)
                 .at_member(link.source.member.clone());
-            let to = InputLinkPortRef::new(target, &link.target.port);
+            let to = InputLinkPortRef::new(target, &link.target.port)
+                .at_member(link.target.member.clone());
             let verdict = the_verdict_connect_takes_in(&mut graph, from.clone(), to.clone())?;
             if let Ok((from, to)) = the_ends_connect_links(&graph, from, to) {
                 graph.traversal_mut().add_e(from, to);
@@ -738,7 +739,7 @@ fn the_graph_a_placed_level_runs_as(
         if let Ok((from, to)) = the_ends_connect_links(
             &graph,
             OutputLinkPortRef::new(source, held.source.port).at_member(held.source.member),
-            InputLinkPortRef::new(target, held.target.port),
+            InputLinkPortRef::new(target, held.target.port).at_member(held.target.member),
         ) {
             graph.traversal_mut().add_e(from, to);
         }
