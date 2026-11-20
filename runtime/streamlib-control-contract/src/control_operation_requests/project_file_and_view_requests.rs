@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
+use streamlib_runtime_client_contract::local_api_wire_contract::ProjectNodeUiElement;
 
 use super::{
     ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, AUTHOR_ARGUMENT_DESCRIPTION,
@@ -89,6 +90,31 @@ pub struct CreateNodeFileRequest {
         description = "The new Python file, `/`-separated and relative to the project directory, such as `nodes/edge_glow.py`: each folder and the file's name a Python identifier, the class named after the file (`EdgeGlow`). Refused where a file already is, outside the project, inside `.tatolab/` or `imports/`, or through a symbolic link."
     )]
     pub path: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `create_node_ui_element`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateNodeUiElementRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// What to create, as its manifest entry registers it.
+    #[schemars(
+        description = "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by and which it must have, since a pin type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
+    )]
+    pub element: ProjectNodeUiElement,
+    /// The new script, inside the project's `node_ui/` folder.
+    #[schemars(
+        description = "The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, for the manifest's own name, or through a symbolic link."
+    )]
+    pub script: String,
     /// Who the change is by, as history records it and undo follows it.
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     pub author: Option<ProjectTransactionAuthorArgument>,

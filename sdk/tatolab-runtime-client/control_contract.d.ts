@@ -4506,6 +4506,81 @@ export interface CreateNodeFileToolResult {
 }
 
 /**
+ * `create_node_ui_element`'s params.
+ */
+export interface CreateNodeUiElementRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by and which it must have, since a pin type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`.
+   */
+  element: ProjectNodeUiElement;
+  /**
+   * The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, for the manifest's own name, or through a symbolic link.
+   */
+  script: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * What a node UI element is, under `kind`.
+ */
+export type ProjectNodeUiElement = ({
+  /**
+   * The pin type whose inputs it edits or shows.
+   */
+  pin_type: BuiltInPinTypeName;
+  /**
+   * Its name, which a pin's `control` annotation picks it by; `null` for its pin type's
+   * default.
+   */
+  control?: string | null;
+  kind: "control";
+}) | {
+  /**
+   * The node type whose node it draws.
+   */
+  node_type: string;
+  kind: "node_body";
+};
+
+/**
+ * The `create_node_ui_element` tool's result.
+ */
+export interface CreateNodeUiElementToolResult {
+  /**
+   * The script created, relative to the project, as `node_ui/knob.ts`.
+   */
+  script_path: string;
+  /**
+   * The manifest that registers it, relative to the project.
+   */
+  manifest_path: string;
+  /**
+   * The kit the template was read from, with its version and where it was found; `null` when
+   * the call was sent again under the key of one already applied, which reads no kit.
+   */
+  template_from?: string | null;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
+
+/**
  * `write_project_file`'s params.
  */
 export interface WriteProjectFileRequest {
@@ -5714,28 +5789,6 @@ export interface ProjectNodeUiModule {
 }
 
 /**
- * What a node UI element is, under `kind`.
- */
-export type ProjectNodeUiElement = ({
-  /**
-   * The pin type whose inputs it edits or shows.
-   */
-  pin_type: BuiltInPinTypeName;
-  /**
-   * Its name, which a pin's `control` annotation picks it by; `null` for its pin type's
-   * default.
-   */
-  control?: string | null;
-  kind: "control";
-}) | {
-  /**
-   * The node type whose node it draws.
-   */
-  node_type: string;
-  kind: "node_body";
-};
-
-/**
  * One module's manifest that reads.
  */
 export interface ProjectNodeUiManifestListed {
@@ -6808,6 +6861,10 @@ export interface ControlContractComponents {
   ReadProjectFileToolResult: ReadProjectFileToolResult;
   CreateNodeFileRequest: CreateNodeFileRequest;
   CreateNodeFileToolResult: CreateNodeFileToolResult;
+  CreateNodeUiElementRequest: CreateNodeUiElementRequest;
+  ProjectNodeUiElement: ProjectNodeUiElement;
+  BuiltInPinTypeName: BuiltInPinTypeName;
+  CreateNodeUiElementToolResult: CreateNodeUiElementToolResult;
   WriteProjectFileRequest: WriteProjectFileRequest;
   ProjectFileTransactionToolResult: ProjectFileTransactionToolResult;
   CheckProjectCodeRequest: CheckProjectCodeRequest;
@@ -6831,7 +6888,6 @@ export interface ControlContractComponents {
   ListPinTypesRequest: ListPinTypesRequest;
   ListPinTypesToolResult: ListPinTypesToolResult;
   PinTypeListed: PinTypeListed;
-  BuiltInPinTypeName: BuiltInPinTypeName;
   PinAnnotationName: PinAnnotationName;
   PinTypeConversionListed: PinTypeConversionListed;
   ListNodeTypesRequest: ListNodeTypesRequest;
@@ -6870,7 +6926,6 @@ export interface ControlContractComponents {
   ListProjectNodeUiElementsToolResult: ListProjectNodeUiElementsToolResult;
   ProjectNodeUiElementListed: ProjectNodeUiElementListed;
   ProjectNodeUiModule: ProjectNodeUiModule;
-  ProjectNodeUiElement: ProjectNodeUiElement;
   ProjectNodeUiManifestListed: ProjectNodeUiManifestListed;
   NodeUiManifest: NodeUiManifest;
   NodeUiManifestControl: NodeUiManifestControl;
@@ -7665,6 +7720,17 @@ export interface ControlOperations {
     result: CreateNodeFileToolResult;
   };
   /**
+   * Create a control or a node body in a project from the kit's template and register it, as one transaction.
+   *
+   * Create a new control for one pin type, or a node body for one node type, in the project's own `node_ui/` folder, as one transaction an undo reverses: the script at `node_ui/<script>`, written from the extension SDK kit's template for its kind (`templates/control.ts` or `templates/node_body.ts`) with the pin type or node type written in, and its entry in `node_ui/tatolab_node_ui.json`, which is created when missing. The script default-exports its element class and never defines a custom element itself. What it writes passes `check_project_code` unchanged, so start from it: edit the script with `write_project_file`, then run `check_project_code` again and read each finding's code and place. The kit is found as `check_project_code` finds it: the runtime unit's, the one its starter names, then the project's installed SDK; the runtime holds no template of its own. Answers the `script_path` and `manifest_path` it wrote, `template_from`, the kit with its version and where it was found (null when sent again under the key of a call already applied, which answers that call's transaction without reading the kit), and the `transaction` and `commit`. Refused when no kit is found or the kit holds no template for the kind, naming why; for a control with no `control` name, as a pin type's default control is the Studio's own to register; where a file already is at the script's path, or for the manifest's own name; when the manifest does not read against the view contract; and when it already registers a control of the same pin type and name, or a node body for the same node type.
+   *
+   * Since contract version 3, experimental.
+   */
+  create_node_ui_element: {
+    params: CreateNodeUiElementRequest;
+    result: CreateNodeUiElementToolResult;
+  };
+  /**
    * Write one file of a project, as one transaction.
    *
    * Write one of the project's files whole, as one transaction: a new file is created with its folders, an existing one overwritten. An undo puts back what the file held, or takes a new file out. Answers the `path`, the `content_sha256` of the bytes written, and the `transaction` and `commit`. With `expected_sha256`, refused when the file changed or was taken out since it was read, so a save never overwrites another change. Content the file already holds is refused, as it changes nothing. Refused for what another tool changes — a stream's graph document, an asset's sidecar or bytes (`replace_asset`), `tatolab-project.json`, a file under `imports/` — and for a file inside a hidden folder or a Python virtual environment, which history does not record.
@@ -7941,7 +8007,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 22;
+export declare const CONTROL_CONTRACT_REVISION: 23;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

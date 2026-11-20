@@ -19,7 +19,8 @@ use super::{
     STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentGroup, StreamGraphDocumentLink,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     input_values_after_the_set, push_the_input_values_of_each_node_at_every_level,
-    push_the_input_values_of_each_of_the_nodes_at_every_level, the_input_value_held_on,
+    push_the_input_values_of_each_of_the_nodes_at_every_level, the_input_value_after_the_set,
+    the_input_value_held_on,
 };
 
 /// One change to a stream's graph, recorded with everything its inverse needs.
@@ -339,19 +340,38 @@ impl StreamGraphOperation {
     }
 
     /// The set of `node`'s input `input`, or of its member `member` when one is named, to `to`,
-    /// `None` or `null` taking the value off, with the value it held as `from`.
+    /// `None` or `null` taking the value off, with the value it held as `from`. A member set on an
+    /// input holding a value that is no object of members replaces that whole value, so it is
+    /// the set of the whole input to the object it starts, and its undo puts the value back.
     pub fn set_node_input_value_of(
         node: &StreamGraphDocumentNode,
         input: String,
         member: Option<String>,
         to: Option<Value>,
     ) -> Self {
+        let to = to.filter(|value| !value.is_null());
+        if member.is_some()
+            && let Some(held) = node.input_values.get(&input)
+            && !held.is_object()
+        {
+            return Self::SetNodeInputValue {
+                node: node.id,
+                from: Some(held.clone()),
+                to: the_input_value_after_the_set(
+                    Some(held.clone()),
+                    member.as_deref(),
+                    to.as_ref(),
+                ),
+                input,
+                member: None,
+            };
+        }
         Self::SetNodeInputValue {
             node: node.id,
             from: the_input_value_held_on(&node.input_values, &input, member.as_deref()).cloned(),
             input,
             member,
-            to: to.filter(|value| !value.is_null()),
+            to,
         }
     }
 

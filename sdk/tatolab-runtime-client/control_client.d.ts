@@ -280,6 +280,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   create_node_file(params: ControlOperations["create_node_file"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["create_node_file"]["result"]>;
   /**
+   * Create a control or a node body in a project from the kit's template and register it, as one transaction.
+   */
+  create_node_ui_element(params: ControlOperations["create_node_ui_element"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["create_node_ui_element"]["result"]>;
+  /**
    * Write one file of a project, as one transaction.
    */
   write_project_file(params: ControlOperations["write_project_file"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_project_file"]["result"]>;

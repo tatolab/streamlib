@@ -80,6 +80,7 @@ impl RefusalCodeAndPlace {
             }
             ProjectRepositoryRefusal::ProjectFilePathRefused { path, .. }
             | ProjectRepositoryRefusal::ProjectFileAlreadyExists(path)
+            | ProjectRepositoryRefusal::NodeUiElementNotRegistered { path, .. }
             | ProjectRepositoryRefusal::ProjectFileWrittenByAnotherAction { path, .. }
             | ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRecorded { path }
             | ProjectRepositoryRefusal::ProjectFileAlreadyHoldsThisContent(path)

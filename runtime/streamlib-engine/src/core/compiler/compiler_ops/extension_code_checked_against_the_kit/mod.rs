@@ -24,7 +24,7 @@ use extension_folder_check::{
     ExtensionCodeCheckersFound, ExtensionFolderChecked, ExtensionFolderToCheck,
 };
 pub use extension_sdk_kit_found::EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE;
-use extension_sdk_kit_found::the_extension_sdk_kit_found;
+use extension_sdk_kit_found::{KIT_TEMPLATES_FOLDER, the_extension_sdk_kit_found};
 
 /// The programs a project's views and controls are checked with, as the host found them beside
 /// itself, and the kit its starter names, which the host hands the engine once.
@@ -36,6 +36,15 @@ pub struct ExtensionCodeCheckers {
     pub linter: Result<PathBuf, String>,
     /// The kit named in [`EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE`] as the runtime started.
     pub kit_its_starter_names: Option<PathBuf>,
+}
+
+/// A template read from the extension SDK kit, and the kit it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionSdkKitTemplate {
+    /// The kit, with its version and where it was found, as a check's `checked_with` names it.
+    pub kit: String,
+    /// The template's text.
+    pub template: String,
 }
 
 /// The two checks of a project's views and controls.
@@ -233,6 +242,37 @@ impl ExtensionCodeCheckersHeld {
             check.take_in(checked);
         }
         check
+    }
+
+    /// The template `template_file` in the first kit found's `templates/` for the project at
+    /// `project_directory`, looking beside `lend_directory` first, or why there is none: no kit
+    /// is found, or the kit holds no such template.
+    pub fn a_template_from_the_kit(
+        &self,
+        project_directory: &Path,
+        template_file: &str,
+        lend_directory: Option<&Path>,
+    ) -> Result<ExtensionSdkKitTemplate, String> {
+        let kit = the_extension_sdk_kit_found(
+            lend_directory,
+            self.checkers
+                .get()
+                .and_then(|checkers| checkers.kit_its_starter_names.as_deref()),
+            project_directory,
+        )?;
+        let template = kit.directory.join(KIT_TEMPLATES_FOLDER).join(template_file);
+        let read = std::fs::read_to_string(&template).map_err(|unreadable| {
+            format!(
+                "the {} holds no template `{KIT_TEMPLATES_FOLDER}/{template_file}`: {} cannot \
+                 be read: {unreadable}",
+                kit.as_checked_with(),
+                template.display()
+            )
+        })?;
+        Ok(ExtensionSdkKitTemplate {
+            kit: kit.as_checked_with(),
+            template: read,
+        })
     }
 
     /// The version `program` reports, read once, as a `checked_with` names it.

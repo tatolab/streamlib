@@ -337,6 +337,40 @@ fn a_set_of_one_member_is_undone_to_the_member_it_replaced() {
     );
 }
 
+/// A member set on an input holding a value that is no object of members replaces that whole
+/// value, so its undo puts the whole value back.
+///
+/// Mental-revert: recording the member alone, which the value held none of, undoes to no value.
+#[test]
+fn a_member_set_over_a_value_holding_no_members_is_undone_to_that_value() {
+    let mut project = ProjectHoldingOneStream::new();
+    let person = an_author(ProjectTransactionAuthorKind::Person, "Jonathan");
+    let meter = a_node("meter", json!({ "reading": 7 }));
+    project
+        .apply(&person, vec![project.on_the_stream(add(&meter))])
+        .unwrap();
+
+    let level_set = StreamGraphOperation::set_node_input_value_of(
+        &held_node(&project, meter.id),
+        "reading".to_owned(),
+        Some("level".to_owned()),
+        Some(json!(1.0)),
+    );
+    project
+        .apply(&person, vec![project.on_the_stream(level_set)])
+        .unwrap();
+    assert_eq!(
+        held_node(&project, meter.id).input_values["reading"],
+        json!({ "level": 1.0 })
+    );
+
+    project.undo(&person).unwrap();
+    assert_eq!(
+        held_node(&project, meter.id).input_values["reading"],
+        json!(7)
+    );
+}
+
 fn held_node(project: &ProjectHoldingOneStream, node: Uuid) -> StreamGraphDocumentNode {
     ProjectRepository::open(project.repository.project_directory())
         .unwrap()

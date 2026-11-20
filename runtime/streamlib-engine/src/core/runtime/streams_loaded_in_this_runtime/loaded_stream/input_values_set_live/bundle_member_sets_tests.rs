@@ -391,6 +391,83 @@ fn taking_a_member_with_no_default_off_the_saved_bundle_is_refused() {
     check("gain").expect("`gain` defaults to 1");
 }
 
+/// A member the input's default holds may be taken off the saved bundle, which then reads it
+/// from that default, though the member declares no default of its own.
+///
+/// Mental-revert: judging the saved object alone refuses taking `label` off.
+#[test]
+fn a_member_the_inputs_default_holds_may_be_taken_off_the_saved_bundle() {
+    const LABELLED_READER: &str = "test_ops:labelled_reader";
+    let labelled_reader = a_function_node_type(LABELLED_READER, &[], &["result"]).with_input(
+        a_typed_input(
+            "reading",
+            PinType::Bundle {
+                members: vec![
+                    a_member("level", float(), None),
+                    a_member("label", PinType::String {}, None),
+                ],
+            },
+        )
+        .with_pin_default(json!({ "label": "unnamed" })),
+    );
+    let graph = a_graph_resolving_these_function_node_types([labelled_reader]);
+    let node_type = NodeClassImportPath::new(LABELLED_READER).unwrap();
+    let check = |member: &str| {
+        let after_the_set = streamlib_project_repository::input_values_after_the_set(
+            json!({ "reading": { "level": 0.2, "label": "kitchen" } })
+                .as_object()
+                .unwrap(),
+            "reading",
+            Some(member),
+            None,
+        );
+        refuse_an_input_value_its_input_does_not_take(
+            graph.node_types_this_stream_resolves(),
+            &NodeAnInputValueIsSetOn {
+                name: "reader",
+                node_type: &node_type,
+                input_values_after_the_set: &after_the_set,
+            },
+            "reading",
+            Some(member),
+            None,
+        )
+    };
+
+    check("label").expect("the input's default holds `label`");
+    check("level").expect_err("neither `level` nor the input's default gives it a default");
+}
+
+/// One live transaction may set every member a bundle needs: each set is checked against the
+/// bundle the whole transaction leaves, not against the live value before it.
+///
+/// Mental-revert: checking the `level` set alone refuses a bundle with no `label`.
+#[test]
+fn one_live_transaction_setting_every_member_a_bundle_needs_is_taken() {
+    let mut graph = a_graph_resolving_a_bundle_reader();
+    let reader = add_a_node(&mut graph, BUNDLE_READER, Value::Null);
+    let reader_uuid = graph.traversal().v(&reader).first().unwrap().node_uuid;
+    let graph = RwLock::new(graph);
+
+    the_values_set_live(
+        &graph,
+        &[
+            a_member_set(reader_uuid, "reading", Some("level"), Some(json!(0.5))),
+            a_member_set(reader_uuid, "reading", Some("label"), Some(json!("hall"))),
+        ],
+    )
+    .unwrap()
+    .expect("a bundle input of a function node is set apart from the graph");
+
+    assert_eq!(
+        graph
+            .read()
+            .live_input_values()
+            .value_of(reader_uuid, "reading"),
+        Some(json!({ "level": 0.5, "label": "hall" }))
+    );
+}
+
 /// A node reading the bundle inside an island is handed both: the member set live over the
 /// saved one, every other member as saved.
 ///

@@ -101,6 +101,8 @@ pub fn register_the_conversion_node_types() {
     NODE_REGISTRY.register::<pin_type_conversion::ChannelsToRecords::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::RecordsToChannels::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::TextureToTensor::Node>();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    NODE_REGISTRY.register::<pin_type_conversion::TextureFormatConvert::Node>();
     NODE_REGISTRY.register_a_conversion_whose_output_a_setting_picks::<
         pin_type_conversion::TensorToTexture::Node,
     >(PinConversionOutputPick {

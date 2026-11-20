@@ -13,26 +13,26 @@ use crate::control_operation_refusals::{ParamsThatDoNotMatchTheirSchema, the_par
 use crate::control_operation_requests::{
     AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest,
     CheckLinkCandidatesRequest, CheckLinkRequest, CheckProjectCodeRequest, CloseViewerRequest,
-    CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest, CreateProjectRequest,
-    CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest, DescribeAssetRequest,
-    DescribeNodeTypesRequest, DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest,
-    GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest,
-    ListAssetsRequest, ListDependenciesRequest, ListNodeTypesRequest, ListPinTypesRequest,
-    ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest,
-    ListProjectViewsRequest, ListSamplesRequest, ListStreamsRequest, LogsRequest,
-    OneLinkGraphEditRequest, OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest,
-    OneStreamActionRequest, OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest,
-    RefreshFragmentsRequest, RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest,
-    RemoveNoteRequest, RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest,
-    SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
-    SetNodeConfigRequest, SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest,
-    SetPinValueRequest, SetProjectCoverRequest, SetProjectDescriptionRequest,
-    SetStreamClockScaleRequest, SetStreamDisplayNameRequest, SetStudioFieldsRequest,
-    SubscribeInputValueChangesRequest, SubscribeProjectChangesRequest,
-    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
-    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
-    WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest, CreateNodeUiElementRequest,
+    CreateProjectRequest, CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest,
+    DescribeAssetRequest, DescribeNodeTypesRequest, DescribeRuntimeRequest, DiscoverRequest,
+    DuplicateProjectRequest, GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest,
+    ImportProjectRequest, ListAssetsRequest, ListDependenciesRequest, ListNodeTypesRequest,
+    ListPinTypesRequest, ListProjectFilesRequest, ListProjectNodeTypesRequest,
+    ListProjectNodeUiElementsRequest, ListProjectViewsRequest, ListSamplesRequest,
+    ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
+    OneProjectByItsDirectoryRequest, OneStreamActionRequest, OpenViewerRequest,
+    ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest, RelocateAssetRequest,
+    RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
+    RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
+    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
+    SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest, SetPinValueRequest,
+    SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
+    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
+    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
+    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
+    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 
 mod assets_and_streams;
@@ -69,9 +69,9 @@ pub use playback_and_stream_actions::{
     StartPlayback, StopPlayback,
 };
 pub use project_files_and_views::{
-    CheckProjectCode, CloseViewer, CreateNodeFile, ListProjectFiles, ListProjectNodeTypes,
-    ListProjectNodeUiElements, ListProjectViews, OpenViewer, ReadProjectFile, WriteProjectFile,
-    WriteStudioViewOutput,
+    CheckProjectCode, CloseViewer, CreateNodeFile, CreateNodeUiElement, ListProjectFiles,
+    ListProjectNodeTypes, ListProjectNodeUiElements, ListProjectViews, OpenViewer, ReadProjectFile,
+    WriteProjectFile, WriteStudioViewOutput,
 };
 pub use project_lifecycle::{
     CloseProject, CreateProject, DeleteProject, DuplicateProject, ImportProject, ListSamples,
@@ -83,7 +83,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 22;
+pub const CONTROL_CONTRACT_REVISION: u32 = 23;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -164,6 +164,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<ListProjectFiles>(),
     ControlOperationDeclaration::of::<ReadProjectFile>(),
     ControlOperationDeclaration::of::<CreateNodeFile>(),
+    ControlOperationDeclaration::of::<CreateNodeUiElement>(),
     ControlOperationDeclaration::of::<WriteProjectFile>(),
     ControlOperationDeclaration::of::<CheckProjectCode>(),
     ControlOperationDeclaration::of::<ListProjectNodeTypes>(),
@@ -323,6 +324,8 @@ pub enum ControlOperationCall {
     ReadProjectFile(ReadProjectFileRequest),
     /// A `create_node_file` call.
     CreateNodeFile(CreateNodeFileRequest),
+    /// A `create_node_ui_element` call.
+    CreateNodeUiElement(CreateNodeUiElementRequest),
     /// A `write_project_file` call.
     WriteProjectFile(WriteProjectFileRequest),
     /// A `check_project_code` call.
@@ -593,6 +596,9 @@ impl ControlOperationCall {
             CreateNodeFile::METHOD_NAME => {
                 the_request_of::<CreateNodeFile>(params).map(Self::CreateNodeFile)
             }
+            CreateNodeUiElement::METHOD_NAME => {
+                the_request_of::<CreateNodeUiElement>(params).map(Self::CreateNodeUiElement)
+            }
             WriteProjectFile::METHOD_NAME => {
                 the_request_of::<WriteProjectFile>(params).map(Self::WriteProjectFile)
             }
@@ -724,6 +730,7 @@ impl ControlOperationCall {
             Self::ListProjectFiles(_) => ListProjectFiles::METHOD_NAME,
             Self::ReadProjectFile(_) => ReadProjectFile::METHOD_NAME,
             Self::CreateNodeFile(_) => CreateNodeFile::METHOD_NAME,
+            Self::CreateNodeUiElement(_) => CreateNodeUiElement::METHOD_NAME,
             Self::WriteProjectFile(_) => WriteProjectFile::METHOD_NAME,
             Self::CheckProjectCode(_) => CheckProjectCode::METHOD_NAME,
             Self::ListProjectNodeTypes(_) => ListProjectNodeTypes::METHOD_NAME,

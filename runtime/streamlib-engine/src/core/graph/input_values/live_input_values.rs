@@ -546,6 +546,20 @@ pub enum LiveInputValueSetRefusal {
     NotHandedOver(crate::core::Error),
 }
 
+/// Whether a live set of `member` of an input, or of the whole input when `member` is `None`,
+/// replaces a value an earlier set of the same transaction made on that input, the earlier sets
+/// having set `members_set_before`, each `None` for the whole input: a set of the whole input
+/// replaces anything set on it, and a set of a member replaces the whole input and that member,
+/// while sets of two members of one bundle replace neither.
+pub fn a_live_set_replaces_an_earlier_one(
+    members_set_before: &[Option<&str>],
+    member: Option<&str>,
+) -> bool {
+    members_set_before
+        .iter()
+        .any(|member_set| member.is_none() || member_set.is_none() || *member_set == member)
+}
+
 /// Why a live set naming input `input` of the node named `node_name` more than once is refused:
 /// the last value would replace each earlier one before the node is handed any, so the earlier
 /// writes would never be published.
