@@ -5,10 +5,13 @@ use super::super::function_node_island::tests::{a_function_node_type, add_a_node
 use super::super::function_node_island::{HowALinkIsWired, how_a_link_is_wired};
 use super::super::shader_node_island_program::tests::shader_program;
 use super::*;
+use crate::core::compiler::compiler_ops::running_node_restart::forget_the_build_of_each_node_restarted;
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily,
     PortFamilyDeclaration,
 };
+use crate::core::graph::NodeMetrics;
+use crate::core::nodes::NodeState;
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves};
 
 fn a_descriptor(
@@ -340,7 +343,7 @@ fn a_live_link_into_a_fused_nodes_output_restarts_its_whole_island_and_a_teardow
     .unwrap();
     assert_eq!(
         restarted,
-        RunningShaderNodesALiveEditRestarts {
+        RunningNodesALiveEditRestarts {
             nodes: sorted(&[
                 stream.tint.clone(),
                 stream.blur.clone(),
@@ -395,7 +398,7 @@ fn a_live_link_joining_two_running_shader_nodes_restarts_both_with_their_other_l
     .unwrap();
     assert_eq!(
         restarted,
-        RunningShaderNodesALiveEditRestarts {
+        RunningNodesALiveEditRestarts {
             nodes: sorted(&[mix, kaleidoscope]),
             links: sorted(&links_already_running),
         }
@@ -511,7 +514,7 @@ fn a_restarted_island_reads_its_old_host_and_forgets_every_part_of_its_build() {
             .unwrap()
             .insert(NodeMetrics::default());
     }
-    forget_the_build_of_each_shader_node_restarted(&mut stream.graph, &island);
+    forget_the_build_of_each_node_restarted(&mut stream.graph, &island);
     for node_id in &island {
         let node = stream.graph.traversal().v(node_id).first().unwrap();
         assert!(!node.has::<NodeMetrics>());

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #[cfg(any(test, feature = "test-support"))]
+pub mod a_node_reading_its_settings_at_setup_for_a_test;
+#[cfg(any(test, feature = "test-support"))]
 pub mod a_project_on_disk_for_a_test;
 pub(crate) mod address_chunk;
 #[cfg(any(test, feature = "test-support"))]

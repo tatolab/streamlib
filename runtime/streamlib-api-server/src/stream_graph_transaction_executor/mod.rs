@@ -41,7 +41,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
-    GraphTransactionToolResult,
+    GraphTransactionRebuiltNode, GraphTransactionToolResult,
 };
 use uuid::Uuid;
 

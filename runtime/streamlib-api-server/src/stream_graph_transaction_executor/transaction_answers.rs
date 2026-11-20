@@ -15,6 +15,8 @@ pub(super) struct WhatAnAnswerNamesBesideItsOperations<'named> {
         &'named HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
     pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
     pub(super) why_each_link_was_made_unjudged: BTreeMap<(String, StreamGraphDocumentLink), String>,
+    /// Each node the transaction built again to take a setting read at setup.
+    pub(super) nodes_rebuilt: Vec<GraphTransactionRebuiltNode>,
 }
 
 /// The links `operation` makes, in the order it makes them.
@@ -91,6 +93,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     .into_iter()
                     .map(|unjudged| ((stream_id_of(unjudged.stream), unjudged.link), unjudged.why))
                     .collect(),
+                nodes_rebuilt: Vec::new(),
             },
         )
     }
@@ -106,6 +109,7 @@ impl StreamGraphTransactionExecutor<'_> {
             what_the_answer_names_of_each_added_node,
             overridden_by_links,
             mut why_each_link_was_made_unjudged,
+            nodes_rebuilt,
         }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
         let mut added_nodes = Vec::new();
@@ -215,7 +219,7 @@ impl StreamGraphTransactionExecutor<'_> {
             connected_links,
             added_groups,
             added_notes,
-            nodes_rebuilt: Vec::new(),
+            nodes_rebuilt,
             overridden_by_links,
         }
     }
