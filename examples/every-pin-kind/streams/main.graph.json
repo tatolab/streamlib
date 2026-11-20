@@ -80,6 +80,16 @@
         "node": "7b5d2e91-4c3f-4a8e-9b1d-6f0e2c8a5d47",
         "port": "sweep"
       }
+    },
+    {
+      "source": {
+        "node": "5c0d7e2a-8b14-4f39-a6e1-3d92b07c4f58",
+        "port": "value"
+      },
+      "target": {
+        "node": "01ccd74d-f7e1-4fa5-a400-5c42ad278f19",
+        "port": "base"
+      }
     }
   ],
   "nodes": [
@@ -104,6 +114,22 @@
         ]
       },
       "name": "brightness",
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "5c0d7e2a-8b14-4f39-a6e1-3d92b07c4f58",
+      "input_values": {
+        "pin_type": {
+          "type": "float"
+        },
+        "port": "warmth_base",
+        "range": [
+          0.0,
+          1.0
+        ],
+        "value": 0.1
+      },
+      "name": "warmth_base",
       "type": "tatolab.stream:GraphInput"
     },
     {

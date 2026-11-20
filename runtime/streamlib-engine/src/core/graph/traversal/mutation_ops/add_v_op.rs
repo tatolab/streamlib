@@ -100,6 +100,7 @@ impl<'a> TraversalSourceMut<'a> {
             &node.display_name,
             node.ports.input_values_under_the_current_names(spec.pins),
         );
+        node.resolve_the_ports_its_settings_declare();
         node.exposed_config_fields = spec.exposed_config_fields;
         node.studio = spec.studio;
 

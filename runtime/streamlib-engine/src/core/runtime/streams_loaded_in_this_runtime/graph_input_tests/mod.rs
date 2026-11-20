@@ -38,6 +38,7 @@ use crate::core::test_support::{
 };
 use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 
+mod graph_input_pin_type_tests;
 mod graph_input_relink_lifetime_and_range_tests;
 
 const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
@@ -229,9 +230,15 @@ fn the_rendered_node(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Value {
         .clone()
 }
 
-fn the_saved_pins_of(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Value {
+/// The value the `GraphInput` `node` saves on its `value` input, beside its settings.
+fn the_saved_value_of(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Option<Value> {
     stream.compiler.scope_reading(|graph| {
-        serde_json::to_value(&graph.node_by_uuid(node).expect("the graph holds it").pins).unwrap()
+        graph
+            .node_by_uuid(node)
+            .expect("the graph holds it")
+            .pins
+            .get("value")
+            .cloned()
     })
 }
 
@@ -303,13 +310,18 @@ fn a_value_set_live_on_a_graph_input_reaches_each_reader_and_leaves_the_saved_va
         "{rendered}"
     );
     assert_eq!(
+        rendered["input_values"][VALUE],
+        json!({ "track": "intro" }),
+        "{rendered}"
+    );
+    assert_eq!(
         rendered["config"]["default"],
         json!({ "track": "intro" }),
         "{rendered}"
     );
     assert_eq!(
-        the_saved_pins_of(&stream, cue),
-        json!({ "value": { "track": "intro" } })
+        the_saved_value_of(&stream, cue),
+        Some(json!({ "track": "intro" }))
     );
     stream.stop().expect("the stream ends");
 }
@@ -337,8 +349,8 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         )],
     );
     assert_eq!(
-        the_saved_pins_of(&stream, fader),
-        json!({ "value": { "level": 0.5 } })
+        the_saved_value_of(&stream, fader),
+        Some(json!({ "level": 0.5 }))
     );
     play(&stream);
     assert_eq!(
@@ -360,14 +372,14 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
     );
     let rendered = the_rendered_node(&stream, fader);
     assert_eq!(
+        rendered["input_values"][VALUE],
+        json!({ "level": 0.75 }),
+        "a saved edit renders on the `value` input: {rendered}"
+    );
+    assert_eq!(
         rendered["config"]["default"],
         json!({ "level": 0.75 }),
         "{rendered}"
-    );
-    assert_eq!(
-        rendered["input_values"][VALUE],
-        json!({ "level": 0.75 }),
-        "a saved edit renders on the `value` input the `default` its config renders: {rendered}"
     );
     let value_input = rendered["ports"]["inputs"]
         .as_array()
@@ -768,7 +780,9 @@ fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_stud
     );
     assert_eq!(
         lights["config"],
-        json!({"port": "lights", "family": "records", "default": {"level": 0.0}})
+        json!({"port": "lights", "family": "records", "default": {"level": 0.0}}),
+        "a `GraphInput`'s config mirrors its saved value under `default`, the key a published \
+         Tato Studio reads"
     );
     assert_eq!(
         lights["components"]["graph_interface"]["current_value"],

@@ -298,6 +298,25 @@ pub(crate) fn the_read_of_an_input_a_link_feeds() -> InputValueReadOnTheWire {
     }
 }
 
+/// What an input no link feeds reads: `read`, the value it reads and where that comes from, else
+/// `null` from nowhere.
+pub(crate) fn the_read_of_an_unfed_input(
+    read: Option<(Value, InputValueComesFromOnTheWire)>,
+) -> InputValueReadOnTheWire {
+    match read {
+        Some((value, value_comes_from)) => InputValueReadOnTheWire {
+            value: Some(value),
+            value_comes_from: Some(value_comes_from),
+            member_values: None,
+        },
+        None => InputValueReadOnTheWire {
+            value: Some(Value::Null),
+            value_comes_from: None,
+            member_values: None,
+        },
+    }
+}
+
 /// The value input `port` of `node` in `graph` reads, `fed` saying what the links into it feed:
 /// wire, while a link feeds the whole input; else its live value, its saved one, which is its config field's for a config field the node
 /// exposes as an input, or its declared default; else nothing. A bundle input reads each member
@@ -355,18 +374,7 @@ pub(crate) fn the_value_an_input_reads(
                 .clone()
                 .map(|value| (value, InputValueComesFromOnTheWire::Default))
         });
-    Some(match read {
-        Some((value, value_comes_from)) => InputValueReadOnTheWire {
-            value: Some(value),
-            value_comes_from: Some(value_comes_from),
-            member_values: None,
-        },
-        None => InputValueReadOnTheWire {
-            value: Some(Value::Null),
-            value_comes_from: None,
-            member_values: None,
-        },
-    })
+    Some(the_read_of_an_unfed_input(read))
 }
 
 /// The value input `port` of `node` in `graph` reads while no link feeds it, as its node is

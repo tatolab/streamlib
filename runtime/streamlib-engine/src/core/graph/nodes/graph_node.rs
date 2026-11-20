@@ -188,11 +188,44 @@ impl GraphNode {
     /// Update config and recompute checksum.
     pub fn set_config(&mut self, config: serde_json::Value) {
         self.config_checksum = compute_json_checksum(&config);
-        if self.is_a_graph_input() {
-            self.ports = std::mem::take(&mut self.ports)
-                .resolved_against_the_config(&self.node_type, Some(&config));
-        }
         self.config = Some(config);
+        self.resolve_the_ports_its_settings_declare();
+    }
+
+    /// Set the pin `input` to `value`, `None` taking it off; answers the pin it held. A
+    /// `GraphInput`'s `value` ports take what its settings declare of them again.
+    pub(crate) fn set_pin(
+        &mut self,
+        input: &str,
+        value: Option<serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        let held = match value {
+            Some(value) => self.pins.insert(input.to_string(), value),
+            None => self.pins.remove(input),
+        };
+        self.resolve_the_ports_its_settings_declare();
+        held
+    }
+
+    /// The one map of input values this node holds: its config and its pins, a pin winning over
+    /// a config field of its name.
+    pub(crate) fn input_values(&self) -> serde_json::Map<String, serde_json::Value> {
+        crate::core::graph::legacy_config_of_a_node::input_values_of_a_config_and_pin_values(
+            self.config.as_ref(),
+            &self.pins,
+        )
+    }
+
+    /// Resolve this node's ports against what its config and pins declare of them: a
+    /// `GraphInput`'s `value` ports take the pin type, the family, the range and the lifetime
+    /// its settings name. The ports of every other node type are as it declares them.
+    pub(crate) fn resolve_the_ports_its_settings_declare(&mut self) {
+        if !self.is_a_graph_input() {
+            return;
+        }
+        let settings = serde_json::Value::Object(self.input_values());
+        self.ports = std::mem::take(&mut self.ports)
+            .resolved_against_the_config(&self.node_type, Some(&settings));
     }
 
     /// Refuse a link into input `input` when it is a setting, which takes a stored value and

@@ -1,78 +1,101 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`GraphInput` and `GraphOutput`: the ports a graph offers, each named and of one family."""
+"""`GraphInput` and `GraphOutput`: the ports a graph offers, each named, and of the type its
+`pin_type` setting chooses or the family its `family` names."""
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal, NotRequired, Required, TypedDict
+from typing import Annotated, ClassVar, Literal
 
-from ._built_in_node import BuiltInNode
-from ._port_family_declaration import PortFamily
+from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
+from ._class_node_pins import InputPin
+from ._description import Description
+from ._formerly_named import FormerlyNamed
+from ._input_declaration_annotations import PublishedOnAnOutput, SettingOnly
+from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
 
 __all__ = [
     "GraphInput",
-    "GraphInputConfig",
     "GraphOutput",
-    "GraphOutputConfig",
 ]
 
 
-class GraphOutputConfig(TypedDict):
-    """The Output a `GraphOutput` declares."""
-
-    port: Required[str]
-    """The Output's name, cast as every exposed name is."""
-    family: NotRequired["PortFamily[Any] | str"]
-    """The Output's family: `Image`, `Array`, `Channels`, `Packets` or `Records`. Left out,
-    the Output takes the family of the port linked into it, and runs nothing until one is."""
-
-
-class GraphOutput(BuiltInNode[GraphOutputConfig]):
+class GraphOutput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     """Declares one Output of the graph: the port linked into `value`. A stream's top-level
     Outputs are what Tato Studio displays. It runs nothing and sends nothing off the machine.
-
-    Inputs:
-        `value`: The port the Output offers, of the declared family.
-
-    Config: `GraphOutputConfig`.
     """
 
     type: ClassVar[str] = "tatolab.stream:GraphOutput"
 
+    port: Annotated[str, SettingOnly(), Description("The Output's name, cast as every exposed name is")]
+    pin_type: Annotated[
+        PinTypeChoice | None,
+        Description("The type of what leaves the Output, any type; unset, `family` decides it"),
+    ] = None
+    family: Annotated[
+        Literal["image", "array", "channels", "packets", "records"] | None,
+        SettingOnly(),
+        Description(
+            "The Output's family, or a port family such as `Image`, while no `pin_type` is "
+            "chosen; left out with it, the Output takes the family of the port linked into it, "
+            "and runs nothing until one is"
+        ),
+    ] = None
+    value: InputPin[
+        Annotated[
+            object,
+            PinTypeFromSetting("pin_type"),
+            Description("The port the Output offers, of the type `pin_type` chooses"),
+        ]
+    ]
 
-class GraphInputConfig(TypedDict):
-    """The Input a `GraphInput` declares."""
 
-    port: Required[str]
-    """The Input's name, cast as every exposed name is."""
-    family: NotRequired["PortFamily[Any] | str"]
-    """The Input's family: `Image`, `Array`, `Channels`, `Packets` or `Records`. Left out,
-    the Input takes the family of its first reader's port, and runs nothing until one is
-    linked."""
-    default: NotRequired[Any]
-    """What the Input's readers see until a client writes it, of its family: a stream's
-    top-level Array, Channels or Records Input only."""
-    range: NotRequired[tuple[float, float]]
-    """`(lowest, highest)`, the span a control moves the Input's number in: a stream's
-    top-level Array or Channels Input only."""
-    lifetime: NotRequired[Literal["kept", "reset"]]
-    """How long a value a client sets lasts: `kept`, the default, keeps it in the project's
-    store through Stop, Play and a restart; `reset` returns to `default` at Stop. A stream's
-    top-level Array, Channels or Records Input only."""
-
-
-class GraphInput(BuiltInNode[GraphInputConfig]):
+class GraphInput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     """Declares one Input of the graph: every port `value` is linked to reads what enters it.
-    A stream's top-level Array, Channels or Records Input runs, and carries the value a client
-    sets with `set_node_input_value` naming the Input and no node, kept as its `lifetime` says,
-    else its `default`; a fragment's Input carries what the graph that adds the fragment wires
-    into it.
-
-    Outputs:
-        `value`: What enters the graph, of the declared family.
-
-    Config: `GraphInputConfig`.
+    A stream's top-level Input of a type that holds a value, or of the Array, Channels or
+    Records family, runs, and carries the value a client sets with `set_node_input_value`
+    naming the Input and no node, kept as its `lifetime` says, else its saved `value`; a
+    fragment's Input carries what the graph that adds the fragment wires into it.
     """
 
     type: ClassVar[str] = "tatolab.stream:GraphInput"
+
+    port: Annotated[str, SettingOnly(), Description("The Input's name, cast as every exposed name is")]
+    pin_type: Annotated[
+        PinTypeChoice | None,
+        Description("The type of what enters the Input, any type; unset, `family` decides it"),
+    ] = None
+    family: Annotated[
+        Literal["image", "array", "channels", "packets", "records"] | None,
+        SettingOnly(),
+        Description(
+            "The Input's family, or a port family such as `Image`, while no `pin_type` is "
+            "chosen; left out with it, the Input takes the family of its first reader's port, "
+            "and runs nothing until one is linked"
+        ),
+    ] = None
+    range: Annotated[
+        list[float] | None,
+        SettingOnly(),
+        Description("`[lowest, highest]`, the span a control moves the Input's number in"),
+    ] = None
+    lifetime: Annotated[
+        Literal["kept", "reset"],
+        SettingOnly(),
+        Description(
+            "How long a value a client sets lasts: kept through Stop and a restart, or reset "
+            "at Stop"
+        ),
+    ] = "kept"
+    value: Annotated[
+        object | None,
+        PinTypeFromSetting("pin_type"),
+        FormerlyNamed("default"),
+        SettingOnly(read="each_run"),
+        PublishedOnAnOutput(),
+        Description(
+            "What the Input's readers see until a client sets it, of the type `pin_type` "
+            "chooses: a stream's top-level Input only"
+        ),
+    ] = None

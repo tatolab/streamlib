@@ -18,7 +18,9 @@ from typing import Final, Literal, Optional, final, get_args
 __all__ = [
     "INPUT_DECLARATION_ANNOTATION_CLASSES",
     "InputValueLifetime",
+    "PublishedOnAnOutput",
     "SettingOnly",
+    "SettingReadTime",
     "StreamDelivery",
     "WireOnly",
 ]
@@ -45,15 +47,45 @@ class _InputModeAnnotation:
         return f"{type(self).__name__}()"
 
 
-@final
-class SettingOnly(_InputModeAnnotation):
-    """A field that takes no wire and is read once, at setup, so a change rebuilds the node: `Annotated[int, SettingOnly()]`."""
+type SettingReadTime = Literal["at_setup", "each_run"]
+"""When a setting is read, as the engine names it."""
 
-    __slots__ = ()
+
+@final
+class SettingOnly:
+    """A field that takes no wire and is read once, at setup, so a change rebuilds the node: `Annotated[int, SettingOnly()]`.
+
+    `SettingOnly(read="each_run")` is read on every run with no rebuild, which only the
+    runtime's own nodes declare."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, *, read: SettingReadTime = "at_setup") -> None:
+        read_times = get_args(SettingReadTime.__value__)
+        if read not in read_times:
+            raise ValueError(
+                f"SettingOnly(read=...) takes one of {', '.join(repr(each) for each in read_times)}, "
+                f"got {read!r}."
+            )
+        self._read: SettingReadTime = read
+
+    @property
+    def read(self) -> SettingReadTime:
+        """When the setting is read, as written."""
+        return self._read
 
     def input_mode(self) -> dict[str, str]:
         """The input mode it states, as the engine reads it."""
-        return {"mode": "setting_only", "read": "at_setup"}
+        return {"mode": "setting_only", "read": self._read}
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SettingOnly) and other._read == self._read
+
+    def __hash__(self) -> int:
+        return hash((SettingOnly, self._read))
+
+    def __repr__(self) -> str:
+        return "SettingOnly()" if self._read == "at_setup" else f"SettingOnly(read={self._read!r})"
 
 
 @final
@@ -65,6 +97,14 @@ class WireOnly(_InputModeAnnotation):
     def input_mode(self) -> dict[str, str]:
         """The input mode it states, as the engine reads it."""
         return {"mode": "wire_only"}
+
+
+@final
+class PublishedOnAnOutput(_InputModeAnnotation):
+    """A field whose value its node also publishes on an output of the field's name, which only
+    the runtime's own nodes declare: a `GraphInput`'s `value`."""
+
+    __slots__ = ()
 
 
 @final
@@ -152,6 +192,7 @@ class StreamDelivery:
 INPUT_DECLARATION_ANNOTATION_CLASSES: Final[tuple[type, ...]] = (
     SettingOnly,
     WireOnly,
+    PublishedOnAnOutput,
     InputValueLifetime,
     StreamDelivery,
 )

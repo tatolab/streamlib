@@ -7,6 +7,9 @@ pub mod traits;
 pub mod __generated_private;
 
 mod empty_config;
+mod graph_interface_node_types;
+#[cfg(test)]
+mod graph_interface_node_types_tests;
 mod node_instance_factory;
 mod node_spec;
 mod node_type_ports_described_on_the_wire;
@@ -33,6 +36,10 @@ pub(crate) use __generated_private::{
     FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use empty_config::EmptyConfig;
+pub(crate) use graph_interface_node_types::{
+    the_family_a_graph_interface_value_port_declares, the_node_type_of_a_graph_input,
+    the_settings_of_a_graph_input, the_settings_of_a_graph_output,
+};
 pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
 };
@@ -46,8 +53,8 @@ pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWir
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 pub(crate) use project_view_node::{
-    THE_FAMILY_A_GRAPH_INPUT_DECLARES, is_the_input_of_an_output_a_panel_writes,
+    is_the_input_of_an_output_a_panel_writes,
     refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes, the_names_listed,
-    the_node_type_of_a_top_level_graph_input, the_refusal_of_a_value_an_output_does_not_carry,
+    the_refusal_of_a_value_an_output_does_not_carry,
     the_saved_values_without_any_on_an_output_a_panel_writes,
 };

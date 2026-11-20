@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::core::descriptors::PortFamily;
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INTERFACE_PORT_CONFIG_KEY, the_family_a_graph_input_config_names,
+    GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME,
 };
 use crate::core::graph::{
     Graph, GraphNode, GraphNodeWithComponents, NodeInstanceComponent, cast_exposed_name_to_url_safe,
@@ -86,8 +86,7 @@ fn the_graph_input_declaring_the_input<'graph>(
     let input_cast = cast_exposed_name_to_url_safe(input_name)?;
     let graph_inputs: Vec<&GraphNode> = graph.every_graph_input().collect();
     let declared_port_of = |node: &GraphNode| -> Option<String> {
-        node.config
-            .as_ref()?
+        node.input_values()
             .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)?
             .as_str()
             .map(str::to_string)
@@ -111,12 +110,15 @@ fn the_graph_input_declaring_the_input<'graph>(
     })
 }
 
-/// The family the top-level `GraphInput` `node` carries, as its config names it.
+/// The family the top-level `GraphInput` `node` carries, as its `value` input resolved it from
+/// its settings.
 fn the_family_a_graph_input_carries(node: &GraphNode) -> Result<PortFamily> {
-    the_family_a_graph_input_config_names(node.config.as_ref()).ok_or_else(|| {
-        Error::Configuration(format!(
-            "`GraphInput` node `{}` names no family",
-            node.display_name
-        ))
-    })
+    node.input_port(GRAPH_INTERFACE_VALUE_PORT_NAME)
+        .map(|value| value.family.family)
+        .ok_or_else(|| {
+            Error::Configuration(format!(
+                "`GraphInput` node `{}` has no `{GRAPH_INTERFACE_VALUE_PORT_NAME}` input",
+                node.display_name
+            ))
+        })
 }

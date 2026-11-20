@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 28
+    "x-contract-revision": 29
   },
   "methods": [
     {
@@ -10655,6 +10655,17 @@
               "null"
             ],
             "description": "The port family the port carries; null while the runtime waits for a link to settle it."
+          },
+          "pin_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pin type the port carries: the one its node's `pin_type` setting chooses, else the\none its family states exactly, as an Image port is a Texture. Absent on any other port."
           },
           "current_value": {
             "description": "On a `GraphInput` node, the value its `value` input reads now: the one set live, else its\nsaved one. Absent elsewhere, and where it reads none."

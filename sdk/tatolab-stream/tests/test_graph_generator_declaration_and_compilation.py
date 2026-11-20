@@ -582,9 +582,9 @@ def test_interface_nodes_compile_with_their_family_written_by_its_wire_name() ->
     from tatolab.stream import GraphInput, GraphOutput, Image
 
     stream_builder = StreamBuilder("rig")
-    entering = stream_builder.add(GraphInput, config={"port": "camera", "family": Image})
+    entering = stream_builder.add(GraphInput, input_values={"port": "camera", "family": Image})
     inverter = stream_builder.add(FrameInverter)
-    leaving = stream_builder.add(GraphOutput, config={"port": "inverted", "family": Image})
+    leaving = stream_builder.add(GraphOutput, input_values={"port": "inverted", "family": Image})
     stream_builder.connect(entering.output("value"), inverter.input("video_from_upstream"))
     stream_builder.connect(inverter.output("video_to_downstream"), leaving.input("value"))
 

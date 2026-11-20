@@ -389,6 +389,17 @@ impl LoadedStreamInThisRuntime {
                     document_node.exposed_config_fields.clone(),
                 )?;
             }
+            let a_setting_read_at_setup_changes = live_node
+                .pins
+                .keys()
+                .chain(document_pins.keys())
+                .filter(|input| live_node.pins.get(*input) != document_pins.get(*input))
+                .any(|input| {
+                    self.is_a_setting_the_node_reads_at_setup(&live_node.node_run_id, input)
+                });
+            if a_setting_read_at_setup_changes {
+                self.leave_the_node_to_rebuild(&live_node.node_run_id);
+            }
             if live_node.pins != document_pins || live_node.studio != document_node.studio {
                 kept_nodes_whose_saved_values_change.push(SavedValuesOfAKeptNode {
                     node_run_id: live_node.node_run_id.clone(),

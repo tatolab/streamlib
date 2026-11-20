@@ -56,6 +56,7 @@ mod graph_answer_read_through_the_contract_tests;
 mod graph_edit_transaction_and_undo_tests;
 mod graph_edits_of_a_playing_stream_tests;
 mod graph_generator_fragment_tests;
+mod graph_input_retyped_through_transact_tests;
 mod imported_and_nested_stream_fragment_tests;
 mod input_value_lifetime_tests;
 mod input_value_set_live_tests;
