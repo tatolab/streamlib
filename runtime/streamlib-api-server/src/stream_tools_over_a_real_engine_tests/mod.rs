@@ -67,6 +67,7 @@ mod loop_closing_link_judged_before_commit_tests;
 mod node_rebuilt_by_a_setting_tests;
 mod node_type_group_tests;
 mod node_type_reads_tests;
+mod node_types_of_the_graph_itself_tests;
 mod played_project_end_to_end_tests;
 mod project_conversion_named_on_a_link_tests;
 mod project_create_open_and_cancel_tests;

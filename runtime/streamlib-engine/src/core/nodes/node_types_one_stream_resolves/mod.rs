@@ -23,6 +23,7 @@ use crate::core::nodes::node_instance_factory::{
 use crate::core::nodes::project_view_node::{ValueSourceNode, the_node_type_of_a_project_view};
 use crate::core::nodes::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, the_node_type_of_a_graph_input,
+    the_node_types_of_the_graph_itself,
 };
 use crate::core::{NodeDescriptor, PortDirection};
 
@@ -587,17 +588,26 @@ impl NodeTypesOneStreamResolves {
         })
     }
 
-    /// The class's short name — what an instance's display name defaults to.
+    /// The class's short name — what an instance's display name defaults to — of a type the
+    /// registry builds, this stream's interpreter described, or the graph resolves itself.
     pub(crate) fn default_display_name(&self, node_type: &NodeClassImportPath) -> Option<String> {
-        NODE_REGISTRY.default_display_name(node_type).or_else(|| {
-            self.project_the_type_this_streams_interpreter_described(node_type, |described| {
-                described
-                    .descriptor
-                    .node_class_short_name
-                    .as_str()
-                    .to_string()
+        NODE_REGISTRY
+            .default_display_name(node_type)
+            .or_else(|| {
+                self.project_the_type_this_streams_interpreter_described(node_type, |described| {
+                    described
+                        .descriptor
+                        .node_class_short_name
+                        .as_str()
+                        .to_string()
+                })
             })
-        })
+            .or_else(|| {
+                the_node_types_of_the_graph_itself()
+                    .into_iter()
+                    .find(|descriptor| &descriptor.node_class_import_path == node_type)
+                    .map(|descriptor| descriptor.node_class_short_name.as_str().to_string())
+            })
     }
 
     /// `project` of `node_type` as this stream resolves it beyond the native types, `None` when

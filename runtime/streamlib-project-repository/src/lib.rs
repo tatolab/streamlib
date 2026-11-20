@@ -174,7 +174,8 @@ pub use stream_graph_document::{
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, asset_references_made_references_into_the_import,
     assets_a_nodes_input_values_reference, fragment_with_each_node_uuid_kept_by_its_name,
-    input_values_after_the_set, is_a_graph_interface_node_type, is_the_graph_input_type,
+    input_values_after_the_set, is_a_graph_interface_node_type,
+    is_a_node_type_of_the_graph_itself, is_the_graph_input_type,
     the_input_value_after_the_set, the_input_value_held_on,
     the_value_held_on_the_input_or_its_member,
 };

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use streamlib_project_repository::{
     STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
     StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphOperation,
-    is_a_graph_interface_node_type,
+    is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
 };
 
 use uuid::Uuid;
@@ -220,7 +220,8 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Whether `graph_operation` is applied to the graph as drawn first and the live graph
-    /// reconciled to it: an edit that places or touches a node no node runs as, and one that
+    /// reconciled to it: an edit that places or touches a node no node runs as, one that places
+    /// or takes out a `SetVariable` or `GetVariable`, which the graph resolves away, and one that
     /// places, takes out or changes a `GraphInput` or `GraphOutput`, whose interface the graph as
     /// drawn declares and `graph` renders from. A link to a running interface node is the live
     /// graph's own, and `graph` renders it from there.
@@ -235,7 +236,7 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::AddNode { node, links } => {
                 node.fragment.is_some()
                     || node.node_type == STREAM_FRAGMENT_NODE_TYPE
-                    || is_a_graph_interface_node_type(&node.node_type)
+                    || is_a_node_type_of_the_graph_itself(&node.node_type)
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
@@ -245,7 +246,7 @@ impl LoadedStreamInThisRuntime {
                 no_node_runs_as(link.source.node) || no_node_runs_as(link.target.node)
             }
             StreamGraphOperation::RemoveNode { node, .. } => {
-                is_a_graph_interface_node_type(&node.node_type) || held_only_as_drawn(node.id)
+                is_a_node_type_of_the_graph_itself(&node.node_type) || held_only_as_drawn(node.id)
             }
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }

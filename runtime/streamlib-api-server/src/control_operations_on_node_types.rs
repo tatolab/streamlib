@@ -14,7 +14,9 @@ use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::{
     FunctionNodeLanguage, NodeDescriptor, NodeKind, PinConversion, PinType,
 };
-use streamlib::sdk::nodes::{NODE_REGISTRY, NodeTypePortsDescribedOnTheWire};
+use streamlib::sdk::nodes::{
+    NODE_REGISTRY, NodeTypePortsDescribedOnTheWire, the_node_types_of_the_graph_itself,
+};
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
     ControlOperation, DescribeNodeTypes, DescribeNodeTypesRequest, ListNodeTypes,
@@ -199,13 +201,14 @@ impl ControlOperationDispatcher {
                     ));
                 }
                 the_built_in_node_type(node_type)
-                    .map(|descriptor| {
+                    .map(|BuiltInNodeType { descriptor, kind }| {
                         let mut description = a_registered_node_type_described(
                             &descriptor,
                             NodeTypeSourceListedOrigin::BuiltIn,
                             NodeTypeDescribedFrom::BuiltIn,
                             None,
                         );
+                        description.kind = kind;
                         node_type_groups.file(
                             &description.node_type,
                             &mut description.category,
@@ -406,23 +409,17 @@ fn the_listed_origin_of(origin: NodeTypeSourceOrigin) -> NodeTypeSourceListedOri
 /// The node types the runtime brings itself, by import path, each filed under the group the
 /// project's and its imports' `node_type_groups` put it in, else the one it declares.
 fn the_built_in_source(node_type_groups: &NodeTypeGroupsOfAProject) -> NodeTypeSourceListed {
-    let mut registered = NODE_REGISTRY.list_registered();
-    registered.sort_by(|one, other| {
-        one.node_class_import_path
-            .as_str()
-            .cmp(other.node_class_import_path.as_str())
-    });
     NodeTypeSourceListed {
         origin: NodeTypeSourceListedOrigin::BuiltIn,
-        node_types: registered
-            .iter()
-            .map(|descriptor| {
+        node_types: every_built_in_node_type()
+            .into_iter()
+            .map(|BuiltInNodeType { descriptor, kind }| {
                 let mut listed = NodeTypeListed {
                     node_type: descriptor.node_class_import_path.to_string(),
                     documentation: the_first_line_of(&descriptor.description),
                     category: descriptor.category.clone(),
                     category_from: None,
-                    kind: Some(the_kind_of(descriptor.node_kind)),
+                    kind,
                     described_from: NodeTypeDescribedFrom::BuiltIn,
                 };
                 node_type_groups.file(
@@ -436,6 +433,40 @@ fn the_built_in_source(node_type_groups: &NodeTypeGroupsOfAProject) -> NodeTypeS
         graph_generators: Vec::new(),
         unreadable_modules: Vec::new(),
     }
+}
+
+/// A node type the runtime brings itself, and its kind: `None` for one the graph resolves
+/// itself, which no node code runs.
+pub(crate) struct BuiltInNodeType {
+    pub(crate) descriptor: NodeDescriptor,
+    kind: Option<NodeTypeKind>,
+}
+
+/// Every node type the runtime brings itself: those its registry builds, by import path, then
+/// those the graph resolves itself, `GraphInput`, `GraphOutput`, `SetVariable` and
+/// `GetVariable`.
+fn every_built_in_node_type() -> Vec<BuiltInNodeType> {
+    let mut registered = NODE_REGISTRY.list_registered();
+    registered.sort_by(|one, other| {
+        one.node_class_import_path
+            .as_str()
+            .cmp(other.node_class_import_path.as_str())
+    });
+    registered
+        .into_iter()
+        .map(|descriptor| BuiltInNodeType {
+            kind: Some(the_kind_of(descriptor.node_kind)),
+            descriptor,
+        })
+        .chain(
+            the_node_types_of_the_graph_itself()
+                .into_iter()
+                .map(|descriptor| BuiltInNodeType {
+                    descriptor,
+                    kind: None,
+                }),
+        )
+        .collect()
 }
 
 /// A graph generator as the old listing reads it, its promoted settings so named.
@@ -540,11 +571,10 @@ fn a_registered_node_type_described(
 }
 
 /// The node type the runtime brings itself by the import path `node_type`.
-pub(crate) fn the_built_in_node_type(node_type: &str) -> Option<NodeDescriptor> {
-    NODE_REGISTRY
-        .list_registered()
+pub(crate) fn the_built_in_node_type(node_type: &str) -> Option<BuiltInNodeType> {
+    every_built_in_node_type()
         .into_iter()
-        .find(|descriptor| descriptor.node_class_import_path.as_str() == node_type)
+        .find(|built_in| built_in.descriptor.node_class_import_path.as_str() == node_type)
 }
 
 /// A port as its declaration states it in source: by its family alone, a pin type not being

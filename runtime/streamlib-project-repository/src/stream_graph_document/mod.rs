@@ -7,6 +7,9 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::stream_graph_default_port_and_variable_names::{
+    GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE,
+};
 use crate::stream_document_upgrade::{
     NODE_INPUT_VALUES_KEY, fold_the_retired_fields_into, put_input_values,
     stream_document_in_the_current_shape, the_retired_field_holding_no_object,
@@ -63,6 +66,13 @@ pub const GRAPH_INTERFACE_VALUE_PORT_NAME: &str = "value";
 /// Whether `node_type` is `GraphInput` or `GraphOutput`.
 pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
     matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
+}
+
+/// Whether `node_type` is one the graph resolves itself, which no node code runs: `GraphInput`,
+/// `GraphOutput`, `SetVariable` or `GetVariable`.
+pub fn is_a_node_type_of_the_graph_itself(node_type: &str) -> bool {
+    is_a_graph_interface_node_type(node_type)
+        || matches!(node_type, SET_VARIABLE_NODE_TYPE | GET_VARIABLE_NODE_TYPE)
 }
 
 /// One node as a stream's graph document holds it: the spec keys a load reads. A node an older

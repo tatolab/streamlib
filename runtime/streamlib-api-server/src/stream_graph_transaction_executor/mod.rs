@@ -33,7 +33,7 @@ use streamlib_project_repository::{
     asset_references_made_references_into_the_import,
     config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
-    input_values_after_the_set, is_a_graph_interface_node_type,
+    input_values_after_the_set, is_a_node_type_of_the_graph_itself,
     stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
     the_stream_document_of_an_import, the_value_held_on_the_input_or_its_member,
 };
@@ -395,7 +395,7 @@ fn the_graph_node_an_edit_adds_or_configures(
     };
     let names_a_node = !holds_a_fragment
         && node_type != STREAM_FRAGMENT_NODE_TYPE
-        && !is_a_graph_interface_node_type(&node_type);
+        && !is_a_node_type_of_the_graph_itself(&node_type);
     names_a_node.then_some((node_type, node_name, input_values))
 }
 

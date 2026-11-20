@@ -335,12 +335,40 @@ fn two_setters_of_one_variable_are_refused_naming_both() {
     );
 }
 
+/// Mental-revert: refusing a setter that holds nothing refuses one placed before its link.
 #[test]
-fn a_setter_holding_nothing_or_two_values_is_refused() {
-    let mut holding_nothing = a_camera_variable_read_by_two_displays();
-    holding_nothing["links"].as_array_mut().unwrap().remove(0);
-    assert!(refusal_of(holding_nothing).contains("sets the variable `camera` to nothing"));
+fn a_setter_holding_nothing_is_placed_and_a_link_reading_it_is_refused_naming_it() {
+    let placed_alone = serde_json::json!({
+        "nodes": [
+            {"name": "set-camera", "type": "tatolab.stream:SetVariable", "config": {"variable": "camera"}},
+            {"name": "get-camera", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}}
+        ],
+        "links": []
+    });
+    let resolution = resolved(placed_alone).expect("a setter holding nothing is placed");
+    assert_eq!(
+        resolution.variables_as_drawn.what_each_get_reads["get-camera"].value,
+        Some(ValueASetVariableHolds::Nothing)
+    );
 
+    let mut read_while_holding_nothing = a_camera_variable_read_by_two_displays();
+    read_while_holding_nothing["links"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    let refusal = refusal_of(read_while_holding_nothing);
+    assert!(
+        refusal.contains(
+            "`GetVariable` node `get-camera` is linked to `front/video_in`, and its variable \
+             `camera` holds nothing yet: link a port into the `value` input of `SetVariable` \
+             node `set-camera`"
+        ),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_setter_holding_two_values_is_refused() {
     let mut holding_two = a_camera_variable_read_by_two_displays();
     holding_two["nodes"][1]["config"]["node_reference"] = serde_json::json!({"node": "front"});
     assert!(refusal_of(holding_two).contains("both from a link and from its `node_reference`"));
@@ -487,14 +515,27 @@ fn a_link_into_a_get_is_refused_naming_where_a_variable_is_set() {
     assert!(refusal_of(graph).contains("a link enters `GetVariable` node `get-camera`"));
 }
 
+/// Mental-revert: refusing a get no setter sets refuses one placed before its setter.
 #[test]
-fn a_get_no_link_or_config_reads_yet_still_needs_a_setter() {
-    let mut graph = a_camera_variable_read_by_two_displays();
-    graph["nodes"].as_array_mut().unwrap().push(serde_json::json!(
+fn a_get_nothing_reads_is_placed_with_no_setter_and_one_linked_is_refused() {
+    let mut placed = a_camera_variable_read_by_two_displays();
+    placed["nodes"].as_array_mut().unwrap().push(serde_json::json!(
             {"name": "get-camra", "type": "tatolab.stream:GetVariable", "config": {"variable": "camra"}}
         ));
+    let resolution = resolved(placed.clone()).expect("a get nothing reads is placed");
+    assert_eq!(
+        resolution.variables_as_drawn.what_each_get_reads["get-camra"],
+        WhatAGetVariableReads {
+            variables_it_may_read: vec!["camera".to_string()],
+            value: None,
+        }
+    );
+
+    placed["links"].as_array_mut().unwrap().push(serde_json::json!(
+        {"source": {"node": "get-camra", "port": "value"}, "target": {"node": "back", "port": "video_in"}}
+    ));
     assert!(
-        refusal_of(graph)
+        refusal_of(placed)
             .contains("reads the variable `camra`, which no `SetVariable` on its level")
     );
 }
@@ -787,4 +828,124 @@ fn a_drawn_link_read_through_a_variable_says_what_its_running_link_converts_and_
         .expect("the get's drawn link renders");
     assert!(drawn.marks.free_conversion, "{drawn:?}");
     assert_eq!(drawn.marks.warnings, [vector_read_as_a_color], "{drawn:?}");
+}
+
+/// Mental-revert: rendering a get's `variable` as the String its type declares, and its `value`
+/// with no type, leaves the menu with no choice and the output untyped.
+#[test]
+fn a_gets_variable_renders_as_a_menu_of_the_variables_it_may_read_and_its_value_of_its_setters_type()
+ {
+    use crate::core::descriptors::{
+        PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    };
+    let graph = serde_json::json!({
+        "nodes": [
+            {"name": "level", "type": "rig:Meter"},
+            {"name": "set-level", "type": "tatolab.stream:SetVariable", "config": {"variable": "level"}},
+            {"name": "set-gain", "type": "tatolab.stream:SetVariable", "config": {"variable": "gain"}},
+            {"name": "get-level", "type": "tatolab.stream:GetVariable", "config": {"variable": "level"}},
+            {"name": "display", "type": "rig:Display"}
+        ],
+        "links": [
+            {"source": {"node": "level", "port": "amount"}, "target": {"node": "set-level", "port": "value"}},
+            {"source": {"node": "level", "port": "amount"}, "target": {"node": "set-gain", "port": "value"}},
+            {"source": {"node": "get-level", "port": "value"}, "target": {"node": "display", "port": "amount_in"}}
+        ]
+    });
+    let resolution = resolved(graph).unwrap();
+    let amount = PortDescriptor::new(
+        "amount",
+        "How loud it is.",
+        false,
+        PortFamilyDeclaration::of_family(PortFamily::Channels),
+    )
+    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }));
+    let mut level = a_rendered_node("level");
+    level.ports.outputs = vec![GraphNodePortOnTheWire::from(&PortInfo::from(&amount))];
+    let mut graph_response = GraphResponse {
+        asset: None,
+        display_name: None,
+        stream: None,
+        clock: Default::default(),
+        condition: None,
+        nodes: vec![level, a_rendered_node("display")],
+        links: Vec::new(),
+        references: Vec::new(),
+        machine: "vm".to_string(),
+        groups: Vec::new(),
+        studio: None,
+        function_node_pool: None,
+    };
+    resolution
+        .variables_as_drawn
+        .render_into(&mut graph_response);
+
+    let node_named = |name: &str| {
+        graph_response
+            .nodes
+            .iter()
+            .find(|node| node.name == name)
+            .unwrap_or_else(|| panic!("`{name}` renders"))
+    };
+    let pin_type_of = |port: &GraphNodePortOnTheWire| port.pin.as_ref().map(|pin| pin.pin_type.clone());
+    let get = node_named("get-level");
+    assert_eq!(
+        pin_type_of(&get.ports.inputs[0]),
+        Some(PinType::Menu {
+            option_names: vec!["gain".to_string(), "level".to_string()],
+        }),
+        "{:?}",
+        get.ports.inputs
+    );
+    let get_value = &get.ports.outputs[0];
+    assert_eq!(get_value.name, "value");
+    assert_eq!(
+        pin_type_of(get_value),
+        Some(PinType::Float { exact_size: None })
+    );
+    let set_value = node_named("set-level")
+        .ports
+        .inputs
+        .iter()
+        .find(|input| input.name == "value")
+        .expect("a setter renders its `value`");
+    assert_eq!(pin_type_of(set_value), None, "a setter's `value` takes any type");
+}
+
+#[test]
+fn a_get_whose_setter_holds_a_node_renders_its_value_of_any_type() {
+    let graph = serde_json::json!({
+        "nodes": [
+            {"name": "connection", "type": "rig:Connection"},
+            {"name": "set-connection", "type": "tatolab.stream:SetVariable",
+             "config": {"variable": "connection", "node_reference": {"node": "connection"}}},
+            {"name": "get-connection", "type": "tatolab.stream:GetVariable", "config": {"variable": "connection"}}
+        ],
+        "links": []
+    });
+    let resolution = resolved(graph).unwrap();
+    let mut graph_response = GraphResponse {
+        asset: None,
+        display_name: None,
+        stream: None,
+        clock: Default::default(),
+        condition: None,
+        nodes: vec![a_rendered_node("connection")],
+        links: Vec::new(),
+        references: Vec::new(),
+        machine: "vm".to_string(),
+        groups: Vec::new(),
+        studio: None,
+        function_node_pool: None,
+    };
+    resolution
+        .variables_as_drawn
+        .render_into(&mut graph_response);
+    let get = graph_response
+        .nodes
+        .iter()
+        .find(|node| node.name == "get-connection")
+        .expect("the get renders");
+    assert_eq!(get.ports.outputs[0].name, "value");
+    assert!(get.ports.outputs[0].pin.is_none(), "{:?}", get.ports.outputs);
 }
