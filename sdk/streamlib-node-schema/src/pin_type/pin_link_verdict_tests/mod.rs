@@ -4,6 +4,8 @@
 use super::*;
 use crate::NodeClassImportPath;
 
+mod bundle_tests;
+
 fn boolean() -> PinType {
     PinType::Boolean {}
 }
@@ -654,146 +656,6 @@ fn a_type_reads_with_what_narrows_it() {
         .to_string(),
         "Asset (image)"
     );
-}
-
-/// Bundle members are compared by name and type; a member meaning that differs only warns.
-#[test]
-fn bundles_connect_by_member_names_and_types_and_warn_of_member_meanings() {
-    let bundle = |meaning: &str| PinType::Bundle {
-        members: vec![BundleMember {
-            name: "pitch".to_owned(),
-            member_type: float(),
-            meaning: Some(meaning.to_owned()),
-            default_value: None,
-        }],
-    };
-    assert_eq!(
-        the_verdict_between(&bundle("frequency"), &bundle("note")),
-        PinLinkVerdict {
-            outcome: PinLinkOutcome::Connects,
-            warnings: vec![PinLinkWarning::MemberMeaningsDiffer {
-                member_name: "pitch".to_owned(),
-                output_meaning: "frequency".to_owned(),
-                input_meaning: "note".to_owned(),
-            }],
-        }
-    );
-    let list_of = |element_type| PinType::ListOf {
-        element_type: Box::new(element_type),
-    };
-    let pitch_warning = |member_name: &str| PinLinkWarning::MemberMeaningsDiffer {
-        member_name: member_name.to_owned(),
-        output_meaning: "frequency".to_owned(),
-        input_meaning: "note".to_owned(),
-    };
-    assert_eq!(
-        the_verdict_between(&list_of(bundle("frequency")), &list_of(bundle("note"))),
-        PinLinkVerdict {
-            outcome: PinLinkOutcome::Connects,
-            warnings: vec![pitch_warning("pitch")],
-        }
-    );
-    let nested = |meaning: &str| PinType::Bundle {
-        members: vec![BundleMember {
-            name: "voice".to_owned(),
-            member_type: bundle(meaning),
-            meaning: None,
-            default_value: None,
-        }],
-    };
-    assert_eq!(
-        the_verdict_between(&nested("frequency"), &nested("note")),
-        PinLinkVerdict {
-            outcome: PinLinkOutcome::Connects,
-            warnings: vec![pitch_warning("voice.pitch")],
-        }
-    );
-    let renamed = PinType::Bundle {
-        members: vec![BundleMember {
-            name: "gain".to_owned(),
-            member_type: float(),
-            meaning: None,
-            default_value: None,
-        }],
-    };
-    assert!(matches!(
-        the_outcome_between(&bundle("frequency"), &renamed),
-        PinLinkOutcome::Refused(_)
-    ));
-    assert_eq!(bundle("frequency").to_string(), "Bundle (pitch: Float)");
-}
-
-/// Two bundles holding the same members in another order are one type: each member is matched
-/// by its name, and a meaning that differs is warned of under that member's name.
-///
-/// Mental-revert: pairing members by their place refuses the link, `pitch` meeting `gain`.
-#[test]
-fn bundles_holding_the_same_members_in_another_order_connect_member_by_name() {
-    let member = |name: &str, meaning: &str| BundleMember {
-        name: name.to_owned(),
-        member_type: float(),
-        meaning: Some(meaning.to_owned()),
-        default_value: None,
-    };
-    let output = PinType::Bundle {
-        members: vec![member("pitch", "frequency"), member("gain", "decibels")],
-    };
-    let input = PinType::Bundle {
-        members: vec![member("gain", "decibels"), member("pitch", "note")],
-    };
-    assert_eq!(
-        the_verdict_between(&output, &input),
-        PinLinkVerdict {
-            outcome: PinLinkOutcome::Connects,
-            warnings: vec![PinLinkWarning::MemberMeaningsDiffer {
-                member_name: "pitch".to_owned(),
-                output_meaning: "frequency".to_owned(),
-                input_meaning: "note".to_owned(),
-            }],
-        }
-    );
-    let with_another_member = PinType::Bundle {
-        members: vec![member("gain", "decibels"), member("pan", "position")],
-    };
-    assert!(matches!(
-        the_outcome_between(&output, &with_another_member),
-        PinLinkOutcome::Refused(_)
-    ));
-}
-
-/// A bundle naming one member twice is not the bundle naming each of its members once, in
-/// either direction, though every name of one is a name of the other.
-#[test]
-fn a_bundle_naming_a_member_twice_does_not_connect_to_one_naming_it_once() {
-    let bundle_of = |names: &[&str]| PinType::Bundle {
-        members: names
-            .iter()
-            .map(|name| BundleMember {
-                name: (*name).to_owned(),
-                member_type: float(),
-                meaning: None,
-                default_value: None,
-            })
-            .collect(),
-    };
-    for (output, input) in [
-        (
-            bundle_of(&["pitch", "pitch"]),
-            bundle_of(&["pitch", "gain"]),
-        ),
-        (
-            bundle_of(&["pitch", "gain"]),
-            bundle_of(&["pitch", "pitch"]),
-        ),
-    ] {
-        assert!(
-            matches!(
-                the_outcome_between(&output, &input),
-                PinLinkOutcome::Refused(_)
-            ),
-            "{output} into {input}"
-        );
-    }
 }
 
 /// The words a refusal of a link from `output` into `input`, which no conversion bridges, says.

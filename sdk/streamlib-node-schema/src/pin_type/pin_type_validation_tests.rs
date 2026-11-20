@@ -135,3 +135,52 @@ fn a_menu_with_no_option_is_refused() {
         .is_err()
     );
 }
+
+/// A member of a type a bundle cannot hold yet is refused at declaration, by the member's name.
+#[test]
+fn a_bundle_member_of_a_stream_or_event_type_is_refused_by_its_name() {
+    for member_type in [
+        PinType::Texture {
+            pixel_formats: vec![],
+        },
+        PinType::Audio {},
+        PinType::EncodedVideo { codecs: vec![] },
+        PinType::EncodedAudio { codecs: vec![] },
+        PinType::Trigger {},
+    ] {
+        let refusal = PinType::Bundle {
+            members: vec![
+                a_member("opacity", PinType::Float { exact_size: None }),
+                a_member("frame", member_type.clone()),
+            ],
+        }
+        .validate()
+        .unwrap_err();
+        assert!(
+            refusal.contains("`frame`") && refusal.contains(&member_type.to_string()),
+            "{refusal}"
+        );
+    }
+}
+
+/// A bundle naming one member twice is refused by that name, as its stored value is one object
+/// keyed by member; so is a List element that is such a bundle.
+///
+/// Mental-revert: without the check, two `gain` members validate and one of them is never read.
+#[test]
+fn a_bundle_naming_a_member_twice_is_refused_by_that_name() {
+    let named_twice = PinType::Bundle {
+        members: vec![
+            a_member("gain", PinType::Float { exact_size: None }),
+            a_member("pan", PinType::Float { exact_size: None }),
+            a_member("gain", PinType::Integer { exact_size: None }),
+        ],
+    };
+    for pin_type in [named_twice.clone(), a_list_of(named_twice)] {
+        let refusal = pin_type.validate().unwrap_err();
+        assert!(
+            refusal.contains("`gain`") && refusal.contains("more than once"),
+            "{refusal}"
+        );
+    }
+}
