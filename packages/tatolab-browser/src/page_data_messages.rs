@@ -13,7 +13,7 @@ use serde_json::Value as JsonValue;
 /// The JSON text of the `detail` one `data` message reaches the page with.
 ///
 /// The payload is one `PageMessage`: a JSON object, nothing after it.
-pub fn page_data_detail_json_of_a_page_message(payload: &[u8]) -> Result<String, String> {
+pub fn page_detail_json_of_message(payload: &[u8]) -> Result<String, String> {
     let value: JsonValue = serde_json::from_slice(payload)
         .map_err(|unreadable| format!("a data message is not one JSON object: {unreadable}"))?;
     if !value.is_object() {
@@ -24,7 +24,7 @@ pub fn page_data_detail_json_of_a_page_message(payload: &[u8]) -> Result<String,
 
 /// The `PageMessage` one `window.tatolab.publish(object)` call is written to
 /// `events` as.
-pub fn events_page_message_of_published_json(published_json: &str) -> Result<Vec<u8>, String> {
+pub fn page_message_of_published_json(published_json: &str) -> Result<Vec<u8>, String> {
     let value: JsonValue = serde_json::from_str(published_json)
         .map_err(|unparsable| format!("a published object is not JSON: {unparsable}"))?;
     if !value.is_object() {
@@ -114,7 +114,7 @@ mod tests {
             "tags": ["a", null],
         });
         let detail: JsonValue = serde_json::from_str(
-            &page_data_detail_json_of_a_page_message(data.to_string().as_bytes()).unwrap(),
+            &page_detail_json_of_message(data.to_string().as_bytes()).unwrap(),
         )
         .unwrap();
         assert_eq!(detail, data);
@@ -122,21 +122,20 @@ mod tests {
 
     #[test]
     fn a_data_message_that_is_not_one_object_is_refused_by_name() {
-        let not_an_object = page_data_detail_json_of_a_page_message(br#""text""#)
-            .expect_err("a string is not an object");
+        let not_an_object =
+            page_detail_json_of_message(br#""text""#).expect_err("a string is not an object");
         assert!(not_an_object.contains("one JSON object"), "{not_an_object}");
-        let two_objects =
-            page_data_detail_json_of_a_page_message(b"{}{}").expect_err("two objects");
+        let two_objects = page_detail_json_of_message(b"{}{}").expect_err("two objects");
         assert!(two_objects.contains("not one JSON object"), "{two_objects}");
-        let not_json = page_data_detail_json_of_a_page_message(&[0x81, 0xa1, b'a', 0x01])
-            .expect_err("a msgpack map");
+        let not_json =
+            page_detail_json_of_message(&[0x81, 0xa1, b'a', 0x01]).expect_err("a msgpack map");
         assert!(not_json.contains("not one JSON object"), "{not_json}");
     }
 
     #[test]
     fn a_published_object_is_written_as_one_page_message() {
         let payload =
-            events_page_message_of_published_json(r#"{"clicked":"cta","at":12.5,"n":-3}"#).unwrap();
+            page_message_of_published_json(r#"{"clicked":"cta","at":12.5,"n":-3}"#).unwrap();
         let written: JsonValue = serde_json::from_slice(&payload).unwrap();
         assert_eq!(
             written,
@@ -146,7 +145,7 @@ mod tests {
 
     #[test]
     fn a_published_value_that_is_not_an_object_is_refused() {
-        let refusal = events_page_message_of_published_json("[1,2]").expect_err("an array");
+        let refusal = page_message_of_published_json("[1,2]").expect_err("an array");
         assert!(refusal.contains("one JSON object"), "{refusal}");
     }
 }
