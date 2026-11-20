@@ -10,6 +10,9 @@ use super::super::bundle_member_link_ends::what_a_link_end_at_a_port_carries;
 use super::super::pin_type_resolution::{PinTypeInItsGraph, the_pin_type_of_a_port_in_its_graph};
 use super::super::port_family_link_checks::the_named_type_among;
 use super::super::{Graph, GraphEdgeWithComponents, GraphNode, Link, PendingDeletionComponent};
+use super::bundle_frames_into_an_untyped_input::{
+    the_bundle_frame_type_among, the_refusal_of_bundle_frames_into_an_untyped_input,
+};
 use super::{TypedEnd, is_typed, verdict_between, what_the_input_end_of_a_link_carries};
 use crate::core::PortDirection;
 use crate::core::descriptors::{DeclaredPinType, PinConversion};
@@ -100,6 +103,24 @@ pub(super) fn the_first_wired_link_past_an_input_refused(
                             link_out.to_port(),
                         ));
                     }
+                } else if member.is_none()
+                    && let Some(bundle_frame_type) = the_bundle_frame_type_among(&carried_on)
+                {
+                    let refusal = the_refusal_of_bundle_frames_into_an_untyped_input(
+                        node,
+                        &following_output.name,
+                        bundle_frame_type.clone(),
+                        downstream_node,
+                        &downstream_input.name,
+                    );
+                    return Some(format!(
+                        "output `{}` of `{}` takes the type linked into `{input_name}`, and \
+                         under it the wired link {} → {} is refused: {refusal}",
+                        following_output.name,
+                        node.display_name,
+                        link_out.source(),
+                        link_out.to_port(),
+                    ));
                 } else if let Some(named) = the_named_type_among(&carried_on) {
                     return Some(format!(
                         "output `{}` of `{}` takes the type linked into `{input_name}`, so it \

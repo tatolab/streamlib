@@ -32,6 +32,7 @@ mod bundle_frames_into_an_untyped_input;
 mod wired_links_past_an_input;
 
 use bundle_frames_into_an_untyped_input::refuse_bundle_frames_into_an_untyped_input;
+pub(crate) use bundle_frames_into_an_untyped_input::the_bundle_frame_type_an_output_may_carry;
 use wired_links_past_an_input::{
     the_first_wired_link_past_an_input_refused, the_wired_links_out_of,
 };

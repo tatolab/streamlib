@@ -13,16 +13,14 @@ use std::time::Duration;
 use streamlib_node_schema::PortFamily;
 use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
 
-use crate::core::PortDirection;
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
-use crate::core::descriptors::ResolvedPin;
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{
     Graph, GraphNode, OutputLinkPortRef, names_listed_for_a_refusal,
-    port_names_listed_for_a_refusal, the_pin_a_port_resolves_to,
+    port_names_listed_for_a_refusal, the_bundle_frame_type_an_output_may_carry,
 };
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::LoadedStreamInThisRuntime;
@@ -347,7 +345,8 @@ fn the_running_node_with_its_output_port<'graph>(
 }
 
 /// Refuse a viewer of output `port_name` of `node`, in the stream `stream_id`, when the port
-/// carries a bundle or a List holding a Texture, Audio or an encoded unit: its messages travel as
+/// carries, or may carry as one of its alternatives, a bundle or a List holding a Texture, Audio
+/// or an encoded unit: its messages travel as
 /// Bundle frames, and a viewer reads only a message of one kind. The refusal names each member
 /// that makes it one. A Texture output on its own wire is viewed as before.
 fn refuse_a_viewer_of_a_port_writing_bundle_frames(
@@ -359,17 +358,15 @@ fn refuse_a_viewer_of_a_port_writing_bundle_frames(
     let Some(port) = node.output_port(port_name) else {
         return Ok(());
     };
-    let Some(ResolvedPin { pin_type, .. }) =
-        the_pin_a_port_resolves_to(graph, node, port, PortDirection::Output)
-    else {
+    let Some(pin_type) = the_bundle_frame_type_an_output_may_carry(graph, node, port) else {
         return Ok(());
     };
-    let Some(heavy_members) = pin_type.its_heavy_members_in_words() else {
-        return Ok(());
-    };
+    let heavy_members = pin_type
+        .its_heavy_members_in_words()
+        .expect("a type travelling as Bundle frames holds a heavy member");
     Err(Error::Link(format!(
         "port `{port_name}` of node `{}` ({}) of the stream `{stream_id}` opens no viewer: it \
-         carries a {pin_type}, and {heavy_members}, so its messages travel as Bundle frames, \
+         may carry a {pin_type}, and {heavy_members}, so its messages travel as Bundle frames, \
          which a viewer does not read. To fix: view the port that writes each heavy member on \
          its own",
         node.node_uuid, node.display_name,
