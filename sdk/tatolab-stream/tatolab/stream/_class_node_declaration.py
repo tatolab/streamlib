@@ -33,10 +33,9 @@ from ._pin_declaration import (
     NodeDeclarationFindingCode,
     NodeDeclarationRefusal,
     PinDirection,
-    family_a_pin_travels_on,
-    family_declaration_of_a_typed_output,
     read_pin_declaration,
 )
+from ._pin_family import family_a_pin_travels_on, family_declaration_of_a_typed_output
 from ._port_family_declaration import Input, Output
 
 __all__ = ["read_class_node_ports"]

@@ -48,11 +48,10 @@ from ._pin_declaration import (
     NO_DEFAULT,
     DeclaredPin,
     NodeDeclarationRefusal,
-    family_a_pin_type_travels_on,
-    family_declaration_of_a_typed_output,
     read_pin_declaration,
     refuse_former_names_that_find_no_one_pin,
 )
+from ._pin_family import family_a_pin_type_travels_on, family_declaration_of_a_typed_output
 from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 __all__ = [

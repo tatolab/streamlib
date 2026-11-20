@@ -19,7 +19,6 @@ parameter types.
 from __future__ import annotations
 
 import dataclasses
-import math
 import types
 import typing
 from collections.abc import Mapping, Sequence
@@ -27,8 +26,6 @@ from dataclasses import dataclass
 from typing import Any, Final, Literal, Optional, final
 
 from ._contract_pin_types import (
-    BUILT_IN_PIN_TYPES,
-    BuiltInPinTypeName,
     PinAnnotationName,
     PinAnnotations,
     DeclaredPinType,
@@ -46,6 +43,11 @@ from ._input_declaration_annotations import (
 from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._number_range import NumberRange
 from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
+from ._pin_value_stored_form import (
+    PIN_TYPE_DESCRIPTION_BY_NAME as _PIN_TYPE_DESCRIPTION_BY_NAME,
+    PinValueNotTaken,
+    stored_form_of_a_pin_value,
+)
 from ._pin_types import (
     INTEGER_BOUNDS_OF_EACH_SIZE,
     INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS,
@@ -66,9 +68,6 @@ __all__ = [
     "PinDirection",
     "PinForm",
     "PinValueNotTaken",
-    "family_a_pin_travels_on",
-    "family_a_pin_type_travels_on",
-    "family_declaration_of_a_typed_output",
     "read_pin_declaration",
     "refuse_former_names_that_find_no_one_pin",
     "stored_form_of_a_pin_value",
@@ -168,10 +167,6 @@ class DeclaredPin:
     """The type parameter that types it, whose value its node can only hand on; `None` for a
     pin typed otherwise."""
 
-
-_PIN_TYPE_DESCRIPTION_BY_NAME: Final[dict[BuiltInPinTypeName, PinTypeDescription]] = {
-    row.name: row for row in BUILT_IN_PIN_TYPES
-}
 
 _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
     ExactNumberSize(size).written_form for size in INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS
@@ -862,116 +857,6 @@ class _PinReading:
                 return "give it a default inside its range."
 
 
-type PinValueNotTakenKind = Literal[
-    "not_of_its_type",
-    "outside_its_exact_size",
-    "not_finite",
-    "not_an_option",
-    "outside_its_range",
-]
-"""Why a pin does not hold a value."""
-
-
-class PinValueNotTaken(ValueError):
-    """A value a pin of its type does not hold: the value refused, and why, worded to follow it."""
-
-    def __init__(self, value: object, why: str, *, kind: PinValueNotTakenKind, pin_type: PinType) -> None:
-        super().__init__(f"{value!r}, {why}")
-        self.value: object = value
-        """The value refused: the whole value, or the element of a List that was refused."""
-        self.why: str = why
-        """Why, as a clause that follows the value, such as `which is not a Float`."""
-        self.kind: PinValueNotTakenKind = kind
-        """What kind of refusal it is."""
-        self.pin_type: PinType = pin_type
-        """The type the refused value was judged as: the pin's, or a List's element type."""
-
-
-def stored_form_of_a_pin_value(
-    value: object, pin_type: PinType, annotations: Optional[PinAnnotations] = None
-) -> object:
-    """`value` in the stored JSON form a pin of `pin_type` holds it in, inside the range
-    `annotations` state; refused with `PinValueNotTaken` when the pin does not hold it."""
-    stored = _stored_form_of_its_type(value, pin_type)
-    number_range = (annotations or {}).get("range")
-    if number_range is not None and isinstance(stored, (int, float)) and not isinstance(stored, bool):
-        minimum, maximum = number_range.get("minimum"), number_range.get("maximum")
-        if (minimum is not None and stored < minimum) or (maximum is not None and stored > maximum):
-            raise PinValueNotTaken(
-                stored,
-                f"outside its `NumberRange(minimum={minimum!r}, maximum={maximum!r})`",
-                kind="outside_its_range",
-                pin_type=pin_type,
-            )
-    return stored
-
-
-def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
-    row = _PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]]
-    not_of_its_type = PinValueNotTaken(
-        value, f"which is not a {row.label}", kind="not_of_its_type", pin_type=pin_type
-    )
-    match pin_type:
-        case {"type": "boolean"}:
-            if not isinstance(value, bool):
-                raise not_of_its_type
-            return value
-        case {"type": "integer"}:
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise not_of_its_type
-            exact_size = pin_type.get("exact_size")
-            if exact_size is not None:
-                lowest, highest = INTEGER_BOUNDS_OF_EACH_SIZE[exact_size]
-                if not lowest <= value <= highest:
-                    raise PinValueNotTaken(
-                        value,
-                        f"outside the {lowest} to {highest} its exact size `{exact_size}` holds",
-                        kind="outside_its_exact_size",
-                        pin_type=pin_type,
-                    )
-            return value
-        case {"type": "float"}:
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise not_of_its_type
-            if not math.isfinite(value):
-                raise PinValueNotTaken(
-                    value, "and a stored number is finite", kind="not_finite", pin_type=pin_type
-                )
-            return float(value)
-        case {"type": "color" | "vector" | "rectangle" | "transform"}:
-            value_class = _the_value_class_of(pin_type)
-            if type(value) is not value_class:
-                raise not_of_its_type
-            return value.stored_value()
-        case {"type": "string"}:
-            if not isinstance(value, str):
-                raise not_of_its_type
-            return value
-        case {"type": "menu", "option_names": option_names}:
-            if value not in option_names:
-                raise PinValueNotTaken(
-                    value,
-                    f"which is none of its options, "
-                    f"{', '.join(repr(option) for option in option_names)}",
-                    kind="not_an_option",
-                    pin_type=pin_type,
-                )
-            return value
-        case {"type": "asset"}:
-            if type(value) is not Asset:
-                raise not_of_its_type
-            return value.stored_value()
-        case {"type": "list_of", "element_type": element_type}:
-            if not isinstance(value, (list, tuple)):
-                raise not_of_its_type
-            return [
-                _stored_form_of_its_type(element, element_type)
-                for element in value  # pyright: ignore[reportUnknownVariableType]
-            ]
-        case _:
-            raise not_of_its_type
-
-
 # The written forms of the small types, which a List element takes.
 _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
     spelling.written_form
@@ -1002,13 +887,6 @@ def _written_forms_a_list_element_takes() -> str:
 
 def _is_a_value_class_of_parts(written_type: object) -> typing.TypeGuard[type[PinValueOfParts]]:
     return written_type in PIN_VALUE_CLASSES
-
-
-def _the_value_class_of(pin_type: PinType) -> type[PinValueOfParts]:
-    (value_class,) = [
-        value_class for value_class in PIN_VALUE_CLASSES if value_class.pin_type == pin_type
-    ]
-    return value_class
 
 
 def _annotation_on_the_wire(annotation: object) -> Any:
@@ -1065,66 +943,3 @@ def _name_of(annotation: object) -> str:
     if isinstance(annotation, type):
         return f"`{annotation.__name__}`"
     return f"`{annotation!r}`"
-
-
-def family_a_pin_type_travels_on(pin_type: "Mapping[str, Any]") -> str:
-    """The port family whose message a value of `pin_type` travels as.
-
-    A number, a Boolean and a value of parts travel as a control message on Channels, and a
-    List of them as an Array frame; a String, a Menu, an Asset, a Trigger and any other List as
-    a Records message. A Texture travels as an Image frame, Audio as a Channels block, a Tensor
-    as an Array frame and encoded media as Packets. A named type travels as the bytes its class
-    packs, which belong to no family; its port is declared on Records, and the runtime refuses
-    its link to any pin that states no type.
-    """
-    if pin_type["type"] == "list_of":
-        return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
-    if pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE:
-        return "channels"
-    return _FAMILY_OF_EACH_STREAM_PIN_TYPE.get(pin_type["type"], "records")
-
-
-def family_a_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
-    """The port family whose message the value of a pin declaring exactly one type travels as."""
-    return family_a_pin_type_travels_on(_the_one_pin_type_declared(declaration))
-
-
-def family_declaration_of_a_typed_output(
-    port_name: str, declaration: PinDeclarationOnTheWire
-) -> dict[str, Any]:
-    """The family declaration of the output `port_name` a pin of exactly one type declares: a
-    value on Channels names one channel per part, or the port itself for a number, each a 64-bit
-    float."""
-    pin_type = _the_one_pin_type_declared(declaration)
-    family = family_a_pin_type_travels_on(pin_type)
-    family_declaration: dict[str, Any] = {"family": family}
-    if family == "channels" and pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE:
-        value_class = next(
-            (value_class for value_class in PIN_VALUE_CLASSES if value_class.pin_type == pin_type),
-            None,
-        )
-        channel_names = [port_name] if value_class is None else list(value_class.part_names())
-        family_declaration.update({"names": {"stated": channel_names}, "dtype": "f64"})
-    return family_declaration
-
-
-def _the_one_pin_type_declared(declaration: PinDeclarationOnTheWire) -> PinType:
-    declared_pin_type = declaration["pin_type"]
-    assert declared_pin_type["kind"] == "is", "a typed pin declares exactly one type"
-    return declared_pin_type["pin_type"]
-
-
-# The pin types whose value travels as a control message, its parts one on each channel.
-_TYPES_OF_A_CONTROL_MESSAGE: Final[frozenset[str]] = frozenset(
-    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
-)
-
-# The family each pin type that holds no stored value travels on.
-_FAMILY_OF_EACH_STREAM_PIN_TYPE: Final[dict[str, str]] = {
-    "texture": "image",
-    "audio": "channels",
-    "tensor": "array",
-    "encoded_video": "packets",
-    "encoded_audio": "packets",
-    "trigger": "records",
-}
