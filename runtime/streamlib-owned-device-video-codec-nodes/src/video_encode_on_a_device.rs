@@ -33,9 +33,7 @@ use streamlib_vulkan_video::{
 use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::EncodedVideoAccessUnit;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
-use crate::video_encode_session_mint_gate::{
-    ENCODE_SESSION_LIMIT_MINT_RETRY_INTERVAL, EncodeSessionMintGate,
-};
+use crate::video_codec_retry_gate::{VIDEO_CODEC_RETRY_INTERVAL, VideoCodecRetryGate};
 use crate::video_encoder_settings::{VideoEncodeSessionShape, VideoEncoderSettings};
 
 /// Imports kept, one per producer pool slot; a producer's pool is far smaller.
@@ -132,7 +130,7 @@ pub struct VideoEncodeOnADevice {
     imported_pixel_buffers: HashMap<String, ConsumerVulkanBuffer>,
     imported_textures: HashMap<String, ConsumerVulkanTexture>,
     minted_session: Option<VideoEncodeSessionMintedFromAFrame>,
-    session_mint_gate: EncodeSessionMintGate,
+    session_mint_gate: VideoCodecRetryGate,
     next_frame_must_be_a_sync_point: bool,
     /// Set when a session is minted and cleared once a frame's outcome
     /// reports it, so a mint whose first frame failed is still reported.
@@ -164,7 +162,7 @@ impl VideoEncodeOnADevice {
             imported_pixel_buffers: HashMap::new(),
             imported_textures: HashMap::new(),
             minted_session: None,
-            session_mint_gate: EncodeSessionMintGate::default(),
+            session_mint_gate: VideoCodecRetryGate::default(),
             next_frame_must_be_a_sync_point: false,
             session_minted_and_not_yet_reported: false,
             frames_not_checked_out: 0,
@@ -184,9 +182,7 @@ impl VideoEncodeOnADevice {
     ) -> Result<VideoFrameEncodeOutcome, String> {
         let node_type_name = self.node.node_type_name;
         if self.minted_session.is_none()
-            && !self
-                .session_mint_gate
-                .a_mint_may_be_tried_at(Instant::now())
+            && !self.session_mint_gate.a_try_may_be_made_at(Instant::now())
         {
             return Ok(VideoFrameEncodeOutcome::DiscardedWithoutASession);
         }
@@ -545,7 +541,7 @@ impl VideoEncodeOnADevice {
                     .session_shape_for_frame(self.node.node_type_name, width, height);
             match self.mint_session(frame, shape) {
                 Ok(minted) => {
-                    let mints_refused = self.session_mint_gate.minted();
+                    let mints_refused = self.session_mint_gate.succeeded();
                     if mints_refused > 0 {
                         tracing::info!(
                             mints_refused,
@@ -557,12 +553,10 @@ impl VideoEncodeOnADevice {
                     self.minted_session = Some(minted);
                 }
                 Err(EncodeSessionNotMinted::AtTheVideoSessionLimit(refusal)) => {
-                    let mints_refused = self
-                        .session_mint_gate
-                        .refused_at_the_session_limit_at(Instant::now());
+                    let mints_refused = self.session_mint_gate.refused_for_now_at(Instant::now());
                     return Err(format!(
                         "{refusal}; frames are discarded and the mint is tried again every \
-                         {ENCODE_SESSION_LIMIT_MINT_RETRY_INTERVAL:?} until another video session \
+                         {VIDEO_CODEC_RETRY_INTERVAL:?} until another video session \
                          on this machine ends ({mints_refused} refused so far)"
                     ));
                 }

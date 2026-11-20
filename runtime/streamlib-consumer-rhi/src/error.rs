@@ -11,7 +11,7 @@ use thiserror::Error;
 ///
 /// Kept deliberately narrow: the carve-out is small (DMA-BUF FD import
 /// + bind + map, sync wait/signal, layout transitions on imported
-///   handles), so two variants cover everything that can go wrong.
+///   handles), so three variants cover everything that can go wrong.
 ///   `streamlib::sdk::error::Error` provides a `From<ConsumerRhiError>`
 ///   impl, so host-side code can wrap consumer errors with `?`.
 #[derive(Debug, Error)]
@@ -22,6 +22,12 @@ pub enum ConsumerRhiError {
     /// and the driver error.
     #[error("GPU operation failed: {0}")]
     Gpu(String),
+
+    /// The driver refused a resource for a want of something another
+    /// client of the GPU may free (memory, the BAR1 aperture, an object
+    /// count), so the same request may succeed later.
+    #[error("GPU operation failed: {0}")]
+    GpuOutOfResourcesForNow(String),
 
     /// Caller-supplied input failed validation before any driver call
     /// — empty plane vec, mismatched plane-array lengths, plane count

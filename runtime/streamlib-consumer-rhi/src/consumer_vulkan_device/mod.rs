@@ -45,6 +45,8 @@ use crate::{ConsumerMarker, ConsumerRhiError, Result, VulkanRhiDevice};
 
 mod consumer_vulkan_device_accessors_and_capabilities;
 mod consumer_vulkan_device_creation;
+#[cfg(test)]
+mod consumer_vulkan_device_creation_tests;
 #[cfg(target_os = "macos")]
 mod consumer_vulkan_device_macos_metal_interop;
 mod consumer_vulkan_device_memory_import;
