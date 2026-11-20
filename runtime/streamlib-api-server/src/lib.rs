@@ -31,7 +31,6 @@ mod loopback_http_listener;
 mod mcp;
 mod mcp_agent_tools;
 mod mcp_project_change_feed;
-mod mcp_prompts;
 mod mcp_resources;
 mod mcp_stdio_upgrade;
 mod mcp_stream_action_resources;
@@ -59,4 +58,3 @@ pub use loopback_http_listener::{
     ControlWebSocketRouteForTheLoopbackListener, LoopbackHttpListenerServedForAnEngine,
     serve_the_loopback_http_listener,
 };
-pub use mcp_prompts::VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH;

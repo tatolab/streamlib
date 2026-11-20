@@ -17,8 +17,7 @@ use crate::control_plane_stub_support::{
 use parking_lot::Mutex;
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, GetPromptRequestParams, ReadResourceRequestParams,
-    RequestMetaObject,
+    CallToolRequestParams, ClientCapabilities, ReadResourceRequestParams, RequestMetaObject,
 };
 use rmcp::service::{
     ClientInitializeError, ClientLifecycleMode, ClientServiceExt, RunningService, ServiceError,
@@ -42,7 +41,7 @@ use streamlib::sdk::descriptors::NodeClassImportPath;
 mod graph_edit_tool_tests;
 mod graph_logs_and_stream_tool_tests;
 mod mcp_discovery_catalog_and_transport_tests;
-mod resource_and_prompt_tests;
+mod resource_tests;
 
 /// Stub runtime answering the observation ops without a live engine.
 ///
@@ -342,7 +341,7 @@ fn the_stub_streams_condition() -> Value {
 }
 
 /// Two nodes and the one link between them, in the shape the engine's
-/// graph export takes, so the prompts parse what a real node answers.
+/// graph export takes, so the tools and resources render what a real node answers.
 fn two_linked_nodes_graph() -> Value {
     json!({
         "stream": crate::control_plane_stub_support::STUB_STREAM_ID,
@@ -391,17 +390,6 @@ async fn resource_read_outcome(
     )
 }
 
-async fn prompt_outcome(
-    runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    prompt_name: &str,
-    arguments: Value,
-) -> std::result::Result<Value, McpError> {
-    let (_served, client) = connected_mcp_client(runtime).await;
-    let request = GetPromptRequestParams::new(prompt_name)
-        .with_arguments(arguments.as_object().cloned().unwrap_or_default());
-    wire_outcome(client.get_prompt(request).await)
-}
-
 pub(crate) async fn resource_document(
     runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     uri: &str,
@@ -415,19 +403,4 @@ pub(crate) async fn resource_document(
     assert_eq!(contents[0]["mimeType"], "application/json");
     serde_json::from_str(contents[0]["text"].as_str().expect("a text document"))
         .expect("the document is JSON")
-}
-
-pub(crate) async fn prompt_text(
-    runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    prompt_name: &str,
-    arguments: Value,
-) -> String {
-    let result = prompt_outcome(runtime, prompt_name, arguments)
-        .await
-        .unwrap_or_else(|refusal| panic!("`{prompt_name}` was refused: {refusal:?}"));
-    let messages = result["messages"].as_array().expect("a messages array");
-    assert_eq!(messages.len(), 1, "{result}");
-    assert_eq!(messages[0]["role"], "user");
-    assert_eq!(messages[0]["content"]["type"], "text");
-    messages[0]["content"]["text"].as_str().unwrap().to_string()
 }

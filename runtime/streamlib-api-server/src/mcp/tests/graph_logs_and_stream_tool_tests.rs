@@ -336,10 +336,6 @@ async fn list_streams_answers_each_streams_id_display_name_location_state_node_c
 /// The same graph after the helper that was to open the link refused it —
 /// what a live `connect` onto a helper-placed node leaves behind when
 /// that helper's port could not open.
-///
-/// Kept beside the wired fixture rather than replacing its link: the
-/// prompts pick a link out of the graph they are rendered against, and an
-/// errored one has no business in the recipes' happy path.
 fn two_linked_nodes_graph_whose_link_a_helper_refused() -> Value {
     let mut graph = two_linked_nodes_graph();
     graph["links"][0]["state"] = json!("error");
