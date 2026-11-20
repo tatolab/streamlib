@@ -32,23 +32,23 @@ CAMERA_NAMES = ["front", "back"]
 @graph_generator
 def invert_twice(stream_builder: StreamBuilder, strength: int = 4) -> None:
     """Two inverters between one Input and one Output."""
-    source = stream_builder.add(GraphInput, config={"port": "video", "family": Packets})
+    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": Packets})
     first = stream_builder.add(FrameInverter, name="first", config={"strength": strength})
     second = stream_builder.add(FrameInverter, name="second")
     stream_builder.connect(source.output("value"), first.input("video_from_upstream"))
     stream_builder.connect(
         first.output("video_to_downstream"), second.input("video_from_upstream")
     )
-    sink = stream_builder.add(GraphOutput, config={"port": "video", "family": Packets})
+    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": Packets})
     stream_builder.connect(second.output("video_to_downstream"), sink.input("value"))
 
 
 @graph_generator
 def look(stream_builder: StreamBuilder) -> None:
-    source = stream_builder.add(GraphInput, config={"port": "video", "family": Packets})
+    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": Packets})
     soft = stream_builder.add(invert_twice, name="soft", strength=8)
     stream_builder.connect(source.output("value"), soft.input("video"))
-    sink = stream_builder.add(GraphOutput, config={"port": "video", "family": Packets})
+    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": Packets})
     stream_builder.connect(soft.output("video"), sink.input("value"))
 
 

@@ -136,6 +136,21 @@ def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
                 _stored_form_of_its_type(element, element_type)
                 for element in value  # pyright: ignore[reportUnknownVariableType]
             ]
+        case {"type": "pin_type_choice"}:
+            from ._pin_type_choice import PinTypeChoice
+
+            if not isinstance(value, PinTypeChoice):
+                raise not_of_its_type
+            among = pin_type.get("among", [])
+            if among and value.chosen not in among:
+                raise PinValueNotTaken(
+                    value,
+                    f"which chooses none of the types it may choose, "
+                    f"{', '.join(repr(choosable) for choosable in among)}",
+                    kind="not_an_option",
+                    pin_type=pin_type,
+                )
+            return value.chosen
         case _:
             raise not_of_its_type
 

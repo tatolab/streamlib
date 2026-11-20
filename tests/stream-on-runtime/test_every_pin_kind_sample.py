@@ -4,9 +4,9 @@
 """The sample that declares each kind of pin, on `tatolabd`: listed among the samples, created
 from the copy the runtime unit carries, played, saved and opened again.
 
-`examples/every-pin-kind` holds typed function and shader nodes, a Graph Input, one node not
-yet typed that holds a setting, a node type whose inputs each name the control the Studio
-draws, and two nodes whose Texture pins state different formats, which `connect` links through
+`examples/every-pin-kind` holds typed function and shader nodes, a Graph Input of a family, one
+whose `pin_type` setting chooses Float, one node not yet typed that holds a setting, a node type
+whose inputs each name the control the Studio draws, and two nodes whose Texture pins state different formats, which `connect` links through
 a `TextureFormatConvert`. The pin types `graph` names here are what the Studio's
 recordings are made from, so each later type, mode and flow joins the sample and this check.
 """
@@ -64,7 +64,11 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
     "bars_check": {"bars": "texture"},
     "sweep": {"position": "float", "width": "float", "result": "named"},
     "sweep_position": {"sweep": "named", "result": "float"},
+    "warmth_base": {"pin_type": "pin_type_choice", "value": "float"},
 }
+
+#: The Graph Input whose `pin_type` setting chooses Float, linked into `warmth`'s `base`.
+GRAPH_INPUT_CHOOSING_A_TYPE = "warmth_base"
 
 #: The control each input of `Caption` names, which the Studio draws in place of its type's
 #: default. The stream places one `Caption` that nothing reads, so its interpreter describes the
@@ -375,6 +379,11 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
         for node_name in PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     } == PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     assert node_named(graph, "brightness")["type"] == "tatolab.stream:GraphInput"
+    choosing = node_named(graph, GRAPH_INPUT_CHOOSING_A_TYPE)
+    assert choosing["components"]["graph_interface"]["pin_type"] == {"type": "float"}, choosing
+    assert input_port_named(choosing, "pin_type")["value"] == {"type": "float"}, choosing
+    base = input_port_named(node_named(graph, "warmth"), "base")
+    assert base.get("value_comes_from") == "wire", base
     (caption,) = local_api.call_tool(
         "describe_node_types",
         {"project_directory": project_directory, "node_types": ["nodes.caption:Caption"]},

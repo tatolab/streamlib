@@ -27,8 +27,8 @@ from tatolab.stream import GraphInput, GraphOutput, Packets, StreamBuilder, grap
 @graph_generator
 def look(stream_builder: StreamBuilder, port: str = "video") -> None:
     """A pass-through: one Input wired to one Output."""
-    source = stream_builder.add(GraphInput, config={"port": port, "family": Packets})
-    sink = stream_builder.add(GraphOutput, config={"port": port, "family": Packets})
+    source = stream_builder.add(GraphInput, input_values={"port": port, "family": Packets})
+    sink = stream_builder.add(GraphOutput, input_values={"port": port, "family": Packets})
     stream_builder.connect(source.output("value"), sink.input("value"))
 
 

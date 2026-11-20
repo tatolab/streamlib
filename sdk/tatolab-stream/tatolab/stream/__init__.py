@@ -35,6 +35,7 @@ from ._pin_annotations import NumberStep as NumberStep
 from ._pin_annotations import NumberUnit as NumberUnit
 from ._pin_annotations import PinControl as PinControl
 from ._pin_annotations import PinMeaning as PinMeaning
+from ._pin_type_choice import PinTypeChoice as PinTypeChoice
 from ._pin_declaration import NodeDeclarationRefusal as NodeDeclarationRefusal
 from ._class_node_pins import InputPin as InputPin
 from ._class_node_pins import OutputPin as OutputPin
@@ -138,9 +139,7 @@ from ._port_family_declaration import PortNamesFromConfig as PortNamesFromConfig
 from ._port_family_declaration import Records as Records
 from ._port_family_declaration import from_config as from_config
 from ._graph_interface_nodes import GraphInput as GraphInput
-from ._graph_interface_nodes import GraphInputConfig as GraphInputConfig
 from ._graph_interface_nodes import GraphOutput as GraphOutput
-from ._graph_interface_nodes import GraphOutputConfig as GraphOutputConfig
 from ._graph_variable_nodes import GetVariable as GetVariable
 from ._graph_variable_nodes import GetVariableConfig as GetVariableConfig
 from ._graph_variable_nodes import SetVariable as SetVariable
@@ -213,9 +212,7 @@ __all__ = [
     "GetVariableConfig",
     "GraphFragmentReference",
     "GraphInput",
-    "GraphInputConfig",
     "GraphOutput",
-    "GraphOutputConfig",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
@@ -252,6 +249,7 @@ __all__ = [
     "NumberUnit",
     "PinControl",
     "PinMeaning",
+    "PinTypeChoice",
     "NodeDeclarationRefusal",
     "Float32",
     "Float64",

@@ -14,10 +14,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final, Literal, Optional
 
-from ._contract_pin_types import BUILT_IN_PIN_TYPES, BuiltInPinTypeName, PinDeclarationOnTheWire
+from ._contract_pin_types import (
+    BUILT_IN_PIN_TYPES,
+    BuiltInPinTypeName,
+    PinDeclarationOnTheWire,
+    PinType,
+)
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP, NODE_DECLARATION_OUTPUT_PORTS_STAMP
 from ._pin_declaration import PinValueNotTaken, stored_form_of_a_pin_value
+from ._port_family_declaration import PortFamily
 
 __all__ = ["TypedNodePins"]
 
@@ -62,8 +68,12 @@ class TypedNodePins:
         return self._declared_port(name, direction).name
 
     def stored_input_values(self, input_values: Mapping[str, Any]) -> dict[str, Any]:
-        """`input_values` keyed by the inputs they set, each in the stored form its pin type holds."""
-        stored: dict[str, Any] = {}
+        """`input_values` keyed by the inputs they set, each in the stored form its pin type holds.
+
+        A value on an input whose type another input chooses is checked against the type
+        `input_values` chooses for it, and kept as given when they choose none.
+        """
+        ports_and_values: list[tuple[_DeclaredPort, object]] = []
         for name, value in input_values.items():
             if not isinstance(name, str):
                 raise TypeError(
@@ -71,23 +81,40 @@ class TypedNodePins:
                     f"`{type(name).__name__}`, and an input is named by a str"
                 )
             port = self._declared_port(name, "input")
-            if port.name in stored:
+            if any(set_port.name == port.name for set_port, _ in ports_and_values):
                 raise ValueError(
                     f"`{self.node}` is set input `{port.name}` twice, once as {name!r}: set "
                     f"each input once"
                 )
-            stored[port.name] = self._stored_value(port, value)
-        return stored
+            ports_and_values.append((port, value))
+        stored: dict[str, Any] = {}
+        for port, value in ports_and_values:
+            if port.declaration["pin_type"]["kind"] != "set_by_input":
+                stored[port.name] = self._stored_value(port, value)
+        for port, value in ports_and_values:
+            pin_type_declared = port.declaration["pin_type"]
+            if pin_type_declared["kind"] == "set_by_input":
+                stored[port.name] = self._stored_value(
+                    port, value, chosen=stored.get(pin_type_declared["input_name"])
+                )
+        return {port.name: stored[port.name] for port, _ in ports_and_values}
 
-    def _stored_value(self, port: _DeclaredPort, value: object) -> object:
+    def _stored_value(self, port: _DeclaredPort, value: object, *, chosen: object = None) -> object:
         declaration = port.declaration
         pin_type_declared = declaration["pin_type"]
-        if pin_type_declared["kind"] != "is":
+        if pin_type_declared["kind"] == "set_by_input":
+            if chosen is None:
+                return value
+            pin_type: PinType = chosen  # pyright: ignore[reportAssignmentType]
+        elif pin_type_declared["kind"] != "is":
             raise TypeError(
                 f"`{self.node}`'s input `{port.name}` finds its type from its graph, so no value "
                 f"is checked against it here. To fix: set it once the stream is placed"
             )
-        pin_type = pin_type_declared["pin_type"]
+        else:
+            pin_type = pin_type_declared["pin_type"]
+        if isinstance(value, PortFamily) and pin_type["type"] == "menu":
+            value = value._wire_name  # pyright: ignore[reportPrivateUsage]
         if pin_type["type"] not in _PIN_TYPES_HOLDING_A_STORED_VALUE:
             raise TypeError(
                 f"`{self.node}`'s input `{port.name}` carries a stream and holds no value, so "
