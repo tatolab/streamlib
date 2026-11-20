@@ -14,20 +14,24 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Annotated
 
 import torch
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     ModelInputTensorGeometry,
     ModelInputTensorKernel,
     NodeOutputTextureRing,
-    Output,
-    Records,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
@@ -68,8 +72,6 @@ NEWTON_ITERATIONS = 4
 DETECTOR_INPUT_STRIDE = 32
 
 DETECTION_REPORT_INTERVAL_NS = 1_000_000_000
-
-DETECTION_RECORD_NAMES = ("detection_count", "detections")
 
 # Cycled by class index; RGBA, the texture's own channel order.
 BOX_COLOUR_PALETTE_RGBA = (
@@ -154,64 +156,78 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 )
 
 
-class DetectedObject(TypedDict):
-    """One detection as a `detections_to_downstream` record carries it, its box in frame pixels."""
+@dataclass(frozen=True)
+class DetectedObject:
+    """One detection, its box in frame pixels from its top-left corner to its bottom-right."""
 
     class_index: int
     class_name: str
     confidence: float
-    box_xyxy: list[int]
-
-
-@dataclass
-class UndistortingObjectDetectorConfig:
-    """UndistortingObjectDetector's settings, as its node's config in the graph document spells them."""
-
-    radial_distortion_k1: float = DEFAULT_RADIAL_DISTORTION_K1
-    radial_distortion_k2: float = DEFAULT_RADIAL_DISTORTION_K2
-    detection_confidence_threshold: float = 0.35
-    detection_model_weights: str = "yolov8n.pt"
-    """An ultralytics detection checkpoint; a relative path resolves against the project directory, where a missing known checkpoint is downloaded."""
+    left: int
+    top: int
+    right: int
+    bottom: int
 
 
 @node.meta(
     description="Rectifies the fisheye frame, detects objects in it, and draws their boxes on",
 )
-@node.process
+@node
 class UndistortingObjectDetector:
     """Fisheye frame in; the rectified frame with its boxes drawn on, and the detections, out."""
 
-    fisheye_frame_from_upstream = Input(
-        Image, delivery="newest", description="Barrelled frames from the lens"
-    )
-    annotated_frame_to_downstream = Output(
-        Image, description="The rectified frames with their boxes drawn on"
-    )
-    detections_to_downstream = Output(
-        Records,
-        names=DETECTION_RECORD_NAMES,
-        description="One record per annotated frame: its detections, boxes in frame pixels",
-    )
+    radial_distortion_k1: Annotated[
+        float, SettingOnly(), Description("The first radial coefficient of the lens to undo.")
+    ] = DEFAULT_RADIAL_DISTORTION_K1
+    radial_distortion_k2: Annotated[
+        float, SettingOnly(), Description("The second radial coefficient of the lens to undo.")
+    ] = DEFAULT_RADIAL_DISTORTION_K2
+    detection_confidence_threshold: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("The least confidence a detection is kept at."),
+    ] = 0.35
+    detection_model_weights: Annotated[
+        str,
+        SettingOnly(),
+        Description(
+            "An ultralytics detection checkpoint; a relative path resolves against the project "
+            "directory, where a missing known checkpoint is downloaded."
+        ),
+    ] = "yolov8n.pt"
+    fisheye_frame_from_upstream: InputPin[
+        Annotated[
+            Texture, StreamDelivery("newest"), Description("Barrelled frames from the lens")
+        ]
+    ]
+    annotated_frame_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(FRAME_TEXTURE_FORMAT),
+            Description("The rectified frames with their boxes drawn on"),
+        ]
+    ]
+    detections_to_downstream: OutputPin[
+        Annotated[
+            list[DetectedObject],
+            Description("The detections in the latest annotated frame, boxes in frame pixels"),
+        ]
+    ]
 
-    def __init__(self, config: UndistortingObjectDetectorConfig) -> None:
-        radial_distortion_k1 = float(config.radial_distortion_k1)
-        radial_distortion_k2 = float(config.radial_distortion_k2)
-        self.largest_recoverable_radius = largest_recoverable_normalised_radius(
-            radial_distortion_k1, radial_distortion_k2
+    def __init__(self) -> None:
+        self._largest_recoverable_radius = largest_recoverable_normalised_radius(
+            self.radial_distortion_k1, self.radial_distortion_k2
         )
-        self.lens_coefficient_push_constants = struct.pack(
+        # Push constants travel with each dispatch and never persist on the
+        # kernel, so this is handed to every one.
+        self._lens_coefficient_push_constants = struct.pack(
             LENS_COEFFICIENT_AND_RECOVERY_LIMIT_FORMAT,
-            radial_distortion_k1,
-            radial_distortion_k2,
-            self.largest_recoverable_radius,
+            self.radial_distortion_k1,
+            self.radial_distortion_k2,
+            self._largest_recoverable_radius,
         )
-        self.detection_confidence_threshold = float(
-            config.detection_confidence_threshold
-        )
-        self.detection_model_weights_path = (
-            PROJECT_DIRECTORY / config.detection_model_weights
-        )
-        self.next_detection_report_at_ns = 0
+        self._detection_model_weights_path = PROJECT_DIRECTORY / self.detection_model_weights
+        self._next_detection_report_at_ns = 0
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.undistorted_frame_ring = NodeOutputTextureRing(
@@ -245,7 +261,7 @@ class UndistortingObjectDetector:
                 "build sees no usable GPU, and the detector reads the frame "
                 "where the engine left it, on the GPU"
             )
-        self.detection_model = YOLO(str(self.detection_model_weights_path))
+        self.detection_model = YOLO(str(self._detection_model_weights_path))
         self.detection_model.to(detection_device)
         self.box_colours = [
             torch.tensor(colour, dtype=torch.uint8, device=detection_device)
@@ -253,13 +269,13 @@ class UndistortingObjectDetector:
         ]
         log.info(
             "rectifier and detector ready",
-            detection_model_weights=str(self.detection_model_weights_path),
-            largest_recoverable_radius=round(self.largest_recoverable_radius, 4),
+            detection_model_weights=str(self._detection_model_weights_path),
+            largest_recoverable_radius=round(self._largest_recoverable_radius, 4),
             detection_confidence_threshold=self.detection_confidence_threshold,
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.fisheye_frame_from_upstream)
+        frame = self.fisheye_frame_from_upstream.read()
         if frame is None:
             return
 
@@ -280,7 +296,7 @@ class UndistortingObjectDetector:
                 workgroups_covering(frame.height),
                 1,
             ),
-            push_constants=self.lens_coefficient_push_constants,
+            push_constants=self._lens_coefficient_push_constants,
         )
 
         detector_model_input = self.detector_input_kernel.apply_to_surface(
@@ -296,18 +312,12 @@ class UndistortingObjectDetector:
             self._draw_boxes_into(torch.from_dlpack(rectified_pixels), detections)
 
         self._report_detections(ctx.time, detections)
-        # Both stamped with the capture's timestamp, which is how a consumer
-        # pairs a frame with its detections.
-        ctx.outputs.write(
-            self.annotated_frame_to_downstream,
+        # Stamped with the capture's timestamp: downstream orders by it.
+        self.annotated_frame_to_downstream.write(
             ImageFrameToWrite.of_texture(undistorted_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
-        ctx.outputs.write(
-            self.detections_to_downstream,
-            {"detection_count": len(detections), "detections": detections},
-            timestamp_ns=frame.timestamp_ns,
-        )
+        self.detections_to_downstream.write(detections)
 
     def _detections_in(
         self,
@@ -338,17 +348,15 @@ class UndistortingObjectDetector:
         class_indices = torch.as_tensor(boxes.cls).to(torch.int32).tolist()
         confidences = torch.as_tensor(boxes.conf).tolist()
         return [
-            {
-                "class_index": class_index,
-                "class_name": self.detection_model.names[class_index],
-                "confidence": round(confidence, 4),
-                "box_xyxy": [
-                    max(0, min(int(left), width - 1)),
-                    max(0, min(int(top), height - 1)),
-                    max(0, min(int(right), width)),
-                    max(0, min(int(bottom), height)),
-                ],
-            }
+            DetectedObject(
+                class_index=class_index,
+                class_name=self.detection_model.names[class_index],
+                confidence=round(confidence, 4),
+                left=max(0, min(int(left), width - 1)),
+                top=max(0, min(int(top), height - 1)),
+                right=max(0, min(int(right), width)),
+                bottom=max(0, min(int(bottom), height)),
+            )
             for (left, top, right, bottom), class_index, confidence in zip(
                 corners, class_indices, confidences
             )
@@ -363,10 +371,11 @@ class UndistortingObjectDetector:
         # capture sizes.
         edge = max(2, height // 240)
         for detection in detections:
-            left, top, right, bottom = detection["box_xyxy"]
+            left, top = detection.left, detection.top
+            right, bottom = detection.right, detection.bottom
             if right - left < edge or bottom - top < edge:
                 continue
-            colour = self.box_colours[detection["class_index"] % len(self.box_colours)]
+            colour = self.box_colours[detection.class_index % len(self.box_colours)]
             rectified_frame[top : top + edge, left:right] = colour
             rectified_frame[bottom - edge : bottom, left:right] = colour
             rectified_frame[top:bottom, left : left + edge] = colour
@@ -376,13 +385,13 @@ class UndistortingObjectDetector:
         self, monotonic_now_ns: int, detections: list[DetectedObject]
     ) -> None:
         """Log a summary of the detections, at most once a second."""
-        if monotonic_now_ns < self.next_detection_report_at_ns:
+        if monotonic_now_ns < self._next_detection_report_at_ns:
             return
-        self.next_detection_report_at_ns = (
+        self._next_detection_report_at_ns = (
             monotonic_now_ns + DETECTION_REPORT_INTERVAL_NS
         )
         log.info(
             "detections on the rectified frame",
             detection_count=len(detections),
-            class_names=sorted({detection["class_name"] for detection in detections}),
+            class_names=sorted({detection.class_name for detection in detections}),
         )

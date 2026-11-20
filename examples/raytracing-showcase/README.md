@@ -114,7 +114,7 @@ one bit per pixel, scales it to the frame, and draws white ink over a black
 outline sampled at eight offsets — legible over a bright sky and a dark floor
 alike.
 
-This is also the one place the stream builds a shader out of its own config:
+This is also the one place the stream builds a shader out of its own settings:
 the kernel source is a function of `left_label` and `right_label`, not a module
 constant, so changing `splitscreencompositor`'s `left_label` changes the Slang the runtime
 compiles at `setup()`. It is why the project depends on nothing but
@@ -249,9 +249,10 @@ The nodes are `rasterizedscenerenderer`, `raytracedscenerenderer` and
 
 ## Knobs
 
-Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
-Studio's inspector or with the runtime's `set_node_config` MCP tool, which
-records the edit in the project's history and applies it to the running stream.
+Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Studio's inspector, which records the edit in the project's history and applies it to the
+running stream. `split_fraction` is read on every frame; the extents and the labels are settings, so
+changing one rebuilds its node.
 
 | Knob | Node | Effect |
 | --- | --- | --- |

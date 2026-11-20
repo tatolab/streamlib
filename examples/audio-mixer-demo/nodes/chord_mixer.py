@@ -13,17 +13,20 @@ deciding which three windows belong together, joined on each window's
 
 import collections
 from dataclasses import dataclass
-from typing import Final
+from typing import Annotated, Final
 
 import numpy
 from tatolab.stream import (
+    Audio,
     AudioWindowContract,
-    Channels,
     ChannelsBlock,
-    Input,
-    Output,
+    Description,
+    InputPin,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     log,
     node,
 )
@@ -65,13 +68,6 @@ ALIGNMENT_TOLERANCE_NS = WINDOW_DURATION_NS
 
 
 @dataclass
-class ChordMixerConfig:
-    """ChordMixer's settings, as its node's config in the graph document spells them."""
-
-    voice_gain: float = 1.0
-
-
-@dataclass
 class ChordVoiceWindow:
     """One voice's window, copied out of the block it arrived in so it can wait for its partners."""
 
@@ -88,44 +84,49 @@ class ChordVoiceWindow:
 
 
 @node.meta(description="Emits one mixed window per set of three time-aligned voice windows")
-@node.process
+@node
 class ChordMixer:
     """Three voices in, at any rate and channel count; their mono sum out."""
 
-    root_voice_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=CHORD_MIX_WINDOW,
-        description="The chord's root voice, converted to the mix window",
-    )
-    third_voice_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=CHORD_MIX_WINDOW,
-        description="The chord's third, converted to the mix window",
-    )
-    fifth_voice_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=CHORD_MIX_WINDOW,
-        description="The chord's fifth, converted to the mix window",
-    )
-    mixed_chord_to_downstream = Output(
-        Channels,
-        rate=CHORD_MIX_SAMPLE_RATE,
-        dtype=CHORD_MIX_DTYPE,
-        description="The three voices summed",
-    )
+    voice_gain: Annotated[
+        float,
+        NumberRange(minimum=0.0),
+        Description("The gain the summed voices are scaled by before clipping."),
+    ] = 1.0
+    root_voice_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            CHORD_MIX_WINDOW,
+            Description("The chord's root voice, converted to the mix window"),
+        ]
+    ]
+    third_voice_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            CHORD_MIX_WINDOW,
+            Description("The chord's third, converted to the mix window"),
+        ]
+    ]
+    fifth_voice_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            CHORD_MIX_WINDOW,
+            Description("The chord's fifth, converted to the mix window"),
+        ]
+    ]
+    mixed_chord_to_downstream: OutputPin[Annotated[Audio, Description("The three voices summed")]]
 
-    def __init__(self, config: ChordMixerConfig) -> None:
-        self.voice_gain = float(config.voice_gain)
-        self.mixed_samples_published = 0
-        self.pending_windows_by_port: dict[str, collections.deque[ChordVoiceWindow]] = {
+    def __init__(self) -> None:
+        self._mixed_samples_published = 0
+        self._pending_windows_by_port: dict[str, collections.deque[ChordVoiceWindow]] = {
             port_name: collections.deque(maxlen=MAXIMUM_PENDING_WINDOWS_PER_VOICE)
             for port_name in VOICE_INPUT_PORTS
         }
-        self.dropped_window_count = 0
-        self.realigned_window_count = 0
+        self._dropped_window_count = 0
+        self._realigned_window_count = 0
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         # A reactive `process()` runs as soon as any one port has a full window,
@@ -136,36 +137,36 @@ class ChordMixer:
             FIFTH_VOICE_INPUT_PORT: self.fifth_voice_from_upstream,
         }
         for port_name, voice_input in voice_inputs_by_port_name.items():
-            block = ctx.inputs.read(voice_input)
+            block = voice_input.read()
             if block is None:
                 continue
             self._hold(port_name, ChordVoiceWindow.copied_from(block))
 
-        while all(self.pending_windows_by_port[port] for port in VOICE_INPUT_PORTS):
+        while all(self._pending_windows_by_port[port] for port in VOICE_INPUT_PORTS):
             # Dropping a lagging head can empty its voice, so the loop re-checks
             # before mixing.
             if self._discard_heads_lagging_the_newest():
                 continue
-            self._publish_one_mixed_window(ctx)
+            self._publish_one_mixed_window()
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        if self.dropped_window_count:
+        if self._dropped_window_count:
             log.warn(
                 "voices ran far enough apart that windows were dropped waiting to be "
                 "mixed",
-                dropped_windows=self.dropped_window_count,
+                dropped_windows=self._dropped_window_count,
             )
-        if self.realigned_window_count:
+        if self._realigned_window_count:
             log.info(
                 "windows discarded to bring the voices onto one instant",
-                realigned_windows=self.realigned_window_count,
+                realigned_windows=self._realigned_window_count,
             )
 
     def _hold(self, port_name: str, window: ChordVoiceWindow) -> None:
-        pending = self.pending_windows_by_port[port_name]
+        pending = self._pending_windows_by_port[port_name]
         if len(pending) == MAXIMUM_PENDING_WINDOWS_PER_VOICE:
-            self.dropped_window_count += 1
-            if self.dropped_window_count == 1:
+            self._dropped_window_count += 1
+            if self._dropped_window_count == 1:
                 log.warn(
                     "a voice ran further ahead of its partners than the mixer holds; "
                     "its oldest window is dropped",
@@ -176,7 +177,7 @@ class ChordMixer:
     def _discard_heads_lagging_the_newest(self) -> bool:
         """Drop any head a whole window or more behind the newest one."""
         heads = {
-            port_name: self.pending_windows_by_port[port_name][0]
+            port_name: self._pending_windows_by_port[port_name][0]
             for port_name in VOICE_INPUT_PORTS
         }
         newest_ns = max(head.first_sample_timestamp_ns for head in heads.values())
@@ -185,14 +186,14 @@ class ChordMixer:
         for port_name, head in heads.items():
             if newest_ns - head.first_sample_timestamp_ns < ALIGNMENT_TOLERANCE_NS:
                 continue
-            self.pending_windows_by_port[port_name].popleft()
-            self.realigned_window_count += 1
+            self._pending_windows_by_port[port_name].popleft()
+            self._realigned_window_count += 1
             discarded_any = True
         return discarded_any
 
-    def _publish_one_mixed_window(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def _publish_one_mixed_window(self) -> None:
         windows = [
-            self.pending_windows_by_port[port_name].popleft()
+            self._pending_windows_by_port[port_name].popleft()
             for port_name in VOICE_INPUT_PORTS
         ]
 
@@ -210,10 +211,10 @@ class ChordMixer:
         first_sample_timestamp_ns = max(
             window.first_sample_timestamp_ns for window in windows
         )
-        ctx.outputs.write(
-            self.mixed_chord_to_downstream,
+        self.mixed_chord_to_downstream.write(
             mixed[numpy.newaxis, :],
             timestamp_ns=first_sample_timestamp_ns,
-            start_sample=self.mixed_samples_published,
+            start_sample=self._mixed_samples_published,
+            sample_rate=CHORD_MIX_SAMPLE_RATE,
         )
-        self.mixed_samples_published += CHORD_MIX_WINDOW_SIZE
+        self._mixed_samples_published += CHORD_MIX_WINDOW_SIZE

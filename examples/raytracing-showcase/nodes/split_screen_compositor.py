@@ -15,17 +15,22 @@ source is a function of `left_label` and `right_label`.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrame,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -196,48 +201,46 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
-@dataclass
-class SplitScreenCompositorConfig:
-    """SplitScreenCompositor's settings: where the cut falls and what each half is labelled."""
-
-    split_fraction: float = 0.5
-    left_label: str = DEFAULT_LEFT_LABEL
-    right_label: str = DEFAULT_RIGHT_LABEL
-
-
 @node.meta(description="Cuts the rasterized and ray-traced frames together")
-@node.process
+@node
 class SplitScreenCompositor:
     """Rasterized on the left, ray traced on the right, one labelled frame out."""
 
-    def __init__(self, config: SplitScreenCompositorConfig) -> None:
-        split_fraction = float(config.split_fraction)
-        if not 0.0 <= split_fraction <= 1.0:
-            raise ValueError(
-                f"SplitScreenCompositor was configured with "
-                f"split_fraction={split_fraction} — the dial runs from 0.0 (all "
-                f"ray traced) to 1.0 (all rasterized), and 0.5 cuts down the middle"
-            )
-        self.left_label = config.left_label
-        self.right_label = config.right_label
-        # Push constants travel with each dispatch and never persist on the
-        # kernel, so this is handed to every one.
-        self.split_push_constants = struct.pack(
-            SPLIT_PUSH_CONSTANT_FORMAT, split_fraction
-        )
-        self.newest_rasterized_frame: ImageFrame | None = None
+    split_fraction: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("Where the cut falls: 0 is all ray traced, 1 all rasterized."),
+    ] = 0.5
+    left_label: Annotated[
+        str, SettingOnly(), Description("The label drawn over the rasterized half.")
+    ] = DEFAULT_LEFT_LABEL
+    right_label: Annotated[
+        str, SettingOnly(), Description("The label drawn over the ray-traced half.")
+    ] = DEFAULT_RIGHT_LABEL
+    rasterized_frame_from_upstream: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description("The rasterized half — direct lighting only"),
+        ]
+    ]
+    ray_traced_frame_from_upstream: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description("The ray-traced half — shadows and a mirror floor"),
+        ]
+    ]
+    split_screen_frame_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("Rasterized left, ray traced right, labelled and cut"),
+        ]
+    ]
 
-    rasterized_frame_from_upstream = Input(
-        Image, delivery="newest", description="The rasterized half — direct lighting only"
-    )
-    ray_traced_frame_from_upstream = Input(
-        Image,
-        delivery="newest",
-        description="The ray-traced half — shadows and a mirror floor",
-    )
-    split_screen_frame_to_downstream = Output(
-        Image, description="Rasterized left, ray traced right, labelled and cut"
-    )
+    def __init__(self) -> None:
+        self._newest_rasterized_frame: ImageFrame | None = None
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(
@@ -256,16 +259,16 @@ class SplitScreenCompositor:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         # Held as the frame the read returned, so its surface stays claimed
         # against the rasterizer reusing it until a newer one replaces it.
-        rasterized_frame = ctx.inputs.read(self.rasterized_frame_from_upstream)
+        rasterized_frame = self.rasterized_frame_from_upstream.read()
         if rasterized_frame is not None:
-            self.newest_rasterized_frame = rasterized_frame
+            self._newest_rasterized_frame = rasterized_frame
 
         # The traced half paces the composite: a wake that brought only a
         # rasterized frame holds it for the next traced one, which costs one
         # dispatch per composite and leaves the left half at most one frame
         # interval behind the right.
-        ray_traced_frame = ctx.inputs.read(self.ray_traced_frame_from_upstream)
-        if ray_traced_frame is None or self.newest_rasterized_frame is None:
+        ray_traced_frame = self.ray_traced_frame_from_upstream.read()
+        if ray_traced_frame is None or self._newest_rasterized_frame is None:
             return
 
         width = ray_traced_frame.width
@@ -275,7 +278,7 @@ class SplitScreenCompositor:
         )
         self.split_screen_kernel.dispatch(
             bindings={
-                RASTERIZED_FRAME_BINDING: self.newest_rasterized_frame.surface_id,
+                RASTERIZED_FRAME_BINDING: self._newest_rasterized_frame.surface_id,
                 RAY_TRACED_FRAME_BINDING: ray_traced_frame.surface_id,
                 SPLIT_SCREEN_FRAME_BINDING: split_screen_frame_texture,
             },
@@ -284,13 +287,14 @@ class SplitScreenCompositor:
                 _workgroups_covering(height),
                 1,
             ),
-            push_constants=self.split_push_constants,
+            # Push constants travel with each dispatch and never persist on the
+            # kernel, so the cut is packed for every one.
+            push_constants=struct.pack(SPLIT_PUSH_CONSTANT_FORMAT, self.split_fraction),
         )
 
         # Stamped with the traced frame's render instant, not the moment of
         # the cut: downstream orders by it.
-        ctx.outputs.write(
-            self.split_screen_frame_to_downstream,
+        self.split_screen_frame_to_downstream.write(
             ImageFrameToWrite.of_texture(split_screen_frame_texture, ray_traced_frame.colour),
             timestamp_ns=ray_traced_frame.timestamp_ns,
         )
