@@ -29,9 +29,17 @@ use streamlib_project_repository::FAMILIES_A_PANEL_WRITES;
 
 use crate::core::descriptors::{PinType, PortFamily};
 
+mod bundle_frame_packing;
+#[cfg(test)]
+mod bundle_frame_packing_tests;
 mod bundle_packing;
 #[cfg(test)]
 mod tests;
+
+pub use bundle_frame_packing::{
+    BundleFrameReadAsItsBundle, HeavyMemberOfABundleFrame, HeavyMemberReadOffABundleFrame,
+    the_bundle_a_bundle_frame_carries, the_bundle_frame_of_a_bundle,
+};
 
 pub use bundle_packing::{
     the_member_a_bundle_message_carries, the_members_of_a_bundle_a_records_message_carries,

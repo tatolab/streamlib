@@ -607,7 +607,9 @@ class HelperProcessLifecycle:
     def _take_each_new_value_a_wire_gives_a_field(self) -> None:
         assert self._hosted is not None and self._hosted.fields is not None
         try:
-            self._hosted.fields.take_each_new_value_a_wire_gives(self._hosted.instance)
+            self._hosted.fields.take_each_new_value_a_wire_gives(
+                self._hosted.instance, fed_by_an_island=self._input_ports_an_island_feeds()
+            )
         except Exception as wire_value_refused:
             if str(wire_value_refused) != self._field_wire_values_last_refused:
                 self._field_wire_values_last_refused = str(wire_value_refused)
@@ -618,13 +620,21 @@ class HelperProcessLifecycle:
             return
         self._field_wire_values_last_refused = None
 
+    def _input_ports_an_island_feeds(self) -> "frozenset[str]":
+        islands = self._function_node_islands_it_reads
+        return frozenset() if islands is None else islands.input_ports_fed
+
     def _hand_back_what_a_link_stopped_driving(self, input_port: str) -> None:
         """Give the field or exposed config field of `input_port` its own value again, now a link stopped feeding it."""
         self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(input_port)
         if self._hosted is None or self._hosted.fields is None:
             return
         try:
-            self._hosted.fields.hand_back_the_set_value_of(self._hosted.instance, input_port)
+            self._hosted.fields.hand_back_the_set_value_of(
+                self._hosted.instance,
+                input_port,
+                fed_by_an_island=self._input_ports_an_island_feeds(),
+            )
         except Exception as set_value_refused:
             log.error(
                 "this node's field could not take its set value again once its wire was gone",

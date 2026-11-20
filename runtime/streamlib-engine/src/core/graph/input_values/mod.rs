@@ -29,9 +29,9 @@ pub use live_input_values::{
 };
 pub(crate) use live_input_values::{
     the_input_port_takes_a_value, the_input_value_change, the_lifetime_of_the_input,
-    the_pin_values_with_the_live_ones_over_them, the_read_of_an_input_a_link_feeds,
-    the_settings_rendered_reading_the_values_held, the_unlinked_input_values,
-    the_value_an_input_reads,
+    the_node_reads_a_value_set_on_the_input_whole, the_pin_values_with_the_live_ones_over_them,
+    the_read_of_an_input_a_link_feeds, the_settings_rendered_reading_the_values_held,
+    the_unlinked_input_values, the_value_an_input_reads,
 };
 pub(crate) use live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
 
@@ -296,9 +296,9 @@ pub(crate) fn the_refusal_of_a_set_on_a_trigger_input(
 }
 
 /// Refuse `value` set on `port`, an input port of the node named `node_name` that runs as
-/// `node_kind`, when the port does not take it: what its pin type takes and, on a node that is
-/// no function or shader node, a number or a bool on a Channels input, which is all such a
-/// node's read carries; `null` on an input that may be unset, which reads as nothing; on a port
+/// `node_kind`, when the port does not take it: what its pin type takes and, on a node that
+/// does not read a value set on the input whole, a number or a bool on a Channels input, which
+/// is all such a node's read carries; `null` on an input that may be unset, which reads as nothing; on a port
 /// that names no pin type, a function node takes any value.
 pub(crate) fn refuse_a_value_the_input_port_does_not_take(
     node_name: &str,
@@ -341,10 +341,7 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         // type alone judges it.
         if value.is_null()
             || !port.takes_a_wire()
-            || matches!(
-                node_kind,
-                Some(NodeKind::Function { .. } | NodeKind::Shader)
-            )
+            || the_node_reads_a_value_set_on_the_input_whole(node_kind, port)
         {
             return Ok(());
         }
