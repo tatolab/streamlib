@@ -18,7 +18,7 @@ from camera_under_test import camera_source_config
 
 
 def _add_the_camera(stream_builder: StreamBuilder) -> NodeReference:
-    return stream_builder.add(CameraSource, config=camera_source_config())
+    return stream_builder.add(CameraSource, input_values=camera_source_config())
 
 
 def _add_the_test_pattern(stream_builder: StreamBuilder) -> NodeReference:

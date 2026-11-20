@@ -52,7 +52,7 @@ pub use node_reference_in_config::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, NODE_REFERENCE_SCHEMA_KEYWORD,
     NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY, NodeReferenceInConfig,
     NodeReferenceToNodeType, NodeTypeANodeReferenceNames, config_keys_holding_a_node_reference,
-    node_name_a_config_value_references,
+    inputs_holding_a_node_reference, node_name_a_config_value_references,
 };
 pub use node_schema::{
     DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES,

@@ -547,7 +547,7 @@ impl GraphSnapshot {
         for node in &self.nodes {
             for reference in config_node_reference_edges_of_one_node(
                 &node.name,
-                &config_of_a_node(node_types, &node.node_type, &node.input_values),
+                &serde_json::Value::Object(node.input_values.clone()),
                 config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.node_type),
             )? {
                 let referenced_node_name = &reference.edge.referenced_node;
@@ -555,10 +555,10 @@ impl GraphSnapshot {
                     .get(cast_exposed_name_to_url_safe(referenced_node_name)?.as_ref())
                 else {
                     return Err(Error::GraphError(format!(
-                        "node `{}`'s config key `{}` names node `{referenced_node_name}`, which \
+                        "input `{}` of node `{}` names node `{referenced_node_name}`, which \
                          the graph does not hold. The graph holds: {}",
-                        node.name,
                         reference.edge.config_key,
+                        node.name,
                         the_names_the_graph_holds()
                     )));
                 };

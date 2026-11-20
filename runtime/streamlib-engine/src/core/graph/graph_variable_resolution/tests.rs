@@ -682,8 +682,69 @@ fn the_render_carries_each_runtime_links_id_and_drops_a_drawn_link_whose_reader_
         rendered_nodes,
         ["camera", "set-camera", "get-camera", "get-camera-2", "back"]
     );
-    assert_eq!(graph_response.nodes[1].ports.inputs[0].name, "value");
     assert_eq!(graph_response.nodes[2].ports.outputs[0].name, "value");
+}
+
+/// Mental-revert: rendering a variable node with its one `value` port, as before, lists none of
+/// its settings, so `variable` and `node_reference` read no value on the setter and `variable`
+/// none on the get.
+#[test]
+fn the_render_lists_each_setting_of_a_variable_node_as_an_input_reading_its_value() {
+    let resolution = resolved(a_camera_variable_read_by_two_displays()).unwrap();
+    let mut graph_response = GraphResponse {
+        asset: None,
+        display_name: None,
+        stream: None,
+        clock: Default::default(),
+        condition: None,
+        nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
+        links: Vec::new(),
+        references: Vec::new(),
+        machine: "vm".to_string(),
+        groups: Vec::new(),
+        studio: None,
+        function_node_pool: None,
+    };
+    resolution
+        .variables_as_drawn
+        .render_into(&mut graph_response);
+
+    let inputs_and_what_each_reads = |node: &GraphNodeOutput| -> Vec<(String, serde_json::Value)> {
+        node.ports
+            .inputs
+            .iter()
+            .map(|input| {
+                (
+                    input.name.clone(),
+                    input
+                        .value_read
+                        .as_ref()
+                        .and_then(|read| read.value.clone())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect()
+    };
+    let setter = &graph_response.nodes[1];
+    assert_eq!(setter.name, "set-camera");
+    assert_eq!(
+        inputs_and_what_each_reads(setter),
+        [
+            ("variable".to_string(), serde_json::json!("camera")),
+            ("node_reference".to_string(), serde_json::Value::Null),
+            ("value".to_string(), serde_json::Value::Null),
+        ]
+    );
+    let get = &graph_response.nodes[2];
+    assert_eq!(
+        inputs_and_what_each_reads(get),
+        [("variable".to_string(), serde_json::json!("camera"))]
+    );
+    assert_eq!(
+        setter.config,
+        Some(serde_json::json!({"variable": "camera"})),
+        "the config `graph` serves keeps its keys"
+    );
 }
 
 #[test]

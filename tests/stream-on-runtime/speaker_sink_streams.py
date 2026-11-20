@@ -43,4 +43,4 @@ def microphone_into_a_speaker_and_a_block_counting_probe(stream_builder: StreamB
 
 @graph_generator
 def speaker_sink_naming_an_unopenable_device(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
+    stream_builder.add(SpeakerSink, input_values={"device_id": UNOPENABLE_DEVICE_ID})

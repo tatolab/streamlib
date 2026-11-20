@@ -10,17 +10,11 @@ engine.
 """
 
 from .camera_source import CameraSource as CameraSource
-from .camera_source import CameraSourceConfig as CameraSourceConfig
 from .capture_to_downstream_latency_probe import (
     CaptureToDownstreamLatencyProbe as CaptureToDownstreamLatencyProbe,
-)
-from .capture_to_downstream_latency_probe import (
-    CaptureToDownstreamLatencyProbeConfig as CaptureToDownstreamLatencyProbeConfig,
 )
 
 __all__ = [
     "CameraSource",
-    "CameraSourceConfig",
     "CaptureToDownstreamLatencyProbe",
-    "CaptureToDownstreamLatencyProbeConfig",
 ]

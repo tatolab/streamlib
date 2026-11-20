@@ -51,6 +51,7 @@ from ._input_declaration_annotations import (
     StreamDelivery,
 )
 from ._named_pin_type_declaration import named_pin_type_declared_by
+from ._node_reference_class import is_the_node_reference_class
 from ._pin_annotations_on_the_wire import (
     ANNOTATION_NAME_OF_EACH_CLASS,
     annotation_classes_named,
@@ -61,6 +62,7 @@ from ._pin_declaration_refusal_words import (
     words_refusing_a_function_pin_of,
     words_refusing_a_type_parameter_limited_to,
 )
+from ._pin_default_refusal_words import fix_of_a_default_not_taken
 from ._pin_spelling_words import WRITTEN_FORMS_A_LIST_ELEMENT_TAKES
 from ._pin_spelling_words import is_a_union as _is_a_union
 from ._pin_spelling_words import name_of as _name_of
@@ -259,6 +261,8 @@ class _PinReading:
                 ),
                 "pin_typed_any",
             )
+        if written_type is object and self._of_the_runtimes_own_node and self._form == "pin":
+            return self._read_a_pin_of_the_runtimes_own_node_its_link_types(metadata)
         if (
             written_type is object
             or isinstance(written_type, typing.TypeVar)
@@ -441,6 +445,22 @@ class _PinReading:
             default_value=None if optional else NO_DEFAULT,
             type_parameter=type_parameter,
         )
+
+    def _read_a_pin_of_the_runtimes_own_node_its_link_types(
+        self, metadata: "list[object]"
+    ) -> DeclaredPin:
+        """A pin of the runtime's own node typed `object`, which carries whatever type the port
+        linked to it carries: a variable's `value`, of the type of the port its setter is linked
+        from. It states no annotation."""
+        for entry in metadata:
+            if not isinstance(entry, Description):
+                raise self._refusal(
+                    f"{self._pin_named} is typed `object`, which its link finds the type of, and "
+                    f"carries {entry!r}. To fix: drop it; such a pin takes `Description`.",
+                    "pin_annotation_not_taken",
+                )
+        declaration: PinDeclarationOnTheWire = {"pin_type": {"kind": "any"}, "flow": "value"}
+        return DeclaredPin(declaration, optional=False, default_value=NO_DEFAULT)
 
     def _input_pin_type_its_link_finds(
         self, written_type: object, type_parameter: Optional[typing.TypeVar]
@@ -693,10 +713,10 @@ class _PinReading:
         return member
 
     def _reads_a_type_choice(self, written_form: str) -> bool:
-        """Whether the pin is a `PinTypeChoice` setting of the runtime's own node, the one place
-        a type choice is read yet."""
+        """Whether the pin is a `PinTypeChoice` or a `NodeReference` setting of the runtime's own
+        node, the one place each is read yet."""
         return (
-            written_form == "PinTypeChoice"
+            written_form in ("PinTypeChoice", "NodeReference")
             and self._of_the_runtimes_own_node
             and self._form == "field"
         )
@@ -814,6 +834,8 @@ class _PinReading:
             return "named_pin_type"
         if written_type is PinTypeChoice:
             return "PinTypeChoice"
+        if is_the_node_reference_class(written_type):
+            return "NodeReference"
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
         )
@@ -931,7 +953,7 @@ class _PinReading:
         except PinValueNotTaken as not_taken:
             raise self._refusal(
                 f"{self._pin_named} defaults to {not_taken.value!r}, {not_taken.why}. To fix: "
-                f"{self._fix_of_a_default_not_taken(not_taken, self._python_form_of(row))}",
+                f"{fix_of_a_default_not_taken(not_taken, self._python_form_of(row))}",
                 (
                     "pin_default_outside_its_range"
                     if not_taken.kind in ("outside_its_exact_size", "outside_its_range")
@@ -944,28 +966,6 @@ class _PinReading:
         if row.name == "bundle" and isinstance(self._written_type, type):
             return self._written_type.__name__
         return row.python_forms[0]
-
-    @staticmethod
-    def _fix_of_a_default_not_taken(not_taken: PinValueNotTaken, pin_python_form: str) -> str:
-        match not_taken.kind:
-            case "not_of_its_type":
-                python_form = (
-                    pin_python_form
-                    if not_taken.pin_type["type"] == "bundle"
-                    else _PIN_TYPE_DESCRIPTION_BY_NAME[not_taken.pin_type["type"]].python_forms[0]
-                )
-                return (
-                    f"give it a default of its type, or type it `{python_form} | None = None` "
-                    f"so it may be unset."
-                )
-            case "outside_its_exact_size":
-                return "give it a default that fits."
-            case "not_finite":
-                return "give it a finite default."
-            case "not_an_option":
-                return "default to one of them."
-            case "outside_its_range":
-                return "give it a default inside its range."
 
 
 # The pin types that hold no stored value, so only a pin carries them.

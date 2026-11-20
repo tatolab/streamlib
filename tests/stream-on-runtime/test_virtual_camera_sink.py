@@ -304,7 +304,7 @@ def _add_a_test_pattern_into_virtual_cameras(
     )
     for camera_name in camera_names:
         sink = stream_builder.add(
-            VirtualCameraSink, config={"name": camera_name, "door": door}
+            VirtualCameraSink, input_values={"name": camera_name, "door": door}
         )
         stream_builder.connect(pattern.output("video"), sink.input("video"))
 

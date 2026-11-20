@@ -167,9 +167,10 @@ fn interface_node_type(
     ))
 }
 
-/// A setting named `name` of `pin_type`, stating `description`, read at setup, reading
-/// `pin_default` while it holds no value, and unset only when `may_be_unset` says so.
-fn setting(
+/// A setting of a node type the runtime owns, named `name` of `pin_type`, stating
+/// `description`, read at setup, reading `pin_default` while it holds no value, and unset only
+/// when `may_be_unset` says so.
+pub(super) fn setting(
     name: &str,
     description: &str,
     pin_type: PinType,

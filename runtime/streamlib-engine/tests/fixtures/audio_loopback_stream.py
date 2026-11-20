@@ -42,9 +42,9 @@ def known_signal_played_and_captured_back(stream_builder: StreamBuilder) -> None
     sink, capture_device_id = _sink_and_capture_device_from_the_environment()
 
     signal = stream_builder.add(KnownAudioSignalSource)
-    speaker = stream_builder.add(SpeakerSink, config={"device_id": sink} if sink else {})
+    speaker = stream_builder.add(SpeakerSink, input_values={"device_id": sink} if sink else {})
     stream_builder.connect(signal.output("audio"), speaker.input("audio"))
 
-    microphone = stream_builder.add(MicrophoneSource, config={"device_id": capture_device_id})
+    microphone = stream_builder.add(MicrophoneSource, input_values={"device_id": capture_device_id})
     recorder = stream_builder.add(CapturedAudioWaveformRecorder)
     stream_builder.connect(microphone.output("audio"), recorder.input("audio_from_upstream"))

@@ -249,7 +249,8 @@ impl RefusalCodeAndPlace {
                         ..Self::coded(LinkNeedsAModuleConversion)
                     }
                 }
-                PinLinkRefusal::PinTypesDoNotConnect { .. } => {
+                PinLinkRefusal::PinTypesDoNotConnect { .. }
+                | PinLinkRefusal::BundleFrameIntoAnUntypedInput { .. } => {
                     Self::coded(LinkPinTypesDoNotConnect)
                 }
             },

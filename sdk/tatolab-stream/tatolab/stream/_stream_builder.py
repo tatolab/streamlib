@@ -292,11 +292,13 @@ class StreamBuilder:
                     f"`input_values={{...}}`; `config=` is the spelling of nodes that declare "
                     f"no pin types"
                 )
-            if values is not None:
-                values = typed_pins.stored_input_values(
-                    _input_values_as_a_mapping(values, "input_values")
-                )
         node_names_the_values_reference: list[str] = []
+        if typed_pins is not None and values is not None:
+            given = _input_values_as_a_mapping(values, "input_values")
+            node_names_the_values_reference.extend(
+                value.name for value in given.values() if isinstance(value, NodeReference)
+            )
+            values = typed_pins.stored_input_values(given)
         input_values_as_json_object = _input_values_as_json_object(
             values, values_given_as or "input_values", node_names_the_values_reference
         )
