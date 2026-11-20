@@ -43,6 +43,7 @@ mod node_types;
 mod playback_and_stream_actions;
 mod project_files_and_views;
 mod project_lifecycle;
+mod worked_examples;
 
 pub use assets_and_streams::{
     CreateStream, DeleteAsset, DeleteStream, DescribeAsset, ImportAsset, ListAssets,

@@ -14,8 +14,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::control_operation::{
-    ControlOperationDeclaration, ControlOperationEffect, ControlOperationGroup,
-    ControlOperationStability,
+    ControlOperationDeclaration, ControlOperationEffect, ControlOperationExample,
+    ControlOperationGroup, ControlOperationStability,
 };
 use crate::control_operation_refusals::the_refusal_of_an_unknown_operation;
 use crate::control_operations::CONTROL_OPERATIONS;
@@ -103,6 +103,34 @@ pub struct AgentOperationDescribed {
     pub params_schema: Value,
     /// The JSON Schema of what it answers.
     pub result_schema: Value,
+    /// A worked example of a call; absent on an operation another replaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example: Option<AgentOperationExample>,
+}
+
+/// A worked example of calling one operation.
+#[derive(Debug, PartialEq, Serialize, JsonSchema)]
+pub struct AgentOperationExample {
+    /// The `params` a call sends.
+    pub params: Value,
+    /// What that call answers; given for an operation the three agent loops call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Value>,
+    /// A refusal of a call of it, in the one refusal shape; given for an operation the three
+    /// agent loops call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Value>,
+}
+
+impl AgentOperationExample {
+    /// `example` as the values it renders.
+    pub fn of(example: &ControlOperationExample) -> Self {
+        Self {
+            params: (example.params)(),
+            answer: example.answer.map(|answer| answer()),
+            refusal: example.refusal.map(|refusal| refusal()),
+        }
+    }
 }
 
 /// `call_operation`'s params.
@@ -149,7 +177,7 @@ pub const AGENT_DISCOVERY_TOOLS: &[AgentDiscoveryToolDeclaration] = &[
     AgentDiscoveryToolDeclaration {
         tool_name: DESCRIBE_OPERATIONS_TOOL_NAME,
         one_line_doc: "Describe operations: what each does, the params it takes and what it answers.",
-        agent_usage_note: "Describe operations by name, or every operation of one group: what each reads, changes and answers, the JSON Schema of its params and of its result, whether it only reads, and the contract version it arrived in. Call it before the first `call_operation` of an operation, and send the params exactly as its `params_schema` states them.",
+        agent_usage_note: "Describe operations by name, or every operation of one group: what each reads, changes and answers, the JSON Schema of its params and of its result, whether it only reads, the contract version it arrived in, and an `example` of the params a call sends; an operation of the three loops (building a graph, writing a Python node, writing a control) also shows what that call answers and a refusal of it. Call it before the first `call_operation` of an operation, and send the params exactly as its `params_schema` states them.",
         effect: ControlOperationEffect::ReadsOnly,
         request_json_schema: the_json_schema_of::<DescribeOperationsRequest>,
         result_json_schema: Some(the_json_schema_of::<DescribeOperationsResult>),
@@ -264,6 +292,7 @@ pub fn the_operations_described_for(
                 result_schema: a_json_schema_carrying_its_own_definitions(
                     declaration.result_json_schema,
                 ),
+                example: declaration.example.as_ref().map(AgentOperationExample::of),
             })
             .collect(),
     })
@@ -436,6 +465,47 @@ mod tests {
         if params_schema.contains("#/$defs/") {
             assert!(add_node.params_schema.get("$defs").is_some());
         }
+    }
+
+    #[test]
+    fn an_operation_is_described_with_its_worked_example_and_a_loop_operation_with_its_answer_and_refusal()
+     {
+        let described = the_operations_described_for(DescribeOperationsRequest {
+            operations: Some(vec![
+                "add_node".to_owned(),
+                "check_link".to_owned(),
+                "set_node_config".to_owned(),
+            ]),
+            group: None,
+        })
+        .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
+        let [add_node, check_link, set_node_config] = described.operations.as_slice() else {
+            panic!("three operations were asked for");
+        };
+        let Some(add_node_example) = &add_node.example else {
+            panic!("add_node shows an example");
+        };
+        assert!(add_node_example.params["stream"].is_string());
+        assert_eq!(
+            (&add_node_example.answer, &add_node_example.refusal),
+            (&None, &None)
+        );
+        let Some(check_link_example) = &check_link.example else {
+            panic!("check_link shows an example");
+        };
+        assert!(
+            check_link_example
+                .answer
+                .as_ref()
+                .is_some_and(|answer| answer["outcome"] == "refused")
+        );
+        assert!(
+            check_link_example
+                .refusal
+                .as_ref()
+                .is_some_and(|refusal| refusal["refusal_code"].is_string())
+        );
+        assert_eq!(set_node_config.example, None);
     }
 
     #[test]

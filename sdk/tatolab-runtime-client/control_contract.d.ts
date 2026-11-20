@@ -6620,6 +6620,10 @@ export interface AgentOperationDescribed {
    * The JSON Schema of what it answers.
    */
   result_schema: unknown;
+  /**
+   * A worked example of a call; absent on an operation another replaces.
+   */
+  example?: AgentOperationExample | null;
 }
 
 /**
@@ -6631,6 +6635,25 @@ export type ControlOperationStability = "stable" | "experimental";
  * What an operation does to what the runtime holds.
  */
 export type ControlOperationEffect = "reads_only" | "changes" | "destroys";
+
+/**
+ * A worked example of calling one operation.
+ */
+export interface AgentOperationExample {
+  /**
+   * The `params` a call sends.
+   */
+  params: unknown;
+  /**
+   * What that call answers; given for an operation the three agent loops call.
+   */
+  answer?: unknown;
+  /**
+   * A refusal of a call of it, in the one refusal shape; given for an operation the three
+   * agent loops call.
+   */
+  refusal?: unknown;
+}
 
 /**
  * `call_operation`'s params.
@@ -6972,6 +6995,7 @@ export interface ControlContractComponents {
   AgentOperationDescribed: AgentOperationDescribed;
   ControlOperationStability: ControlOperationStability;
   ControlOperationEffect: ControlOperationEffect;
+  AgentOperationExample: AgentOperationExample;
   CallOperationRequest: CallOperationRequest;
   BooleanPinValue: BooleanPinValue;
   IntegerPinValue: IntegerPinValue;

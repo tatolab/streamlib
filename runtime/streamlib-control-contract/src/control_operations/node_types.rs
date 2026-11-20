@@ -7,9 +7,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::EVERY_SURFACE;
+use super::worked_examples;
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest, SetNodeTypeGroupRequest,
@@ -32,6 +34,7 @@ impl ControlOperation for ListPinTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_PIN_TYPES);
 }
 
 /// `list_node_types`: the node types and graph generators a project offers, by the source each
@@ -52,6 +55,7 @@ impl ControlOperation for ListNodeTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_NODE_TYPES);
 }
 
 /// `describe_node_types`: the typed inputs and outputs of the node types named.
@@ -71,6 +75,7 @@ impl ControlOperation for DescribeNodeTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_NODE_TYPES);
 }
 
 /// `set_node_type_group`: file a node type under a group of the project's own, or put it back
@@ -90,4 +95,5 @@ impl ControlOperation for SetNodeTypeGroup {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_NODE_TYPE_GROUP);
 }
