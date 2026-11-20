@@ -168,7 +168,7 @@ impl ShaderSpecializationData {
 pub(crate) fn specialization_constants_a_shader_declares(
     shader_module: &Module,
 ) -> BTreeMap<u32, ShaderDeclaredSpecializationConstant> {
-    let constant_id_of_each_result_id: BTreeMap<u32, u32> = shader_module
+    let mut constant_id_of_each_result_id: BTreeMap<u32, u32> = shader_module
         .annotations
         .iter()
         .filter(|instruction| instruction.class.opcode == Op::Decorate)
@@ -181,6 +181,25 @@ pub(crate) fn specialization_constants_a_shader_declares(
             _ => None,
         })
         .collect();
+    // A `SpecId` on a decoration group reaches the constants the group is
+    // applied to.
+    let grouped: Vec<(u32, u32)> = shader_module
+        .annotations
+        .iter()
+        .filter(|instruction| instruction.class.opcode == Op::GroupDecorate)
+        .filter_map(|instruction| match instruction.operands.split_first() {
+            Some((Operand::IdRef(group_id), targets)) => {
+                let constant_id = *constant_id_of_each_result_id.get(group_id)?;
+                Some(targets.iter().filter_map(move |target| match target {
+                    Operand::IdRef(target_id) => Some((*target_id, constant_id)),
+                    _ => None,
+                }))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    constant_id_of_each_result_id.extend(grouped);
     let name_of_each_result_id: BTreeMap<u32, &str> = shader_module
         .debug_names
         .iter()

@@ -240,3 +240,41 @@ fn a_local_array_sized_by_a_specialization_constant_is_taken() {
     );
     validated(&spv, 0).expect("an array outside the bindings and push constants is taken");
 }
+
+/// Writes the low word of a 64-bit constant and a 64-bit float constant's
+/// integer part, so both reach the shader as the values the pipeline took.
+const SIXTY_FOUR_BIT_CONSTANTS_SLANG: &str = r#"
+[vk::constant_id(0)] const uint64_t OFFSET = 1;
+[vk::constant_id(1)] const double SCALE = 1.0;
+[[vk::binding(0, 0)]] RWStructuredBuffer<uint> written;
+[numthreads(1, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    written[0] = uint(OFFSET & 0xffffffff);
+    written[1] = uint(SCALE);
+}
+"#;
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
+fn sixty_four_bit_constants_reach_the_shader_on_a_device_serving_them() {
+    let device = vulkan_device_for_dispatch_tests();
+    let spv = compiled(SIXTY_FOUR_BIT_CONSTANTS_SLANG, "sixty-four-bit-constants");
+    let written = entries_one_workgroup_writes(
+        &device,
+        &spv,
+        &[
+            ShaderSpecializationConstant {
+                constant_id: 0,
+                value: ShaderSpecializationValue::U64((7 << 32) | 40),
+            },
+            ShaderSpecializationConstant {
+                constant_id: 1,
+                value: ShaderSpecializationValue::F64(12.0),
+            },
+        ],
+    );
+    assert_eq!(&written[..2], &[40, 12]);
+}
