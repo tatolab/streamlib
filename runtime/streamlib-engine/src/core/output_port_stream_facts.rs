@@ -42,32 +42,27 @@ impl StreamFactsOfOutputPorts {
             facts_by_output_port: RwLock::new(
                 output_ports
                     .iter()
-                    .map(|port| {
-                        let family =
-                            output_port_family_resolved_against_config(&port.family, node_config)
-                                .unwrap_or(port.family.family);
-                        let declared_frame_rate = output_port_frame_rate_resolved_against_config(
-                            &port.family,
-                            node_config,
-                        )
-                        .ok()
-                        .flatten();
-                        let current_facts = declared_frame_rate.map(|frame_rate| {
-                            PortStreamFacts::Image(ImageStreamFacts {
-                                frame_rate: Some(frame_rate),
-                                ..ImageStreamFacts::default()
-                            })
-                        });
-                        (
-                            port.name.clone(),
-                            StreamFactsOfOneOutputPort {
-                                family,
-                                current_facts,
-                            },
-                        )
-                    })
+                    .map(|port| (port.name.clone(), the_facts_declared_by(port, node_config)))
                     .collect(),
             ),
+        }
+    }
+
+    /// Hold an entry for each of `output_ports` and for no other port: an output a pin group's
+    /// slot just gave the node takes the facts it declares, as [`Self::as_declared_by`] reads
+    /// them, an output it still holds keeps what it carries, and the entry of an output its slot
+    /// gave back is dropped.
+    pub(crate) fn hold_the_output_ports(
+        &self,
+        output_ports: &[PortInfo],
+        node_config: Option<&serde_json::Value>,
+    ) {
+        let mut facts_by_output_port = self.facts_by_output_port.write();
+        facts_by_output_port.retain(|held, _| output_ports.iter().any(|port| port.name == *held));
+        for port in output_ports {
+            facts_by_output_port
+                .entry(port.name.clone())
+                .or_insert_with(|| the_facts_declared_by(port, node_config));
         }
     }
 
@@ -212,6 +207,29 @@ impl UpstreamStreamFactsByInboundLink {
         Ok(upstream_port
             .upstream_stream_facts
             .current_facts_of(&upstream_port.upstream_output_port))
+    }
+}
+
+/// The facts output `port` declares, its family and frame rate resolved against `node_config`.
+fn the_facts_declared_by(
+    port: &PortInfo,
+    node_config: Option<&serde_json::Value>,
+) -> StreamFactsOfOneOutputPort {
+    let family = output_port_family_resolved_against_config(&port.family, node_config)
+        .unwrap_or(port.family.family);
+    let declared_frame_rate =
+        output_port_frame_rate_resolved_against_config(&port.family, node_config)
+            .ok()
+            .flatten();
+    let current_facts = declared_frame_rate.map(|frame_rate| {
+        PortStreamFacts::Image(ImageStreamFacts {
+            frame_rate: Some(frame_rate),
+            ..ImageStreamFacts::default()
+        })
+    });
+    StreamFactsOfOneOutputPort {
+        family,
+        current_facts,
     }
 }
 

@@ -116,11 +116,7 @@ impl GraphNodePorts {
         ports.iter().find(|port| port.name == name).or_else(|| {
             let slot_port = crate::core::descriptors::PinGroupSlotPort::named(name)
                 .filter(|port| port.slot < crate::core::descriptors::PIN_GROUP_MOST_SLOTS)?;
-            let separator = crate::core::descriptors::PIN_GROUP_SLOT_PORT_NAME_SEPARATOR;
-            let in_the_first_slot = format!(
-                "{}{separator}0{separator}{}",
-                slot_port.group, slot_port.pin
-            );
+            let in_the_first_slot = slot_port.named_in_the_first_slot();
             ports.iter().find(|port| port.name == in_the_first_slot)
         })
     }

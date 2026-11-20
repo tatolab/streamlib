@@ -110,6 +110,8 @@ impl GraphNode {
             }
             *self.ports.on_mut(direction) = ports;
         }
+        self.stream_facts_of_output_ports()
+            .hold_the_output_ports(&self.ports.outputs, self.config.as_ref());
         true
     }
 }
@@ -206,7 +208,8 @@ pub(crate) fn grow_a_pin_group_to_hold_the_port(
 }
 
 /// Refuse `value` as the count of the pin group of node `node_index` named `input`, naming the
-/// node and the link: a count that leaves out a slot a link reaches. Any other input, and a
+/// node and the link: a count that leaves out a slot a link reaches, `None` reading as the
+/// input's default. Any other input, and a
 /// count no link is past, is taken.
 pub(crate) fn refuse_a_slot_count_leaving_out_a_linked_slot(
     graph: &DiGraph<GraphNode, Link>,
@@ -222,7 +225,16 @@ pub(crate) fn refuse_a_slot_count_leaving_out_a_linked_slot(
     }) else {
         return Ok(());
     };
-    let Some(count) = value.and_then(serde_json::Value::as_u64) else {
+    let count = match value {
+        Some(value) => value.as_u64(),
+        None => node
+            .ports
+            .input_named(input)
+            .and_then(|input| input.pin_default.as_ref())
+            .and_then(serde_json::Value::as_u64)
+            .or(Some(1)),
+    };
+    let Some(count) = count else {
         return Ok(());
     };
     match the_last_slot_its_links_reach(graph, node_index, group) {
