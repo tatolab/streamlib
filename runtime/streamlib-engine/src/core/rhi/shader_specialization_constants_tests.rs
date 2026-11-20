@@ -7,7 +7,8 @@ use rspirv_reflect::spirv::Decoration;
 use super::shader_specialization_constants::{
     ShaderDeclaredSpecializationConstant, ShaderSpecializationConstant,
     ShaderSpecializationConstantType, ShaderSpecializationData, ShaderSpecializationMapEntry,
-    ShaderSpecializationValue, specialization_constants_a_shader_declares,
+    ShaderSpecializationScalar, ShaderSpecializationValue,
+    specialization_constants_a_shader_declares,
 };
 
 #[test]
@@ -75,7 +76,7 @@ fn reflection_reads_each_constants_id_type_and_name() {
     let offset = builder.spec_constant_bit64(signed_64, 0);
     let half_scale = builder.spec_constant_bit32(half_float, 0);
     let enabled = builder.spec_constant_true(boolean);
-    let undecorated = builder.spec_constant_bit32(unsigned_32, 1);
+    let _undecorated = builder.spec_constant_bit32(unsigned_32, 1);
     for (result_id, constant_id) in [
         (workgroup_size, 0),
         (offset, 4),
@@ -90,7 +91,6 @@ fn reflection_reads_each_constants_id_type_and_name() {
     }
     builder.name(workgroup_size, "WORKGROUP_SIZE");
     builder.name(enabled, "ENABLED");
-    let _ = undecorated;
 
     let declared: Vec<(u32, ShaderDeclaredSpecializationConstant)> =
         specialization_constants_a_shader_declares(&builder.module())
@@ -113,7 +113,10 @@ fn reflection_reads_each_constants_id_type_and_name() {
             (
                 2,
                 named(
-                    ShaderSpecializationConstantType::Unspecializable("float16".to_string()),
+                    ShaderSpecializationConstantType::UnspecializableWidth {
+                        scalar: ShaderSpecializationScalar::Float,
+                        width: 16,
+                    },
                     None
                 )
             ),
@@ -125,4 +128,20 @@ fn reflection_reads_each_constants_id_type_and_name() {
         ],
         "a constant with no SpecId is not specializable and is left out"
     );
+}
+
+#[test]
+fn each_type_reads_as_the_shader_spells_it() {
+    let spelled: Vec<String> = [
+        ShaderSpecializationConstantType::U32,
+        ShaderSpecializationConstantType::F64,
+        ShaderSpecializationConstantType::UnspecializableWidth {
+            scalar: ShaderSpecializationScalar::SignedInteger,
+            width: 16,
+        },
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    assert_eq!(spelled, vec!["uint32", "float64", "int16"]);
 }

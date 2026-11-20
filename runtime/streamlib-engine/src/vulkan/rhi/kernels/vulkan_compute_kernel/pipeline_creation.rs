@@ -132,6 +132,24 @@ pub(super) fn create_compute_pipeline_with_cache(
     pipeline_cache_directory_of_its_stream: Option<&Path>,
 ) -> Result<vk::Pipeline> {
     let specialization_data = ShaderSpecializationData::of_the_constants(specialization_constants);
+    let specialization_map_entries = specialization_data
+        .map_entries
+        .iter()
+        .map(|entry| {
+            let offset = u32::try_from(entry.offset).map_err(|_| {
+                Error::GpuError(format!(
+                    "Compute kernel '{label}': specialization constant {} sits past the 4 GiB \
+                     a specialization's data can span",
+                    entry.constant_id
+                ))
+            })?;
+            Ok(vk::SpecializationMapEntry {
+                constant_id: entry.constant_id,
+                offset,
+                size: entry.size,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let cache_path = pipeline_cache_file_path(
         spv,
         entry_point,
@@ -159,19 +177,9 @@ pub(super) fn create_compute_pipeline_with_cache(
 
     let cache_handle = pipeline_cache.unwrap_or(vk::PipelineCache::null());
 
-    let specialization_map_entries: Vec<vk::SpecializationMapEntry> = specialization_data
-        .map_entries
-        .iter()
-        .map(|entry| vk::SpecializationMapEntry {
-            constant_id: entry.constant_id,
-            offset: entry.offset,
-            size: entry.size,
-        })
-        .collect();
     let specialization_info = vk::SpecializationInfo::builder()
         .map_entries(&specialization_map_entries)
-        .data(&specialization_data.bytes)
-        .build();
+        .data(&specialization_data.bytes);
     let mut stage = vk::PipelineShaderStageCreateInfo::builder()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(shader_module)
@@ -230,10 +238,10 @@ pub(super) fn pipeline_cache_file_path(
     // run is not what a cache is for.
     hasher.update(entry_point.to_bytes());
     // Each specialization is a pipeline of its own. An unspecialized kernel
-    // adds nothing here, so its file keeps the name it had.
+    // hashes only its SPIR-V and entry point.
     for entry in &specialization_data.map_entries {
         hasher.update(entry.constant_id.to_le_bytes());
-        hasher.update(entry.offset.to_le_bytes());
+        hasher.update((entry.offset as u64).to_le_bytes());
         hasher.update((entry.size as u64).to_le_bytes());
     }
     hasher.update(&specialization_data.bytes);

@@ -290,6 +290,7 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<ComputeBindingKind> {
 mod tests {
     use super::*;
     use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        add_a_local_size_id_execution_mode_to_spirv_module,
         move_binding_to_another_descriptor_set_in_spirv_module,
         pack_the_debug_source_strings_sign_extended_for_a_non_ascii_character,
         split_a_multi_byte_character_across_op_source_and_op_source_continued,
@@ -522,6 +523,18 @@ mod tests {
                 ))
             ),
             built_module_bindings
+        );
+    }
+
+    /// Mental revert: drop `OP_EXECUTION_MODE_ID` from the reflection rewrite
+    /// and the module is refused with `DetachedInstruction`.
+    #[test]
+    fn a_module_with_a_local_size_id_execution_mode_reflects_the_same_bindings() {
+        assert_eq!(
+            bindings_of_a_module_rspirv_refuses(
+                &add_a_local_size_id_execution_mode_to_spirv_module(blend_spv(2))
+            ),
+            derive_bindings_from_spirv(blend_spv(2)).expect("the built module reflects")
         );
     }
 

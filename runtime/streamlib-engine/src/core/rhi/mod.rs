@@ -104,7 +104,7 @@ pub use ray_tracing_kernel::{
     validate_shader_groups,
 };
 pub use shader_specialization_constants::{
-    ShaderSpecializationConstant, ShaderSpecializationConstantType, ShaderSpecializationValue,
+    ShaderSpecializationConstant, ShaderSpecializationValue,
 };
 pub(crate) use shader_specialization_constants::{
     ShaderSpecializationData, refuse_specialization_constants_the_shader_does_not_take,

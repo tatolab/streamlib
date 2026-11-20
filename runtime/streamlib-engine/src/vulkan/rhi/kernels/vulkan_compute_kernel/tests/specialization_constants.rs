@@ -57,11 +57,7 @@ fn validation_refusal(specialization_constants: &[ShaderSpecializationConstant])
     let bindings = [ComputeBindingSpec::storage_buffer(0)];
     validate_against_spirv(
         &descriptor_specialized(&spv, &bindings, specialization_constants),
-        &VulkanSubgroupOperationSupport {
-            driver_name: "a driver under test".to_string(),
-            supported_stages: vk::ShaderStageFlags::COMPUTE,
-            supported_operations: vk::SubgroupFeatureFlags::all(),
-        },
+        &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
     )
     .expect_err("the specialization must be refused")
     .to_string()
@@ -85,7 +81,9 @@ fn a_constant_the_shader_does_not_declare_is_refused_naming_the_ones_it_does() {
 fn a_constant_of_another_type_than_the_shaders_is_refused() {
     let refusal = validation_refusal(&workgroup_size(ShaderSpecializationValue::F32(32.0)));
     assert!(
-        refusal.contains("`WORKGROUP_SIZE`") && refusal.contains("F32") && refusal.contains("U32"),
+        refusal.contains("`WORKGROUP_SIZE`")
+            && refusal.contains("as float32")
+            && refusal.contains("declares it uint32"),
         "{refusal}"
     );
 }

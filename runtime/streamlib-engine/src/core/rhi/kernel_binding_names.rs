@@ -76,7 +76,7 @@ fn spirv_without_what_rspirv_refuses(spirv: &[u8]) -> Cow<'_, [u8]> {
     let instruction_header_word =
         |word_count: usize, opcode: u32| u32::to_le_bytes(((word_count as u32) << 16) | opcode);
 
-    let mut module_without_debug_source_strings: Option<Vec<u8>> = None;
+    let mut module_without_what_rspirv_refuses: Option<Vec<u8>> = None;
     let mut instruction_start_word_index = SPIRV_HEADER_WORD_COUNT;
     while instruction_start_word_index < module_word_count {
         let instruction_header = u32::from_le_bytes(word_at(instruction_start_word_index));
@@ -116,20 +116,20 @@ fn spirv_without_what_rspirv_refuses(spirv: &[u8]) -> Cow<'_, [u8]> {
         };
         match (
             replacement_bytes,
-            module_without_debug_source_strings.as_mut(),
+            module_without_what_rspirv_refuses.as_mut(),
         ) {
             (Some(replacement_bytes), Some(rewritten)) => rewritten.extend(replacement_bytes),
             (Some(replacement_bytes), None) => {
                 let mut rewritten = spirv[..instruction_start_word_index * 4].to_vec();
                 rewritten.extend(replacement_bytes);
-                module_without_debug_source_strings = Some(rewritten);
+                module_without_what_rspirv_refuses = Some(rewritten);
             }
             (None, Some(rewritten)) => rewritten.extend_from_slice(instruction_bytes),
             (None, None) => {}
         }
         instruction_start_word_index = instruction_end_word_index;
     }
-    module_without_debug_source_strings.map_or(Cow::Borrowed(spirv), Cow::Owned)
+    module_without_what_rspirv_refuses.map_or(Cow::Borrowed(spirv), Cow::Owned)
 }
 
 /// Render a shader's declared binding names for an error message.

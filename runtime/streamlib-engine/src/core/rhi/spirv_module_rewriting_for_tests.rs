@@ -104,6 +104,37 @@ pub(crate) fn move_binding_to_another_descriptor_set_in_spirv_module(
     moved
 }
 
+/// Follow the module's `OpExecutionMode` with an `OpExecutionModeId` naming
+/// a `LocalSizeId`, as Slang emits for a workgroup size taken from
+/// specialization constants. Its size operands are the entry point's own id:
+/// the module is for reflection, which never reads them.
+pub(crate) fn add_a_local_size_id_execution_mode_to_spirv_module(spirv: &[u8]) -> Vec<u8> {
+    const OP_EXECUTION_MODE: u32 = 16;
+    const OP_EXECUTION_MODE_ID: u32 = 331;
+    const EXECUTION_MODE_LOCAL_SIZE_ID: u32 = 38;
+    const OP_EXECUTION_MODE_ID_WORD_COUNT: u32 = 6;
+    let (added, added_count) = rewrite_spirv_instructions(spirv, |opcode, instruction| {
+        (opcode == OP_EXECUTION_MODE).then(|| {
+            let entry_point = instruction[1];
+            let mut followed = instruction.to_vec();
+            followed.extend_from_slice(&[
+                (OP_EXECUTION_MODE_ID_WORD_COUNT << 16) | OP_EXECUTION_MODE_ID,
+                entry_point,
+                EXECUTION_MODE_LOCAL_SIZE_ID,
+                entry_point,
+                entry_point,
+                entry_point,
+            ]);
+            followed
+        })
+    });
+    assert!(
+        added_count > 0,
+        "the module carries no OpExecutionMode to follow"
+    );
+    added
+}
+
 /// Name a file in the module's `OpSource`, with its source text and its
 /// `OpString` file name packed as SPIRV-Tools 2023.6 packs a non-ASCII
 /// character: each of its bytes sign-extended, so the rest of that word reads
