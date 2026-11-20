@@ -163,7 +163,7 @@ export interface GraphLinkEndOnTheWire {
    */
   port: string;
   /**
-   * The member of a bundle port the link starts at; absent for the whole port.
+   * The member of a bundle port the link starts or ends at; absent for the whole port.
    */
   member?: string | null;
 }
@@ -1325,7 +1325,7 @@ export interface GraphLinkOnTheWire {
 
 /**
  * One end of a link of a stream's graph: a node by its name, one of its ports, and the member
- * of a bundle port the link starts at, if any.
+ * of a bundle port the link starts or ends at, if any.
  */
 export interface GraphLinkPortRefOnTheWire {
   /**
@@ -1337,8 +1337,8 @@ export interface GraphLinkPortRefOnTheWire {
    */
   port: string;
   /**
-   * The member of a bundle port the link starts at, which it carries alone; absent for the
-   * whole port. Only a link's `source` names one.
+   * The member of a bundle port the link starts or ends at, which it carries alone; absent
+   * for the whole port.
    */
   member?: string | null;
 }
@@ -1956,7 +1956,7 @@ export type StreamGraphAction = ({
 
 /**
  * One end of a link a graph action names: a node, one of its ports, and the member of a bundle
- * port it starts at, if any.
+ * port it starts or ends at, if any.
  */
 export interface StreamGraphActionLinkEnd {
   /**
@@ -1968,7 +1968,7 @@ export interface StreamGraphActionLinkEnd {
    */
   port: string;
   /**
-   * The member of a bundle port the link starts at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. Only a link's `source` names one.
+   * The member of a bundle port the link starts or ends at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. A bundle input is fed either whole or member by member, and the node reads one bundle built from the newest value of each member.
    */
   member?: string | null;
 }
@@ -8007,7 +8007,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 23;
+export declare const CONTROL_CONTRACT_REVISION: 24;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

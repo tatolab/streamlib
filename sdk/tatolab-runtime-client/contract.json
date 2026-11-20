@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 23
+    "x-contract-revision": 24
   },
   "methods": [
     {
@@ -6207,7 +6207,7 @@
               "string",
               "null"
             ],
-            "description": "The member of a bundle port the link starts at; absent for the whole port."
+            "description": "The member of a bundle port the link starts or ends at; absent for the whole port."
           }
         },
         "required": [
@@ -9008,14 +9008,14 @@
               "string",
               "null"
             ],
-            "description": "The member of a bundle port the link starts at, which it carries alone; absent for the\nwhole port. Only a link's `source` names one."
+            "description": "The member of a bundle port the link starts or ends at, which it carries alone; absent\nfor the whole port."
           }
         },
         "required": [
           "node",
           "port"
         ],
-        "description": "One end of a link of a stream's graph: a node by its name, one of its ports, and the member\nof a bundle port the link starts at, if any."
+        "description": "One end of a link of a stream's graph: a node by its name, one of its ports, and the member\nof a bundle port the link starts or ends at, if any."
       },
       "GraphLinkStateOnTheWire": {
         "oneOf": [
@@ -10307,14 +10307,14 @@
               "string",
               "null"
             ],
-            "description": "The member of a bundle port the link starts at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. Only a link's `source` names one."
+            "description": "The member of a bundle port the link starts or ends at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. A bundle input is fed either whole or member by member, and the node reads one bundle built from the newest value of each member."
           }
         },
         "required": [
           "node",
           "port"
         ],
-        "description": "One end of a link a graph action names: a node, one of its ports, and the member of a bundle\nport it starts at, if any."
+        "description": "One end of a link a graph action names: a node, one of its ports, and the member of a bundle\nport it starts or ends at, if any."
       },
       "GraphEditMode": {
         "oneOf": [
