@@ -700,8 +700,10 @@ fn rendered_impl_block_declared_as(built_in_node: bool) -> String {
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(built_in_node, &schema.name),
-        &quote! { __streamlib_sdk::nodes::EmptyConfig },
-        &None,
+        &NodeConfigEmitted {
+            config_type: &quote! { __streamlib_sdk::nodes::EmptyConfig },
+            field_name: &None,
+        },
         &NodeSettingsEmitted::of(None),
         &[],
     ))
@@ -938,8 +940,10 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(false, "MinimalProbe"),
-        &config_type,
-        &None,
+        &NodeConfigEmitted {
+            config_type: &config_type,
+            field_name: &None,
+        },
         &settings,
         &[],
     ));

@@ -77,8 +77,10 @@ pub(crate) fn generate_from_parsed_node_attr(
         &member_visibility,
         &NodeDeclaredMetaAndPortDescriptions::of(parsed),
         &node_type_minted(parsed.built_in_node, &schema.name),
-        &config_type,
-        &config_field_name,
+        &NodeConfigEmitted {
+            config_type: &config_type,
+            field_name: &config_field_name,
+        },
         &settings,
         &custom_fields,
     );
@@ -283,17 +285,28 @@ fn node_type_minted(built_in_node: bool, node_class_short_name: &str) -> TokenSt
     }
 }
 
+/// The config a node declares: its type (`EmptyConfig` when it declares none) and the field
+/// that holds it.
+struct NodeConfigEmitted<'a> {
+    config_type: &'a TokenStream,
+    field_name: &'a Option<Ident>,
+}
+
 fn generate_node_impl_from_schema(
     schema: &NodeSchema,
     member_visibility: &TokenStream,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
     node_type_minted: &TokenStream,
-    config_type: &TokenStream,
-    config_field_name: &Option<Ident>,
+    config: &NodeConfigEmitted<'_>,
     settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
     use streamlib_node_schema::NodeSchemaExecution;
+
+    let NodeConfigEmitted {
+        config_type,
+        field_name: config_field_name,
+    } = config;
 
     let node_class_short_name = &schema.name;
 
