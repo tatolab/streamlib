@@ -714,6 +714,14 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 ::streamlib::sdk::runtime::ExtensionCodeCheckersHeld::default()
                     .check_a_projects_extension_code(project_directory, paths, None)
             }
+            fn a_template_from_the_extension_sdk_kit(
+                &self,
+                project_directory: &::std::path::Path,
+                template_file: &str,
+            ) -> ::std::result::Result<::streamlib::sdk::runtime::ExtensionSdkKitTemplate, String> {
+                ::streamlib::sdk::runtime::ExtensionCodeCheckersHeld::default()
+                    .a_template_from_the_kit(project_directory, template_file, None)
+            }
         }
     };
 }

@@ -317,10 +317,20 @@ class ContractBackedAgentSession:
     ) -> "dict[str, Any]":
         """A file operation on the stand-in project, whose declaration check refuses a typed
         input written with no default, as the declaration reader does: at the line of the
-        decorator above it, where the refusal is raised."""
+        decorator above it, where the refusal is raised; and whose type check refuses a number
+        written into an element's string `value`, at its line."""
         if operation == "check_project_code":
             paths = arguments.get("paths") or sorted(self.project_files)
-            findings = [
+            type_findings = [
+                {"check": "extension_types", "finding_code": "TS2322", "severity": "error",
+                 "words": "Type 'number' is not assignable to type 'string'.",
+                 "path": path, "line": line_number, "column": 5}
+                for path in paths
+                if path.endswith(".ts")
+                for line_number, line in enumerate(self.project_files[path].splitlines(), start=1)
+                if line.strip().endswith(".value = value;")
+            ]
+            declaration_findings = [
                 {"check": "python_node_declarations", "finding_code": "value_input_has_no_default",
                  "severity": "error", "words": "`level` has no default. To fix: give it one.",
                  "path": path, "line": line_number - 1, "node_type": the_node_type_at(path, "Tremolo"),
@@ -329,16 +339,30 @@ class ContractBackedAgentSession:
                 for line_number, line in enumerate(self.project_files[path].splitlines(), start=1)
                 if "(level: float," in line
             ]
+            findings = declaration_findings + type_findings
             return {
                 "verdict": "failed" if findings else "passed",
-                "checks": [{"check": "python_node_declarations",
-                            "state": "failed" if findings else "passed"}],
+                "checks": [
+                    {"check": "python_node_declarations",
+                     "state": "failed" if declaration_findings else "passed"},
+                    {"check": "extension_manifest", "state": "passed"},
+                    {"check": "extension_types", "state": "failed" if type_findings else "passed"},
+                    {"check": "extension_lint", "state": "passed"},
+                ],
                 "findings": findings,
                 "files_checked": [
                     {"path": path, "content_sha256": sha256_of(self.project_files[path])}
                     for path in paths
                 ],
             }
+        if operation == "create_node_ui_element":
+            script_path = f"node_ui/{arguments['script']}"
+            if script_path in self.project_files:
+                raise StandInRefusal(f"`{script_path}` already holds a file")
+            self.project_files[script_path] = "// the kit's control template\n"
+            return {"script_path": script_path, "manifest_path": "node_ui/tatolab_node_ui.json",
+                    "template_from": "@tatolab/tato-app-view-sdk 0.0.0 (a stand-in kit)",
+                    "transaction": str(uuid.uuid4()), "commit": "c0"}
         path = arguments["path"]
         if operation == "create_node_file":
             if path in self.project_files:
@@ -421,7 +445,13 @@ class ContractBackedAgentSession:
 
 
 #: The project file operations the stand-in session answers on its own files.
-FILE_OPERATIONS = ("create_node_file", "read_project_file", "write_project_file", "check_project_code")
+FILE_OPERATIONS = (
+    "create_node_file",
+    "create_node_ui_element",
+    "read_project_file",
+    "write_project_file",
+    "check_project_code",
+)
 
 
 def sha256_of(content: str) -> str:

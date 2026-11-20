@@ -34,6 +34,11 @@ mod tone_mapper;
 mod uniform_buffer;
 mod vertex_buffer;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use crate::vulkan::rhi::{
+    TEXTURE_FORMATS_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_AS_STORED,
+    texture_format_the_image_to_image_kernel_samples, the_image_to_image_kernel_samples_as_stored,
+};
 pub use blitter::RhiBlitter;
 pub use color_converter::{
     COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, RhiColorConverter,

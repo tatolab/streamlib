@@ -63,6 +63,8 @@ from ._built_in_nodes import TensorToAudio as TensorToAudio
 from ._built_in_nodes import TensorToAudioConfig as TensorToAudioConfig
 from ._built_in_nodes import TensorToTexture as TensorToTexture
 from ._built_in_nodes import TensorToTextureConfig as TensorToTextureConfig
+from ._built_in_nodes import TextureFormatConvert as TextureFormatConvert
+from ._built_in_nodes import TextureFormatConvertConfig as TextureFormatConvertConfig
 from ._built_in_nodes import TextureToTensor as TextureToTensor
 from ._built_in_nodes import TextureToTensorConfig as TextureToTensorConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
@@ -292,6 +294,8 @@ __all__ = [
     "TensorToAudioConfig",
     "TensorToTexture",
     "TensorToTextureConfig",
+    "TextureFormatConvert",
+    "TextureFormatConvertConfig",
     "TextureToTensor",
     "TextureToTensorConfig",
     "Time",

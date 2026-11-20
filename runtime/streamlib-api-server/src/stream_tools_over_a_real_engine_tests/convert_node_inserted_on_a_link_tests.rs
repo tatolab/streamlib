@@ -23,6 +23,8 @@ use super::*;
     input("count", delivery_profile = "newest", pin_type = Integer),
     input("audio", delivery_profile = "newest", pin_type = Audio),
     output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
+    output("bgra_video_out", pin_type = Texture, formats = ["bgra8_unorm"]),
+    output("half_float_video", pin_type = Texture, formats = ["rgba16_float"]),
     output("tensor_out", pin_type = Tensor),
     output("gate", pin_type = Boolean),
     output("level", pin_type = Float),
@@ -64,12 +66,13 @@ pub(super) fn register_the_convert_node_test_node_types_once() {
     });
 }
 
-const CAMERA_NODE_UUID: &str = "c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4";
+pub(super) const CAMERA_NODE_UUID: &str = "c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4";
 pub(super) const MODEL_NODE_UUID: &str = "d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5d5";
 
 /// A project whose stream `main` holds two [`ConvertNodeTestEnd`]s, `camera` drawn at (0, 0) and
 /// `model` drawn at (200, 100), and no link.
-fn a_project_whose_main_stream_holds_a_camera_and_a_model() -> ProjectWithGraphDocuments {
+pub(super) fn a_project_whose_main_stream_holds_a_camera_and_a_model() -> ProjectWithGraphDocuments
+{
     register_the_convert_node_test_node_types_once();
     let node_type = ConvertNodeTestEnd::node_class_import_path();
     ProjectWithGraphDocuments::holding(json!({
@@ -85,7 +88,7 @@ fn a_project_whose_main_stream_holds_a_camera_and_a_model() -> ProjectWithGraphD
 }
 
 /// The link from `camera`'s `output` to `model`'s `input` in `stream`, as `check_link` takes it.
-fn camera_into_model(stream: Uuid, output: &str, input: &str) -> Value {
+pub(super) fn camera_into_model(stream: Uuid, output: &str, input: &str) -> Value {
     json!({
         "stream": stream,
         "source": { "node": CAMERA_NODE_UUID, "port": output },
@@ -101,7 +104,7 @@ pub(super) fn connected_by_alice(link: &Value) -> Value {
 }
 
 /// The node of `graph_document` other than the camera and the model.
-fn the_inserted_node_in(graph_document: &Value) -> Value {
+pub(super) fn the_inserted_node_in(graph_document: &Value) -> Value {
     let mut others = graph_document["nodes"]
         .as_array()
         .into_iter()
@@ -113,7 +116,7 @@ fn the_inserted_node_in(graph_document: &Value) -> Value {
 }
 
 /// Each link of `graph_document` as `(source node, source port, target node, target port)`.
-fn the_links_in(graph_document: &Value) -> Vec<(String, String, String, String)> {
+pub(super) fn the_links_in(graph_document: &Value) -> Vec<(String, String, String, String)> {
     let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
     graph_document["links"]
         .as_array()
@@ -130,7 +133,7 @@ fn the_links_in(graph_document: &Value) -> Vec<(String, String, String, String)>
         .collect()
 }
 
-fn link(source: (&str, &str), target: (&str, &str)) -> (String, String, String, String) {
+pub(super) fn link(source: (&str, &str), target: (&str, &str)) -> (String, String, String, String) {
     (
         source.0.to_owned(),
         source.1.to_owned(),
@@ -292,13 +295,13 @@ async fn a_convert_node_a_refused_transaction_inserted_is_taken_back_with_its_li
 /// holding `format` `bgra8_unorm`, the format it picks for that input; into an input that takes
 /// only `nv12`, which it never writes, the link is refused and nothing is added.
 ///
-/// A second link out of that node, into an input that takes only `rgba8_unorm`, is refused by
-/// its pin types: the node writes the `bgra8_unorm` it holds.
+/// A second link out of that node, into an input that takes only `rgba8_unorm`, gets a
+/// `TextureFormatConvert`: the node writes the `bgra8_unorm` it holds.
 ///
 /// Mental-revert: a conversion judged by its output as it states itself, a Texture of no format,
 /// is placed into the `nv12` input with a warning, and the node into `bgra8_unorm` holds no
 /// `format`; a link out of the node judged by that same declared output warns that it states no
-/// format, and the second link connects with that warning.
+/// format, and the second link connects straight, with that warning.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_placed_without_one() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -354,8 +357,7 @@ async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_pla
         "{inserted}"
     );
 
-    let saved_before = project.the_graph_document_of("main");
-    let refusal = engine
+    let second_applied = engine
         .the_answer_or_the_refusal_of(
             "connect",
             connected_by_alice(&json!({
@@ -365,13 +367,15 @@ async fn a_convert_node_holds_the_setting_it_picks_for_the_input_and_none_is_pla
             })),
         )
         .await
-        .expect_err("the node writes bgra8_unorm, which the input does not take");
+        .unwrap_or_else(|refusal| panic!("a bgra8_unorm link converts: {refusal:?}"));
+    let second_added_nodes = second_applied["added_nodes"]
+        .as_array()
+        .expect("added_nodes");
+    assert_eq!(second_added_nodes.len(), 1, "{second_applied}");
     assert_eq!(
-        refusal.refusal_code,
-        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
-        "{refusal:?}"
+        second_added_nodes[0]["node_type"], "tatolab.stream:TextureFormatConvert",
+        "{second_applied}"
     );
-    assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
 /// A `TensorToTexture` placed by hand with no `format` writes `rgba8_unorm`, so a link from it

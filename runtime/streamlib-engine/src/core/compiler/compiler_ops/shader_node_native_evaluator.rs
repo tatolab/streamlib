@@ -21,8 +21,8 @@ use super::shader_node_program::{
     ShaderNodeImageInputBacking, ShaderNodeImageInputExtent, ShaderNodeInputValueType,
     ShaderNodeProgram, a_shader_node_takes_an_image_of,
 };
-use super::subprocess_escalate::publish_the_layouts_a_dispatch_left_its_bound_textures_in;
 use crate::core::context::surfaces_and_their_stores::surface_backing_resolution::ResolvedSurfaceBacking;
+use crate::core::context::surfaces_and_their_stores::texture_layouts_published_to_the_surface_store::publish_the_layouts_a_dispatch_left_its_bound_textures_in;
 use crate::core::context::{
     BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding, GpuContext,
     NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,

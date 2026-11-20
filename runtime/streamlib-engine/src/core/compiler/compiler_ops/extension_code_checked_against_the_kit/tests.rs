@@ -182,6 +182,43 @@ fn no_kit_names_each_place_looked_in() {
 }
 
 #[test]
+fn a_template_is_read_from_the_first_kit_found_or_its_absence_names_the_kit() {
+    let workspace = tempfile::tempdir().unwrap();
+    let lend = workspace.path().join("unit/lib/tatolab/lend");
+    let unit_kit = workspace.path().join("unit/lib/tatolab/extension-sdk");
+    let project = workspace.path().join("project");
+    a_kit_at(&unit_kit, "1.0.0");
+    a_kit_at(
+        &project.join("node_modules/@tatolab/tato-app-view-sdk"),
+        "3.0.0",
+    );
+    std::fs::create_dir_all(unit_kit.join("templates")).unwrap();
+    std::fs::write(
+        unit_kit.join("templates/control.ts"),
+        "// \"PIN_TYPE_NAME\"\n",
+    )
+    .unwrap();
+    let held = ExtensionCodeCheckersHeld::default();
+
+    let template = held
+        .a_template_from_the_kit(&project, "control.ts", Some(&lend))
+        .unwrap();
+    assert_eq!(template.template, "// \"PIN_TYPE_NAME\"\n");
+    assert!(template.kit.contains("1.0.0"), "{}", template.kit);
+
+    let why = held
+        .a_template_from_the_kit(&project, "node_body.ts", Some(&lend))
+        .expect_err("the kit holds no node body template");
+    assert!(why.contains("templates/node_body.ts"), "{why}");
+    assert!(why.contains("1.0.0"), "{why}");
+
+    let why = held
+        .a_template_from_the_kit(&project, "control.ts", None)
+        .expect_err("the project's kit holds no templates");
+    assert!(why.contains("3.0.0"), "{why}");
+}
+
+#[test]
 fn a_project_with_no_view_or_control_passes_both_checks_without_a_kit() {
     let project = tempfile::tempdir().unwrap();
 
