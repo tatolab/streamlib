@@ -36,9 +36,12 @@ from ._contract_pin_types import (
     PinTypeDescription,
 )
 from ._bundle_pin_type import (
+    HEAVY_MEMBER_TYPES_A_BUNDLE_CARRIES,
     bundle_of_the_fields_of,
+    holds_a_member_carried_by_reference,
     refuse_a_member_type_a_bundle_does_not_hold,
     refuse_what_a_bundle_member_does_not_state,
+    words_refusing_a_bundle_only_a_pin_carries,
 )
 from ._description import Description
 from ._node_declaration_refusal import NodeDeclarationFindingCode, NodeDeclarationRefusal
@@ -59,6 +62,7 @@ from ._pin_declaration_refusal_words import (
     words_refusing_a_function_pin_of,
     words_refusing_a_type_parameter_limited_to,
 )
+from ._pin_default_refusal_words import fix_of_a_default_not_taken
 from ._pin_spelling_words import WRITTEN_FORMS_A_LIST_ELEMENT_TAKES
 from ._pin_spelling_words import is_a_union as _is_a_union
 from ._pin_spelling_words import name_of as _name_of
@@ -289,7 +293,7 @@ class _PinReading:
         annotations = self._annotations_among(metadata, row)
         declaration: PinDeclarationOnTheWire = {
             "pin_type": {"kind": "is", "pin_type": pin_type},
-            "flow": "value" if flows_as_value else self._flow_of(row),
+            "flow": "value" if flows_as_value else self._flow_of(row, pin_type),
         }
         if annotations:
             declaration["annotations"] = annotations
@@ -362,10 +366,12 @@ class _PinReading:
             declaration, optional=optional, default_value=None if optional else NO_DEFAULT
         )
 
-    def _flow_of(self, row: PinTypeDescription) -> PinFlow:
-        """How the pin reads its messages: a field's value, an `InputPin`'s stream or event, else
-        its type's first flow."""
+    def _flow_of(self, row: PinTypeDescription, pin_type: PinType) -> PinFlow:
+        """How the pin reads its messages: a field's value, an `InputPin`'s stream or event, an
+        output of a bundle holding a Texture a stream, else its type's first flow."""
         if self._form == "function" or self._direction == "output":
+            if self._direction == "output" and holds_a_member_carried_by_reference(pin_type):
+                return "stream"
             return row.flows[0]
         if self._form == "field":
             return "value"
@@ -624,7 +630,17 @@ class _PinReading:
                 words_refusing_a_type_parameter_limited_to(self._pin_named, self._pin_name, row, limit),
                 "pin_flow_not_taken",
             )
-        if spelling.only_a_pin_carries and limit is None and (self._form != "pin" or as_an_element):
+        a_member_carried_by_reference = (
+            self._member_of is not None
+            and not as_an_element
+            and spelling.pin_type_name in HEAVY_MEMBER_TYPES_A_BUNDLE_CARRIES
+        )
+        if (
+            spelling.only_a_pin_carries
+            and limit is None
+            and (self._form != "pin" or as_an_element)
+            and not a_member_carried_by_reference
+        ):
             raise self._refusal_of_a_type_only_a_pin_carries(row, as_an_element=as_an_element)
         if spelling.not_read_yet_because is not None and not self._reads_a_type_choice(written_form):
             raise self._refusal(
@@ -640,7 +656,7 @@ class _PinReading:
         if written_form == "list":
             return self._list_pin_type_of(written_type)
         if written_form == "dataclass":
-            return bundle_of_the_fields_of(
+            bundle = bundle_of_the_fields_of(
                 written_type,  # pyright: ignore[reportArgumentType]
                 pin_named=self._pin_named,
                 refusal=self._refusal,  # pyright: ignore[reportArgumentType]
@@ -648,6 +664,14 @@ class _PinReading:
                     field, annotation, as_an_element=as_an_element
                 ),
             )
+            if self._form != "pin" and holds_a_member_carried_by_reference(bundle):
+                raise self._refusal(
+                    words_refusing_a_bundle_only_a_pin_carries(
+                        self._pin_named, self._pin_name, self._form, written_type, bundle
+                    ),
+                    "field_typed_as_a_stream" if self._form == "field" else "pin_type_not_read_yet",
+                )
+            return bundle
         named = named_pin_type_declared_by(written_type)
         if named is not None:
             return {"type": "named", "named_pin_type": named.import_path}  # pyright: ignore[reportReturnType]
@@ -929,7 +953,7 @@ class _PinReading:
         except PinValueNotTaken as not_taken:
             raise self._refusal(
                 f"{self._pin_named} defaults to {not_taken.value!r}, {not_taken.why}. To fix: "
-                f"{self._fix_of_a_default_not_taken(not_taken, self._python_form_of(row))}",
+                f"{fix_of_a_default_not_taken(not_taken, self._python_form_of(row))}",
                 (
                     "pin_default_outside_its_range"
                     if not_taken.kind in ("outside_its_exact_size", "outside_its_range")
@@ -942,28 +966,6 @@ class _PinReading:
         if row.name == "bundle" and isinstance(self._written_type, type):
             return self._written_type.__name__
         return row.python_forms[0]
-
-    @staticmethod
-    def _fix_of_a_default_not_taken(not_taken: PinValueNotTaken, pin_python_form: str) -> str:
-        match not_taken.kind:
-            case "not_of_its_type":
-                python_form = (
-                    pin_python_form
-                    if not_taken.pin_type["type"] == "bundle"
-                    else _PIN_TYPE_DESCRIPTION_BY_NAME[not_taken.pin_type["type"]].python_forms[0]
-                )
-                return (
-                    f"give it a default of its type, or type it `{python_form} | None = None` "
-                    f"so it may be unset."
-                )
-            case "outside_its_exact_size":
-                return "give it a default that fits."
-            case "not_finite":
-                return "give it a finite default."
-            case "not_an_option":
-                return "default to one of them."
-            case "outside_its_range":
-                return "give it a default inside its range."
 
 
 # The pin types that hold no stored value, so only a pin carries them.

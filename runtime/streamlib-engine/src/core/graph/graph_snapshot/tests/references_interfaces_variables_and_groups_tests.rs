@@ -744,3 +744,42 @@ fn a_link_into_a_config_field_the_node_does_not_expose_is_refused_naming_its_inp
         "{refusal}"
     );
 }
+
+/// A node saved exposing config fields before its type was typed opens exposing none: on a
+/// type that takes no config, each was an input of its own or merged into one, and a link into
+/// one that is an input ends at that input.
+///
+/// Mental-revert: keeping the exposures refuses the whole document, as a saved Solid Color
+/// exposing `alpha` was on the rig.
+#[test]
+fn a_node_of_a_type_taking_no_config_opens_exposing_none_of_the_fields_it_was_saved_exposing() {
+    crate::core::test_support::ensure_test_mocks_registered();
+    let typed = crate::core::test_support::MockPinTypedNode::node_class_import_path();
+    let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+        "nodes": [
+            {"id": Uuid::new_v4(), "name": "mixer", "type": typed.as_str(),
+             "exposed_config_fields": ["gain", "alpha"]},
+            {"id": Uuid::new_v4(), "name": "level", "type": "tatolab.stream:GraphInput",
+             "config": {"port": "level", "family": "channels", "range": [0, 1]}},
+        ],
+        "links": [
+            {"source": {"node": "level", "port": "value"},
+             "target": {"node": "mixer", "port": "gain"}},
+        ]
+    }))
+    .unwrap();
+    let node_types = NodeTypesOneStreamResolves::new();
+
+    graph
+        .validate(&node_types)
+        .expect("the saved exposures no longer refuse the document");
+    let resolved = graph.with_graph_only_nodes_resolved(&node_types).unwrap();
+    let mixer = resolved
+        .graph_the_runtime_runs
+        .nodes
+        .iter()
+        .find(|node| node.name == "mixer")
+        .unwrap();
+    assert!(mixer.exposed_config_fields.is_empty());
+    assert_eq!(resolved.graph_the_runtime_runs.links.len(), 1);
+}

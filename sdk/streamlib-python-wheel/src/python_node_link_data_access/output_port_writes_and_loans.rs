@@ -98,46 +98,12 @@ impl PythonNodeLinkDataAccess {
         timestamp_ns: Option<i64>,
         starts_group: bool,
     ) -> PyResult<()> {
-        let not_an_image = || {
-            PyTypeError::new_err(format!(
-                "a write on Image output port {port_name:?} takes an ImageFrame this node read \
-                 or a texture it acquired from a pool; got a {}",
-                python_type_name_for_error_message(image, "value")
-            ))
-        };
-        let surface_id: String = image
-            .getattr_opt("surface_id")?
-            .ok_or_else(not_an_image)?
-            .extract()
-            .map_err(|_| not_an_image())?;
-        let slot = gpu_limited_access
-            .descriptor_of_the_pooled_gpu_frame_named(&surface_id)
-            .ok_or_else(|| {
-                PyValueError::new_err(format!(
-                    "a write on Image output port {port_name:?} names surface {surface_id:?}, \
-                     which is no pooled GPU frame this node acquired or read"
-                ))
-            })?;
-        let format_name: String = image.getattr("format")?.extract()?;
-        let format = TextureFormat::from_wire_name(&format_name).ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "a write on Image output port {port_name:?} names format {format_name:?}, which \
-                 is no texture format an Image frame carries"
-            ))
-        })?;
-        if !declared_formats.is_empty() && !declared_formats.contains(&format_name) {
-            return Err(PyValueError::new_err(format!(
-                "a write on Image output port {port_name:?} carries format {format_name:?}, and \
-                 the port declares formats={declared_formats:?}"
-            )));
-        }
-        let image_frame = ImageFrameDescriptorBody {
-            slot,
-            width: image.getattr("width")?.extract()?,
-            height: image.getattr("height")?.extract()?,
-            format: format as u32,
-            colour: image_frame_colour_the_image_states(image)?,
-        };
+        let image_frame = image_frame_descriptor_of_the_image(
+            port_name,
+            image,
+            declared_formats,
+            gpu_limited_access,
+        )?;
         self.write_described_by(
             python,
             port_name,
@@ -494,6 +460,58 @@ impl PythonNodeLinkDataAccess {
             None => false,
         })
     }
+}
+
+/// The Image frame descriptor of `image`, an `ImageFrame` this node read or a GPU surface it
+/// acquired from a pool, as a write on `port_name` publishes it: its pool slot, size, format and
+/// colour; refused for anything else, a surface no pool slot of this node holds, or a format
+/// `declared_formats`, when it names any, does not list.
+pub(crate) fn image_frame_descriptor_of_the_image(
+    port_name: &str,
+    image: &Bound<'_, PyAny>,
+    declared_formats: &[String],
+    gpu_limited_access: &PythonGpuContextLimitedAccess,
+) -> PyResult<ImageFrameDescriptorBody> {
+    let not_an_image = || {
+        PyTypeError::new_err(format!(
+            "a write on Image output port {port_name:?} takes an ImageFrame this node read \
+             or a texture it acquired from a pool; got a {}",
+            python_type_name_for_error_message(image, "value")
+        ))
+    };
+    let surface_id: String = image
+        .getattr_opt("surface_id")?
+        .ok_or_else(not_an_image)?
+        .extract()
+        .map_err(|_| not_an_image())?;
+    let slot = gpu_limited_access
+        .descriptor_of_the_pooled_gpu_frame_named(&surface_id)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "a write on Image output port {port_name:?} names surface {surface_id:?}, \
+                 which is no pooled GPU frame this node acquired or read"
+            ))
+        })?;
+    let format_name: String = image.getattr("format")?.extract()?;
+    let format = TextureFormat::from_wire_name(&format_name).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "a write on Image output port {port_name:?} names format {format_name:?}, which \
+             is no texture format an Image frame carries"
+        ))
+    })?;
+    if !declared_formats.is_empty() && !declared_formats.contains(&format_name) {
+        return Err(PyValueError::new_err(format!(
+            "a write on Image output port {port_name:?} carries format {format_name:?}, and \
+             the port declares formats={declared_formats:?}"
+        )));
+    }
+    Ok(ImageFrameDescriptorBody {
+        slot,
+        width: image.getattr("width")?.extract()?,
+        height: image.getattr("height")?.extract()?,
+        format: format as u32,
+        colour: image_frame_colour_the_image_states(image)?,
+    })
 }
 
 /// The H.273 codes an `ImageFrame`'s `colour` spells; unspecified when it states none.

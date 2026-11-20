@@ -17,6 +17,12 @@ use crate::python_port_payload::PythonPortPayloadLoan;
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
 
+mod bundle_frame_reads_and_writes;
+
+pub(crate) use bundle_frame_reads_and_writes::{
+    read_the_bundle_frame_at_an_input_port, write_the_bundle_frame_on_an_output_port,
+};
+
 #[pyclass(name = "LinkInputDataReader", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkInputDataReader {
     pub(super) link_data_access: Py<PythonNodeLinkDataAccess>,

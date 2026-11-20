@@ -139,6 +139,14 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        python_node_context::read_the_bundle_frame_at_an_input_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_node_context::write_the_bundle_frame_on_an_output_port,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_function_node_island::read_the_named_value_at_an_input_port,
         module
     )?)?;

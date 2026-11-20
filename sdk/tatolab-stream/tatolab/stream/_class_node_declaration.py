@@ -315,6 +315,10 @@ class _ClassNodeReading:
             port["input_mode"] = input_modes[0].input_mode()  # pyright: ignore[reportAttributeAccessIssue]
         elif _chooses_a_pin_type(declared.declaration):
             port["input_mode"] = SettingOnly().input_mode()
+        else:
+            # Stated, not left to the engine's default for a node of its kind, since the field
+            # reads whole any value its pin type takes, from its wire or set on it.
+            port["input_mode"] = {"mode": "wire_or_value"}
         if lifetimes:
             port["lifetime"] = lifetimes[0].lifetime  # pyright: ignore[reportAttributeAccessIssue]
         if not published:

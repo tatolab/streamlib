@@ -581,7 +581,9 @@ mod tests;
 /// Each value and each link end of one level's `nodes` and `links`, and of every fragment level
 /// they hold, held under a name a port had moved to the port's current name. A value under a
 /// field the node type's config schema lists stays under its own name, and a link held under
-/// several names its ports had is held once.
+/// several names its ports had is held once. A node of a type that takes no config exposes no
+/// config field: each it exposed, saved before its type was typed, is now an input of its own
+/// or was merged into one, so it is dropped.
 fn each_port_of_one_level_under_its_current_name(
     nodes: &mut [GraphSnapshotNode],
     links: &mut Vec<GraphSnapshotLink>,
@@ -599,6 +601,10 @@ fn each_port_of_one_level_under_its_current_name(
         let Some(ports) = node_types.port_info(&node.node_type) else {
             continue;
         };
+        if !crate::core::graph::input_values::node_type_takes_a_config(node_types, &node.node_type)
+        {
+            node.exposed_config_fields.clear();
+        }
         let config_fields =
             fields_the_config_schema_of_a_node_type_lists(node_types, &node.node_type);
         let (config_values, input_values): (serde_json::Map<_, _>, serde_json::Map<_, _>) =

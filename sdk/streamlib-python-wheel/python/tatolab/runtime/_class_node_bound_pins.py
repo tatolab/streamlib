@@ -9,7 +9,8 @@ Audio, Tensor or encoded pin reads and writes through its port's family, as `ctx
 Trigger message is. A Boolean, Integer or Float travels as a control message, a Color, Vector,
 Rectangle or Transform as one on each channel of its parts, a String, Menu, Asset, List or bundle as the
 record `{"value": <stored JSON form>}`, and a named type as the bytes its class packs, each read
-and written as a function node run as a standalone node reads and writes it.
+and written as a function node run as a standalone node reads and writes it. A bundle holding a
+Texture travels as one Bundle frame, its Texture by the pool slot it lives in.
 """
 
 from __future__ import annotations
@@ -27,11 +28,18 @@ from tatolab.stream._node_context_protocols import (
     NodeLinkDataAccess,
 )
 
+from tatolab.runtime._bundle_holding_a_texture import (
+    holds_a_texture,
+    the_bundle_a_frame_read_builds,
+    the_small_members_and_textures_of,
+)
 from tatolab.runtime._engine import (
+    read_the_bundle_frame_at_an_input_port,
     read_the_control_value_at_an_input_port,
     read_the_named_value_at_an_input_port,
     read_the_parts_at_an_input_port,
     read_the_stored_value_at_an_input_port,
+    write_the_bundle_frame_on_an_output_port,
     write_the_named_value_on_an_output_port,
     write_the_stored_value_on_an_output_port,
 )
@@ -108,7 +116,8 @@ def the_reader_of_a_value_at_an_input_port(
     """What reads the newest value of `pin_type` `input_port` holds, in its Python form, resolved once.
 
     A bundle, or each bundle element of a List, is built as `bundle_class`, the dataclass it is
-    written as. A Texture or a Tensor read as a value is its newest frame. `None` for a pin type whose value
+    written as; a bundle holding a Texture is read off its Bundle frame, each Texture the
+    `ImageFrame` it is. A Texture or a Tensor read as a value is its newest frame. `None` for a pin type whose value
     no wire carries, a node reference or a choice of pin type, and for Audio, encoded media and
     a Trigger, which travel only as a stream.
     """
@@ -143,6 +152,20 @@ def the_reader_of_a_value_at_an_input_port(
             return None if parts is None else value_class.from_parts(parts)
 
         return read_a_value_of_parts
+    if holds_a_texture(pin_type):
+        pin_type_as_json = json.dumps(pin_type)
+        assert bundle_class is not None, "a bundle pin is written as a dataclass"
+        built_as = bundle_class
+
+        def read_a_bundle_frame() -> Any:
+            members_read = read_the_bundle_frame_at_an_input_port(
+                inputs=inputs, node_id=node_id, input_port=input_port, pin_type=pin_type_as_json
+            )
+            if members_read is None:
+                return None
+            return the_bundle_a_frame_read_builds(pin_type, members_read, what_it_is, built_as)
+
+        return read_a_bundle_frame
     if pin_type_name in STORED_VALUE_TYPES:
         pin_type_as_json = json.dumps(pin_type)
 
@@ -372,6 +395,21 @@ def _the_writer_of_a_value_on_an_output_port(
             control_values_written[0] += 1
 
         return write_a_control_value
+    if holds_a_texture(pin_type):
+        pin_type_as_json = json.dumps(pin_type)
+
+        def write_a_bundle_frame(value: Any, timestamp_ns: Optional[int]) -> None:
+            small_members, textures = the_small_members_and_textures_of(pin_type, value, what_it_is)
+            write_the_bundle_frame_on_an_output_port(
+                outputs=outputs,
+                output_port=output_port,
+                pin_type=pin_type_as_json,
+                small_members=json.dumps(small_members),
+                textures=textures,
+                timestamp_ns=timestamp_ns,
+            )
+
+        return write_a_bundle_frame
     if pin_type_name in STORED_VALUE_TYPES:
         pin_type_as_json = json.dumps(pin_type)
 

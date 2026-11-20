@@ -13,6 +13,7 @@ from typing import Annotated, Any
 import pytest
 
 from tatolab.stream import (
+    Audio,
     Color,
     Description,
     InputPin,
@@ -202,8 +203,8 @@ class DescribesALevel:
 
 
 @dataclass(frozen=True)
-class HoldsAPictureAlways:
-    picture: Texture
+class HoldsAVoice:
+    voice: Audio
 
 
 @dataclass
@@ -223,12 +224,12 @@ def refusal_of(annotation: Any, default: Any) -> NodeDeclarationRefusal:
 
 
 def test_a_member_a_bundle_does_not_carry_yet_is_refused_by_its_name_with_its_own_output_as_the_fix() -> None:
-    refusal = refusal_of(HoldsAPictureAlways, None)
+    refusal = refusal_of(HoldsAVoice, None)
 
     assert refusal.finding_code == "pin_type_not_read_yet"
     assert refusal.pin == "value"
     assert str(refusal) == (
-        "`Probe`'s input `value`'s member `picture` is typed `Texture`, a Texture, which a "
+        "`Probe`'s input `value`'s member `voice` is typed `Audio`, a Audio, which a "
         "bundle does not carry yet. To fix: give it an output of its own beside `value`."
     )
 
