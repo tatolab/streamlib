@@ -4,21 +4,24 @@
 use super::conversion_node_config_refusals::{
     refuse_a_channels_output_config, refuse_channel_names_naming_none_or_one_twice,
 };
-use super::tensor_to_texture::image_format_of_the_config;
+use super::tensor_to_texture::image_format_of_the_settings;
 use super::{
-    ChannelsToRecordsConfig, RecordsToChannelsConfig, TensorToAudioConfig, TensorToTextureConfig,
+    ChannelsToRecordsConfig, RecordsToChannelsConfig, TensorToAudioSettings,
+    TensorToTextureSettings,
 };
+use streamlib::sdk::descriptors::NodeSettings;
 
 #[test]
 fn each_conversion_node_given_no_config_takes_defaults_its_setup_accepts() {
-    let tensor_to_audio: TensorToAudioConfig =
-        serde_json::from_str("{}").expect("an empty config takes the defaults");
+    let tensor_to_audio =
+        TensorToAudioSettings::read_from_the_input_values(&serde_json::Map::new())
+            .expect("no values take the defaults");
     let records_to_channels: RecordsToChannelsConfig =
         serde_json::from_str("{}").expect("an empty config takes the defaults");
     let channels_to_records: ChannelsToRecordsConfig =
         serde_json::from_str("{}").expect("an empty config takes the defaults");
 
-    assert_eq!(tensor_to_audio, TensorToAudioConfig::default());
+    assert_eq!(tensor_to_audio, TensorToAudioSettings::default());
     assert_eq!(records_to_channels, RecordsToChannelsConfig::default());
     assert_eq!(channels_to_records, ChannelsToRecordsConfig::default());
     refuse_a_channels_output_config(
@@ -39,9 +42,10 @@ fn each_conversion_node_given_no_config_takes_defaults_its_setup_accepts() {
     )
     .expect("ChannelsToRecords's defaults are accepted at setup");
 
-    let tensor_to_texture: TensorToTextureConfig =
-        serde_json::from_str("{}").expect("an empty config takes the defaults");
-    assert_eq!(tensor_to_texture, TensorToTextureConfig::default());
-    image_format_of_the_config(&tensor_to_texture)
+    let tensor_to_texture =
+        TensorToTextureSettings::read_from_the_input_values(&serde_json::Map::new())
+            .expect("no values take the defaults");
+    assert_eq!(tensor_to_texture, TensorToTextureSettings::default());
+    image_format_of_the_settings(&tensor_to_texture)
         .expect("TensorToTexture's defaults are accepted at setup");
 }

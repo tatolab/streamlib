@@ -24,6 +24,7 @@ mod port_family_link_checks;
 mod traits;
 mod traversal;
 mod validation;
+mod values_port_facts_read;
 
 #[cfg(test)]
 mod graph_tests;
@@ -70,6 +71,7 @@ pub use streamlib_node_schema::{
 };
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
+pub(crate) use values_port_facts_read::the_values_port_facts_read;
 
 pub(crate) use components::HowOneReadersHelperRanEachFunctionNode;
 pub use components::{

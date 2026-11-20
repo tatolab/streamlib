@@ -183,6 +183,7 @@ fn dispatch_via_recorder_matches_direct_kernel_dispatch() {
             spv: blend_spv(2),
             bindings: &bindings,
             push_constant_size: 4,
+            specialization_constants: &[],
         },
     )
     .expect("kernel");
@@ -250,6 +251,7 @@ fn back_to_back_recordings_signal_distinct_timeline_values() {
             spv: blend_spv(1),
             bindings: &bindings,
             push_constant_size: 4,
+            specialization_constants: &[],
         },
     )
     .expect("kernel");

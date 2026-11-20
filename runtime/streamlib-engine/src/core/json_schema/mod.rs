@@ -439,7 +439,8 @@ pub struct PortDescriptorOutput {
     #[schema(value_type = Option<Object>)]
     pub input_mode: Option<NodeInputMode>,
     /// The value a setting reads while no value is set on its node, as its
-    /// schema states it. Absent on a port, and on a setting that states none.
+    /// schema or its declaration states it. Absent on an input that takes a
+    /// wire, and on a setting that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
     /// What it states besides its type: a port's range, step, unit, meaning and
@@ -881,7 +882,10 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
                 flow: declared.flow,
             }),
             input_mode: port.input_mode,
-            default_value: None,
+            default_value: port
+                .input_mode
+                .filter(|input_mode| !input_mode.takes_a_wire())
+                .and(port.pin_default.clone()),
             annotations,
         }
     }

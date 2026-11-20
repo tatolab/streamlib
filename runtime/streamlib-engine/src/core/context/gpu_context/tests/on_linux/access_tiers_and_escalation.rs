@@ -96,6 +96,7 @@ fn test_kernel_drops_cleanly_after_escalate_end() {
                 spv: trivial_spv,
                 bindings,
                 push_constant_size: 96,
+                specialization_constants: &[],
             })
         })
         .expect("escalate must succeed");

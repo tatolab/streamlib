@@ -34,26 +34,33 @@ pub(super) const OP_STRING: u32 = 7;
 const OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT: usize = 4;
 /// `OpString`'s opcode word, result id and an empty literal.
 const OP_STRING_WORD_COUNT_WITH_AN_EMPTY_LITERAL: usize = 3;
+const OP_EXECUTION_MODE_ID: u32 = 331;
 
-/// Reflect a SPIR-V module with its debug source strings — the embedded
-/// shader source and the source file names — left out.
+/// Reflect a SPIR-V module with what `rspirv` refuses and reflection never
+/// reads left out: its debug source strings — the embedded shader source and
+/// the source file names — and its `OpExecutionModeId`s.
 ///
 /// SPIRV-Tools 2023.6, as Ubuntu 24.04 packages it, packs a literal
 /// string's bytes sign-extended, so a non-ASCII byte fills the rest of its word
 /// with `0xFF`. `-g` puts the shader's source in `OpSource` and its file name in
 /// `OpString`, and `rspirv` refuses a module with a literal that is not UTF-8.
-/// Reflection reads neither.
-pub(crate) fn reflect_spirv_without_its_debug_source_strings(
+///
+/// `rspirv` 0.12 also refuses `OpExecutionModeId`, which Slang emits as
+/// `LocalSizeId` for a workgroup size taken from specialization constants.
+///
+/// Reflection reads none of them, and the driver is handed the module whole.
+pub(crate) fn reflect_spirv_without_what_rspirv_refuses(
     spirv: &[u8],
 ) -> std::result::Result<Reflection, ReflectError> {
-    Reflection::new_from_spirv(&spirv_without_its_debug_source_strings(spirv))
+    Reflection::new_from_spirv(&spirv_without_what_rspirv_refuses(spirv))
 }
 
-/// `spirv` with every `OpSourceContinued` dropped, every `OpSource` cut before
-/// its source text and every `OpString` literal emptied, its result id kept; a
+/// `spirv` with every `OpSourceContinued` and `OpExecutionModeId` dropped,
+/// every `OpSource` cut before its source text and every `OpString` literal
+/// emptied, its result id kept; a
 /// module that is not well-formed SPIR-V is handed back unchanged, for
 /// reflection to refuse.
-fn spirv_without_its_debug_source_strings(spirv: &[u8]) -> Cow<'_, [u8]> {
+fn spirv_without_what_rspirv_refuses(spirv: &[u8]) -> Cow<'_, [u8]> {
     if !spirv.len().is_multiple_of(4) || spirv.len() < SPIRV_HEADER_WORD_COUNT * 4 {
         return Cow::Borrowed(spirv);
     }
@@ -69,7 +76,7 @@ fn spirv_without_its_debug_source_strings(spirv: &[u8]) -> Cow<'_, [u8]> {
     let instruction_header_word =
         |word_count: usize, opcode: u32| u32::to_le_bytes(((word_count as u32) << 16) | opcode);
 
-    let mut module_without_debug_source_strings: Option<Vec<u8>> = None;
+    let mut module_without_what_rspirv_refuses: Option<Vec<u8>> = None;
     let mut instruction_start_word_index = SPIRV_HEADER_WORD_COUNT;
     while instruction_start_word_index < module_word_count {
         let instruction_header = u32::from_le_bytes(word_at(instruction_start_word_index));
@@ -85,7 +92,7 @@ fn spirv_without_its_debug_source_strings(spirv: &[u8]) -> Cow<'_, [u8]> {
             OP_SOURCE_CONTINUED if word_count < OP_SOURCE_CONTINUED_MINIMUM_WORD_COUNT => {
                 return Cow::Borrowed(spirv);
             }
-            OP_SOURCE_CONTINUED => Some(Vec::new()),
+            OP_SOURCE_CONTINUED | OP_EXECUTION_MODE_ID => Some(Vec::new()),
             OP_SOURCE if word_count > OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT => {
                 let mut cut = instruction_header_word(
                     OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT,
@@ -109,20 +116,20 @@ fn spirv_without_its_debug_source_strings(spirv: &[u8]) -> Cow<'_, [u8]> {
         };
         match (
             replacement_bytes,
-            module_without_debug_source_strings.as_mut(),
+            module_without_what_rspirv_refuses.as_mut(),
         ) {
             (Some(replacement_bytes), Some(rewritten)) => rewritten.extend(replacement_bytes),
             (Some(replacement_bytes), None) => {
                 let mut rewritten = spirv[..instruction_start_word_index * 4].to_vec();
                 rewritten.extend(replacement_bytes);
-                module_without_debug_source_strings = Some(rewritten);
+                module_without_what_rspirv_refuses = Some(rewritten);
             }
             (None, Some(rewritten)) => rewritten.extend_from_slice(instruction_bytes),
             (None, None) => {}
         }
         instruction_start_word_index = instruction_end_word_index;
     }
-    module_without_debug_source_strings.map_or(Cow::Borrowed(spirv), Cow::Owned)
+    module_without_what_rspirv_refuses.map_or(Cow::Borrowed(spirv), Cow::Owned)
 }
 
 /// Render a shader's declared binding names for an error message.
@@ -452,12 +459,11 @@ where
     for module in stage_modules {
         let stage = module.stage;
         let stage_flag = stage_flag_of(stage);
-        let reflection =
-            reflect_spirv_without_its_debug_source_strings(module.spirv).map_err(|e| {
-                Error::GpuError(format!(
-                    "{kernel_kind_label}: failed to reflect SPIR-V for {stage:?} stage: {e:?}"
-                ))
-            })?;
+        let reflection = reflect_spirv_without_what_rspirv_refuses(module.spirv).map_err(|e| {
+            Error::GpuError(format!(
+                "{kernel_kind_label}: failed to reflect SPIR-V for {stage:?} stage: {e:?}"
+            ))
+        })?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
             Error::GpuError(format!(
                 "{kernel_kind_label}: failed to extract descriptor sets for {stage:?} stage: {e:?}"

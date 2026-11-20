@@ -334,7 +334,10 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
                 ),
             )
         })?;
+        // A setting's value lands in the node's settings, never on a Channels wire, so its pin
+        // type alone judges it.
         if value.is_null()
+            || !port.takes_a_wire()
             || matches!(
                 node_kind,
                 Some(NodeKind::Function { .. } | NodeKind::Shader)
