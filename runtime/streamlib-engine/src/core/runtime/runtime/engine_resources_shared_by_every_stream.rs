@@ -52,6 +52,10 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) node_interpreter_lend_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// The uv the host handed this runtime, which makes every project's `.venv`.
     pub(crate) runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce,
+    /// What the host handed this runtime to check a project's views and controls with, and
+    /// each check's outcome kept by what it checked.
+    pub(crate) extension_code_checkers:
+        crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::ExtensionCodeCheckersHeld,
     /// What the host commits a created project's files with, as its history's first commit.
     pub(crate) created_project_first_commit: OnceLock<CreatedProjectFirstCommit>,
     /// The project history the host records each move of a project's first-party packages

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The reads and writes a function node run as a standalone node makes at its own ports: each
-//! input's message unread, control value, parts or stored value, and each output's stored value
-//! or message handed on.
+//! input's message unread, control value, parts, stored value or named value, and each output's
+//! stored value, named value or message handed on.
 
 use super::*;
 
@@ -132,6 +132,42 @@ pub(crate) fn write_the_stored_value_on_an_output_port(
         true,
         |_| Ok(payload_descriptor),
     )
+}
+
+/// The bytes of the value of a named type `input_port` holds for this read, the payload of a
+/// Bytes message, any other message refused by name; `None` when no message arrived since the
+/// last read.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, node_id, input_port))]
+pub(crate) fn read_the_named_value_at_an_input_port<'py>(
+    python: Python<'py>,
+    link_data_access: &PythonNodeLinkDataAccess,
+    node_id: &str,
+    input_port: &str,
+) -> PyResult<Option<Bound<'py, PyBytes>>> {
+    link_data_access
+        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
+        .map(|message| {
+            the_bytes_a_message_of_a_named_type_carries(&message, node_id, input_port)
+                .map(|bytes| PyBytes::new(python, &bytes))
+                .map_err(|refusal| PyValueError::new_err(refusal.to_string()))
+        })
+        .transpose()
+}
+
+/// Write `payload`, the bytes a value of a named type packs as, on `output_port` as a Bytes
+/// message.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, output_port, payload))]
+pub(crate) fn write_the_named_value_on_an_output_port(
+    python: Python<'_>,
+    link_data_access: &PythonNodeLinkDataAccess,
+    output_port: &str,
+    payload: &Bound<'_, PyBytes>,
+) -> PyResult<()> {
+    link_data_access.write_described_by(python, output_port, payload.as_any(), None, true, |_| {
+        Ok(DataChannelPayloadDescriptor::bytes())
+    })
 }
 
 pub(super) fn the_pin_type_given_as_json(pin_type: &str) -> PyResult<PinType> {

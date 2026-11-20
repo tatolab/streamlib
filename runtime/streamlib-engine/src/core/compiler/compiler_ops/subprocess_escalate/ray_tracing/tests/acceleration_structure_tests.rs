@@ -100,6 +100,69 @@ fn a_registered_acceleration_structure_is_released_through_release_handle() {
     assert!(message.contains("not found in registry"), "{message}");
 }
 
+/// A helper that crashes never sends `release_handle`, so every structure it
+/// built goes with the rest of what it held when its bridge is torn down,
+/// while a structure another helper built stays registered.
+#[test]
+fn a_torn_down_helpers_acceleration_structures_are_released_and_another_helpers_kept() {
+    let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {
+        println!("a_torn_down_helpers_acceleration_structures: no RT device — skipping");
+        return;
+    };
+    let crashed_helper = EscalateHandleRegistry::new();
+    let other_helper = EscalateHandleRegistry::new();
+    let crashed_helpers_blas = register_acceleration_structure_or_panic(
+        &sandbox,
+        &crashed_helper,
+        EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+            "crashed-helpers-blas",
+            &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+            &index_hex(A_SCENES_TRIANGLE_INDICES),
+        )),
+    );
+    let crashed_helpers_tlas = register_acceleration_structure_or_panic(
+        &sandbox,
+        &crashed_helper,
+        EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
+            "crashed-helpers-tlas",
+            &crashed_helpers_blas,
+        )),
+    );
+    let other_helpers_blas = register_acceleration_structure_or_panic(
+        &sandbox,
+        &other_helper,
+        EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+            "other-helpers-blas",
+            &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+            &index_hex(A_SCENES_TRIANGLE_INDICES),
+        )),
+    );
+
+    release_everything_a_torn_down_helper_held(&sandbox, &crashed_helper);
+
+    let still_registered = |acceleration_structure_id: &str| {
+        sandbox
+            .escalate(|full| {
+                Ok(full
+                    .acceleration_structure_by_id(acceleration_structure_id)
+                    .is_some())
+            })
+            .expect("looking a structure up never fails")
+    };
+    assert!(
+        !still_registered(&crashed_helpers_blas),
+        "the crashed helper's BLAS outlived it"
+    );
+    assert!(
+        !still_registered(&crashed_helpers_tlas),
+        "the crashed helper's TLAS outlived it"
+    );
+    assert!(
+        still_registered(&other_helpers_blas),
+        "tearing one helper down released a structure another helper built"
+    );
+}
+
 #[test]
 fn a_tlas_instance_naming_an_unregistered_structure_is_refused() {
     let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {

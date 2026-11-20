@@ -6,7 +6,8 @@
 A module is parsed with `ast` and its decorators are matched against the names it imports
 from `tatolab.stream`: `@node.process` and bare `@node` classes, `@node.function`, bare `@node` and
 `@node.shader` functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
-node's `@node.meta` beside its kind decorator. A
+node's `@node.meta` beside its kind decorator, and `@named_pin_type` classes, each a pin type
+of the module named by its import path. A
 port is listed where the declaration states it in source; one whose family is computed at
 import is listed with no family, and a node whose ports only its native half knows is listed
 with none. The answer is a JSON-ready dict the runtime's node-type listing passes on.
@@ -39,6 +40,7 @@ SHADER_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.shader"
 NODE_META_DECORATOR = f"{SDK_MODULE_NAME}.node.meta"
 RUST_FUNCTION_NODE_DECLARATION = f"{SDK_MODULE_NAME}.node.rust_function"
 GRAPH_GENERATOR_DECORATOR = f"{SDK_MODULE_NAME}.graph_generator"
+NAMED_PIN_TYPE_DECORATOR = f"{SDK_MODULE_NAME}.named_pin_type"
 DESCRIPTION_DECLARATION = f"{SDK_MODULE_NAME}.Description"
 INPUT_PORT_DECLARATION = f"{SDK_MODULE_NAME}.Input"
 OUTPUT_PORT_DECLARATION = f"{SDK_MODULE_NAME}.Output"
@@ -60,6 +62,10 @@ _PORT_FAMILY_BY_ANNOTATED_TYPE = {
     "float": "channels",
     "int": "channels",
     "bool": "channels",
+    "Color": "channels",
+    "Vector2": "channels",
+    "Vector3": "channels",
+    "Vector4": "channels",
     "dict": "records",
     "ImageFrame": "image",
     "ArrayFrame": "array",
@@ -119,11 +125,12 @@ def read_node_types_and_graph_generators_from_module_sources(
 ) -> dict[str, Any]:
     """Read each `(module name, path as listed, source text or why it could not be read)` that imports the SDK.
 
-    Answers `{"node_types", "graph_generators", "unreadable_modules"}`, each sorted, a module
-    that does not parse listed with why and where and the rest read regardless.
+    Answers `{"node_types", "graph_generators", "named_pin_types", "unreadable_modules"}`, each
+    sorted, a module that does not parse listed with why and where and the rest read regardless.
     """
     node_types: list[dict[str, Any]] = []
     graph_generators: list[dict[str, Any]] = []
+    named_pin_types: list[dict[str, Any]] = []
     unreadable_modules: list[dict[str, Any]] = []
     for module_name, listed_path, source_text in module_sources:
         if isinstance(source_text, OSError):
@@ -166,12 +173,15 @@ def read_node_types_and_graph_generators_from_module_sources(
         module_reading = _ModuleDeclarationReading(module_name, listed_path, module_tree)
         node_types.extend(module_reading.node_types)
         graph_generators.extend(module_reading.graph_generators)
+        named_pin_types.extend(module_reading.named_pin_types)
     node_types.sort(key=lambda node_type: node_type["type"])
     graph_generators.sort(key=lambda graph_generator: graph_generator["generator"])
+    named_pin_types.sort(key=lambda named_pin_type: named_pin_type["named_pin_type"])
     unreadable_modules.sort(key=lambda unreadable_module: unreadable_module["path"])
     return {
         "node_types": node_types,
         "graph_generators": graph_generators,
+        "named_pin_types": named_pin_types,
         "unreadable_modules": unreadable_modules,
     }
 
@@ -208,6 +218,7 @@ class _ModuleDeclarationReading:
         }
         self.node_types: list[dict[str, Any]] = []
         self.graph_generators: list[dict[str, Any]] = []
+        self.named_pin_types: list[dict[str, Any]] = []
         self.retired_declarations: list[dict[str, Any]] = []
         self._read_statements(module_tree.body, qualname_prefix="", at_module_scope=True)
 
@@ -223,6 +234,16 @@ class _ModuleDeclarationReading:
                     self._note_a_retired_form(decorator, PROCESS_NODE_DECORATOR, qualname)
                 elif self._decorated_with(statement, TYPED_NODE_DECORATOR) is not None:
                     self.node_types.append(self._typed_class_node_type(statement, qualname))
+                named_pin_type = self._decorated_with(statement, NAMED_PIN_TYPE_DECORATOR)
+                if named_pin_type is not None:
+                    self.named_pin_types.append(
+                        {
+                            "named_pin_type": f"{self._module_name}:{qualname}",
+                            "description": self._keyword_string(named_pin_type, "description"),
+                            "path": self._listed_path,
+                            "line": statement.lineno,
+                        }
+                    )
                 self._read_statements(
                     statement.body, qualname_prefix=f"{qualname}.", at_module_scope=False
                 )

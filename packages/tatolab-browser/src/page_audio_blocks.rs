@@ -74,9 +74,29 @@ impl PageAudioStreamTimeline {
     }
 }
 
+/// The `f32` samples little-endian `bytes` hold; a trailing partial sample is
+/// left out.
+pub(crate) fn samples_of_little_endian_f32_bytes(bytes: &[u8]) -> Vec<f32> {
+    let (samples, _partial_sample) = bytes.as_chunks::<4>();
+    samples.iter().copied().map(f32::from_le_bytes).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interleaved_little_endian_samples_are_read_back_and_a_partial_one_is_left_out() {
+        let mut bytes: Vec<u8> = [0.5f32, -1.0, 0.25]
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        bytes.push(7);
+        assert_eq!(
+            samples_of_little_endian_f32_bytes(&bytes),
+            [0.5, -1.0, 0.25]
+        );
+    }
 
     #[test]
     fn packets_tile_the_timeline_from_the_first_arrival_whatever_later_ones_arrive_at() {

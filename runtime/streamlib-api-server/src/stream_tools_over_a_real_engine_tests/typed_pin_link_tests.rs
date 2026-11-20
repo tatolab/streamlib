@@ -103,3 +103,138 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
     );
     assert!(refusal.runtime_words.contains("`volume`"), "{refusal:?}");
 }
+
+/// A link inside a placed stream is judged by its pin types as the same link at the stream's
+/// own level is: a Float into a Texture is refused with `link_pin_types_do_not_connect`, and a
+/// link into a setting with `input_takes_no_wire`, each leaving the placed stream's document as
+/// it was; a link the verdict connects is saved in it.
+///
+/// Mental-revert: saving a link inside a placed stream unjudged saves the two refused links.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_inside_a_placed_stream_is_judged_by_its_pin_types() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let inside = engine
+        .the_mixer_collapsed_into_a_placed_stream(&project)
+        .await;
+    let link_inside = |source: (&str, &str), target: (&str, &str)| {
+        json!({
+            "stream": stream_asset, "level": [inside.subgraph], "author": an_agent_named("alice"),
+            "source": { "node": source.0, "port": source.1 },
+            "target": { "node": target.0, "port": target.1 },
+        })
+    };
+    let sub_before = project.the_graph_document_of("sub");
+
+    let pin_types_refused = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            link_inside((&inside.mixer, "level"), (&inside.mixer, "video")),
+        )
+        .await
+        .expect_err("a Float does not connect to a Texture inside a placed stream");
+    let setting_refused = engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            link_inside((&inside.mixer, "level"), (&inside.volume, "value")),
+        )
+        .await
+        .expect_err("a setting inside a placed stream takes no wire");
+
+    assert_eq!(
+        pin_types_refused.refusal_code,
+        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+        "{pin_types_refused:?}"
+    );
+    assert!(
+        pin_types_refused
+            .runtime_words
+            .contains("`mixer.level` (Float) to `mixer.video` (Texture)"),
+        "{pin_types_refused:?}"
+    );
+    assert_eq!(
+        setting_refused.refusal_code,
+        ControlOperationRefusalCode::InputTakesNoWire,
+        "{setting_refused:?}"
+    );
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "connect",
+            link_inside((&inside.mixer, "level"), (&inside.mixer, "gain")),
+        )
+        .await
+        .expect("a Float into a Float connects inside a placed stream");
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_of("sub")),
+        ["mixer/level -> mixer/gain"]
+    );
+}
+
+/// A link inside a placed stream reaching a `GraphOutput` that names no family, which runs as
+/// no node of its own, is saved without being judged, and its entry under `connected_links`
+/// says why; the same `connect` sent again under its key says why again.
+///
+/// Mental-revert: discarding what the judgement of a link at a placed level answers leaves the
+/// entry with no `not_judged_because`; answering the retry without the reasons the transaction
+/// keeps leaves the retry's entry with none.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let inside = engine
+        .the_mixer_collapsed_into_a_placed_stream(&project)
+        .await;
+    let added = engine
+        .the_answer_or_the_refusal_of(
+            "add_node",
+            json!({ "stream": stream_asset, "level": [inside.subgraph],
+                    "type": "tatolab.stream:GraphOutput", "name": "level-out",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("a `GraphOutput` naming no family is added inside `sub`");
+    let output = added["added_nodes"][0]["node"]
+        .as_str()
+        .expect("the output's UUID")
+        .to_owned();
+
+    let connect = json!({
+        "stream": stream_asset, "level": [inside.subgraph],
+        "author": an_agent_named("alice"), "idempotency_key": "level-out",
+        "source": { "node": inside.mixer, "port": "level" },
+        "target": { "node": output, "port": "value" },
+    });
+    let connected = engine
+        .the_answer_or_the_refusal_of("connect", connect.clone())
+        .await
+        .expect("a link into a `GraphOutput` naming no family is saved");
+
+    let why = connected["connected_links"][0]["not_judged_because"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the link says why it was not judged: {connected}"));
+    assert!(why.contains("runs as no node of its own"), "{why}");
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_of("sub")),
+        ["mixer/level -> level-out/value"]
+    );
+
+    let sent_again = engine
+        .the_answer_or_the_refusal_of("connect", connect)
+        .await
+        .unwrap_or_else(|refusal| panic!("the connect sent again answers: {refusal:?}"));
+    assert_eq!(
+        sent_again["transaction"], connected["transaction"],
+        "{sent_again}"
+    );
+    assert_eq!(
+        sent_again["connected_links"][0]["not_judged_because"].as_str(),
+        Some(why),
+        "{sent_again}"
+    );
+}

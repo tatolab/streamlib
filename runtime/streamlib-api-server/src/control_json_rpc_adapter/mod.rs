@@ -620,6 +620,7 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
                                 stream,
                                 node: input_value_change.node.clone(),
                                 input: input_value_change.input.clone(),
+                                member: input_value_change.member.clone(),
                             };
                             send_each_notification::<InputValueChanged>(
                                 &outgoing_message_sender,
@@ -705,13 +706,15 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
     }
 }
 
-/// One input of a stream, which changes of its value are sent at most once each interval for:
-/// the stream, by stream id, the node, by its graph `id`, and the input, by name.
+/// One input of a stream, or one member of a bundle input, which changes of its value are sent at
+/// most once each interval for: the stream, by stream id, the node, by its graph `id`, the input,
+/// by name, and the member, by name, when it is a bundle input's.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct OneInputOfAStream {
     stream: String,
     node: String,
     input: String,
+    member: Option<String>,
 }
 
 /// Wait until `due_at`, or for ever when nothing is due.

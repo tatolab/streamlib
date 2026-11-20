@@ -13,6 +13,9 @@ pub(super) struct CompileResult {
     /// Number of links unwired in this compile cycle.
     pub links_unwired: usize,
     pub configs_updated: usize,
+    /// Whether the compile went on to take something out of the running stream or build into
+    /// it, so a failure from here leaves the stream changed.
+    pub began_changing_what_runs: bool,
 }
 
 impl fmt::Display for CompileResult {

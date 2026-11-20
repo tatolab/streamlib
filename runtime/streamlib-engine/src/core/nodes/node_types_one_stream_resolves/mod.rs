@@ -283,6 +283,40 @@ impl NodeTypesOneStreamResolves {
         )
     }
 
+    /// Register `descriptor` as a type this stream's interpreter described, for a test in
+    /// another crate: a function node runs inside the read of each node it feeds, and any other
+    /// node, driven as `execution` says, is built by nothing. Neither runs a node.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn register_a_described_type_that_runs_no_node_for_a_test(
+        &self,
+        descriptor: NodeDescriptor,
+        execution: Option<ProcessExecution>,
+    ) -> Result<()> {
+        let node_type = descriptor.node_class_import_path.clone();
+        let runs_no_node = || Error::NotSupported("a test's node type runs no node".to_owned());
+        let how_its_nodes_run =
+            match descriptor.node_kind {
+                NodeKind::Function { .. } => {
+                    HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                        node_once_promoted_to_its_own_process: Box::new(move |_node| {
+                            Err(runs_no_node())
+                        }),
+                    }
+                }
+                _ => HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
+                    move |_node| Err(runs_no_node()),
+                )),
+            };
+        self.register_a_type_described_in_this_streams_node_interpreter(
+            descriptor,
+            how_its_nodes_run,
+        )?;
+        if let Some(execution) = execution {
+            self.record_the_execution_a_described_class_declares(node_type, execution);
+        }
+        Ok(())
+    }
+
     /// Register `descriptor`, which `installed_module` declares and this stream's interpreter
     /// described, its nodes run as `how_its_nodes_run`, with the conversion it states, and
     /// record the module declaring it.

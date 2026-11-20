@@ -2,6 +2,70 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib::sdk::runtime::{GraphEditBatch, HowFarARefusedBatchWasTakenBack};
+
+/// One loaded stream a transaction edits: its operations, where it lives, its graph as the
+/// transaction has staged it, and the batch of graph edits it makes on the running stream.
+pub(super) struct StreamATransactionEdits {
+    pub(super) stream_operations: Arc<dyn RuntimeOperations>,
+    pub(super) stream_location: StreamLocation,
+    pub(super) staged_graph: StreamGraphDocument,
+    graph_edit_batch: GraphEditBatchState,
+}
+
+/// Where the batch of graph edits a transaction makes on one running stream stands.
+enum GraphEditBatchState {
+    /// Open: each graph edit of the stream is applied through it.
+    Open(Box<dyn GraphEditBatch>),
+    /// Closed, its edits compiled in one commit.
+    Closed,
+    /// Taken back: whole, which leaves only the values its edits set to reverse, or only as far
+    /// as nothing built or wired holds it, since its commit failed after it changed what runs,
+    /// which leaves every edit to reverse.
+    TakenBack(HowFarARefusedBatchWasTakenBack),
+}
+
+impl StreamATransactionEdits {
+    /// The stream `stream_operations` serves, at `stream_location`, its graph staged as
+    /// `staged_graph`, with a batch of graph edits opened on it, once no other writer's is open.
+    pub(super) fn new(
+        stream_operations: Arc<dyn RuntimeOperations>,
+        stream_location: StreamLocation,
+        staged_graph: StreamGraphDocument,
+    ) -> Result<Self, String> {
+        let graph_edit_batch = GraphEditBatchState::Open(
+            Arc::clone(&stream_operations)
+                .open_a_graph_edit_batch()
+                .map_err(|refusal| refusal.to_string())?,
+        );
+        Ok(Self {
+            stream_operations,
+            stream_location,
+            staged_graph,
+            graph_edit_batch,
+        })
+    }
+}
+
+/// The batch of graph edits open on the stream `stream_id` of `streams`, to apply a graph edit
+/// through.
+pub(super) fn the_open_batch_of<'streams>(
+    streams: &'streams BTreeMap<String, StreamATransactionEdits>,
+    stream_id: &str,
+) -> Result<&'streams dyn GraphEditBatch, String> {
+    match streams
+        .get(stream_id)
+        .map(|stream| &stream.graph_edit_batch)
+    {
+        Some(GraphEditBatchState::Open(graph_edit_batch)) => Ok(graph_edit_batch.as_ref()),
+        Some(_) => Err(format!(
+            "stream `{stream_id}` holds no batch of graph edits open to apply to"
+        )),
+        None => Err(format!(
+            "stream `{stream_id}` holds no batch of graph edits"
+        )),
+    }
+}
 
 impl StreamGraphTransactionExecutor<'_> {
     /// Make each of `operations`, each by the loaded stream it changes, on that running stream,
@@ -104,6 +168,40 @@ impl StreamGraphTransactionExecutor<'_> {
             &stream_id_of_each_stream_asset,
             &reversal.operations,
         )?;
+        // Every batch opens before any edit is applied, in the order of the stream ids, so two
+        // transactions editing the same streams never each wait on a batch the other holds.
+        let stream_assets_a_batch_opens_on: BTreeMap<&String, Uuid> = reversal
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
+                ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+                    stream,
+                    graph_operation,
+                }) if !graph_operation.reaches_a_running_stream_once_the_documents_hold_it() => {
+                    stream_id_of_each_stream_asset
+                        .get(stream)
+                        .map(|stream_id| (stream_id, *stream))
+                }
+                _ => None,
+            })
+            .collect();
+        for (stream_id, stream_asset) in stream_assets_a_batch_opens_on {
+            let stream_operations = self
+                .operations_on_the_loaded_streams
+                .runtime_operations_of_the_stream_a_call_names(stream_id)?;
+            streams.insert(
+                stream_id.clone(),
+                StreamATransactionEdits::new(
+                    stream_operations,
+                    StreamLocation {
+                        project_directory: project_repository.project_directory().to_path_buf(),
+                        project,
+                        stream_asset,
+                    },
+                    StreamGraphDocument::from_value(Value::Object(Map::new()))?,
+                )?,
+            );
+        }
         for operation in &reversal.operations {
             let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
                 stream,
@@ -124,35 +222,11 @@ impl StreamGraphTransactionExecutor<'_> {
                     .insert(stream_id.clone());
                 continue;
             }
-            let mut applied_to_the_running_stream = || {
-                let stream_operations = match streams.get(stream_id) {
-                    Some(held) => Arc::clone(&held.stream_operations),
-                    None => {
-                        let stream_operations = self
-                            .operations_on_the_loaded_streams
-                            .runtime_operations_of_the_stream_a_call_names(stream_id)?;
-                        streams.insert(
-                            stream_id.clone(),
-                            StreamATransactionEdits {
-                                stream_operations: Arc::clone(&stream_operations),
-                                stream_location: StreamLocation {
-                                    project_directory: project_repository
-                                        .project_directory()
-                                        .to_path_buf(),
-                                    project,
-                                    stream_asset: *stream,
-                                },
-                                staged_graph: StreamGraphDocument::from_value(Value::Object(
-                                    Map::new(),
-                                ))?,
-                            },
-                        );
-                        stream_operations
-                    }
-                };
+            let applied_to_the_running_stream = || {
+                let graph_edit_batch = the_open_batch_of(&streams, stream_id)?;
                 self.async_runtime
                     .block_on(
-                        stream_operations
+                        graph_edit_batch
                             .apply_a_stream_graph_operation_live(graph_operation.clone()),
                     )
                     .map_err(GraphRequestRefusal::from)
@@ -167,10 +241,15 @@ impl StreamGraphTransactionExecutor<'_> {
             match applied {
                 Ok(applied) => applied_live.push(applied),
                 Err(refusal) => {
+                    take_back_the_graph_edits_of_each_stream(&mut streams);
                     self.reverse_what_was_applied_live(&streams, applied_live);
                     return Err(refusal);
                 }
             }
+        }
+        if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut streams) {
+            self.reverse_what_was_applied_live(&streams, applied_live);
+            return Err(refusal);
         }
         match project_repository.apply_project_operations(
             author,
@@ -233,7 +312,11 @@ impl StreamGraphTransactionExecutor<'_> {
                 stream,
                 graph_operation:
                     StreamGraphOperation::SetNodeInputValue {
-                        node, input, to, ..
+                        node,
+                        input,
+                        member,
+                        to,
+                        ..
                     },
             }) = operation
             else {
@@ -255,13 +338,18 @@ impl StreamGraphTransactionExecutor<'_> {
             let stream_operations = self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(stream_id)?;
-            let input_values_after_the_set =
-                input_values_after_the_set(&set_on.input_values, input, to.as_ref());
+            let input_values_after_the_set = input_values_after_the_set(
+                &set_on.input_values,
+                input,
+                member.as_deref(),
+                to.as_ref(),
+            );
             refuse_a_value_the_input_does_not_take(
                 stream_operations.as_ref(),
                 &set_on,
                 &input_values_after_the_set,
                 input,
+                member.as_deref(),
                 to.as_ref(),
                 None,
             )?;
@@ -273,35 +361,99 @@ impl StreamGraphTransactionExecutor<'_> {
 
     /// Apply the inverse of each operation of `applied_live`, newest first, to the running
     /// stream it was applied to, setting live again each value set live it replaced, so a
-    /// refused transaction leaves the streams as they were.
+    /// refused transaction leaves the streams as they were. A stream that took back the graph
+    /// edits of its batch has only the values they set left to reverse.
+    ///
+    /// The inverses of one stream are applied in one batch: the transaction's own while it is
+    /// open, or else one opened to reverse them, so none is judged by a graph the others leave
+    /// half reversed and a stream's one writer is never waited for while its batch is open.
     pub(super) fn reverse_what_was_applied_live(
         &self,
         streams: &BTreeMap<String, StreamATransactionEdits>,
         applied_live: Vec<(String, OneOperationAppliedLive)>,
     ) {
+        let applied_live: Vec<(String, OneOperationAppliedLive)> = applied_live
+            .into_iter()
+            .filter(|(stream_id, applied)| {
+                streams.get(stream_id).is_some_and(|stream| {
+                    !matches!(
+                        stream.graph_edit_batch,
+                        GraphEditBatchState::TakenBack(HowFarARefusedBatchWasTakenBack::Whole)
+                    ) || sets_a_value_a_take_back_leaves(&applied.operation)
+                })
+            })
+            .collect();
+        let streams_to_reverse_in_a_batch_of_their_own: BTreeSet<String> = applied_live
+            .iter()
+            .map(|(stream_id, _)| stream_id)
+            .filter(|stream_id| the_open_batch_of(streams, stream_id).is_err())
+            .cloned()
+            .collect();
+        let mut batch_reversing_each_stream: BTreeMap<String, Box<dyn GraphEditBatch>> =
+            BTreeMap::new();
+        for stream_id in streams_to_reverse_in_a_batch_of_their_own {
+            let Some(stream) = streams.get(&stream_id) else {
+                continue;
+            };
+            match Arc::clone(&stream.stream_operations).open_a_graph_edit_batch() {
+                Ok(batch) => {
+                    batch_reversing_each_stream.insert(stream_id, batch);
+                }
+                Err(not_opened) => tracing::error!(
+                    stream = %stream_id,
+                    %not_opened,
+                    "no batch of graph edits was opened to reverse a refused graph \
+                     transaction; each part of it is reversed on its own"
+                ),
+            }
+        }
         for (stream_id, applied) in applied_live.into_iter().rev() {
             let Some(stream) = streams.get(&stream_id) else {
                 continue;
             };
+            let batch = the_open_batch_of(streams, &stream_id).ok().or_else(|| {
+                batch_reversing_each_stream
+                    .get(&stream_id)
+                    .map(|batch| batch.as_ref())
+            });
             self.reverse_one_operation_applied_live(
                 &stream_id,
                 stream.stream_operations.as_ref(),
+                batch,
                 &applied,
             );
+        }
+        for (stream_id, batch) in batch_reversing_each_stream {
+            if let Err(refused) = batch.close() {
+                tracing::error!(
+                    stream = %stream_id,
+                    refusal = %refused.refusal,
+                    "could not reverse a refused graph transaction on its running stream"
+                );
+            }
         }
     }
 
     /// Reverse `applied` on the running stream `stream_operations` serves: apply its inverse,
-    /// then set live again the live value it replaced, logging a step the stream refuses.
+    /// through `batch` when one is open on the stream, then set live again the live value it
+    /// replaced, logging a step the stream refuses.
     pub(super) fn reverse_one_operation_applied_live(
         &self,
         stream_id: &str,
         stream_operations: &dyn RuntimeOperations,
+        batch: Option<&dyn GraphEditBatch>,
         applied: &OneOperationAppliedLive,
     ) {
-        if let Err(not_reversed) = self.async_runtime.block_on(
-            stream_operations.apply_a_stream_graph_operation_live(applied.operation.inverse()),
-        ) {
+        let inverse = applied.operation.inverse();
+        let reversed = match batch {
+            Some(batch) => self
+                .async_runtime
+                .block_on(batch.apply_a_stream_graph_operation_live(inverse)),
+            None => self
+                .async_runtime
+                .block_on(stream_operations.apply_a_stream_graph_operation_live(inverse)),
+        };
+        if let Err(not_reversed) = reversed {
             tracing::error!(
                 stream = %stream_id,
                 %not_reversed,
@@ -321,5 +473,54 @@ impl StreamGraphTransactionExecutor<'_> {
                 "could not set live again a value a refused graph transaction replaced"
             );
         }
+    }
+}
+
+/// Whether `operation` sets a value a running stream does not take back with the graph edits
+/// of a batch: a node's config, input, studio fields or exposed config fields.
+fn sets_a_value_a_take_back_leaves(operation: &StreamGraphOperation) -> bool {
+    matches!(
+        operation,
+        StreamGraphOperation::SetNodeConfig { .. }
+            | StreamGraphOperation::SetPinValue { .. }
+            | StreamGraphOperation::SetNodeInputValue { .. }
+            | StreamGraphOperation::SetStudioFields { .. }
+            | StreamGraphOperation::SetExposedConfigFields { .. }
+    )
+}
+
+/// Take back the batch of graph edits open on each of `streams`, which compiles none of them.
+pub(super) fn take_back_the_graph_edits_of_each_stream(
+    streams: &mut BTreeMap<String, StreamATransactionEdits>,
+) {
+    for stream in streams.values_mut() {
+        if let GraphEditBatchState::Open(_) = stream.graph_edit_batch {
+            stream.graph_edit_batch =
+                GraphEditBatchState::TakenBack(HowFarARefusedBatchWasTakenBack::Whole);
+        }
+    }
+}
+
+/// Close the batch of graph edits open on each of `streams`, every one of them closed: each
+/// running stream judges the graph its batch leaves and compiles it in one commit, or takes the
+/// batch back, and the transaction is refused as the first running stream refuses.
+pub(super) fn close_the_graph_edits_of_each_stream(
+    streams: &mut BTreeMap<String, StreamATransactionEdits>,
+) -> Result<(), GraphRequestRefusal> {
+    let mut first_refusal = None;
+    for stream in streams.values_mut() {
+        let GraphEditBatchState::Open(graph_edit_batch) =
+            std::mem::replace(&mut stream.graph_edit_batch, GraphEditBatchState::Closed)
+        else {
+            continue;
+        };
+        if let Err(refused) = graph_edit_batch.close() {
+            stream.graph_edit_batch = GraphEditBatchState::TakenBack(refused.taken_back);
+            first_refusal.get_or_insert(refused.refusal);
+        }
+    }
+    match first_refusal {
+        Some(refusal) => Err(GraphRequestRefusal::from(refusal)),
+        None => Ok(()),
     }
 }

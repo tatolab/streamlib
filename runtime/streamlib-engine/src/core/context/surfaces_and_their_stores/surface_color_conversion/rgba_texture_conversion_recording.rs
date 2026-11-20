@@ -4,9 +4,13 @@
 //! Recording the conversion of an RGBA or BGRA texture into an RGBA texture.
 
 use crate::core::context::{GpuContext, TextureRegistration};
-use crate::core::rhi::{PixelFormat, TextureFormat, VulkanLayout};
+use crate::core::rhi::{VulkanLayout, the_image_to_image_kernel_samples_as_stored};
 use crate::core::{Error, Result};
-use crate::vulkan::rhi::{COLOR_CONVERTER_WORKGROUP_SIZE, VulkanAccess, VulkanStage};
+use crate::vulkan::rhi::{
+    ImageToImageColorConvertersWithTheirKernelsBuilt, LAYOUT_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_IN,
+    TextureTheImageToImageKernelSamples, VulkanAccess, VulkanStage,
+    record_the_image_to_image_dispatch,
+};
 
 use super::{
     RgbaOrBgraTextureSourceLookup, SurfaceColorConversionSession,
@@ -49,10 +53,7 @@ impl SurfaceColorConversionSession {
                     };
                 }
             };
-        if !matches!(
-            texture.format(),
-            TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm
-        ) {
+        if !the_image_to_image_kernel_samples_as_stored(texture.format()) {
             return not_a_texture_source;
         }
         self.rgba_or_bgra_texture_sources_by_surface_id.insert(
@@ -77,8 +78,6 @@ impl SurfaceColorConversionSession {
         source_surface_id: &str,
         destination_surface_id: &str,
     ) -> Result<(String, TextureRegistration)> {
-        const LAYOUT_THE_CONVERSION_SAMPLES_IN: VulkanLayout =
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
         let source = self
             .rgba_or_bgra_texture_sources_by_surface_id
             .get(source_surface_id)
@@ -90,22 +89,14 @@ impl SurfaceColorConversionSession {
         let source_texture = source.texture();
         let destination = resolve_color_conversion_destination(gpu, destination_surface_id)?;
         let destination_texture = destination.texture();
-        let source_pixel_format = match source_texture.format() {
-            TextureFormat::Bgra8Unorm => PixelFormat::Bgra32,
-            _ => PixelFormat::Rgba32,
+        let image_to_image_color_converters = match self.image_to_image_color_converters.as_ref() {
+            Some(image_to_image_color_converters) => image_to_image_color_converters,
+            None => self.image_to_image_color_converters.insert(
+                ImageToImageColorConvertersWithTheirKernelsBuilt::create(gpu)?,
+            ),
         };
-        let color_converter = match self
-            .color_converters_by_source_format
-            .get(&source_pixel_format)
-        {
-            Some(color_converter) => color_converter,
-            None => self
-                .color_converters_by_source_format
-                .entry(source_pixel_format)
-                .or_insert(gpu.create_color_converter(source_pixel_format, PixelFormat::Rgba32)?),
-        };
-        let kernel =
-            color_converter.prepare_image_to_image_storage(source_texture, destination_texture)?;
+        let kernel = image_to_image_color_converters
+            .prepare_dispatch(source_texture, destination_texture)?;
         let recorder = match self.conversion_recorder.as_mut() {
             Some(recorder) => recorder,
             None => self
@@ -114,33 +105,17 @@ impl SurfaceColorConversionSession {
         };
         recorder.begin()?;
         let recorded = (|| -> Result<()> {
-            recorder.record_image_barrier(
-                source_texture,
-                source.current_layout(),
-                LAYOUT_THE_CONVERSION_SAMPLES_IN,
-                VulkanStage::NONE,
-                VulkanStage::COMPUTE_SHADER,
-                VulkanAccess::NONE,
-                VulkanAccess::SHADER_SAMPLED_READ,
-            )?;
-            recorder.record_image_barrier(
+            record_the_image_to_image_dispatch(
+                recorder,
+                &kernel,
+                &TextureTheImageToImageKernelSamples {
+                    texture: source_texture,
+                    layout: source.current_layout(),
+                    last_written_in_stage: VulkanStage::NONE,
+                    last_written_with_access: VulkanAccess::NONE,
+                },
                 destination_texture,
                 destination.current_layout(),
-                VulkanLayout::GENERAL,
-                VulkanStage::ALL_COMMANDS,
-                VulkanStage::COMPUTE_SHADER,
-                VulkanAccess::MEMORY_WRITE | VulkanAccess::MEMORY_READ,
-                VulkanAccess::SHADER_WRITE,
-            )?;
-            recorder.record_dispatch(
-                &kernel,
-                destination_texture
-                    .width()
-                    .div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
-                destination_texture
-                    .height()
-                    .div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
-                1,
             )?;
             recorder.record_image_barrier(
                 destination_texture,
@@ -157,7 +132,7 @@ impl SurfaceColorConversionSession {
             return Err(record_failure);
         }
         recorder.submit()?;
-        source.update_layout(LAYOUT_THE_CONVERSION_SAMPLES_IN);
+        source.update_layout(LAYOUT_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_IN);
         destination.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
         recorder.wait_for_completion()?;
         Ok((destination_surface_id.to_string(), destination))

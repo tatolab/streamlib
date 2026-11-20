@@ -61,7 +61,8 @@ pub const NOTE_POSITION_ARGUMENT_DESCRIPTION: &str =
 pub const NOTE_SIZE_ARGUMENT_DESCRIPTION: &str =
     "The note's width and height on the canvas, a `[width, height]` pair of numbers.";
 
-/// One end of a link a graph action names: a node and one of its ports.
+/// One end of a link a graph action names: a node, one of its ports, and the member of a bundle
+/// port it starts or ends at, if any.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp-tool-json-schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -73,6 +74,14 @@ pub struct StreamGraphActionLinkEnd {
         schemars(description = "The port's name, as `graph` lists it under the node's `ports`.")
     )]
     pub port: String,
+    #[cfg_attr(
+        feature = "mcp-tool-json-schema",
+        schemars(
+            description = "The member of a bundle port the link starts or ends at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. A bundle input is fed either whole or member by member, and the node reads one bundle built from the newest value of each member."
+        )
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
 }
 
 /// The stream a graph edit is to, as its caller named it: by the stream id `list_streams`
@@ -533,11 +542,17 @@ pub enum StreamGraphAction<Stream = Uuid> {
         node: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NODE_INPUT_ARGUMENT_DESCRIPTION))]
         input: String,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        member: Option<String>,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         value: Option<Value>,
     },
 }
+
+/// What a set's `member` says, as every tool that takes one says.
+pub const NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION: &str = "The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off.";
 
 /// What a node's `exposed_config_fields` are, as every tool that takes them says.
 pub const EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION: &str = "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.";
@@ -831,12 +846,14 @@ impl<Stream> StreamGraphAction<Stream> {
                 level,
                 node,
                 input,
+                member,
                 value,
             } => StreamGraphAction::SetNodeInputValue {
                 stream: name_the_stream(stream),
                 level,
                 node,
                 input,
+                member,
                 value,
             },
         }

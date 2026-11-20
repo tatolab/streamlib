@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::shader_node_island::{
-    ShaderNodeIslandHostedHereComponent, pin_value_of_a_shader_node_input,
+    ShaderNodeIslandHostedHereComponent, numbers_of_a_shader_node_input,
 };
 use super::shader_node_island_program::{
     ShaderNodeIslandKernel, ShaderNodeIslandMemberInput, ShaderNodeIslandProgram,
@@ -18,11 +18,11 @@ use super::shader_node_island_program::{
 };
 use super::shader_node_program::{
     SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE, SHADER_NODE_OUTPUT_TEXTURE_FORMAT,
-    ShaderNodeImageInputBacking, ShaderNodeImageInputExtent, ShaderNodeProgram,
-    a_shader_node_takes_an_image_of,
+    ShaderNodeImageInputBacking, ShaderNodeImageInputExtent, ShaderNodeInputValueType,
+    ShaderNodeProgram, a_shader_node_takes_an_image_of,
 };
-use super::subprocess_escalate::publish_the_layouts_a_dispatch_left_its_bound_textures_in;
 use crate::core::context::surfaces_and_their_stores::surface_backing_resolution::ResolvedSurfaceBacking;
+use crate::core::context::surfaces_and_their_stores::texture_layouts_published_to_the_surface_store::publish_the_layouts_a_dispatch_left_its_bound_textures_in;
 use crate::core::context::{
     BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding, GpuContext,
     NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
@@ -32,7 +32,6 @@ use crate::core::context::{
 use crate::core::descriptors::NodeDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::core::graph::{GraphNode, GraphNodeWithComponents, ShaderNodeFusedGroupOfAnIsland};
 use crate::core::nodes::DynGeneratedNode;
 use crate::core::rhi::{ShaderCompilationTargetStage, StorageBuffer, TextureFormat};
@@ -43,6 +42,13 @@ use streamlib_ipc_types::{
     ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
     DataChannelPayloadDescriptorKind, ImageFrameDescriptorBody,
 };
+
+/// The numbers one input port of the evaluator reads, a Float, a Color or a
+/// Vector, and the value type it reads them as.
+struct NumbersReadAtAnInputPort {
+    value_type: ShaderNodeInputValueType,
+    numbers: Vec<f32>,
+}
 
 /// The newest Image frame one input port of the evaluator has taken.
 #[derive(Clone, Copy)]
@@ -74,14 +80,14 @@ pub(crate) struct ShaderNodeNativeEvaluator {
     stored_pixel_buffer_pool_by_member: HashMap<usize, NodeOutputPixelBufferPoolOfOneNativeNode>,
     kernels_by_slang_source: HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>,
     newest_image_frame_by_input_port: HashMap<String, ImageFrameTakenAtAnInputPort>,
-    value_by_float_input_port: HashMap<String, f32>,
+    numbers_by_input_port: HashMap<String, NumbersReadAtAnInputPort>,
     refusal_last_logged: Option<String>,
 }
 
 impl ShaderNodeNativeEvaluator {
     /// The evaluator of the island shader node `node` hosts, or of `node`
-    /// alone running `program` when it hosts none; each float input starts at
-    /// its pin value, else its declared default, else zero.
+    /// alone running `program` when it hosts none; each input of numbers starts
+    /// at its pin value, else its declared default, else zero.
     pub(crate) fn for_the_node(
         node: &GraphNode,
         descriptor: NodeDescriptor,
@@ -90,21 +96,29 @@ impl ShaderNodeNativeEvaluator {
         let (island, fused_group) = match node.get::<ShaderNodeIslandHostedHereComponent>() {
             Some(hosted) => (hosted.island.clone(), Some(Arc::clone(&hosted.fused_group))),
             None => (
-                ShaderNodeIslandProgram::of_one_node(node.display_name.clone(), program, |port| {
-                    pin_value_of_a_shader_node_input(node, port)
-                }),
+                ShaderNodeIslandProgram::of_one_node(
+                    node.display_name.clone(),
+                    program,
+                    |port, value_type| numbers_of_a_shader_node_input(node, port, value_type),
+                ),
                 None,
             ),
         };
-        let value_by_float_input_port = island
+        let numbers_by_input_port = island
             .members()
             .iter()
-            .flat_map(|member| &member.inputs)
-            .filter_map(|input| match input {
-                ShaderNodeIslandMemberInput::FloatReadAt {
+            .flat_map(|member| member.inputs.iter().zip(&member.program.inputs))
+            .filter_map(|(input, signature_input)| match input {
+                ShaderNodeIslandMemberInput::NumbersReadAt {
                     input_port,
-                    value_until_one_is_read,
-                } => Some((input_port.clone(), *value_until_one_is_read)),
+                    numbers_until_one_is_read,
+                } => Some((
+                    input_port.clone(),
+                    NumbersReadAtAnInputPort {
+                        value_type: signature_input.value_type.clone(),
+                        numbers: numbers_until_one_is_read.clone(),
+                    },
+                )),
                 _ => None,
             })
             .collect();
@@ -119,15 +133,17 @@ impl ShaderNodeNativeEvaluator {
             stored_pixel_buffer_pool_by_member: HashMap::new(),
             kernels_by_slang_source: HashMap::new(),
             newest_image_frame_by_input_port: HashMap::new(),
-            value_by_float_input_port,
+            numbers_by_input_port,
             refusal_last_logged: None,
         }
     }
 
-    /// The value float input `input_port` of the island reads while nothing arrives on it.
+    /// The numbers input `input_port` of the island reads now.
     #[cfg(test)]
-    pub(crate) fn the_value_a_float_input_reads(&self, input_port: &str) -> Option<f32> {
-        self.value_by_float_input_port.get(input_port).copied()
+    pub(crate) fn the_numbers_an_input_reads(&self, input_port: &str) -> Option<&[f32]> {
+        self.numbers_by_input_port
+            .get(input_port)
+            .map(|read| read.numbers.as_slice())
     }
 
     /// Each Image input port the island reads, with the member and its own
@@ -186,19 +202,19 @@ impl ShaderNodeNativeEvaluator {
                     input_port == the_input_port_each_evaluation_waits_on;
             }
         }
-        let float_input_ports: Vec<String> =
-            self.value_by_float_input_port.keys().cloned().collect();
-        for input_port in float_input_ports {
-            if !input_mailboxes.has_port(&input_port) {
+        for (input_port, read) in &mut self.numbers_by_input_port {
+            if !input_mailboxes.has_port(input_port) {
                 continue;
             }
-            while let Some(message) = input_mailboxes.read_raw(&input_port)? {
-                if let Some(latest_value) = last_sample_of_the_first_channel(
-                    message.payload_descriptor,
-                    message.payload.bytes(),
-                ) {
-                    self.value_by_float_input_port
-                        .insert(input_port.clone(), latest_value as f32);
+            while let Some(message) = input_mailboxes.read_raw(input_port)? {
+                if let Some(numbers) =
+                    last_sample_of_each_channel(message.payload_descriptor, message.payload.bytes())
+                        .and_then(|channel_values| {
+                            read.value_type
+                                .numbers_a_control_message_carries(&channel_values)
+                        })
+                {
+                    read.numbers = numbers;
                 }
             }
         }
@@ -417,24 +433,21 @@ impl ShaderNodeNativeEvaluator {
                 surface_bound_resource,
             });
         }
-        let float_values: Vec<f32> = kernel
-            .float_arguments()
+        let numbers: Vec<f32> = kernel
+            .number_arguments()
             .iter()
-            .map(|float_argument| {
-                let input_port = self.island.members()[float_argument.member]
-                    .inputs
-                    .iter()
-                    .filter_map(|input| match input {
-                        ShaderNodeIslandMemberInput::FloatReadAt { input_port, .. } => {
-                            Some(input_port)
-                        }
+            .flat_map(|argument| {
+                let numbers_read =
+                    match &self.island.members()[argument.member].inputs[argument.input_index] {
+                        ShaderNodeIslandMemberInput::NumbersReadAt { input_port, .. } => self
+                            .numbers_by_input_port
+                            .get(input_port)
+                            .map(|read| read.numbers.as_slice()),
                         _ => None,
-                    })
-                    .nth(float_argument.float_index);
-                input_port
-                    .and_then(|input_port| self.value_by_float_input_port.get(input_port))
-                    .copied()
-                    .unwrap_or(0.0)
+                    }
+                    .unwrap_or_default();
+                (0..argument.number_count)
+                    .map(move |part| numbers_read.get(part).copied().unwrap_or_default())
             })
             .collect();
         let (output_width, output_height) = output_extent_of_each_member[kernel.output_member()];
@@ -451,7 +464,7 @@ impl ShaderNodeNativeEvaluator {
             push_constants: kernel.push_constants(
                 (output_width, output_height),
                 &extents,
-                &float_values,
+                &numbers,
             ),
             group_count_x: output_width.div_ceil(SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE),
             group_count_y: output_height.div_ceil(SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE),
@@ -600,12 +613,13 @@ fn resolve_one_image_input(
     })
 }
 
-/// The last sample of the first channel of the Channels block a message
-/// carries; `None` for any other message, or a block of no samples.
-fn last_sample_of_the_first_channel(
+/// The last sample of each channel of the Channels block a message carries,
+/// channel after channel; `None` for any other message, or a block of no
+/// samples.
+fn last_sample_of_each_channel(
     payload_descriptor: DataChannelPayloadDescriptor,
     payload: &[u8],
-) -> Option<f64> {
+) -> Option<Vec<f64>> {
     if payload_descriptor.kind != DataChannelPayloadDescriptorKind::ChannelsBlock as u32 {
         return None;
     }
@@ -616,14 +630,22 @@ fn last_sample_of_the_first_channel(
     if samples_per_channel == 0 || body.channel_count == 0 {
         return None;
     }
-    let last_sample_start = (samples_per_channel - 1) * sample_byte_len;
-    let last_sample = payload.get(last_sample_start..last_sample_start + sample_byte_len)?;
-    match sample_type {
-        ChannelsBlockSampleType::F32 => {
-            Some(f64::from(f32::from_le_bytes(last_sample.try_into().ok()?)))
-        }
-        ChannelsBlockSampleType::F64 => Some(f64::from_le_bytes(last_sample.try_into().ok()?)),
-    }
+    (0..body.channel_count as usize)
+        .map(|channel| {
+            let last_sample_start =
+                (channel * samples_per_channel + samples_per_channel - 1) * sample_byte_len;
+            let last_sample =
+                payload.get(last_sample_start..last_sample_start + sample_byte_len)?;
+            match sample_type {
+                ChannelsBlockSampleType::F32 => {
+                    Some(f64::from(f32::from_le_bytes(last_sample.try_into().ok()?)))
+                }
+                ChannelsBlockSampleType::F64 => {
+                    Some(f64::from_le_bytes(last_sample.try_into().ok()?))
+                }
+            }
+        })
+        .collect()
 }
 
 impl DynGeneratedNode for ShaderNodeNativeEvaluator {
@@ -726,29 +748,28 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
 
     fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
         Err(Error::Configuration(format!(
-            "shader node `{}` declares no configuration; its settings are its float inputs",
+            "shader node `{}` declares no configuration; its settings are its value inputs",
             self.node_name
         )))
     }
 
-    /// Read each float input of the island no link feeds as its number in `input_values`, keyed
-    /// by the input port it is read at, and one `input_values` holds no number for as 0, as a
-    /// freshly built island reads it; a linked input goes on reading its link.
+    /// Read each input of numbers of the island no link feeds as its value in `input_values`,
+    /// keyed by the input port it is read at, and one `input_values` holds no value of its type
+    /// for as 0, as a freshly built island reads it; a linked input goes on reading its link.
     fn set_unlinked_input_values(
         &mut self,
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
         let input_mailboxes = self.input_mailboxes.as_ref();
-        for (input_port, float_input) in &mut self.value_by_float_input_port {
+        for (input_port, read) in &mut self.numbers_by_input_port {
             if input_mailboxes
                 .is_some_and(|input_mailboxes| input_mailboxes.is_fed_by_a_link(input_port))
             {
                 continue;
             }
-            *float_input = input_values
-                .get(input_port)
-                .and_then(the_control_value_of_a_pin)
-                .unwrap_or(0.0) as f32;
+            read.numbers = read
+                .value_type
+                .numbers_a_stored_value_holds(input_values.get(input_port));
         }
         Ok(())
     }
@@ -794,26 +815,58 @@ mod tests {
     }
 
     #[test]
-    fn a_float_input_reads_the_last_sample_of_its_first_channel() {
-        let samples: Vec<u8> = [0.25f32, 0.75f32]
+    fn an_input_of_numbers_reads_the_last_sample_of_each_channel() {
+        let samples: Vec<u8> = [0.25f32, 0.75, 0.5, 1.0]
             .iter()
             .flat_map(|sample| sample.to_le_bytes())
             .collect();
-        let descriptor =
+        let block_of = |channel_count: u32, samples_per_channel: u32| {
             DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
                 start_sample: 0,
                 sample_rate: 100,
-                channel_count: 1,
-                samples_per_channel: 2,
+                channel_count,
+                samples_per_channel,
                 sample_type: ChannelsBlockSampleType::F32 as u32,
-            });
+            })
+        };
         assert_eq!(
-            last_sample_of_the_first_channel(descriptor, &samples),
-            Some(0.75)
+            last_sample_of_each_channel(block_of(1, 4), &samples),
+            Some(vec![1.0])
         );
         assert_eq!(
-            last_sample_of_the_first_channel(DataChannelPayloadDescriptor::bytes(), &samples),
+            last_sample_of_each_channel(block_of(2, 2), &samples),
+            Some(vec![0.75, 1.0])
+        );
+        assert_eq!(
+            last_sample_of_each_channel(block_of(4, 1), &samples),
+            Some(vec![0.25, 0.75, 0.5, 1.0])
+        );
+        assert_eq!(
+            last_sample_of_each_channel(DataChannelPayloadDescriptor::bytes(), &samples),
             None
+        );
+    }
+
+    #[test]
+    fn a_color_input_reads_a_vector_or_one_number_with_the_free_conversion() {
+        let color = ShaderNodeInputValueType::Numbers(crate::core::descriptors::PinType::Color {});
+        assert_eq!(
+            color.numbers_a_control_message_carries(&[0.25, 0.5, 0.75, 1.0]),
+            Some(vec![0.25, 0.5, 0.75, 1.0])
+        );
+        assert_eq!(
+            color.numbers_a_control_message_carries(&[0.5]),
+            Some(vec![0.5, 0.5, 0.5, 1.0])
+        );
+        assert_eq!(
+            color.numbers_a_stored_value_holds(Some(&serde_json::json!({
+                "red": 1.0, "green": 0.5, "blue": 0.25, "alpha": 0.75,
+            }))),
+            vec![1.0, 0.5, 0.25, 0.75]
+        );
+        assert_eq!(
+            color.numbers_a_stored_value_holds(None),
+            vec![0.0, 0.0, 0.0, 1.0]
         );
     }
 }

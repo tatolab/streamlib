@@ -87,8 +87,8 @@ pub(super) fn the_project_source() -> Value {
 }
 
 /// Every built-in pin type is listed in the contract's order, each storing a value with its
-/// value's schema, List and bundle with how a pin of one is declared, and Audio with the
-/// conversion a registered node type states from it.
+/// value's schema, List and bundle with how a pin of one is declared, and Audio with, among
+/// the conversions the test binary registers, the one a registered node type states from it.
 ///
 /// Mental-revert: reading conversions from no node type leaves Audio's `converts_to` empty.
 #[tokio::test(flavor = "multi_thread")]
@@ -122,13 +122,17 @@ async fn every_built_in_pin_type_is_listed_with_its_schema_and_the_conversions_f
             .map(|name| serde_json::to_value(name).expect("a name serializes"))
             .collect::<Vec<_>>()
     );
-    assert_eq!(
-        row("audio")["converts_to"],
-        json!([{
-            "from": { "type": "audio" },
-            "to": { "type": "tensor" },
-            "node_type": AudioToTensorTestConversion::node_class_import_path().as_str(),
-        }])
+    let audio_test_conversion = json!({
+        "from": { "type": "audio" },
+        "to": { "type": "tensor" },
+        "node_type": AudioToTensorTestConversion::node_class_import_path().as_str(),
+    });
+    assert!(
+        row("audio")["converts_to"]
+            .as_array()
+            .is_some_and(|conversions| conversions.contains(&audio_test_conversion)),
+        "{}",
+        row("audio")
     );
     assert_eq!(
         row("boolean")["value_json_schema"]["type"],
@@ -203,6 +207,92 @@ async fn a_conversion_no_node_can_be_built_for_is_not_listed() {
         .find(|row| row["name"] == "rectangle")
         .expect("Rectangle is listed");
     assert_eq!(rectangle["converts_to"], json!([]), "{rectangle}");
+}
+
+/// Each named type a source of the project declares is listed by its pin type, its
+/// description and the source it comes from, an import's beside the project's own.
+///
+/// Mental-revert: listing the built-in rows alone answers no `named_pin_types`.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_named_type_the_projects_code_declares_is_listed_with_its_source() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let named_pin_type = |import_path: &str, description: &str, path: &str| json!({ "named_pin_type": import_path, "description": description, "path": path, "line": 4 });
+    let project = a_project_listing(json!([
+        {
+            "source": "project", "node_types": [], "graph_generators": [],
+            "named_pin_types": [named_pin_type("faces:FaceBox", "A face found.", "faces.py")],
+            "unreadable_modules": [],
+        },
+        {
+            "source": "dependency", "project": "6f1c2a8e-0000-4000-8000-000000000001",
+            "folder": "poses", "version": "v1", "node_types": [], "graph_generators": [],
+            "named_pin_types": [named_pin_type("poses.kinds:Pose", "A body's pose.", "poses/kinds.py")],
+            "unreadable_modules": [],
+        },
+    ]));
+
+    let listed = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "list_pin_types",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("the pin types are listed");
+
+    assert_eq!(
+        listed["named_pin_types"],
+        json!([
+            {
+                "source": "project",
+                "pin_type": { "type": "named", "named_pin_type": "faces:FaceBox" },
+                "documentation": "A face found.", "path": "faces.py", "line": 4,
+            },
+            {
+                "source": "dependency", "project": "6f1c2a8e-0000-4000-8000-000000000001",
+                "folder": "poses", "version": "v1", "project_name": null,
+                "pin_type": { "type": "named", "named_pin_type": "poses.kinds:Pose" },
+                "documentation": "A body's pose.", "path": "poses/kinds.py", "line": 4,
+            },
+        ]),
+        "{listed}"
+    );
+    assert!(
+        listed.get("named_pin_types_not_listed_because").is_none(),
+        "{listed}"
+    );
+}
+
+/// A project whose node code does not list still has every built-in pin type listed, and says
+/// why no named type of it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_whose_code_does_not_list_answers_the_built_in_types_and_why() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+
+    let listed = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "list_pin_types",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("the built-in pin types are listed");
+
+    assert_eq!(
+        listed["pin_types"].as_array().map(Vec::len),
+        Some(streamlib_node_schema::pin_type::BuiltInPinTypeName::EVERY_NAME.len()),
+        "{listed}"
+    );
+    assert_eq!(listed["named_pin_types"], json!([]), "{listed}");
+    assert!(
+        listed["named_pin_types_not_listed_because"]
+            .as_str()
+            .is_some_and(|why| why.contains("were not listed")),
+        "{listed}"
+    );
 }
 
 /// `describe_node_types` naming no node type is refused before it reads the project.

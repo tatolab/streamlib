@@ -33,15 +33,16 @@ use streamlib_project_repository::{
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
     CloseViewerToolResult, ControlOperationRefusalCode, CreateNodeFileToolResult,
-    CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
-    DescribeAssetToolResult, DescribeNodeTypesToolResult, DescribeRuntimeToolResult,
-    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
-    ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
-    ListDependenciesToolResult, ListNodeTypesToolResult, ListPinTypesToolResult,
-    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
-    ListSamplesToolResult, ListStreamsToolResult, ListedStreamState, LogsToolResult,
-    OpenViewerToolResult, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
-    ProjectCodeCheckResult, ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
+    CreateNodeUiElementToolResult, CreateProjectToolResult, DeleteProjectToolResult,
+    DependencyTransactionToolResult, DescribeAssetToolResult, DescribeNodeTypesToolResult,
+    DescribeRuntimeToolResult, DescribeStreamActionToolResult, DuplicateProjectToolResult,
+    GraphTransactionToolResult, ImportProjectToolResult, LinkCandidatesCheckResult,
+    LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult, ListNodeTypesToolResult,
+    ListPinTypesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
+    ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
+    ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
+    PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectCodeCheckResult,
+    ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
     ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
     ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
     RemoveProjectToolResult, ResumePlaybackToolResult, SetNodeTypeGroupToolResult,
@@ -156,6 +157,8 @@ pub(crate) enum ControlOperationAnswer {
     ReadProjectFile(ReadProjectFileToolResult),
     /// `create_node_file`'s.
     CreateNodeFile(CreateNodeFileToolResult),
+    /// `create_node_ui_element`'s.
+    CreateNodeUiElement(CreateNodeUiElementToolResult),
     /// `write_project_file`'s.
     ProjectFileTransaction(ProjectFileTransactionToolResult),
     /// `check_project_code`'s.
@@ -172,6 +175,8 @@ pub(crate) enum ControlOperationAnswer {
     SetNodeTypeGroup(SetNodeTypeGroupToolResult),
     /// `list_project_views`'s.
     ListProjectViews(ListProjectViewsToolResult),
+    /// `list_project_node_ui_elements`'.
+    ListProjectNodeUiElements(ListProjectNodeUiElementsToolResult),
     /// `write_studio_view_output`'s.
     WriteStudioViewOutput(WriteStudioViewOutputToolResult),
     /// `write_graph_input`'s.
@@ -643,6 +648,10 @@ impl ControlOperationDispatcher {
                 .create_node_file(request, request_origin)
                 .await
                 .map(ControlOperationAnswer::CreateNodeFile),
+            ControlOperationCall::CreateNodeUiElement(request) => self
+                .create_node_ui_element(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::CreateNodeUiElement),
             ControlOperationCall::WriteProjectFile(request) => self
                 .write_project_file(request, request_origin)
                 .await
@@ -675,6 +684,10 @@ impl ControlOperationDispatcher {
                 .list_project_views(request)
                 .await
                 .map(ControlOperationAnswer::ListProjectViews),
+            ControlOperationCall::ListProjectNodeUiElements(request) => self
+                .list_project_node_ui_elements(request)
+                .await
+                .map(ControlOperationAnswer::ListProjectNodeUiElements),
             ControlOperationCall::WriteStudioViewOutput(request) => self
                 .write_studio_view_output(request, request_origin)
                 .await

@@ -1,0 +1,40 @@
+id: no-directory-made-beside-a-listener-bind
+language: rust
+severity: error
+message: A folder made with `std::fs::create_dir` or `create_dir_all` in a runtime process can lose its owner search bit to an iceoryx2 listener bind on another thread; make it through `process_umask_kept_from_iceoryx2_listener_binds` or `directory_at_an_explicit_mode`.
+note: >-
+  iceoryx2 0.10 binds each listener's socket under a process-wide umask of
+  0o177, so a folder another thread makes in that window cannot be entered.
+  `create_directory_and_its_missing_parents_at_the_process_umask` and
+  `create_directory_at_the_process_umask` make it while no bind runs;
+  `create_directory_and_its_missing_parents_at_mode` sets an exact mode after
+  `mkdir`. Test code is not checked.
+files:
+  - runtime/**/*.rs
+ignores:
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/benches/**"
+  - "**/examples/**"
+  - "**/build.rs"
+  - "**/src/bin/**"
+  # the two helpers themselves
+  - runtime/streamlib-runtime-client-contract/src/process_umask_kept_from_iceoryx2_listener_binds/mod.rs
+  # a project laid out on disk for other crates' tests
+  - runtime/streamlib-engine/src/core/runtime/a_project_on_disk_for_a_test.rs
+  # clients that bind no iceoryx2 listener
+  - runtime/tatolab-cli/**
+  - runtime/tatolab-read-track/**
+rule:
+  any:
+    - kind: scoped_identifier
+      regex: '(^|::)fs::create_dir(_all)?$'
+    - kind: identifier
+      regex: '^create_dir(_all)?$'
+      inside:
+        kind: use_declaration
+        stopBy: end
+  not:
+    matches: inside-rust-test-code

@@ -6,14 +6,14 @@
 Each island the pool carries feeds one of its inputs and is evaluated at that
 input's read, as in any reader; the pool writes the value to the matching
 output, whose channel reaches the reader that could not evaluate the island
-itself. A number or bool is written as a control value, one f64 sample on one
-channel at rate 0, a `dict` as a Records message, and a message the island
-hands on unread exactly as it arrived, its descriptor unchanged.
+itself. A control message, a number, a bool or the parts of a Color, a Vector,
+a Rectangle or a Transform one on each channel, and a message the island hands
+on unread are written exactly as the island answered them, their descriptor
+unchanged; a `dict` is written as a Records message.
 """
 
 from __future__ import annotations
 
-import struct
 from typing import Any, Mapping, Sequence
 
 from tatolab.stream import (
@@ -31,12 +31,8 @@ from tatolab.stream import (
 
 from tatolab.runtime._engine import hand_an_unread_message_on, read_the_message_at_an_input_port_unread
 
-# A control value on a wire: one f64 sample, at no regular rate.
-_CONTROL_VALUE_SAMPLE_FORMAT = "<d"
-_CONTROL_VALUE_SAMPLE_RATE = 0
-
-# What a carry's `family` names: a control value, a record, or a message handed on unread.
-_CARRIES_A_CONTROL_VALUE = "channels"
+# What a carry's `family` names, besides `"channels"`, a control message: a record, or a message
+# handed on unread.
 _CARRIES_A_RECORD = "records"
 _CARRIES_A_MESSAGE_HANDED_ON_UNREAD = "message"
 
@@ -78,6 +74,38 @@ def the_node_class_the_function_node_pool_runs_as(
     return node.process(execution="continuous")(pool_class)
 
 
+def take_the_carries_a_running_pool_is_handed(
+    pool_class: type, pool_config: "Mapping[str, Any]", link_data_access: NodeLinkDataAccess
+) -> None:
+    """Take each carry `pool_config["carries"]` names that the running pool does not carry yet.
+
+    Its two ports are declared before the engine wires the links into and out of them, and
+    the pool reads and writes them from its next `process` on, so a carry joins a running
+    pool without a restart. A carry the pool already holds is left as it is.
+    """
+    carried_input_ports = {input_port for input_port, _, _ in pool_class._carries}
+    new_carries = [
+        carry
+        for carry in (pool_config.get("carries") or [])
+        if carry["input_port"] not in carried_input_ports
+    ]
+    for carry in new_carries:
+        family = _the_port_family_a_carry_declares(carry)
+        for port_name, port in (
+            (carry["input_port"], Input(family, delivery="newest")),
+            (carry["output_port"], Output(family)),
+        ):
+            setattr(pool_class, port_name, port)
+            port.__set_name__(pool_class, port_name)
+    link_data_access.declare_ports(
+        [carry["input_port"] for carry in new_carries],
+        [carry["output_port"] for carry in new_carries],
+    )
+    pool_class._carries = pool_class._carries + tuple(
+        (carry["input_port"], carry["output_port"], carry["family"]) for carry in new_carries
+    )
+
+
 def _the_port_family_a_carry_declares(carry: "Mapping[str, Any]") -> "PortFamily[Any]":
     if carry["family"] == _CARRIES_A_MESSAGE_HANDED_ON_UNREAD:
         return _PORT_FAMILIES_BY_WIRE_NAME[carry["message_family"]]
@@ -92,35 +120,19 @@ class _FunctionNodePoolBase:
     _carries: "tuple[tuple[str, str, str], ...]"
     _link_data_access: NodeLinkDataAccess
 
-    def __init__(self) -> None:
-        self._control_values_written = {output_port: 0 for _, output_port, _ in self._carries}
-
     def process(self, ctx: Any) -> None:
         for input_port, output_port, carries in self._carries:
-            if carries == _CARRIES_A_MESSAGE_HANDED_ON_UNREAD:
-                message = read_the_message_at_an_input_port_unread(
-                    link_data_access=self._link_data_access, input_port=input_port
-                )
-                if message is not None:
-                    hand_an_unread_message_on(
-                        link_data_access=self._link_data_access,
-                        output_port=output_port,
-                        message=message,
-                    )
-                continue
             if carries == _CARRIES_A_RECORD:
                 record = ctx.inputs.read(getattr(type(self), input_port))
                 if record is not None:
                     ctx.outputs.write(getattr(type(self), output_port), record)
                 continue
-            payload = ctx.inputs.read(input_port)
-            if payload is None:
-                continue
-            (control_value,) = struct.unpack_from(_CONTROL_VALUE_SAMPLE_FORMAT, bytes(payload))
-            ctx.outputs.write_channels_block(
-                output_port,
-                memoryview(struct.pack("=d", control_value)).cast("d", (1, 1)),
-                start_sample=self._control_values_written[output_port],
-                sample_rate=_CONTROL_VALUE_SAMPLE_RATE,
+            message = read_the_message_at_an_input_port_unread(
+                link_data_access=self._link_data_access, input_port=input_port
             )
-            self._control_values_written[output_port] += 1
+            if message is not None:
+                hand_an_unread_message_on(
+                    link_data_access=self._link_data_access,
+                    output_port=output_port,
+                    message=message,
+                )

@@ -27,6 +27,7 @@ use crate::core::error::{Error, Result};
 use crate::core::supervised_child_process::{
     SupervisedChildProcess, SupervisedChildProcessEvent, SupervisedChildProcessLaunch,
 };
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// The switch naming the socket a shared native service listens on.
 pub const SHARED_NATIVE_SERVICE_LISTEN_SOCKET_SWITCH: &str = "--listen-socket";
@@ -328,13 +329,15 @@ impl SharedNativeServicesOfTheEngine {
         supervisor_generation: u64,
     ) -> Result<SupervisedChildProcess> {
         for directory in [&self.services_directory, &offer.state_directory] {
-            std::fs::create_dir_all(directory).map_err(|failure| {
-                Error::Runtime(format!(
-                    "{} for the shared native service {} could not be created: {failure}",
-                    directory.display(),
-                    offer.service_name
-                ))
-            })?;
+            create_directory_and_its_missing_parents_at_the_process_umask(directory).map_err(
+                |failure| {
+                    Error::Runtime(format!(
+                        "{} for the shared native service {} could not be created: {failure}",
+                        directory.display(),
+                        offer.service_name
+                    ))
+                },
+            )?;
         }
         let endpoint_socket_path = self.endpoint_socket_path_of(&offer.service_name);
         let launch = SupervisedChildProcessLaunch {

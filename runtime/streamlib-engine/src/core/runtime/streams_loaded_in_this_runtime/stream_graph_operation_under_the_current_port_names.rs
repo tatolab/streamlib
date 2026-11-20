@@ -91,6 +91,7 @@ fn the_link_under_the_current_port_names(
         |end: StreamGraphDocumentLinkEnd, direction: PortDirection| StreamGraphDocumentLinkEnd {
             port: the_current_name(ports_of, end.node, end.port, direction),
             node: end.node,
+            member: end.member,
         };
     StreamGraphDocumentLink {
         source: current_name(link.source, PortDirection::Output),
@@ -147,11 +148,13 @@ pub(crate) fn the_operation_under_the_current_port_names(
         StreamGraphOperation::SetNodeInputValue {
             node,
             input,
+            member,
             from,
             to,
         } => StreamGraphOperation::SetNodeInputValue {
             input: current_name(node, input, PortDirection::Input),
             node,
+            member,
             from,
             to,
         },

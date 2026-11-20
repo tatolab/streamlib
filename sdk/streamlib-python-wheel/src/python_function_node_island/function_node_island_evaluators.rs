@@ -92,10 +92,14 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
 
 /// The value a function node input reads while nothing links into it, as the
 /// bootstrap hands it over: a number, the `tuple` of the parts of a Color, a
-/// Vector, a Rectangle or a Transform, or the record `{"value": <stored JSON
-/// form>}` of a String, a Menu, an Asset or a List.
+/// Vector, a Rectangle or a Transform, the record `{"value": <stored JSON
+/// form>}` of a String, a Menu, an Asset or a List, or `None` for an input that
+/// takes `None` and holds no value, as a named type's input does.
 #[derive(Debug, FromPyObject)]
 pub(crate) enum PinValueTheBootstrapHandsOver {
+    Nothing(
+        #[expect(dead_code, reason = "the input reads only that it was handed `None`")] Py<PyNone>,
+    ),
     Number(f64),
     Parts(Vec<f64>),
     Record(Py<PyDict>),
@@ -171,6 +175,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                         WhereAFunctionNodeInputTakesItsValue::ItsPin(FunctionNodeValue::Nothing)
                     }
                     None => WhereAFunctionNodeInputTakesItsValue::ItsPin(match pin_value {
+                        PinValueTheBootstrapHandsOver::Nothing(_) => FunctionNodeValue::Nothing,
                         PinValueTheBootstrapHandsOver::Number(number) => {
                             FunctionNodeValue::Number(number)
                         }

@@ -80,6 +80,19 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
         }
+        fn the_verdict_of_a_link_between_two_running_nodes(
+            &self,
+            _link: &::streamlib_project_repository::StreamGraphDocumentLink,
+        ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {
+            None
+        }
+        fn the_verdict_of_a_link_between_two_node_types(
+            &self,
+            _from: ::streamlib::sdk::runtime::PortOfANodeOfAType<'_>,
+            _to: ::streamlib::sdk::runtime::PortOfANodeOfAType<'_>,
+        ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {
+            None
+        }
         fn what_a_live_connect_makes_of_links_with_node_types_ports<'a>(
             &'a self,
             _held: &'a ::streamlib_project_repository::StreamGraphDocumentLinkEnd,
@@ -88,6 +101,13 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'a, ::streamlib::sdk::error::Result<::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>>>> {
             let answers = node_types_ports.iter().map(|_| Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))).collect();
             Box::pin(async move { Ok(answers) })
+        }
+        fn what_a_connect_makes_of_each_link_at_a_placed_level(
+            &self,
+            _level: &::streamlib_project_repository::StreamGraphDocument,
+            links: &[::streamlib_project_repository::StreamGraphDocumentLink],
+        ) -> ::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>> {
+            links.iter().map(|_| Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))).collect()
         }
         fn the_name_a_node_added_with_none_takes(
             &self,
@@ -123,6 +143,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             _node_name: &str,
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
+            _member: ::std::option::Option<&str>,
             _value: ::std::option::Option<&::serde_json::Value>,
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             Ok(())
@@ -157,6 +178,15 @@ macro_rules! graph_mutation_ops_record_the_call {
             _exposed_config_fields: &[String],
         ) -> ::streamlib::sdk::error::Result<bool> {
             Ok(true)
+        }
+        fn open_a_graph_edit_batch(
+            self: ::std::sync::Arc<Self>,
+        ) -> ::streamlib::sdk::error::Result<
+            ::std::boxed::Box<dyn ::streamlib::sdk::runtime::GraphEditBatch>,
+        > {
+            Ok(::std::boxed::Box::new(
+                $crate::control_plane_stub_support::GraphEditsOfAStubAppliedOneByOne(self),
+            ))
         }
         fn hold_an_edit_its_document_holds_not_live(
             &self,
@@ -263,3 +293,27 @@ macro_rules! graph_mutation_ops_record_the_call {
 }
 
 pub(crate) use graph_mutation_ops_record_the_call;
+
+/// A batch of graph edits on a stub runtime: each edit applied as the stub applies one, and
+/// the batch closed with nothing left to judge.
+pub(crate) struct GraphEditsOfAStubAppliedOneByOne<Stub>(pub(crate) ::std::sync::Arc<Stub>);
+
+impl<Stub: ::streamlib::sdk::runtime::RuntimeOperations + 'static>
+    ::streamlib::sdk::runtime::GraphEditBatch for GraphEditsOfAStubAppliedOneByOne<Stub>
+{
+    fn apply_a_stream_graph_operation_live(
+        &self,
+        graph_operation: ::streamlib_project_repository::StreamGraphOperation,
+    ) -> ::streamlib::sdk::runtime::BoxFuture<
+        '_,
+        ::streamlib::sdk::error::Result<::streamlib_project_repository::StreamGraphOperation>,
+    > {
+        self.0.apply_a_stream_graph_operation_live(graph_operation)
+    }
+
+    fn close(
+        self: ::std::boxed::Box<Self>,
+    ) -> ::std::result::Result<(), ::streamlib::sdk::runtime::GraphEditBatchRefused> {
+        Ok(())
+    }
+}

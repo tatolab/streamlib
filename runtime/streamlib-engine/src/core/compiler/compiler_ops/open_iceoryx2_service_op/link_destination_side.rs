@@ -9,12 +9,14 @@ use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphNodeWithComponents, InputLinkPortRef,
-    LinkUniqueId, NodeLossCounts,
+    LinkUniqueId, NodeLossCounts, OutputLinkPortRef, the_bundle_member_a_link_ends_at,
+    the_bundle_member_a_link_starts_at,
 };
 use crate::core::nodes::{NodeInstance, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope};
 use crate::iceoryx2::{
-    AudioWindowDeclarationOfAnInputPort, ChannelSizing, DeliveryResolution, Iceoryx2NotifyService,
-    Iceoryx2Service, InboundLinkName, refuse_an_unsettled_match_device_sentinel,
+    AudioWindowDeclarationOfAnInputPort, BundleMembersAtTheRead, ChannelSizing, DeliveryResolution,
+    Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName, MemberPutAtTheRead,
+    MemberTakenAtTheRead, WhatTheMembersArePutInto, refuse_an_unsettled_match_device_sentinel,
 };
 
 use super::{
@@ -42,13 +44,22 @@ pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
     /// as a windowed reader's ring, so one connected later fits it.
     pub(super) room_for_a_windowed_reader_joining_later:
         RoomForAWindowedReaderTheSourcesGraphCannotSee,
+    /// The bundle members the link starts and ends at, which its subscriber takes from each
+    /// message and puts into the bundle its port reads.
+    pub(super) bundle_members_at_the_read: BundleMembersAtTheRead,
 }
 
+/// What the wiring of link `link_id`, from `from_port`, reads off its destination's graph when
+/// it is read at `to_port`, `delivery_declared_by` the input that declares how it is delivered
+/// and the link's own input end; a member of a bundle that input end names is put into what
+/// `put_into` says.
 pub(crate) fn read_the_destination_of_a_link(
     dest_graph: &mut Graph,
+    from_port: &OutputLinkPortRef,
     to_port: &InputLinkPortRef,
     delivery_declared_by: &InputLinkPortRef,
     link_id: &LinkUniqueId,
+    put_into: WhatTheMembersArePutInto,
 ) -> Result<DestinationOfALinkAsItsWiringReadsIt> {
     let dest_proc_id = to_port.node_run_id().clone();
     let dest_port = to_port.port_name().to_string();
@@ -81,6 +92,26 @@ pub(crate) fn read_the_destination_of_a_link(
     // iceoryx2 counts repeat notifications in shared memory and sends no
     // further wakeup until the listener drains.
     let notify_service_name = notify_service_name_for(&dest_proc_id);
+    let member_taken_at_the_read = the_bundle_member_a_link_starts_at(dest_graph, from_port)
+        .map(|(bundle, member)| MemberTakenAtTheRead { bundle, member });
+    if let (Some(member), None) = (from_port.member(), &member_taken_at_the_read) {
+        return Err(Error::InvalidLink(format!(
+            "the link from `{from_port}` starts at member `{member}`, which its output no longer \
+             holds, so it is not wired"
+        )));
+    }
+    let member_put_at_the_read = the_bundle_member_a_link_ends_at(dest_graph, delivery_declared_by)
+        .map(|(bundle, member)| MemberPutAtTheRead {
+            bundle,
+            member,
+            put_into,
+        });
+    if let (Some(member), None) = (delivery_declared_by.member(), &member_put_at_the_read) {
+        return Err(Error::InvalidLink(format!(
+            "the link into `{delivery_declared_by}` ends at member `{member}`, which its input no \
+             longer holds, so it is not wired"
+        )));
+    }
     Ok(DestinationOfALinkAsItsWiringReadsIt {
         dest_proc_id,
         dest_port,
@@ -91,6 +122,10 @@ pub(crate) fn read_the_destination_of_a_link(
         max_notifiers,
         room_for_a_windowed_reader_joining_later:
             RoomForAWindowedReaderTheSourcesGraphCannotSee::NotNeeded,
+        bundle_members_at_the_read: BundleMembersAtTheRead {
+            taken_from_its_output: member_taken_at_the_read,
+            put_into_its_input: member_put_at_the_read,
+        },
     })
 }
 
@@ -120,6 +155,7 @@ pub(crate) fn open_the_destination_side_of_a_link(
                 destination.max_notifiers,
                 link_id,
                 destination.audio_windowing,
+                &destination.bundle_members_at_the_read,
             )?
         } else {
             let dest_node = get_single_node(dest_graph, &destination.dest_proc_id)?;
@@ -134,6 +170,7 @@ pub(crate) fn open_the_destination_side_of_a_link(
                 &opened_source_side.channel_data_service,
                 &opened_source_side.destination_notify_service,
                 destination.audio_windowing,
+                destination.bundle_members_at_the_read,
             )?;
             None
         };
@@ -209,6 +246,7 @@ pub(super) fn wire_rust_dest(
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
+    bundle_members_at_the_read: BundleMembersAtTheRead,
 ) -> Result<()> {
     let dest_guard = dest_node.lock();
     let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
@@ -254,6 +292,7 @@ pub(super) fn wire_rust_dest(
         link_id.as_str(),
         &InboundLinkName::from(channel_service_name),
         subscriber,
+        bundle_members_at_the_read,
     );
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
@@ -298,6 +337,20 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
     ));
 }
 
+/// `member`, a bundle member input port `dest_port` reads, as the helper wiring envelope carries
+/// it.
+fn the_member_on_the_wiring_envelope(
+    member: &impl serde::Serialize,
+    dest_port: &str,
+) -> Result<serde_json::Value> {
+    serde_json::to_value(member).map_err(|render_failure| {
+        Error::Configuration(format!(
+            "the member input port '{dest_port}' reads could not be rendered onto the helper \
+             wiring envelope: {render_failure}"
+        ))
+    })
+}
+
 pub(super) fn wire_subprocess_dest(
     graph: &mut Graph,
     link_wiring: &OutOfProcessLinkWiringEnvelope,
@@ -310,6 +363,7 @@ pub(super) fn wire_subprocess_dest(
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
+    bundle_members_at_the_read: &BundleMembersAtTheRead,
 ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
     // The dest reader carries no payload-size hint: the publisher's segment
     // grows to whatever frame it sends, and the reader copies each out whole.
@@ -334,6 +388,14 @@ pub(super) fn wire_subprocess_dest(
         "max_subscribers": channel_sizing.max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
+    if let Some(member_taken_at_the_read) = &bundle_members_at_the_read.taken_from_its_output {
+        entry["member_taken_at_the_read"] =
+            the_member_on_the_wiring_envelope(member_taken_at_the_read, dest_port)?;
+    }
+    if let Some(member_put_at_the_read) = &bundle_members_at_the_read.put_into_its_input {
+        entry["member_put_at_the_read"] =
+            the_member_on_the_wiring_envelope(member_put_at_the_read, dest_port)?;
+    }
     let into_a_windowed_port = audio_windowing.is_some();
     match audio_windowing {
         None => {}

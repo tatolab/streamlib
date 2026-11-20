@@ -177,6 +177,11 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// answer — so no two doors disagree about one frame.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     write_back_answers_by_pool_slot: Mutex<std::collections::HashMap<String, bool>>,
+    /// The pool slots whose staging holds an edit a handle has not published
+    /// yet: the stagings above are shared by every handle over a slot.
+    #[cfg(target_os = "linux")]
+    pool_slots_holding_a_staged_edit:
+        Arc<crate::python_gpu_surface_pixel_exchange::PoolSlotsHoldingAStagedEdit>,
     /// Each foreign DMA-BUF this helper adopted, with whether a
     /// `convert_surface_into` named it as its source — the parent then holds
     /// what it resolved until the adoption's release says to drop it. Every
@@ -226,10 +231,23 @@ impl HelperProcessGpuExchangeClient {
             cpu_readback_exports_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             write_back_answers_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(target_os = "linux")]
+            pool_slots_holding_a_staged_edit: Arc::default(),
             foreign_adoptions_and_whether_a_conversion_named_them: Mutex::new(
                 std::collections::HashMap::new(),
             ),
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl HelperProcessGpuExchangeClient {
+    /// The pool slots whose staging holds an edit a handle has not
+    /// published yet.
+    pub(crate) fn pool_slots_holding_a_staged_edit(
+        &self,
+    ) -> &Arc<crate::python_gpu_surface_pixel_exchange::PoolSlotsHoldingAStagedEdit> {
+        &self.pool_slots_holding_a_staged_edit
     }
 }
 

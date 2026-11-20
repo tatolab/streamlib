@@ -3,7 +3,7 @@
 
 """The shader nodes the shader-node scenarios run: Slang the runtime compiles, with no Python behind it."""
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Color, ImageFrame, Vector3, node
 
 TINT_AMOUNT = 0.5
 
@@ -62,3 +62,18 @@ float4 red_ramp_of_the_extent_of(ImageInput extent_from)
 """
 )
 def red_ramp_of_the_extent_of(extent_from: ImageFrame) -> ImageFrame: ...
+
+
+@node.shader(
+    """
+float4 tint_by_a_color_and_lift(ImageInput image, float4 tint_color, float3 lift)
+{
+    return float4(image.pixel.rgb * tint_color.rgb + lift, image.pixel.a * tint_color.a);
+}
+"""
+)
+def tint_by_a_color_and_lift(
+    image: ImageFrame,
+    tint_color: Color = Color(1.0, 1.0, 1.0),
+    lift: Vector3 = Vector3(0.0, 0.0, 0.0),
+) -> ImageFrame: ...

@@ -276,7 +276,13 @@ fn spawn_dedicated_thread(
                 "[{}] Waiting for CONTINUE signal (wiring in progress)...",
                 proc_id_clone
             );
-            barrier.wait_for_continue();
+            if !barrier.wait_for_continue() {
+                tracing::info!(
+                    "[{}] Its compile failed before its wiring completed; the node never sets up",
+                    proc_id_clone
+                );
+                return;
+            }
             tracing::trace!(
                 "[{}] Received CONTINUE signal (wiring complete)",
                 proc_id_clone

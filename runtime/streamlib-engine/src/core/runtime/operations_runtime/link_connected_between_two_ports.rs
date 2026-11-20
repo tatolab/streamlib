@@ -3,39 +3,94 @@
 
 //! A link connected between an output port and an input port of one stream's graph, judged
 //! before any channel exists, and the same judgement of a link made nowhere: between two ends
-//! the graph holds, or between one it holds and a port of a node type no node has yet.
+//! the graph holds, between one it holds and a port of a node type no node has yet, or among the
+//! nodes of a placed stream's level.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use streamlib_project_repository::{
+    StreamGraphDocument, StreamGraphDocumentLink, StreamGraphDocumentNode,
+};
 
 use super::link_ends_this_graph_cannot_take::{
     refuse_a_destination_this_graph_cannot_take, refuse_a_source_this_graph_cannot_take,
 };
-use super::{LiveGraphChangeOnOneStream, commit_live_graph_change};
+use super::{LiveGraphChangeOnOneStream, announce_or_hold, commit_live_graph_change};
 use crate::core::compiler::compiler_ops::function_node_island::{
-    refuse_a_link_an_island_cannot_take, refuse_a_link_feeding_an_island_into_the_app_process,
+    link_in, refuse_a_link_an_island_cannot_take,
+    refuse_a_link_feeding_an_island_into_the_app_process,
+    refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands,
+    refuse_the_links_through_a_node_not_yet_added,
 };
+use crate::core::compiler::compiler_ops::refuse_a_link_a_channel_cannot_carry;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
     PortDescriptor, ResolvedPin,
 };
-use crate::core::graph::legacy_config_of_a_node::node_spec_holding_the_input_values;
+use crate::core::graph::legacy_config_of_a_node::{
+    node_spec_holding_the_input_values, node_spec_of_a_document_node,
+};
 use crate::core::graph::{
-    ALinkConnected, Graph, LinkUniqueId, NodeRunId, WhyTheNodeLeaves,
+    ALinkConnected, Graph, Link, LinkUniqueId, NodeRunId, WhyTheNodeLeaves,
     cast_exposed_name_to_url_safe, refuse_a_link_its_pin_types_or_families_refuse,
+    refuse_the_names_and_codec_the_links_through_a_convert_node_refuse,
+    the_verdict_on_a_link_between_typed_ends,
 };
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::pubsub::RuntimeEvent;
+use crate::core::runtime::streams_loaded_in_this_runtime::stream_graph_operation_applied_live::runs_as_no_node_of_its_own;
+use crate::core::runtime::{ANodeNotBuilt, WhatALiveConnectMakesOfALink};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use crate::iceoryx2::ChannelName;
+
+/// What connect does with a link the engine cannot wire, and when it judges the rule a reader
+/// that runs reactively sets: that something other than an island feeds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::core::runtime) enum WhenTheEngineCannotWireALink {
+    /// Refuse it, judged whole now, as an edit made on its own is.
+    Refuse,
+    /// Refuse it, the reader rule left to a sweep once each link of an added node or a batch of
+    /// edits is made, so the order they are made in never matters.
+    RefuseLeavingTheReaderRuleToASweep,
+    /// Make nothing and answer why, so a saved graph opens and plays without the link, the
+    /// reader rule left to the sweep a load or a reconcile makes once each link is made.
+    SetAsideLeavingTheReaderRuleToASweep,
+}
+
+impl WhenTheEngineCannotWireALink {
+    fn judges_the_reader_rule_now(self) -> bool {
+        self == Self::Refuse
+    }
+}
+
+/// What connect made of one link.
+#[derive(Debug)]
+pub(in crate::core::runtime) enum ALinkConnectedOrSetAside {
+    /// The link, connected.
+    Connected(LinkUniqueId),
+    /// Nothing: the engine cannot wire the link, for this refusal.
+    SetAside(Error),
+}
+
+impl ALinkConnectedOrSetAside {
+    /// The link connected, or the refusal it was set aside for.
+    pub(in crate::core::runtime) fn connected(self) -> Result<LinkUniqueId> {
+        match self {
+            Self::Connected(link_id) => Ok(link_id),
+            Self::SetAside(refusal) => Err(refusal),
+        }
+    }
+}
 
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
 /// Connect judges two typed ports by their pin link verdict, and any other two by their
 /// families, names, codec and formats, and refuses, by name before any channel exists, a link
-/// that does not connect as it is, that feeds a function node island into a node in the app
-/// process, or that an island cannot take; `a_link_connected` says how leniently a link of a
-/// saved graph is judged.
+/// that does not connect as it is; `a_link_connected` says how leniently a link of a saved
+/// graph is judged by its pin types. A link the engine cannot wire is refused or set aside, as
+/// `when_the_engine_cannot_wire_it` says.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -46,31 +101,61 @@ pub(in crate::core::runtime) async fn connect_impl(
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
     a_link_connected: ALinkConnected,
-) -> Result<LinkUniqueId> {
+    when_the_engine_cannot_wire_it: WhenTheEngineCannotWireALink,
+) -> Result<ALinkConnectedOrSetAside> {
     let LiveGraphChangeOnOneStream {
         compiler,
         live,
         stream,
+        held_for_one_commit,
+        one_input_value_change_at_a_time,
     } = live_graph_change;
     let (from, to) = compiler.scope(|graph, _tx| the_ends_connect_links(graph, from, to))?;
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: from.clone(),
-        to: to.clone(),
-    });
-
-    let link_id = apply_a_link(&compiler, from.clone(), to.clone(), a_link_connected)?;
+    let applied = {
+        let _no_input_value_changing = one_input_value_change_at_a_time.held_while_a_link_is_made();
+        apply_a_link(
+            &compiler,
+            from.clone(),
+            to.clone(),
+            a_link_connected,
+            when_the_engine_cannot_wire_it,
+        )?
+    };
+    let link_id = match applied {
+        ALinkConnectedOrSetAside::Connected(link_id) => link_id,
+        set_aside @ ALinkConnectedOrSetAside::SetAside(_) => return Ok(set_aside),
+    };
+    announce_or_hold(
+        &stream,
+        held_for_one_commit.as_deref(),
+        Some(&link_id),
+        RuntimeEvent::RuntimeWillConnect {
+            from: from.clone(),
+            to: to.clone(),
+        },
+    );
 
     commit_live_graph_change(&compiler, live).await?;
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
-        link_id: link_id.to_string(),
-        from,
-        to,
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+    announce_or_hold(
+        &stream,
+        held_for_one_commit.as_deref(),
+        Some(&link_id),
+        RuntimeEvent::RuntimeDidConnect {
+            link_id: link_id.to_string(),
+            from,
+            to,
+        },
+    );
+    announce_or_hold(
+        &stream,
+        held_for_one_commit.as_deref(),
+        None,
+        RuntimeEvent::GraphDidChange,
+    );
 
-    Ok(link_id)
+    Ok(ALinkConnectedOrSetAside::Connected(link_id))
 }
 
 /// The ends `from` and `to` as connect links them in `graph`: each port name cast, and a name a
@@ -89,13 +174,11 @@ fn the_ends_connect_links(
 }
 
 /// Refuse a link from `from` to `to` that connect refuses, in `graph`, before anything is made:
-/// an end the graph cannot take, a link its pin types or families refuse, one feeding a
-/// function node island into the app process, one an island cannot take, or one whose channel
+/// an end the graph cannot take, a link its pin types or families refuse, or one whose channel
 /// cannot be named. A link of a saved graph, as `a_link_connected` says, keeps one the verdict
-/// refuses by its pin types alone when its families take it, and leaves one feeding an island
-/// into the app process or one an island cannot take to the commit that builds the stream, so
-/// the graph opens and the link can be removed. Answers the verdict of two typed ends that
-/// connect, `None` for ends their families judge, and the channel the link carries on.
+/// refuses by its pin types alone when its families take it. Answers the verdict of two typed
+/// ends that connect, `None` for ends their families judge, and the channel the link carries
+/// on.
 fn refuse_a_link_connect_refuses(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -106,10 +189,6 @@ fn refuse_a_link_connect_refuses(
     refuse_a_destination_this_graph_cannot_take(graph, to)?;
     let verdict =
         refuse_a_link_its_pin_types_or_families_refuse(graph, from, to, a_link_connected)?;
-    if a_link_connected == ALinkConnected::MadeNow {
-        refuse_a_link_feeding_an_island_into_the_app_process(graph, from, to)?;
-        refuse_a_link_an_island_cannot_take(graph, from, to, None)?;
-    }
     let channel =
         crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
             .map_err(|source| Error::InvalidLink(source.to_string()))?;
@@ -117,19 +196,118 @@ fn refuse_a_link_connect_refuses(
 }
 
 /// The verdict a connect made now takes on a link from `from` to `to` in the graph `compiler`
-/// holds, judged as [`connect_impl`] judges it under [`ALinkConnected::MadeNow`] and made
-/// nowhere: the verdict of two typed ends that connect, `None` for ends their families
-/// judge, refused as connect refuses the link.
+/// holds, judged as [`connect_impl`] judges it under [`ALinkConnected::MadeNow`] and
+/// [`WhenTheEngineCannotWireALink::Refuse`], and left out of the graph: the verdict of two
+/// typed ends that connect, `None` for ends their families judge, refused as connect refuses
+/// the link; but a link whose two typed ends connect through a built-in conversion answers that
+/// verdict, naming the convert node a transaction's `connect` places between them, once each of
+/// the two links through it is one an island takes, carrying the names and codec the end it
+/// feeds requires. Connect itself never places it, so a graph written in code stays what its
+/// code says.
 pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<Option<PinLinkVerdict>> {
-    compiler.scope(|graph, _tx| {
-        let (from, to) = the_ends_connect_links(graph, from, to)?;
-        refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)
-            .map(|(verdict, _)| verdict)
-    })
+    compiler.scope(|graph, _tx| the_verdict_connect_takes_in(graph, from, to))
+}
+
+/// The verdict a connect made now takes on a link from `from` to `to` in `graph`, as
+/// [`the_verdict_connect_takes_on_a_link`] takes it in the graph a compiler holds and
+/// [`what_a_connect_makes_of_each_link_at_a_placed_level`] among the nodes of a placed stream's
+/// level; the link is left out of `graph`.
+fn the_verdict_connect_takes_in(
+    graph: &mut Graph,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+) -> Result<Option<PinLinkVerdict>> {
+    let (from, to) = the_ends_connect_links(graph, from, to)?;
+    match the_verdict_a_connect_made_now_takes(graph, from.clone(), to.clone()) {
+        Ok(verdict) => Ok(verdict),
+        Err(refusal @ Error::PinLinkRefused(_)) => {
+            let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+            let Some(verdict) =
+                the_verdict_on_a_link_between_typed_ends(graph, &from, &to, &conversions)
+            else {
+                return Err(refusal);
+            };
+            let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome else {
+                return Err(refusal);
+            };
+            refuse_the_links_through_a_node_not_yet_added(
+                graph,
+                &from,
+                &to,
+                &convert_node.conversion,
+            )?;
+            refuse_the_names_and_codec_the_links_through_a_convert_node_refuse(
+                graph,
+                &from,
+                &to,
+                convert_node,
+            )?;
+            Ok(Some(verdict))
+        }
+        Err(refusal) => Err(refusal),
+    }
+}
+
+/// The verdict a connect made now takes on the link from `from` to `to` in `graph`: judged with
+/// the graph holding the link, as [`connect_impl`] judges it under [`ALinkConnected::MadeNow`]
+/// and [`WhenTheEngineCannotWireALink::Refuse`], then taken out again.
+fn the_verdict_a_connect_made_now_takes(
+    graph: &mut Graph,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+) -> Result<Option<PinLinkVerdict>> {
+    let (verdict, _) = refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)?;
+    let link_id = add_a_link_unless_the_engine_cannot_wire_it(
+        graph,
+        from,
+        to,
+        WhenTheEngineCannotWireALink::Refuse,
+    )?
+    .connected()?;
+    graph.traversal_mut().e(&link_id).drop();
+    Ok(verdict)
+}
+
+/// Add the link from `from` to `to` to `graph` and judge it as the engine wires it, with the
+/// graph holding it, the reader rule as `when_the_engine_cannot_wire_it` says: kept when the
+/// engine can wire it, taken out again when it cannot, and then refused or answered set aside.
+fn add_a_link_unless_the_engine_cannot_wire_it(
+    graph: &mut Graph,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+    when_the_engine_cannot_wire_it: WhenTheEngineCannotWireALink,
+) -> Result<ALinkConnectedOrSetAside> {
+    let link_id = graph
+        .traversal_mut()
+        .add_e(from, to)
+        .first()
+        .map(|link| link.id.clone())
+        .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
+    let link = link_in(graph, &link_id)?;
+    let judged = refuse_a_held_link_the_engine_cannot_wire(graph, link).and_then(|()| {
+        if when_the_engine_cannot_wire_it.judges_the_reader_rule_now() {
+            refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands(graph, link)
+        } else {
+            Ok(())
+        }
+    });
+    let Err(why_the_engine_cannot_wire_it) = judged else {
+        return Ok(ALinkConnectedOrSetAside::Connected(link_id));
+    };
+    graph.traversal_mut().e(&link_id).drop();
+    match when_the_engine_cannot_wire_it {
+        WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep => Ok(
+            ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it),
+        ),
+        WhenTheEngineCannotWireALink::Refuse
+        | WhenTheEngineCannotWireALink::RefuseLeavingTheReaderRuleToASweep => {
+            Err(why_the_engine_cannot_wire_it)
+        }
+    }
 }
 
 /// One end of a link the graph holds a node for, the link's other end being a port of a node
@@ -188,23 +366,38 @@ impl ALinkEndTheGraphHolds {
             .map(|pin| pin.pin_type.clone())
     }
 
-    /// The link between this end and port `port_name` of the node `node_run_id`, output first.
+    /// The link between this end and port `port_name` of the node `node_run_id`, output first;
+    /// `member` names the member of the bundle that port carries the link starts or ends at.
     fn the_link_to(
         &self,
         node_run_id: &NodeRunId,
         port_name: &str,
+        member: Option<String>,
     ) -> (OutputLinkPortRef, InputLinkPortRef) {
         match self {
             Self::Output(from) => (
                 from.clone(),
-                InputLinkPortRef::new(node_run_id.clone(), port_name),
+                InputLinkPortRef::new(node_run_id.clone(), port_name).at_member(member),
             ),
             Self::Input(to) => (
-                OutputLinkPortRef::new(node_run_id.clone(), port_name),
+                OutputLinkPortRef::new(node_run_id.clone(), port_name).at_member(member),
                 to.clone(),
             ),
         }
     }
+}
+
+/// Refuse `link`, which `graph` holds, when the engine cannot wire it as the stream plays: one
+/// feeding a function node island into a node in the app process, one an island cannot take, or
+/// one a channel cannot carry. The rule a reactive reader sets is judged apart, with the link or
+/// by a sweep once every link is made.
+pub(in crate::core::runtime) fn refuse_a_held_link_the_engine_cannot_wire(
+    graph: &Graph,
+    link: &Link,
+) -> Result<()> {
+    refuse_a_link_feeding_an_island_into_the_app_process(graph, link.source(), link.to_port())?;
+    refuse_a_link_an_island_cannot_take(graph, link.source(), link.to_port(), Some(&link.id))?;
+    refuse_a_link_a_channel_cannot_carry(graph, link)
 }
 
 /// A port of a node type the stream has described, as the other end of a link to judge: the spec
@@ -215,17 +408,20 @@ pub(in crate::core::runtime) struct ANodeTypesPortToJudge {
     node_type: NodeClassImportPath,
     spec: NodeSpec,
     port_name: String,
+    member: Option<String>,
     ports_of_its_direction: Arc<[PortDescriptor]>,
 }
 
 impl ANodeTypesPortToJudge {
-    /// Port `port_name` of `node_type`, as `node_types` resolves the type, among the type's
-    /// `ports_of_its_direction`, which every port of the type judged in one batch shares.
+    /// Port `port_name` of `node_type`, or its `member` when it carries a bundle,
+    /// as `node_types` resolves the type, among the type's `ports_of_its_direction`, which every
+    /// port of the type judged in one batch shares.
     pub(in crate::core::runtime) fn of(
         node_types: &NodeTypesOneStreamResolves,
         node_type: NodeClassImportPath,
         ports_of_its_direction: Arc<[PortDescriptor]>,
         port_name: &str,
+        member: Option<&str>,
     ) -> Self {
         Self {
             spec: node_spec_holding_the_input_values(
@@ -236,6 +432,7 @@ impl ANodeTypesPortToJudge {
             ),
             node_type,
             port_name: port_name.to_owned(),
+            member: member.map(str::to_owned),
             ports_of_its_direction,
         }
     }
@@ -291,6 +488,7 @@ fn the_verdict_on_a_link_with_a_node_types_port(
         node_type,
         spec,
         port_name,
+        member,
         ports_of_its_direction,
     }: ANodeTypesPortToJudge,
 ) -> Result<Option<PinLinkVerdict>> {
@@ -303,12 +501,10 @@ fn the_verdict_on_a_link_with_a_node_types_port(
             port_name,
             direction,
         })?;
-    let (from, to) = held.the_link_to(&placed.node_run_id, &port_name);
-    let judge = |graph: &Graph| {
-        refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)
-            .map(|(verdict, _)| verdict)
-    };
-    let as_placed = judge(placed.graph())?;
+    let (from, to) = held.the_link_to(&placed.node_run_id, &port_name, member);
+    let judge =
+        |graph: &mut Graph| the_verdict_a_connect_made_now_takes(graph, from.clone(), to.clone());
+    let as_placed = judge(placed.graph_mut())?;
     let Some(declaration) = ports_of_its_direction
         .iter()
         .find(|port| port.name == port_name)
@@ -337,7 +533,7 @@ fn the_verdict_on_a_link_with_a_node_types_port(
                 flow: declaration.flow,
             },
         );
-        let judged = judge(placed.graph());
+        let judged = judge(placed.graph_mut());
         if best.as_ref().is_none_or(|best| {
             how_well_a_judged_link_connects(&judged) < how_well_a_judged_link_connects(best)
         }) {
@@ -393,8 +589,8 @@ impl<'graph> NodeHeldForOneJudgement<'graph> {
         Ok(Self { graph, node_run_id })
     }
 
-    /// The graph, holding the node.
-    fn graph(&self) -> &Graph {
+    /// The graph, holding the node, to judge a link to it in.
+    fn graph_mut(&mut self) -> &mut Graph {
         self.graph
     }
 
@@ -446,34 +642,166 @@ impl Drop for NodeHeldForOneJudgement<'_> {
     }
 }
 
-/// Add the link from `from` to `to` to the graph and queue it for wiring.
+/// What a connect made now would make of each of `links`, in their order, at `level`, a level of
+/// a placed stream as its graph document holds it, each node by its UUID there, made nowhere:
+/// the verdict [`the_verdict_connect_takes_in`] takes among the level's nodes, built from the
+/// node types `node_types` resolves, as a load builds them, with the links it holds and each of
+/// `links` before it that the connect would make. Only the level is built, so a check reaching
+/// across the placed stream's ports does not judge the link. A link reaching a node that runs
+/// as no node of its own, or one that is not built, such as one whose type is not described, is
+/// judged only as it is made; one reaching a node the level does not hold is refused.
+pub(in crate::core::runtime) fn what_a_connect_makes_of_each_link_at_a_placed_level(
+    node_types: &Arc<NodeTypesOneStreamResolves>,
+    level: &StreamGraphDocument,
+    links: &[StreamGraphDocumentLink],
+) -> Vec<Result<WhatALiveConnectMakesOfALink>> {
+    let (mut graph, node_of_each_node) = the_graph_a_placed_level_runs_as(node_types, level);
+    let end = |node: uuid::Uuid| match node_of_each_node.get(&node) {
+        Some(NodeOfAPlacedLevel::Built(node_run_id)) => Ok(Ok(node_run_id.clone())),
+        Some(NodeOfAPlacedLevel::NotBuilt(not_built)) => Ok(Err(
+            WhatALiveConnectMakesOfALink::ReachesANodeNotBuilt(not_built.clone()),
+        )),
+        Some(NodeOfAPlacedLevel::RunsAsNoNodeOfItsOwn) => {
+            Ok(Err(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade))
+        }
+        None => Err(Error::InvalidLink(format!(
+            "the link reaches node {node}, which is not at this level"
+        ))),
+    };
+    links
+        .iter()
+        .map(|link| {
+            let (source, target) = match (end(link.source.node)?, end(link.target.node)?) {
+                (Ok(source), Ok(target)) => (source, target),
+                (Err(unjudged), _) | (_, Err(unjudged)) => return Ok(unjudged),
+            };
+            let from = OutputLinkPortRef::new(source, &link.source.port)
+                .at_member(link.source.member.clone());
+            let to = InputLinkPortRef::new(target, &link.target.port)
+                .at_member(link.target.member.clone());
+            let verdict = the_verdict_connect_takes_in(&mut graph, from.clone(), to.clone())?;
+            if let Ok((from, to)) = the_ends_connect_links(&graph, from, to) {
+                graph.traversal_mut().add_e(from, to);
+            }
+            Ok(WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
+        })
+        .collect()
+}
+
+/// What one node of a placed stream's level is in the graph that level runs as.
+enum NodeOfAPlacedLevel {
+    /// It is built, under this id.
+    Built(NodeRunId),
+    /// It runs as no node of its own, such as a fragment.
+    RunsAsNoNodeOfItsOwn,
+    /// It is not built.
+    NotBuilt(ANodeNotBuilt),
+}
+
+impl NodeOfAPlacedLevel {
+    /// The id it is built under, if it is built.
+    fn built(&self) -> Option<&NodeRunId> {
+        match self {
+            Self::Built(node_run_id) => Some(node_run_id),
+            Self::RunsAsNoNodeOfItsOwn | Self::NotBuilt(_) => None,
+        }
+    }
+}
+
+/// The graph `level`, a level of a placed stream as its graph document holds it, runs as, made
+/// nowhere, and what each of its nodes is in it, by its UUID: each node that runs as a node of
+/// its own and whose type `node_types` describes, built, and each link of the level between two
+/// built nodes, as a saved graph holds it.
+fn the_graph_a_placed_level_runs_as(
+    node_types: &Arc<NodeTypesOneStreamResolves>,
+    level: &StreamGraphDocument,
+) -> (Graph, HashMap<uuid::Uuid, NodeOfAPlacedLevel>) {
+    let mut graph = Graph::new_resolving_node_types_through(Arc::clone(node_types));
+    let mut node_of_each_node = HashMap::new();
+    for node in level.nodes() {
+        let built = if runs_as_no_node_of_its_own(&node) {
+            NodeOfAPlacedLevel::RunsAsNoNodeOfItsOwn
+        } else {
+            match the_node_a_placed_level_builds(&mut graph, node_types, &node) {
+                Ok(node_run_id) => NodeOfAPlacedLevel::Built(node_run_id),
+                Err(not_built) => NodeOfAPlacedLevel::NotBuilt(not_built),
+            }
+        };
+        node_of_each_node.insert(node.id, built);
+    }
+    for held in level.links() {
+        let built = |node: uuid::Uuid| node_of_each_node.get(&node)?.built().cloned();
+        let (Some(source), Some(target)) = (built(held.source.node), built(held.target.node))
+        else {
+            continue;
+        };
+        if let Ok((from, to)) = the_ends_connect_links(
+            &graph,
+            OutputLinkPortRef::new(source, held.source.port).at_member(held.source.member),
+            InputLinkPortRef::new(target, held.target.port).at_member(held.target.member),
+        ) {
+            graph.traversal_mut().add_e(from, to);
+        }
+    }
+    (graph, node_of_each_node)
+}
+
+/// The id `node`, a node of a placed stream's level, is built under in `graph`; refused when its
+/// type is not described or a load would not add it.
+fn the_node_a_placed_level_builds(
+    graph: &mut Graph,
+    node_types: &NodeTypesOneStreamResolves,
+    node: &StreamGraphDocumentNode,
+) -> std::result::Result<NodeRunId, ANodeNotBuilt> {
+    let not_built = |why: String| ANodeNotBuilt {
+        node_name: node.name.clone(),
+        why,
+    };
+    let node_type = NodeClassImportPath::new(&node.node_type)
+        .map_err(|refusal| not_built(format!("its type `{}`: {refusal}", node.node_type)))?;
+    if node_types.port_info(&node_type).is_none() {
+        return Err(not_built(format!(
+            "its type `{}` is not described",
+            node.node_type
+        )));
+    }
+    graph
+        .traversal_mut()
+        .add_v(node_spec_of_a_document_node(node_types, node_type, node))
+        .and_then(|added| {
+            added
+                .first()
+                .map(|built| built.id.clone())
+                .ok_or_else(|| Error::GraphError("the node was not created".into()))
+        })
+        .map_err(|refusal| not_built(refusal.to_string()))
+}
+
+/// Add the link from `from` to `to` to the graph and queue it for wiring, or, when the engine
+/// cannot wire it, refuse it or set it aside as `when_the_engine_cannot_wire_it` says.
 fn apply_a_link(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
     a_link_connected: ALinkConnected,
-) -> Result<LinkUniqueId> {
-    let (link_id, channel) =
-        compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
-            let (_, channel) = refuse_a_link_connect_refuses(graph, &from, &to, a_link_connected)?;
-
-            let link_id = graph
-                .traversal_mut()
-                .add_e(from, to)
-                .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
-                .first()
-                .map(|link| link.id.clone())
-                .ok_or_else(|| {
-                    Error::GraphError("failed to create link after validation".into())
-                })?;
-
-            Ok((link_id, channel))
-        })?;
-
-    tracing::debug!(
-        link_id = %link_id,
-        channel = channel.as_str(),
-        "connect assigned channel"
-    );
-    Ok(link_id)
+    when_the_engine_cannot_wire_it: WhenTheEngineCannotWireALink,
+) -> Result<ALinkConnectedOrSetAside> {
+    compiler.scope(|graph, tx| {
+        let (_, channel) = refuse_a_link_connect_refuses(graph, &from, &to, a_link_connected)?;
+        let made = add_a_link_unless_the_engine_cannot_wire_it(
+            graph,
+            from,
+            to,
+            when_the_engine_cannot_wire_it,
+        )?;
+        if let ALinkConnectedOrSetAside::Connected(link_id) = &made {
+            tx.log(PendingOperation::AddLink(link_id.clone()));
+            tracing::debug!(
+                link_id = %link_id,
+                channel = channel.as_str(),
+                "connect assigned channel"
+            );
+        }
+        Ok(made)
+    })
 }

@@ -216,9 +216,22 @@ fn a_link_and_a_node_removed_from_a_stopped_stream_leave_its_loaded_graph_at_onc
         )
     };
 
-    apply(streamlib_project_repository::StreamGraphOperation::Disconnect { link })
+    apply(streamlib_project_repository::StreamGraphOperation::Disconnect { link: link.clone() })
         .expect("a stopped stream takes a disconnect");
     assert!(held.the_live_links_by_node_uuid().is_empty());
+    let refusal = apply(
+        streamlib_project_repository::StreamGraphOperation::Disconnect { link: link.clone() },
+    )
+    .expect_err("a disconnect of a link the stream no longer holds is refused")
+    .to_string();
+    assert!(
+        refusal.contains("holds no link source/out1 -> sink/in1"),
+        "the refusal names each node by its name: {refusal}"
+    );
+    assert!(
+        !refusal.contains(&link.source.node.to_string()),
+        "{refusal}"
+    );
     apply(
         streamlib_project_repository::StreamGraphOperation::RemoveNode {
             node: sink.clone(),

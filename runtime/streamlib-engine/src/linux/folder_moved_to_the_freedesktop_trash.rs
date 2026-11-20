@@ -6,6 +6,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// Move `folder` into the user's home Trash, `$XDG_DATA_HOME/Trash`, or
 /// `~/.local/share/Trash` when that is unset.
@@ -39,9 +40,9 @@ pub(crate) fn move_the_folder_into_the_trash_at(
     let files_directory = trash_directory.join("files");
     let info_directory = trash_directory.join("info");
     for directory in [&files_directory, &info_directory] {
-        std::fs::create_dir_all(directory).map_err(|not_made| {
-            format!("the Trash {} was not made: {not_made}", directory.display())
-        })?;
+        create_directory_and_its_missing_parents_at_the_process_umask(directory).map_err(
+            |not_made| format!("the Trash {} was not made: {not_made}", directory.display()),
+        )?;
     }
     for attempt in 1..=u32::MAX {
         let trashed_name = if attempt == 1 {

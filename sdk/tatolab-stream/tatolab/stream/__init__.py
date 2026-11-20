@@ -28,6 +28,8 @@ from ._exposed_name_cast import (
 )
 from ._description import Description as Description
 from ._formerly_named import FormerlyNamed as FormerlyNamed
+from ._named_pin_type_declaration import NamedPinTypeValue as NamedPinTypeValue
+from ._named_pin_type_declaration import named_pin_type as named_pin_type
 from ._number_range import NumberRange as NumberRange
 from ._pin_annotations import NumberStep as NumberStep
 from ._pin_annotations import NumberUnit as NumberUnit
@@ -75,6 +77,8 @@ from ._built_in_nodes import TensorToAudio as TensorToAudio
 from ._built_in_nodes import TensorToAudioConfig as TensorToAudioConfig
 from ._built_in_nodes import TensorToTexture as TensorToTexture
 from ._built_in_nodes import TensorToTextureConfig as TensorToTextureConfig
+from ._built_in_nodes import TextureFormatConvert as TextureFormatConvert
+from ._built_in_nodes import TextureFormatConvertConfig as TextureFormatConvertConfig
 from ._built_in_nodes import TextureToTensor as TextureToTensor
 from ._built_in_nodes import TextureToTensorConfig as TextureToTensorConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
@@ -242,6 +246,7 @@ __all__ = [
     "NodeReference",
     "NodeReferenceToNodeType",
     "FormerlyNamed",
+    "NamedPinTypeValue",
     "NumberRange",
     "NumberStep",
     "NumberUnit",
@@ -316,6 +321,8 @@ __all__ = [
     "TensorToAudioConfig",
     "TensorToTexture",
     "TensorToTextureConfig",
+    "TextureFormatConvert",
+    "TextureFormatConvertConfig",
     "TextureToTensor",
     "TextureToTensorConfig",
     "Time",
@@ -326,6 +333,7 @@ __all__ = [
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
     "monotonic_now_ns",
+    "named_pin_type",
     "node",
     "run_graph_generator",
     "start_monotonic_timer",

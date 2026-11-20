@@ -270,6 +270,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("create_node_file", params, callOptions);
   }
 
+  create_node_ui_element(params, callOptions) {
+    return this.call("create_node_ui_element", params, callOptions);
+  }
+
   write_project_file(params, callOptions) {
     return this.call("write_project_file", params, callOptions);
   }
@@ -300,6 +304,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
 
   list_project_views(params, callOptions) {
     return this.call("list_project_views", params, callOptions);
+  }
+
+  list_project_node_ui_elements(params, callOptions) {
+    return this.call("list_project_node_ui_elements", params, callOptions);
   }
 
   write_studio_view_output(params, callOptions) {

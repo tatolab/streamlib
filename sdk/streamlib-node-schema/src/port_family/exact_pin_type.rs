@@ -5,7 +5,7 @@
 //! states exactly, and the family a typed port serves.
 
 use super::{PortFamily, PortFamilyDeclaration};
-use crate::pin_type::{PinType, TexturePixelFormat};
+use crate::pin_type::{BuiltInPinTypeName, PinType, TexturePixelFormat};
 
 impl PortFamilyDeclaration {
     /// The pin type this declaration states exactly: a Texture of the formats it states, for an
@@ -32,27 +32,43 @@ impl PortFamily {
     /// `family`. `None` for a type that takes no wire, a named type, whose bytes belong to no
     /// family, and a List or a bundle, which no family's message carries.
     pub fn carrying(pin_type: &PinType) -> Option<Self> {
-        match pin_type {
-            PinType::Boolean {}
-            | PinType::Integer { .. }
-            | PinType::Float { .. }
-            | PinType::Color {}
-            | PinType::Vector { .. }
-            | PinType::Rectangle {}
-            | PinType::Transform {}
-            | PinType::Audio {} => Some(Self::Channels),
-            PinType::Texture { .. } => Some(Self::Image),
-            PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. } => Some(Self::Packets),
-            PinType::Tensor {} => Some(Self::Array),
-            PinType::String {}
-            | PinType::Menu { .. }
-            | PinType::Asset { .. }
-            | PinType::Trigger {} => Some(Self::Records),
-            PinType::ListOf { .. }
-            | PinType::Bundle { .. }
-            | PinType::Named { .. }
-            | PinType::NodeReference { .. }
-            | PinType::PinTypeChoice { .. } => None,
+        Self::carrying_a_pin_of(pin_type.built_in_name())
+    }
+
+    /// The family whose messages carry a pin of the built-in type `name`, as [`Self::carrying`]
+    /// finds it.
+    pub fn carrying_a_pin_of(name: BuiltInPinTypeName) -> Option<Self> {
+        match name {
+            BuiltInPinTypeName::Boolean
+            | BuiltInPinTypeName::Integer
+            | BuiltInPinTypeName::Float
+            | BuiltInPinTypeName::Color
+            | BuiltInPinTypeName::Vector
+            | BuiltInPinTypeName::Rectangle
+            | BuiltInPinTypeName::Transform
+            | BuiltInPinTypeName::Audio => Some(Self::Channels),
+            BuiltInPinTypeName::Texture => Some(Self::Image),
+            BuiltInPinTypeName::EncodedVideo | BuiltInPinTypeName::EncodedAudio => {
+                Some(Self::Packets)
+            }
+            BuiltInPinTypeName::Tensor => Some(Self::Array),
+            BuiltInPinTypeName::String
+            | BuiltInPinTypeName::Menu
+            | BuiltInPinTypeName::Asset
+            | BuiltInPinTypeName::Trigger => Some(Self::Records),
+            BuiltInPinTypeName::ListOf
+            | BuiltInPinTypeName::Bundle
+            | BuiltInPinTypeName::Named
+            | BuiltInPinTypeName::NodeReference
+            | BuiltInPinTypeName::PinTypeChoice => None,
         }
+    }
+
+    /// Every built-in type this family's messages carry, in the order the contract lists them.
+    pub fn the_pin_types_it_carries(self) -> Vec<BuiltInPinTypeName> {
+        BuiltInPinTypeName::EVERY_NAME
+            .into_iter()
+            .filter(|name| Self::carrying_a_pin_of(*name) == Some(self))
+            .collect()
     }
 }

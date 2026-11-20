@@ -11,7 +11,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyNone, PyTuple};
 use streamlib::sdk::descriptors::{PinType, VectorComponentCount};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
@@ -48,14 +48,16 @@ pub(crate) use function_node_raises_in_this_helper::FunctionNodeRaisesInThisHelp
 use function_node_raises_in_this_helper::WhereAnIslandNotesTheRaisesOfItsFunctionNodes;
 use messages_read_off_links_from_outside_the_island::{
     HowAnInputReadsALinkFromOutsideItsIsland, NewestMessageReaderOfTheReadersInputPorts,
-    the_control_value_a_message_carries, the_newest_message_read_from, the_parts_a_message_carries,
+    the_bytes_a_message_of_a_named_type_carries, the_control_value_a_message_carries,
+    the_newest_message_read_from, the_parts_a_message_carries,
     the_pin_type_a_value_type_carries_in_parts, the_record_of_a_stored_value_a_message_carries,
     the_stored_value_a_record_carries_packed,
 };
 pub(crate) use ports_of_a_function_node_run_standalone::{
     hand_an_unread_message_on, read_the_control_value_at_an_input_port,
-    read_the_message_at_an_input_port_unread, read_the_parts_at_an_input_port,
-    read_the_stored_value_at_an_input_port, write_the_stored_value_on_an_output_port,
+    read_the_message_at_an_input_port_unread, read_the_named_value_at_an_input_port,
+    read_the_parts_at_an_input_port, read_the_stored_value_at_an_input_port,
+    write_the_named_value_on_an_output_port, write_the_stored_value_on_an_output_port,
 };
 
 /// One value a function node takes or gives.
@@ -68,6 +70,9 @@ pub(crate) enum FunctionNodeValue {
     /// A Color, a Vector, a Rectangle or a Transform: its parts in the order its stored form
     /// lists them, which only a node run as Python takes or gives.
     Parts(Vec<f64>),
+    /// The bytes a value of a module's named type packs as, which only a node run as Python
+    /// takes or gives, building the value back with its class.
+    Bytes(Arc<[u8]>),
     /// A message read off a channel, which a node hands on without reading it.
     MessageHandedOnUnread(Arc<MessageAFunctionNodeIslandHolds>),
     /// No value: a link from outside the island that carried none yet, a
@@ -89,6 +94,10 @@ impl FunctionNodeValue {
                  {input_index}, and was handed a value of {} parts",
                 parts.len()
             ))),
+            Self::Bytes(_) => Err(Error::Runtime(format!(
+                "function node `{node_id}` runs compiled and takes a number on input \
+                 {input_index}, and was handed a value of a named type"
+            ))),
             Self::MessageHandedOnUnread(_) => Err(Error::Runtime(format!(
                 "function node `{node_id}` takes a number on input {input_index}, and was \
                  handed a message to hand on unread; only an `UnreadMessage` input takes one"
@@ -109,6 +118,7 @@ impl FunctionNodeValue {
             Self::Number(number) => Self::Number(*number),
             Self::Record(record) => Python::attach(|python| Self::Record(record.clone_ref(python))),
             Self::Parts(parts) => Self::Parts(parts.clone()),
+            Self::Bytes(bytes) => Self::Bytes(Arc::clone(bytes)),
             Self::MessageHandedOnUnread(message) => {
                 Self::MessageHandedOnUnread(Arc::clone(message))
             }
@@ -121,6 +131,7 @@ impl FunctionNodeValue {
             Self::Number(number) => number.into_pyobject(python)?.into_any(),
             Self::Record(record) => record.bind(python).clone(),
             Self::Parts(parts) => PyTuple::new(python, parts)?.into_any(),
+            Self::Bytes(bytes) => PyBytes::new(python, bytes).into_any(),
             Self::MessageHandedOnUnread(message) => Bound::new(
                 python,
                 UnreadMessageAFunctionNodeHandsOn {
@@ -133,9 +144,9 @@ impl FunctionNodeValue {
     }
 
     /// `value` as a function node gives it: `None` as nothing, a message it
-    /// was handed as that message, a `dict` as a record, a `tuple` of numbers
-    /// as the parts of a Color, a Vector, a Rectangle or a Transform, anything
-    /// else as the number it converts to.
+    /// was handed as that message, a `dict` as a record, `bytes` as a value of
+    /// a named type, a `tuple` of numbers as the parts of a Color, a Vector, a
+    /// Rectangle or a Transform, anything else as the number it converts to.
     fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         if value.is_none() {
             return Ok(Self::Nothing);
@@ -147,6 +158,9 @@ impl FunctionNodeValue {
         }
         if value.is_instance_of::<PyDict>() {
             return Ok(Self::Record(value.clone().unbind()));
+        }
+        if let Ok(bytes) = value.cast::<PyBytes>() {
+            return Ok(Self::Bytes(Arc::from(bytes.as_bytes())));
         }
         if value.is_instance_of::<PyTuple>() {
             return Ok(Self::Parts(value.extract::<Vec<f64>>()?));
@@ -176,6 +190,10 @@ impl FunctionNodeValue {
         Ok(match self {
             Self::Number(number) => FunctionNodeIslandOutputValue::ControlValue(vec![*number]),
             Self::Parts(parts) => FunctionNodeIslandOutputValue::ControlValue(parts.clone()),
+            Self::Bytes(bytes) => FunctionNodeIslandOutputValue::Packed(PackedPinValue {
+                payload_descriptor: DataChannelPayloadDescriptor::bytes(),
+                payload: bytes.to_vec(),
+            }),
             Self::Record(record) => Python::attach(|python| {
                 records_message_payload_of(
                     &format!("function node `{node_id}`'s output {output_index}"),
@@ -503,6 +521,17 @@ impl FunctionNodeIslandEvaluation {
                             .map(|record| FunctionNodeValue::Record(record.unbind()))
                             .map_err(|refusal| Error::Runtime(refusal.to_string()))
                         })?;
+                        self.values_last_read_off_links_from_outside_islands
+                            .lock()
+                            .insert(reader_input_port.clone(), value_read_last.duplicated());
+                    }
+                    (Some(message), HowAnInputReadsALinkFromOutsideItsIsland::NamedValue) => {
+                        *value_read_last =
+                            FunctionNodeValue::Bytes(the_bytes_a_message_of_a_named_type_carries(
+                                &message,
+                                &function_node.node_id,
+                                reader_input_port,
+                            )?);
                         self.values_last_read_off_links_from_outside_islands
                             .lock()
                             .insert(reader_input_port.clone(), value_read_last.duplicated());

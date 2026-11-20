@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`@node.shader` reads a signature over Images and floats into a node carrying its Slang source, and refuses by name what is not one."""
+"""`@node.shader` reads a signature over Images and values into a node carrying its Slang source, and refuses by name what is not one."""
 
 from __future__ import annotations
 
@@ -10,10 +10,14 @@ from dataclasses import dataclass
 import pytest
 from tatolab.stream import (
     ChannelsBlock,
+    Color,
     ImageFrame,
     ShaderNode,
     StreamBuilder,
     Time,
+    Vector2,
+    Vector3,
+    Vector4,
     node,
 )
 from tatolab.stream._node_declaration import (
@@ -65,7 +69,7 @@ def test_the_signature_stamp_names_the_function_each_input_in_order_and_the_outp
         "inputs": [
             {"port": "a", "value_type": "image_frame"},
             {"port": "b", "value_type": "image_frame"},
-            {"port": "amount", "value_type": "float"},
+            {"port": "amount", "value_type": "float", "pin_type": {"type": "float"}},
         ],
         "output_port": "result",
     }
@@ -88,7 +92,7 @@ def test_a_shader_node_is_added_to_a_stream_like_any_node():
 def tint(image: ImageFrame) -> ImageFrame: ...
 
 
-def flat(level: float) -> ImageFrame: ...
+def flat(level: float = 1.0) -> ImageFrame: ...
 
 
 def levels(image: ImageFrame, level: ChannelsBlock) -> ImageFrame: ...
@@ -133,8 +137,8 @@ def test_time_and_state_are_refused():
         node.shader("float4 animated(ImageInput image) { return image.pixel; }")(animated)
 
 
-def test_a_config_is_refused_pointing_at_float_inputs():
-    with pytest.raises(TypeError, match="push constant"):
+def test_a_config_is_refused_pointing_at_value_inputs():
+    with pytest.raises(TypeError, match="push constants"):
         node.shader("float4 configured(ImageInput image) { return image.pixel; }")(configured)
 
 
@@ -148,3 +152,68 @@ def test_a_function_defined_inside_another_is_refused():
 def test_the_decorator_takes_the_source_never_the_function():
     with pytest.raises(TypeError, match="Slang source as its one argument"):
         node.shader(blend)  # type: ignore[arg-type]
+
+
+TINT_AND_SHIFT_SLANG = """
+float4 tint_and_shift(ImageInput image, float4 tint_color, float2 shift, float3 gain, float4 mix)
+{
+    return image.sample(image.uv + shift) * tint_color * float4(gain, 1.0) * mix;
+}
+"""
+
+
+@node.shader(TINT_AND_SHIFT_SLANG)
+def tint_and_shift(
+    image: ImageFrame,
+    tint_color: Color = Color(1.0, 0.5, 0.25),
+    shift: Vector2 = Vector2(0.0, 0.0),
+    gain: Vector3 = Vector3(1.0, 1.0, 1.0),
+    mix: Vector4 = Vector4(1.0, 1.0, 1.0, 1.0),
+) -> ImageFrame: ...
+
+
+def test_a_color_and_vectors_are_typed_pins_whose_signature_states_their_pin_types():
+    signature = getattr(tint_and_shift, NODE_DECLARATION_SHADER_SIGNATURE_STAMP)
+    assert signature["inputs"] == [
+        {"port": "image", "value_type": "image_frame"},
+        {"port": "tint_color", "value_type": "color", "pin_type": {"type": "color"}},
+        {
+            "port": "shift",
+            "value_type": "vector2",
+            "pin_type": {"type": "vector", "component_count": "two"},
+        },
+        {
+            "port": "gain",
+            "value_type": "vector3",
+            "pin_type": {"type": "vector", "component_count": "three"},
+        },
+        {
+            "port": "mix",
+            "value_type": "vector4",
+            "pin_type": {"type": "vector", "component_count": "four"},
+        },
+    ]
+    input_ports = {port["name"]: port for port in getattr(tint_and_shift, NODE_DECLARATION_INPUT_PORTS_STAMP)}
+    assert "pin_declaration" not in input_ports["image"]
+    assert input_ports["tint_color"]["family"] == {"family": "channels"}
+    assert input_ports["tint_color"]["pin_declaration"]["pin_type"] == {
+        "kind": "is",
+        "pin_type": {"type": "color"},
+    }
+    assert input_ports["tint_color"]["pin_default"] == {
+        "red": 1.0,
+        "green": 0.5,
+        "blue": 0.25,
+        "alpha": 1.0,
+    }
+    assert input_ports["shift"]["pin_default"] == {"x": 0.0, "y": 0.0}
+
+
+def integer_steps(image: ImageFrame, steps: int = 4) -> ImageFrame: ...
+
+
+def test_a_value_a_shader_holds_no_push_constant_for_is_refused_naming_its_types():
+    with pytest.raises(TypeError, match="input `steps` is a int.*`Color`, `Vector2`"):
+        node.shader("float4 integer_steps(ImageInput image) { return image.pixel; }")(
+            integer_steps
+        )

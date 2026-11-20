@@ -329,10 +329,12 @@ async fn tools_call_connect_and_disconnect_name_each_end_by_its_nodes_uuid() {
         source: streamlib_project_repository::StreamGraphDocumentLinkEnd {
             node: STUB_CAMERA_NODE_UUID.parse().unwrap(),
             port: "video".to_owned(),
+            member: None,
         },
         target: streamlib_project_repository::StreamGraphDocumentLinkEnd {
             node: STUB_EFFECT_NODE_UUID.parse().unwrap(),
             port: target_port.to_owned(),
+            member: None,
         },
     };
     assert_eq!(
@@ -445,6 +447,7 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
     assert_eq!(
         recorded[0],
         StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: camera,
             input: "fps".to_owned(),
             from: Some(json!(30)),
@@ -454,6 +457,7 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
     assert_eq!(
         recorded[1],
         StreamGraphOperation::SetNodeInputValue {
+            member: None,
             node: effect,
             input: "strength".to_owned(),
             from: Some(json!(0.5)),
@@ -496,7 +500,8 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
 }
 
 /// `transact` applies its operations in order, a later one naming a node an
-/// earlier `add_node` adds by its `as`; one refused undoes what came before it.
+/// earlier `add_node` adds by its `as`; one refused takes back the stream's batch, and the
+/// take-back undoes the rename before it, which the executor then leaves alone.
 #[tokio::test]
 async fn transact_names_an_added_node_by_its_as_and_reverses_itself_when_refused() {
     let runtime = a_stub_holding_a_camera_linked_to_an_effect();
@@ -546,19 +551,13 @@ async fn transact_names_an_added_node_by_its_as_and_reverses_itself_when_refused
     let effect: uuid::Uuid = STUB_EFFECT_NODE_UUID.parse().unwrap();
     assert_eq!(
         recorded_stream_graph_operations(&recorded),
-        [
-            StreamGraphOperation::RenameNode {
-                node: effect,
-                from: "fx".to_owned(),
-                to: "glow".to_owned()
-            },
-            StreamGraphOperation::RenameNode {
-                node: effect,
-                from: "glow".to_owned(),
-                to: "fx".to_owned()
-            },
-        ],
-        "the refused transaction's applied rename is reversed on the running stream"
+        [StreamGraphOperation::RenameNode {
+            node: effect,
+            from: "fx".to_owned(),
+            to: "glow".to_owned()
+        }],
+        "the rename is made in the batch, whose take-back names the node as before, so the \
+         executor reverses nothing after it"
     );
 }
 

@@ -9,7 +9,6 @@ use serde_json::{Map, Value, json};
 use streamlib_node_schema::pin_type::{
     NodeInputMode, PinDeclaration, PinType, PinTypeDescription, built_in_pin_types,
 };
-use streamlib_project_repository::NodeUiManifest;
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
@@ -89,7 +88,6 @@ pub fn control_contract_document() -> Value {
         .map(|row| the_pin_type_entry_of(row, &mut schema_generator))
         .collect();
     the_pin_type_components_added_to(&mut schema_generator);
-    the_node_ui_manifest_component_added_to(&mut schema_generator);
     let component_schemas: Map<String, Value> = schema_generator.take_definitions(true);
     json!({
         "openrpc": OPENRPC_DOCUMENT_VERSION,
@@ -141,6 +139,22 @@ fn the_method_entry_of(
     if let Some(replaced_by) = declaration.replaced_by {
         method["x-replaced-by"] = json!(replaced_by);
     }
+    if let Some(example) = &declaration.example {
+        let mut pairing = json!({
+            "name": format!("{}_example", declaration.method_name),
+            "params": [{ "name": "params", "value": (example.params)() }],
+        });
+        if let Some(answer) = example.answer {
+            pairing["result"] = json!({
+                "name": format!("{}_result", declaration.method_name),
+                "value": answer(),
+            });
+        }
+        method["examples"] = json!([pairing]);
+        if let Some(refusal) = example.refusal {
+            method["x-refusal-example"] = refusal();
+        }
+    }
     method
 }
 
@@ -190,12 +204,6 @@ fn the_pin_type_components_added_to(schema_generator: &mut schemars::SchemaGener
     schema_generator.subschema_for::<PinType>();
     schema_generator.subschema_for::<PinDeclaration>();
     schema_generator.subschema_for::<NodeInputMode>();
-}
-
-/// Adds the node UI manifest's shape, which no operation names, so the runtime client generates
-/// its type and the JSON Schema an author's editor reads from the file.
-fn the_node_ui_manifest_component_added_to(schema_generator: &mut schemars::SchemaGenerator) {
-    schema_generator.subschema_for::<NodeUiManifest>();
 }
 
 fn the_errors_of(
@@ -280,6 +288,58 @@ mod tests {
         ] {
             assert!(!validator.is_valid(&refused), "{refused} is refused");
         }
+    }
+
+    #[test]
+    fn every_worked_example_validates_against_the_schemas_its_method_states() {
+        let document = control_contract_document();
+        let the_validator_of = |schema: &Value| {
+            let mut schema = schema.clone();
+            schema["components"] = document["components"].clone();
+            jsonschema::validator_for(&schema)
+                .unwrap_or_else(|refusal| panic!("a method states a schema: {refusal}"))
+        };
+        let refusal_validator = the_validator_of(
+            &json!({ "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire" }),
+        );
+        let mut examples_seen = 0;
+        for method in document["methods"].as_array().into_iter().flatten() {
+            let name = method["name"].as_str().unwrap_or_default();
+            for example in method["examples"].as_array().into_iter().flatten() {
+                examples_seen += 1;
+                let params = &example["params"][0]["value"];
+                let params_validator = the_validator_of(&method["params"][0]["schema"]);
+                assert!(
+                    params_validator.is_valid(params),
+                    "{name}'s example params: {:?}",
+                    params_validator
+                        .iter_errors(params)
+                        .map(|error| error.to_string())
+                        .collect::<Vec<_>>()
+                );
+                if let Some(answer) = example.get("result").map(|result| &result["value"]) {
+                    let result_validator = the_validator_of(&method["result"]["schema"]);
+                    assert!(
+                        result_validator.is_valid(answer),
+                        "{name}'s example answer: {:?}",
+                        result_validator
+                            .iter_errors(answer)
+                            .map(|error| error.to_string())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+            if let Some(refusal) = method.get("x-refusal-example") {
+                assert!(
+                    refusal_validator.is_valid(refusal),
+                    "{name}'s example refusal"
+                );
+            }
+        }
+        assert!(
+            examples_seen > 70,
+            "{examples_seen} methods carry an example"
+        );
     }
 
     /// A node type as each listing answers it, filed under a group by the project, validates
@@ -514,7 +574,8 @@ mod tests {
     }
 
     #[test]
-    fn the_node_ui_manifest_is_a_component_whose_control_type_names_a_built_in_pin_type() {
+    fn the_node_ui_manifest_is_a_component_whose_control_type_names_a_built_in_or_a_named_pin_type()
+    {
         let document = control_contract_document();
         let schemas = &document["components"]["schemas"];
         let manifest = &schemas["NodeUiManifest"];
@@ -529,7 +590,20 @@ mod tests {
         assert_eq!(control["required"], json!(["type", "script"]));
         assert_eq!(
             control["properties"]["type"]["$ref"],
-            json!("#/components/schemas/BuiltInPinTypeName")
+            json!("#/components/schemas/NodeUiControlPinType")
+        );
+        let either: Vec<Value> = schemas["NodeUiControlPinType"]["anyOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`NodeUiControlPinType` is an `anyOf`"))
+            .iter()
+            .map(|alternative| alternative["$ref"].clone())
+            .collect();
+        assert_eq!(
+            either,
+            [
+                json!("#/components/schemas/BuiltInPinTypeName"),
+                json!("#/components/schemas/NamedPinTypeImportPath")
+            ]
         );
         assert_eq!(control["properties"]["control"]["type"], json!("string"));
         let listed_names: Vec<Value> = schemas["BuiltInPinTypeName"]["oneOf"]

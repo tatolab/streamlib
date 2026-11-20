@@ -293,7 +293,7 @@ impl ProjectRepository {
             idempotency_key,
             ProjectTransactionAsSentAndAnswered {
                 actions_as_sent,
-                inputs_overridden_by_links: Vec::new(),
+                ..ProjectTransactionAsSentAndAnswered::default()
             },
             operations,
             lineage,
@@ -341,7 +341,7 @@ impl ProjectRepository {
             idempotency_key,
             ProjectTransactionAsSentAndAnswered {
                 actions_as_sent,
-                inputs_overridden_by_links: Vec::new(),
+                ..ProjectTransactionAsSentAndAnswered::default()
             },
             operations,
             lineage,
@@ -355,6 +355,8 @@ impl ProjectRepository {
         ProjectTransactionAsSentAndAnswered {
             actions_as_sent,
             inputs_overridden_by_links,
+            nodes_inserted_on_links,
+            links_made_unjudged,
         }: ProjectTransactionAsSentAndAnswered,
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
@@ -472,6 +474,8 @@ impl ProjectRepository {
             idempotency_key: idempotency_key.cloned(),
             actions: actions_as_sent,
             inputs_overridden_by_links,
+            nodes_inserted_on_links,
+            links_made_unjudged,
         };
 
         let mut performed_effects = Vec::with_capacity(transaction.operations.len());

@@ -8,9 +8,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::EVERY_SURFACE;
+use super::worked_examples;
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     CreateProjectRequest, DuplicateProjectRequest, ImportProjectRequest, ListSamplesRequest,
@@ -35,6 +37,7 @@ impl ControlOperation for OpenProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::OPEN_PROJECT);
 }
 
 /// `reload_project`: queue a soft reload of an open project from disk, keeping its playback.
@@ -54,6 +57,7 @@ impl ControlOperation for ReloadProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::RELOAD_PROJECT);
 }
 
 /// `close_project`: queue the close of an open project: its streams are unloaded and stay closed until it is opened.
@@ -72,6 +76,7 @@ impl ControlOperation for CloseProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CLOSE_PROJECT);
 }
 
 /// `remove_project`: queue the removal of a project from the runtime: its streams are stopped and their records forgotten.
@@ -90,6 +95,7 @@ impl ControlOperation for RemoveProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REMOVE_PROJECT);
 }
 
 /// `rename_project`: rename a project, as one transaction on its history.
@@ -108,6 +114,7 @@ impl ControlOperation for RenameProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::RENAME_PROJECT);
 }
 
 /// `set_project_description`: describe a project, or clear its description, as one transaction on its history.
@@ -127,6 +134,7 @@ impl ControlOperation for SetProjectDescription {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_PROJECT_DESCRIPTION);
 }
 
 /// `set_project_cover`: give a project a cover, or take it away, as one transaction on its history.
@@ -146,6 +154,7 @@ impl ControlOperation for SetProjectCover {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_PROJECT_COVER);
 }
 
 /// `duplicate_project`: duplicate a project into a folder that does not exist yet, as a project of its own.
@@ -165,6 +174,7 @@ impl ControlOperation for DuplicateProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DUPLICATE_PROJECT);
 }
 
 /// `delete_project`: queue the deletion of a whole project.
@@ -183,6 +193,7 @@ impl ControlOperation for DeleteProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DELETE_PROJECT);
 }
 
 /// `import_project`: import a project from an archive into a folder that does not exist yet.
@@ -202,6 +213,7 @@ impl ControlOperation for ImportProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::IMPORT_PROJECT);
 }
 
 /// `create_project`: queue the creation of a project from the starter or a sample.
@@ -221,6 +233,7 @@ impl ControlOperation for CreateProject {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CREATE_PROJECT);
 }
 
 /// `list_samples`: list the sample projects a new project can be created from.
@@ -240,4 +253,5 @@ impl ControlOperation for ListSamples {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_SAMPLES);
 }

@@ -34,14 +34,14 @@ use super::{
 /// `run_copy_*` call so `new()` stays infallible. Single-threaded
 /// caller convention; future concurrent callers serialise through
 /// the inner [`Mutex`] (correct, just less concurrent than
-/// thread-local pools — see issue #620 AI Agent Notes).
+/// thread-local pools).
 pub struct InProcessCpuReadbackCopyTrigger<D: VulkanRhiDevice> {
     device: Arc<D>,
     submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
     /// Counts the number of times the persistent submit context was
     /// (re)created — incremented on lazy-init and on rebuild after
     /// device loss. Tests assert this stays at 1 after N submits to
-    /// lock the amortisation contract from #620.
+    /// lock the amortisation contract.
     submit_ctx_create_count: AtomicUsize,
 }
 
@@ -61,7 +61,7 @@ impl<D: VulkanRhiDevice> InProcessCpuReadbackCopyTrigger<D> {
     /// — driver-loss recovery would bump it).
     ///
     /// Hidden from the public docs because callers shouldn't depend
-    /// on it; tests use it to lock #620's amortisation invariant.
+    /// on it; tests use it to lock its amortisation invariant.
     #[doc(hidden)]
     pub fn submit_pool_create_count(&self) -> usize {
         self.submit_ctx_create_count.load(Ordering::Relaxed)
@@ -258,13 +258,13 @@ impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
             .signal_semaphore_infos(&signal_infos)
             .build();
 
-        unsafe {
-            self.device
-                .submit_to_queue(queue, &[submit], submit_ctx.fence)
-        }
-        .map_err(|e| AdapterError::BackendRejected {
-            reason: format!("submit_to_queue: {e}"),
-        })?;
+        submit_ctx
+            .submit_carrying_the_fence(|fence| unsafe {
+                self.device.submit_to_queue(queue, &[submit], fence)
+            })
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("submit_to_queue: {e}"),
+            })?;
 
         Ok(ctx.suggested_signal_value)
     }

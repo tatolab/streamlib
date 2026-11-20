@@ -95,6 +95,8 @@ toml.workspace = true
 tracing-subscriber.workspace = true
 # The project archive tests zip a project to import it.
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# The convert node tests link through the built-in conversions, as a runtime registers them.
+streamlib-media-builtins = { path = "../streamlib-media-builtins" }
 # The media facts tests import a real PNG.
 image = { version = "0.25", default-features = false, features = ["png"] }
 

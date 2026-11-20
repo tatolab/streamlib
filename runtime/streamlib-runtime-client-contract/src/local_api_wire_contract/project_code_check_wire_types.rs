@@ -18,19 +18,21 @@ pub struct ProjectCodeCheckResult {
     pub checks: Vec<ProjectCodeCheckRun>,
     /// Every finding of every check, in the order each check found them.
     pub findings: Vec<ProjectCodeCheckFinding>,
-    /// Each file a check finished, with the hash of the bytes it checked. A file a check did
-    /// not finish is not listed.
+    /// Each file a check finished, once, with the hash of the bytes it checked. A file no check
+    /// finished is not listed.
     pub files_checked: Vec<ProjectFileChecked>,
 }
 
 impl ProjectCodeCheckResult {
     /// The answer of `checks` and the `findings` and `files_checked` they gave, its verdict
-    /// derived from them.
+    /// derived from them, and a file two checks finished listed once, as the first listed it.
     pub fn of(
         checks: Vec<ProjectCodeCheckRun>,
         findings: Vec<ProjectCodeCheckFinding>,
-        files_checked: Vec<ProjectFileChecked>,
+        mut files_checked: Vec<ProjectFileChecked>,
     ) -> Self {
+        let mut paths_listed = std::collections::BTreeSet::new();
+        files_checked.retain(|file| paths_listed.insert(file.path.clone()));
         let verdict = if findings
             .iter()
             .any(|finding| finding.severity == ProjectCodeCheckSeverity::Error)
@@ -78,6 +80,21 @@ pub enum ProjectCodeCheckKind {
     /// node: each declaration it refuses, each module that does not import, and each node
     /// declared in a retired form.
     PythonNodeDeclarations,
+    /// Each `tatolab_view.json` of the project's own views, read as the runtime reads it when
+    /// the view opens: each one that does not open, and each port still declared by the older
+    /// `family` field, with the `pin_type` to write. And the project's own
+    /// `node_ui/tatolab_node_ui.json`: one that does not read, and each entry that registers what
+    /// only another module may.
+    ExtensionManifest,
+    /// Each `.ts` file of the project's own views and of its `node_ui` folder, type-checked against
+    /// the extension SDK kit with its strict options, each control tied to the class type its
+    /// manifest entry declares: each error the compiler reports, at its file and line, coded by
+    /// the compiler as `TS2322`. A `.tsx` file is an error.
+    ExtensionTypes,
+    /// The same files, read by the linter with the kit's strict rules, `vendor/` left out: each
+    /// broken rule, coded by the rule as `typescript(no-explicit-any)`. A `.js`, `.mjs` or `.map`
+    /// file outside `vendor/` is a warning naming `.ts`.
+    ExtensionLint,
 }
 
 /// How one check ended. The set grows: a state a client does not know reads as `not_checked`.
@@ -133,7 +150,8 @@ pub struct ProjectCodeCheckFinding {
     pub check: ProjectCodeCheckKind,
     /// What was found, for a caller to branch on: the code the declaration reader refused with,
     /// such as `value_input_has_no_default`, `module_does_not_import` for a module that does not
-    /// import, or `declaration_retired` for a node declared in a retired form.
+    /// import, `declaration_retired` for a node declared in a retired form, or
+    /// `port_declared_by_family` for a view's port its manifest declares by `family` alone.
     pub finding_code: String,
     /// How much it matters.
     pub severity: ProjectCodeCheckSeverity,

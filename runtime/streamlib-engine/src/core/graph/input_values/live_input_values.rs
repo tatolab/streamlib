@@ -5,7 +5,7 @@
 //! node, link or port, and the value each input reads while no link feeds it: its live value,
 //! else its saved one, else its declared default.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use parking_lot::RwLock;
 use serde_json::{Map, Value};
@@ -14,9 +14,14 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 use uuid::Uuid;
 
+use super::bundle_input_read::{
+    ValuesABundleInputHolds, the_bundle_members_of, the_live_members_over_the_held_ones,
+};
 use super::live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime};
-use crate::core::graph::{Graph, GraphNode, PortInfo, WhyTheNodeLeaves};
+use crate::core::graph::{
+    Graph, GraphNode, PortInfo, WhatTheLinksIntoAnInputFeed, WhyTheNodeLeaves,
+};
 use crate::core::pubsub::RuntimeEvent;
 
 /// The values set live on one stream's inputs, by node UUID and then input, each with the
@@ -85,6 +90,29 @@ impl LiveInputValuesOfAStream {
             project_store.forget(node, input);
         }
         before.map(|before| before.value)
+    }
+
+    /// Set `value` live on input `input` of `node`, or on its member `member` when one is
+    /// named, as [`Self::set`] does: a member set changes that member of the input's live value
+    /// alone, so a bundle input's live value holds the members set live. Answers the input's
+    /// whole live value before.
+    pub fn set_on_the_input_or_its_member(
+        &self,
+        node: Uuid,
+        input: &str,
+        member: Option<&str>,
+        value: Option<Value>,
+        lifetime: NodeValueLifetime,
+    ) -> Option<Value> {
+        let value = match member {
+            None => value,
+            Some(member) => streamlib_project_repository::the_input_value_after_the_set(
+                self.value_of(node, input),
+                Some(member),
+                value.as_ref(),
+            ),
+        };
+        self.set(node, input, value, lifetime)
     }
 
     /// Hold `value`, which the project's store keeps for input `input` of `node`, as the live
@@ -172,13 +200,31 @@ impl LiveInputValuesOfAStream {
     /// leaves says: removed, every one, the project's store forgetting each `kept` one; torn
     /// down at a Stop, to be put back, each on a `reset` input, the `kept` ones held across.
     pub fn forget_the_node(&self, node: Uuid, why: WhyTheNodeLeaves) {
+        self.forget_the_node_but_the_inputs(node, why, &HashSet::new());
+    }
+
+    /// [`Self::forget_the_node`], keeping the value set live on each of `inputs_kept`, which a
+    /// node holding `node`'s UUID after it still has.
+    pub(crate) fn forget_the_node_but_the_inputs(
+        &self,
+        node: Uuid,
+        why: WhyTheNodeLeaves,
+        inputs_kept: &HashSet<String>,
+    ) {
         let forgotten = {
             let mut values = self.values.write();
             match why {
-                WhyTheNodeLeaves::Removed => values.remove(&node),
+                WhyTheNodeLeaves::Removed if inputs_kept.is_empty() => values.remove(&node),
+                WhyTheNodeLeaves::Removed => values.get_mut(&node).map(|values_of_the_node| {
+                    values_of_the_node
+                        .extract_if(.., |input, _| !inputs_kept.contains(input))
+                        .collect()
+                }),
                 WhyTheNodeLeaves::TornDownAtAStop => {
                     if let Some(values_of_the_node) = values.get_mut(&node) {
-                        values_of_the_node.retain(|_, live| live.lifetime.is_kept());
+                        values_of_the_node.retain(|input, live| {
+                            live.lifetime.is_kept() || inputs_kept.contains(input)
+                        });
                         if values_of_the_node.is_empty() {
                             values.remove(&node);
                         }
@@ -248,20 +294,42 @@ pub(crate) fn the_read_of_an_input_a_link_feeds() -> InputValueReadOnTheWire {
     InputValueReadOnTheWire {
         value: None,
         value_comes_from: Some(InputValueComesFromOnTheWire::Wire),
+        member_values: None,
     }
 }
 
-/// The value input `port` of `node` in `graph` reads, `is_linked` when a link feeds it: wire;
-/// else its live value, its saved one, which is its config field's for a config field the node
-/// exposes as an input, or its declared default; else nothing. `None` for an input that takes
-/// no stored value and no link feeds.
+/// The value input `port` of `node` in `graph` reads, `fed` saying what the links into it feed:
+/// wire, while a link feeds the whole input; else its live value, its saved one, which is its config field's for a config field the node
+/// exposes as an input, or its declared default; else nothing. A bundle input reads each member
+/// so alone, as `member_values`, `wire` for a member a link ends at. `None` for an input that takes no stored value and no link
+/// feeds.
 pub(crate) fn the_value_an_input_reads(
     graph: &Graph,
     node: &GraphNode,
     port: &PortInfo,
-    is_linked: bool,
+    fed: &WhatTheLinksIntoAnInputFeed,
 ) -> Option<InputValueReadOnTheWire> {
-    if is_linked {
+    if let Some(members) = the_bundle_members_of(port)
+        && !node.is_an_exposed_config_field_input(&port.name)
+    {
+        if !fed.anything() && !the_input_port_takes_a_value(node.node_kind(), port) {
+            return None;
+        }
+        let live = graph
+            .live_input_values()
+            .value_of(node.node_uuid, &port.name);
+        let held = ValuesABundleInputHolds {
+            live: live.as_ref(),
+            saved: node.pins.get(&port.name),
+            input_default: port.pin_default.as_ref(),
+        };
+        return Some(InputValueReadOnTheWire {
+            value: None,
+            value_comes_from: None,
+            member_values: Some(held.each_member_read(members, fed)),
+        });
+    }
+    if fed.the_whole_input() {
         return Some(the_read_of_an_input_a_link_feeds());
     }
     let exposed_config_field = node.is_an_exposed_config_field_input(&port.name);
@@ -291,12 +359,41 @@ pub(crate) fn the_value_an_input_reads(
         Some((value, value_comes_from)) => InputValueReadOnTheWire {
             value: Some(value),
             value_comes_from: Some(value_comes_from),
+            member_values: None,
         },
         None => InputValueReadOnTheWire {
             value: Some(Value::Null),
             value_comes_from: None,
+            member_values: None,
         },
     })
+}
+
+/// The value input `port` of `node` in `graph` reads while no link feeds it, as its node is
+/// handed it: what [`the_value_an_input_reads`] renders, and for a bundle input the bundle its
+/// members read. `None` when it reads nothing.
+fn the_value_an_unlinked_input_is_handed(
+    graph: &Graph,
+    node: &GraphNode,
+    port: &PortInfo,
+) -> Option<Value> {
+    if let Some(members) = the_bundle_members_of(port) {
+        if !the_input_port_takes_a_value(node.node_kind(), port) {
+            return None;
+        }
+        let live = graph
+            .live_input_values()
+            .value_of(node.node_uuid, &port.name);
+        return ValuesABundleInputHolds {
+            live: live.as_ref(),
+            saved: node.pins.get(&port.name),
+            input_default: port.pin_default.as_ref(),
+        }
+        .the_bundle_read(members);
+    }
+    the_value_an_input_reads(graph, node, port, &WhatTheLinksIntoAnInputFeed::default())?
+        .value
+        .filter(|value| !value.is_null())
 }
 
 /// The value each input of `node` in `graph` reads while no link feeds it, by input: its live
@@ -309,51 +406,90 @@ pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<
         .iter()
         .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
         .filter_map(|port| {
-            let value = the_value_an_input_reads(graph, node, port, false)?.value?;
-            (!value.is_null()).then(|| (port.name.clone(), value))
+            the_value_an_unlinked_input_is_handed(graph, node, port)
+                .map(|value| (port.name.clone(), value))
         })
         .collect()
 }
 
 /// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now, under
-/// the input's current name; `None` when the node has no such input.
+/// the input's current name; none when the node has no such input. A bundle input announces a
+/// change of each member, or of `member` alone when one is named, each naming its member.
 pub(crate) fn the_input_value_change(
     graph: &Graph,
     node: &GraphNode,
     input: &str,
-) -> Option<RuntimeEvent> {
-    let port = node.input_port(input)?;
-    Some(RuntimeEvent::InputValueDidChange {
-        node: node.node_uuid,
-        input: port.name.clone(),
-        value_read: the_value_an_input_reads(
-            graph,
-            node,
-            port,
-            graph.link_into(&node.id, &port.name).is_some(),
-        ),
-    })
+    member: Option<&str>,
+) -> Vec<RuntimeEvent> {
+    let Some(port) = node.input_port(input) else {
+        return Vec::new();
+    };
+    let value_read = the_value_an_input_reads(
+        graph,
+        node,
+        port,
+        &WhatTheLinksIntoAnInputFeed::of(graph, &node.id, &port.name),
+    );
+    let Some(member_values) = value_read
+        .as_ref()
+        .and_then(|read| read.member_values.clone())
+    else {
+        return vec![RuntimeEvent::InputValueDidChange {
+            node: node.node_uuid,
+            input: port.name.clone(),
+            member: None,
+            value_read,
+        }];
+    };
+    member_values
+        .into_iter()
+        .filter(|read| member.is_none_or(|member| read.member == member))
+        .map(|read| RuntimeEvent::InputValueDidChange {
+            node: node.node_uuid,
+            input: port.name.clone(),
+            member: Some(read.member),
+            value_read: Some(InputValueReadOnTheWire {
+                value: read.value,
+                value_comes_from: read.value_comes_from,
+                member_values: None,
+            }),
+        })
+        .collect()
 }
 
 /// The pin values `node` of `graph` reads, each value set live on one of its inputs over the
-/// saved one.
+/// saved one; on a bundle input, each member set live over that member alone.
 pub(crate) fn the_pin_values_with_the_live_ones_over_them(
     graph: &Graph,
     node: &GraphNode,
 ) -> Map<String, Value> {
     let mut pin_values = node.pins.clone();
-    pin_values.extend(graph.live_input_values().values_of_the_node(node.node_uuid));
+    for (input, live) in graph.live_input_values().values_of_the_node(node.node_uuid) {
+        let is_a_bundle = node
+            .input_port(&input)
+            .and_then(the_bundle_members_of)
+            .is_some();
+        let read = if is_a_bundle {
+            the_live_members_over_the_held_ones(pin_values.get(&input), live)
+        } else {
+            live
+        };
+        pin_values.insert(input, read);
+    }
     pin_values
 }
 
-/// One value a live set makes: the node, by UUID, its input, and the value, `None` taking the
-/// input's live value off. A set of no value on a Trigger input fires it once.
+/// One value a live set makes: the node, by UUID, its input, the member of a bundle input it
+/// names, and the value, `None` taking the input's or the member's live value off. A set of no
+/// value on a Trigger input fires it once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputValueToSetLive {
     /// The node, by UUID.
     pub node: Uuid,
     /// The input, by name.
     pub input: String,
+    /// The member of a bundle input the value is set on, by name; `None` sets the whole input.
+    pub member: Option<String>,
     /// The value, `None` taking the live value off.
     pub value: Option<Value>,
 }
@@ -408,6 +544,20 @@ pub enum LiveInputValueSetRefusal {
     },
     /// A helper or island reading one of the values, or a node one fires, was not handed it.
     NotHandedOver(crate::core::Error),
+}
+
+/// Whether a live set of `member` of an input, or of the whole input when `member` is `None`,
+/// replaces a value an earlier set of the same transaction made on that input, the earlier sets
+/// having set `members_set_before`, each `None` for the whole input: a set of the whole input
+/// replaces anything set on it, and a set of a member replaces the whole input and that member,
+/// while sets of two members of one bundle replace neither.
+pub fn a_live_set_replaces_an_earlier_one(
+    members_set_before: &[Option<&str>],
+    member: Option<&str>,
+) -> bool {
+    members_set_before
+        .iter()
+        .any(|member_set| member.is_none() || member_set.is_none() || *member_set == member)
 }
 
 /// Why a live set naming input `input` of the node named `node_name` more than once is refused:

@@ -199,11 +199,16 @@ pub struct InputValueChangedNotificationParams {
     pub node: String,
     /// The input, by name.
     pub input: String,
-    /// The value the input reads now, as `graph` renders it: null when a link feeds it or it
-    /// reads nothing.
+    /// The member of a bundle input whose value changed, by name, as each row of `graph`'s
+    /// `member_values` names it; named for every change of a bundle input, absent for any other
+    /// input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    /// The value the input, or its member `member`, reads now, as `graph` renders it: null when
+    /// a link feeds it or it reads nothing.
     pub value: Option<serde_json::Value>,
-    /// Where `value` comes from; `wire` when a link feeds the input, absent when it reads
-    /// nothing.
+    /// Where `value` comes from; `wire` when a link feeds the input or the member, absent when
+    /// it reads nothing.
     pub value_comes_from: Option<InputValueComesFromOnTheWire>,
 }
 

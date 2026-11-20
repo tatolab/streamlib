@@ -313,6 +313,7 @@ fn a_node_type_source_spells_its_origin_flat_and_keeps_a_null_default() {
             "line": 4,
         }],
         "graph_generators": [],
+        "named_pin_types": [],
         "unreadable_modules": [],
     });
 
@@ -467,6 +468,11 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
                      "delivery_profile": "newest", "pin_default": null, "value": null},
                     {"name": "video", "description": "", "port_kind": "data",
                      "delivery_profile": "newest"},
+                    {"name": "reading", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest", "member_values": [
+                        {"member": "level", "value": 1.0, "value_comes_from": "live"},
+                        {"member": "label", "value": null},
+                     ]},
                 ],
                 "outputs": [
                     {"name": "out", "description": "", "port_kind": "data",
@@ -489,7 +495,8 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         "links": [{"id": "L1", "source": {"node": "a", "port": "out"},
                    "target": {"node": "mixer", "port": "level"}, "capacity": 4,
                    "state": "wired", "free_conversion": true,
-                   "warnings": [{"warning": "vector_read_as_a_color"}],
+                   "warnings": [{"warning": "vector_read_as_a_color",
+                                 "words": "a Vector is read as a Color"}],
                    "components": {"state": "Wired"}}],
         "clock": {"mode": "stepped", "step_ns": 1000, "pace": null, "stop_after_steps": 3},
         "machine": "rig",
@@ -519,6 +526,7 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             Some(InputValueComesFromOnTheWire::Wire),
             None,
             None,
+            None,
         ]
     );
     assert_eq!(
@@ -526,6 +534,7 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         Some(InputValueReadOnTheWire {
             value: Some(serde_json::Value::Null),
             value_comes_from: None,
+            member_values: None,
         }),
         "an input reading nothing reads a null value"
     );
@@ -538,6 +547,26 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         "an input with neither key, and an output, read no value"
     );
     assert_eq!(
+        inputs[6].value_read,
+        Some(InputValueReadOnTheWire {
+            value: None,
+            value_comes_from: None,
+            member_values: Some(vec![
+                BundleMemberValueReadOnTheWire {
+                    member: "level".to_owned(),
+                    value: Some(serde_json::json!(1.0)),
+                    value_comes_from: Some(InputValueComesFromOnTheWire::Live),
+                },
+                BundleMemberValueReadOnTheWire {
+                    member: "label".to_owned(),
+                    value: Some(serde_json::Value::Null),
+                    value_comes_from: None,
+                },
+            ]),
+        }),
+        "a bundle input reads each member alone, a member reading nothing a null value"
+    );
+    assert_eq!(
         inputs
             .iter()
             .map(|input| input.pin_default.clone())
@@ -548,6 +577,7 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             Some(serde_json::json!(0.0)),
             None,
             Some(serde_json::Value::Null),
+            None,
             None
         ],
         "a declared null default reads apart from no default"
@@ -560,8 +590,10 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
     );
     assert_eq!(
         link.marks.warnings,
-        [PinLinkWarningOnTheWire::VectorReadAsAColor],
-        "a warned link carries its warnings"
+        [PinLinkWarningOnTheWire::VectorReadAsAColor {
+            words: "a Vector is read as a Color".to_owned()
+        }],
+        "a warned link carries its warnings and their words"
     );
     assert_eq!(
         graph.nodes[0].components.state,
@@ -638,6 +670,31 @@ fn each_node_kind_and_language_is_named_as_it_is_written() {
     for language in FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE {
         assert_eq!(serde_json::to_value(language).unwrap(), language.name());
     }
+}
+
+/// A node a newer runtime inserted for a reason this client does not know still reads as
+/// inserted, its node type kept, the reason read as `for_another_reason`.
+///
+/// Mental-revert: a reason read only among the ones this client knows fails the flattened
+/// `inserted`, which then reads as absent, the node as one an operation added.
+#[test]
+fn a_node_inserted_for_a_reason_this_client_does_not_know_still_reads_as_inserted() {
+    let added: GraphTransactionAddedNode = serde_json::from_value(serde_json::json!({
+        "stream": "main-1a2b3c",
+        "node": "7f3e2d1c-0000-4000-8000-000000000001",
+        "name": "splitbundle",
+        "node_type": "tatolab.stream:SplitBundle",
+        "inserted_because": "splits_a_bundle",
+    }))
+    .unwrap();
+
+    assert_eq!(
+        added.inserted,
+        Some(InsertedNodeOnTheWire {
+            node_type: "tatolab.stream:SplitBundle".to_owned(),
+            inserted_because: GraphTransactionNodeInsertedBecause::ForAnotherReason,
+        })
+    );
 }
 
 #[test]

@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use streamlib_runtime_client_contract::local_api_wire_contract::GraphTransactionInputOverriddenByALink;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
+};
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
@@ -14,7 +16,7 @@ use crate::project_file::ProjectImport;
 use crate::project_file::TatolabProjectFile;
 use crate::project_file_access::ProjectRelativeFilePath;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
-use crate::stream_graph_document::StreamGraphOperation;
+use crate::stream_graph_document::{StreamGraphDocumentLink, StreamGraphOperation};
 
 /// Who a transaction is by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -795,6 +797,35 @@ pub struct ProjectTransaction {
     /// named it; an action sent again under its key is answered with them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    /// Each node a `connect` of its actions inserted on its link, and why, as their answer named
+    /// it; an action sent again under its key is answered with them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes_inserted_on_links: Vec<ProjectTransactionNodeInsertedOnALink>,
+    /// Each link its actions made without judging it, and why, as their answer named it; an
+    /// action sent again under its key is answered with them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links_made_unjudged: Vec<ProjectTransactionLinkMadeUnjudged>,
+}
+
+/// A link an action made without judging it, on the stream asset `stream` as that stream's
+/// document holds it, and why, in the runtime's words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTransactionLinkMadeUnjudged {
+    /// The stream asset whose document holds the link.
+    pub stream: Uuid,
+    /// The link, as that document holds it.
+    pub link: StreamGraphDocumentLink,
+    /// Why it was made without being judged.
+    pub why: String,
+}
+
+/// A node a `connect` inserted on the link it asked for, by its UUID, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTransactionNodeInsertedOnALink {
+    /// The node's UUID.
+    pub node: Uuid,
+    /// Why the `connect` inserted it.
+    pub inserted_because: GraphTransactionNodeInsertedBecause,
 }
 
 /// What the caller of a transaction sent, and what the answer it was sent named beside the
@@ -805,6 +836,10 @@ pub struct ProjectTransactionAsSentAndAnswered {
     pub actions_as_sent: Vec<ProjectAction>,
     /// Each input value they set that a link overrides.
     pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    /// Each node a `connect` of theirs inserted on its link, and why.
+    pub nodes_inserted_on_links: Vec<ProjectTransactionNodeInsertedOnALink>,
+    /// Each link they made without judging it, and why.
+    pub links_made_unjudged: Vec<ProjectTransactionLinkMadeUnjudged>,
 }
 
 impl ProjectTransaction {

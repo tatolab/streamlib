@@ -280,6 +280,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   create_node_file(params: ControlOperations["create_node_file"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["create_node_file"]["result"]>;
   /**
+   * Create a control or a node body in a project from the kit's template and register it, as one transaction.
+   */
+  create_node_ui_element(params: ControlOperations["create_node_ui_element"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["create_node_ui_element"]["result"]>;
+  /**
    * Write one file of a project, as one transaction.
    */
   write_project_file(params: ControlOperations["write_project_file"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_project_file"]["result"]>;
@@ -292,7 +296,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   list_project_node_types(params: ControlOperations["list_project_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_types"]["result"]>;
   /**
-   * List every built-in pin type, how each is written, and what converts it.
+   * List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.
    */
   list_pin_types(params: ControlOperations["list_pin_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_pin_types"]["result"]>;
   /**
@@ -311,6 +315,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    * List the Tato Studio views a project brings.
    */
   list_project_views(params: ControlOperations["list_project_views"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_views"]["result"]>;
+  /**
+   * List the controls and node bodies a project and its imports register.
+   */
+  list_project_node_ui_elements(params: ControlOperations["list_project_node_ui_elements"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_ui_elements"]["result"]>;
   /**
    * Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.
    */

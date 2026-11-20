@@ -6,17 +6,15 @@
 //! output resolves from its node's config.
 
 use super::pin_type_link_checks::ALinkConnected;
-use super::{
-    Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef,
-    PendingDeletionComponent,
-};
+use super::pin_type_resolution::{PinTypeInItsGraph, the_pin_type_of_a_port_in_its_graph};
+use super::{Graph, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::descriptors::{
-    PortFamilyDeclaration, PortFamilyLinkEndpoint, PortFamilyLinkRefusal,
-    refusal_of_a_link_between_port_families,
+    NamedPinTypeImportPath, PinType, PortFamilyDeclaration, PortFamilyLinkEndpoint,
+    PortFamilyLinkRefusal, refusal_of_a_link_between_port_families,
 };
 use std::collections::HashSet;
 
-use crate::core::{Error, Result};
+use crate::core::{Error, PortDirection, Result};
 
 fn output_port_family<'node>(
     node: &'node GraphNode,
@@ -71,7 +69,7 @@ pub(crate) fn the_outputs_a_link_carries_on<'graph>(
         let links_into_the_followed_input = graph.traversal().e(()).iter().filter(|link| {
             link.to_port().node_run_id() == &node.id
                 && link.to_port().port_name() == followed_input_port
-                && !link.has::<PendingDeletionComponent>()
+                && graph.stands(link)
         });
         for link_into_the_followed_input in links_into_the_followed_input {
             if let Some(upstream_node) = graph
@@ -134,8 +132,7 @@ pub(crate) fn the_inputs_an_input_is_carried_on_to<'graph>(
                 .out_e()
                 .iter()
                 .filter(|link| {
-                    link.source().port_name() == following_output.name
-                        && !link.has::<PendingDeletionComponent>()
+                    link.source().port_name() == following_output.name && graph.stands(link)
                 });
             for link_out in links_out_of_the_following_output {
                 let Some(downstream_node) = graph
@@ -241,6 +238,11 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     if output_port_family(from_node, from.port_name()).is_none() {
         return Ok(taken);
     }
+    refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(
+        graph,
+        (from_node, from),
+        (to_node, to),
+    )?;
     let inputs_carried_on_to = the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name());
     for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
         if let Some(refusal) =
@@ -258,6 +260,68 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
         )?;
     }
     Ok(taken)
+}
+
+/// Refuse a link from `from` to `to` when one end carries a named type and the other is
+/// untyped, naming the type and both ends: a named type travels as the bytes its class packs,
+/// which belong to no family, so only a typed pin reads them.
+fn refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(
+    graph: &Graph,
+    (from_node, from): (&GraphNode, &OutputLinkPortRef),
+    (to_node, to): (&GraphNode, &InputLinkPortRef),
+) -> Result<()> {
+    let pin_type_of = |node: &GraphNode, port_name: &str, direction: PortDirection| {
+        let port = match direction {
+            PortDirection::Input => node.input_port(port_name),
+            PortDirection::Output => node.output_port(port_name),
+        }?;
+        Some(the_pin_type_of_a_port_in_its_graph(
+            graph, node, port, direction,
+        ))
+    };
+    let (Some(output_pin_type), Some(input_pin_type)) = (
+        pin_type_of(from_node, from.port_name(), PortDirection::Output),
+        pin_type_of(to_node, to.port_name(), PortDirection::Input),
+    ) else {
+        return Ok(());
+    };
+    let output = format!("`{}.{}`", from_node.display_name, from.port_name());
+    let input = format!("`{}.{}`", to_node.display_name, to.port_name());
+    let refusal = match (&output_pin_type, &input_pin_type) {
+        (_, PinTypeInItsGraph::Untyped) => the_named_type_among(&output_pin_type).map(|named| {
+            let named = named.as_str();
+            format!(
+                "cannot link {output} to {input}: {output} carries the named type `{named}`, \
+                 whose bytes only a pin typed with it reads, and {input} states no pin type. \
+                 To fix: link it to an input typed `{named}`"
+            )
+        }),
+        (PinTypeInItsGraph::Untyped, _) => the_named_type_among(&input_pin_type).map(|named| {
+            let named = named.as_str();
+            format!(
+                "cannot link {output} to {input}: {input} reads the named type `{named}`, which \
+                 only a pin typed with it writes, and {output} states no pin type. To fix: link \
+                 it from an output typed `{named}`"
+            )
+        }),
+        _ => None,
+    };
+    refusal.map_or(Ok(()), |words| Err(Error::InvalidLink(words)))
+}
+
+/// The first named type among what a port carries in its graph; `None` when it carries none.
+pub(super) fn the_named_type_among(
+    pin_type: &PinTypeInItsGraph,
+) -> Option<&NamedPinTypeImportPath> {
+    let pin_types = match pin_type {
+        PinTypeInItsGraph::Is(pin_type) => std::slice::from_ref(pin_type),
+        PinTypeInItsGraph::OneOf(pin_types) => pin_types.as_slice(),
+        PinTypeInItsGraph::Any | PinTypeInItsGraph::Untyped => &[],
+    };
+    pin_types.iter().find_map(|pin_type| match pin_type {
+        PinType::Named { named_pin_type } => Some(named_pin_type),
+        _ => None,
+    })
 }
 
 /// Each input what arrives at an input is carried on to, with the following output it leaves
@@ -311,8 +375,10 @@ pub(crate) fn refuse_what_a_link_carries_on_past_its_input(
 
 /// Refuse a config update `config_to_apply` on node `node_run_id` under which a link out of
 /// it, or what a passer carries on from one, would be refused by its families, names or codec.
-/// Its Image formats are not judged again: no config sets them, and a wired link has passed
-/// them or, a saved graph's, been kept despite them.
+/// Its Image formats are not judged again here: a wired link has passed them or, a saved
+/// graph's, been kept despite them, and the one node whose config sets them, a convert node
+/// whose output follows a setting, has its links judged under the new config by
+/// [`super::refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse`].
 pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
     graph: &Graph,
     node_run_id: &NodeRunId,
@@ -326,7 +392,7 @@ pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_ref
         .v(node_run_id)
         .out_e()
         .iter()
-        .filter(|link| !link.has::<PendingDeletionComponent>());
+        .filter(|link| graph.stands(link));
     for link in outbound_links {
         let Some(to_node) = graph.traversal().v(link.to_port().node_run_id()).first() else {
             continue;

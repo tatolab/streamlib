@@ -6,12 +6,14 @@
 //! the placed ports, the node types' ports or a list of ends, and changes nothing.
 
 use streamlib::sdk::runtime::graph_renders_and_commits_counted_for_a_test::commits_begun_of;
+use streamlib_node_schema::pin_type::PinLinkWarning;
 use streamlib_project_repository::GRAPH_INPUT_NODE_TYPE;
 
 use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
 use super::link_checked_before_it_is_made_tests::{
-    FRAMES_TYPE, FRAMES_UUID, MIX_UUID, REMAP_UUID, SECONDS_TYPE, SECONDS_UUID,
-    a_project_whose_main_stream_holds_function_nodes, the_link,
+    FRAMES_TYPE, FRAMES_UUID, MIX_UUID, REMAP_UUID, RGBA_TYPE, SECONDS_TYPE, SECONDS_UUID,
+    TINT_TYPE, a_project_whose_main_stream_holds_function_nodes,
+    register_the_link_check_node_types_once, the_link,
 };
 use super::*;
 
@@ -244,6 +246,49 @@ async fn a_node_types_port_answers_what_check_link_answers_for_a_placed_node_of_
         "no node is left placed"
     );
     assert_eq!(project.the_graph_document_of("main"), saved_before);
+}
+
+/// A Vector output checked against a placed Color input of the same meaning connects for free,
+/// warning that the Vector is read as a Color, in the words the runtime writes for that warning.
+///
+/// Mental-revert: a candidate's warning put on the wire without its sentence carries no `words`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_candidates_warning_carries_the_runtimes_words_for_it() {
+    const RGBA_UUID: &str = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
+    const TINT_UUID: &str = "b2b2b2b2-b2b2-4b2b-8b2b-b2b2b2b2b2b2";
+    register_the_link_check_node_types_once();
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [
+            { "id": RGBA_UUID, "name": "rgba", "type": RGBA_TYPE, "config": {} },
+            { "id": TINT_UUID, "name": "tint", "type": TINT_TYPE, "config": {} },
+        ],
+        "links": [],
+    }));
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+
+    let answer = engine
+        .the_candidates_checked(the_candidates(
+            json!(project.stream_asset_of("main")),
+            "output",
+            (RGBA_UUID, "rgba"),
+            json!({ "ends": [{ "kind": "placed_port", "node": TINT_UUID, "port": "color" }] }),
+            false,
+        ))
+        .await;
+
+    assert_eq!(
+        answer["candidates"][0]["check"],
+        json!({
+            "outcome": "connects_with_free_conversion",
+            "warnings": [{
+                "warning": "vector_read_as_a_color",
+                "words": PinLinkWarning::VectorReadAsAColor.to_string(),
+            }],
+        }),
+        "{answer}"
+    );
 }
 
 /// From an input, among an explicit list, a node type's output and a placed output are each

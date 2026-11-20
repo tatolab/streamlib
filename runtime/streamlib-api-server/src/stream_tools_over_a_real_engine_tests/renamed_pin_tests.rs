@@ -242,6 +242,7 @@ async fn an_edit_recorded_under_the_old_name_undoes_and_redoes_onto_the_renamed_
                 StreamGraphOperationOnAStream {
                     stream: project.stream_asset_of("main"),
                     graph_operation: StreamGraphOperation::SetNodeInputValue {
+                        member: None,
                         node: Uuid::parse_str(DIMMER_NODE_UUID).expect("a UUID"),
                         input: "level".to_owned(),
                         from: Some(json!(0.3)),

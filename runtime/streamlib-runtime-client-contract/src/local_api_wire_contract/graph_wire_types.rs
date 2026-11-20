@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::PinLinkMarksOnTheWire;
+
 /// The link a refused operation names, each end as the caller named it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -13,7 +15,8 @@ pub struct RefusedGraphLinkOnTheWire {
     pub target: GraphLinkEndOnTheWire,
 }
 
-/// One end of a link a graph tool names: a node by its UUID and one of its ports.
+/// One end of a link a graph tool names: a node by its UUID, one of its ports, and the member of
+/// a bundle port it starts at, if any.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphLinkEndOnTheWire {
@@ -21,6 +24,9 @@ pub struct GraphLinkEndOnTheWire {
     pub node: String,
     /// The port's name.
     pub port: String,
+    /// The member of a bundle port the link starts or ends at; absent for the whole port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
 }
 
 /// A node a graph transaction added.
@@ -36,6 +42,38 @@ pub struct GraphTransactionAddedNode {
     /// The `as` its `add_node` gave it, which later operations of the transaction named it by.
     #[serde(rename = "as", default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Its node type and why the runtime inserted it on a link a `connect` asked for; absent on
+    /// a node an operation added.
+    #[serde(flatten)]
+    pub inserted: Option<InsertedNodeOnTheWire>,
+}
+
+/// A node the runtime inserted on a link a `connect` asked for: its node type and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct InsertedNodeOnTheWire {
+    /// Its node type, on a node a `connect` inserted.
+    pub node_type: String,
+    /// Why a `connect` inserted it on its link.
+    pub inserted_because: GraphTransactionNodeInsertedBecause,
+}
+
+/// Why a `connect` placed a node of its own on the link it asked for, the link carried through
+/// it. The set grows: a reason a client does not know reads as `for_another_reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
+#[serde(rename_all = "snake_case")]
+pub enum GraphTransactionNodeInsertedBecause {
+    /// The two ends' pin types connect only through this built-in convert node.
+    ConvertsPinTypes,
+    /// The link closes a loop of function nodes, which this `PreviousValue` node breaks.
+    ClosesALoop,
+    /// A reason this client does not know, which a newer runtime gave: in its answer, or in a
+    /// transaction it kept that an older runtime answers from history.
+    // `#[serde(other)]` holds only on the last variant, so a new reason goes above this one.
+    #[serde(other)]
+    ForAnotherReason,
 }
 
 /// A labelled group a graph transaction made.
@@ -76,6 +114,14 @@ pub struct GraphTransactionConnectedLink {
     /// Why a link reading `error` will carry nothing, in the refusing end's own words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
+    /// What the link converts and warns of, as the judgement of its two typed ends says.
+    #[serde(flatten)]
+    pub marks: PinLinkMarksOnTheWire,
+    /// Why the link was saved without its two ends being judged, when it was: inside a placed
+    /// stream, it reaches a node that runs as no node of its own, or one that is not built to
+    /// judge it, such as one whose type is not described.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_judged_because: Option<String>,
 }
 
 /// An input a graph transaction set a value on while a link feeds it, so the link's messages

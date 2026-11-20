@@ -5,6 +5,19 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE;
 
+/// The umask iceoryx2 0.10 holds the whole process under while it binds a
+/// listener's socket.
+pub(crate) const UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER: libc::mode_t = 0o177;
+
+/// The permission bits of the file or folder at `path`.
+pub(crate) fn mode_of(path: &std::path::Path) -> u32 {
+    std::fs::metadata(path)
+        .expect("the path's metadata")
+        .permissions()
+        .mode()
+        & 0o777
+}
+
 /// A temporary directory at exactly owner-only mode, whatever umask it was made under.
 pub(crate) fn a_temporary_directory_at_owner_only_mode() -> std::io::Result<tempfile::TempDir> {
     let temporary_directory = tempfile::tempdir()?;

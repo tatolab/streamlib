@@ -112,6 +112,23 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "{no_uv}; every stream whose project's .venv needs making is recorded failed"
         ),
     }
+    let extension_code_checkers =
+        crate::runtime_unit_executable_beside_tatolabd::extension_code_checkers_beside_this_one();
+    for no_code_checker in [
+        &extension_code_checkers.typescript_compiler,
+        &extension_code_checkers.linter,
+    ]
+    .into_iter()
+    .filter_map(|code_checker| code_checker.as_ref().err())
+    {
+        tracing::warn!("{no_code_checker}; a project's views and controls cannot be checked");
+    }
+    if let Err(checkers_refusal) = engine.set_extension_code_checkers(extension_code_checkers) {
+        return write_refusal_to_standard_error(&format!(
+            "the engine could not be handed what checks a project's views and controls: \
+             {checkers_refusal}"
+        ));
+    }
     if let Err(first_commit_refusal) =
         engine.set_created_project_first_commit(std::sync::Arc::new(|project_directory| {
             streamlib_project_repository::ProjectRepository::commit_a_written_project_as_its_first(

@@ -244,6 +244,11 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             listed["state"] == "failed" and listed["stream"] in ids_of_the_streams_the_run_took_in
             for listed in listed_streams
         ), f"`{stream_run.command_description}` left the runtime holding {listed_streams}"
+        graphs_of_the_streams_it_took_in = {
+            listed["stream"]: graph
+            for listed in listed_streams
+            if (graph := local_api.graph_of_a_stream_holding_one(listed["stream"])) is not None
+        }
         for project_directory_of_a_failed_stream in sorted(
             {listed["location"]["project_directory"] for listed in listed_streams if listed["location"]}
         ):
@@ -284,6 +289,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             tatolabd_stderr_text_during_the_run=tatolabd_stderr_text,
             tatolabd=tatolabd,
             tatolab_run=tatolab_run,
+            graphs_of_the_streams_it_took_in=graphs_of_the_streams_it_took_in,
         )
 
     return run

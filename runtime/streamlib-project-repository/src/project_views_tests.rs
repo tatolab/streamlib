@@ -98,7 +98,7 @@ fn a_view_folder_without_a_readable_manifest_is_listed_with_why_it_does_not_open
     a_view_folder_holding(
         workspace.path(),
         "late",
-        r#"{"contract": "1.1", "title": "Late", "entry": "index.html", "placement": "area"}"#,
+        r#"{"contract": "1.2", "title": "Late", "entry": "index.html", "placement": "area"}"#,
     );
     std::fs::write(workspace.path().join("views/notes.txt"), "not a view").unwrap();
 
@@ -131,7 +131,7 @@ fn a_view_folder_without_a_readable_manifest_is_listed_with_why_it_does_not_open
         refusals[2],
         (
             "acme-dj:late",
-            "`contract`: this runtime reads view contract 1.0."
+            "`contract`: this runtime reads view contract 1.1."
         )
     );
     assert_eq!(

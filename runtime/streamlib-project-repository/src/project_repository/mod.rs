@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::content_sha256::content_sha256_of;
 use crate::core_project_import::every_import_a_project_resolves;
 use crate::project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, DIRECTORIES_A_PROJECT_SCAN_SKIPS, GRAPH_DOCUMENT_FILE_SUFFIX,
@@ -19,15 +20,14 @@ use crate::project_asset::{
     read_every_asset_sidecar,
 };
 use crate::project_asset_file_bytes::{
-    AssetFileBytesRecorded, PROJECT_UPLOADS_DIRECTORY, content_sha256_of,
-    copy_the_file_into_the_uploads_hashing_it, is_a_sha256_digest,
-    the_bytes_recorded_of_the_file_at, the_upload_file_of,
+    AssetFileBytesRecorded, PROJECT_UPLOADS_DIRECTORY, copy_the_file_into_the_uploads_hashing_it,
+    is_a_sha256_digest, the_bytes_recorded_of_the_file_at, the_upload_file_of,
 };
 use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
 use crate::project_file_access::{
-    ProjectFileListed, ProjectRelativeFilePath, project_files_a_listing_shows,
+    ProjectFileListed, ProjectRelativeFilePath, project_files_listed_under_a_checked_folder,
 };
 use crate::project_history_repository::{
     PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit,
@@ -57,12 +57,14 @@ use crate::project_transaction::{
 };
 use crate::stream_document_upgrade::recorded_transaction::upgrade_recorded_transaction_in_place;
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_nodes_input_values_reference};
+use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 mod asset_effects;
 mod asset_operations;
 mod assets_and_transactions;
 mod creating_and_opening;
 mod imports_and_dependencies;
+mod node_ui_elements_created;
 mod project_files;
 mod stream_documents;
 mod undo_and_redo;
@@ -285,7 +287,7 @@ fn the_nearest_existing_ancestor_resolved(
 
 /// Copy the folder `source` and everything under it to `destination`, which must not exist.
 fn copy_a_folder_whole(source: &Path, destination: &Path) -> Result<(), ProjectRepositoryRefusal> {
-    std::fs::create_dir_all(destination)?;
+    create_directory_and_its_missing_parents_at_the_process_umask(destination)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
         let copied_to = destination.join(entry.file_name());
@@ -553,7 +555,7 @@ fn apply_operation_to_imports(
 
 fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
     }
     let partial = path.with_extension(format!("partial-{}", Uuid::new_v4()));
     if let Err(not_written) = std::fs::write(&partial, bytes) {

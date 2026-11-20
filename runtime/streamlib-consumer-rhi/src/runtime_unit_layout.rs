@@ -20,6 +20,16 @@ pub const BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "bin";
 /// unit's `bin/` and the app bundle's `Contents/MacOS` beside `tatolabd`.
 pub const RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME: &str = "uv";
 
+/// The TypeScript compiler a project's views and controls are checked with,
+/// relative to the directory `tatolabd` sits in. It reads its library files
+/// from the directory its own real path sits in, so they travel with it there.
+pub const RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY: &str =
+    "typescript/tsc";
+
+/// The linter a project's views and controls are checked with, beside
+/// `tatolabd`.
+pub const RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME: &str = "oxlint";
+
 /// The lend directory, relative to the runtime unit's root.
 pub const LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "lib/tatolab/lend";
 
@@ -160,6 +170,23 @@ pub fn runtime_client_package_directory_beside_the_lend(lend_directory: &Path) -
         lend_directory
             .parent()?
             .join(RUNTIME_CLIENT_PACKAGE_DIRECTORY_NAME),
+    )
+}
+
+/// The directory beside the lend that holds the extension SDK's kit: the declarations, strict
+/// options and rules a project's views and controls are checked against, as data. A Tato Studio
+/// places the kit its own SDK build wrote, so its runtime checks against what that Studio draws
+/// with.
+pub const EXTENSION_SDK_KIT_DIRECTORY_NAME: &str = "extension-sdk";
+
+/// The extension SDK kit's directory beside the lend at `lend_directory`, or `None` for a lend
+/// at the filesystem root: `lib/tatolab/extension-sdk/` in a runtime unit, and
+/// `Contents/Resources/extension-sdk/` in a macOS app bundle.
+pub fn extension_sdk_kit_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(EXTENSION_SDK_KIT_DIRECTORY_NAME),
     )
 }
 

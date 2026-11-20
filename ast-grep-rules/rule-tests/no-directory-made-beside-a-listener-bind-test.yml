@@ -1,0 +1,15 @@
+id: no-directory-made-beside-a-listener-bind
+valid:
+  - "fn f(p: &Path) -> io::Result<()> { create_directory_and_its_missing_parents_at_the_process_umask(p) }"
+  - "fn f(p: &Path) -> io::Result<()> { create_directory_and_its_missing_parents_at_mode(p, 0o700) }"
+  - "/// Not `std::fs::create_dir_all`.\nfn ok() {}"
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn make(p: &Path) { std::fs::create_dir_all(p).unwrap(); }
+    }
+invalid:
+  - "fn f(p: &Path) -> io::Result<()> { std::fs::create_dir_all(p) }"
+  - "fn f(p: &Path) -> io::Result<()> { fs::create_dir(p) }"
+  - "fn f(p: Option<&Path>) -> io::Result<()> { p.map_or(Ok(()), std::fs::create_dir_all) }"
+  - "use std::fs::create_dir_all;"

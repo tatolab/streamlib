@@ -3,27 +3,34 @@
 
 use super::*;
 
+/// A file a transaction writes whole: its bytes, and what it holds on disk now.
+pub(super) struct FileToWrite<'content> {
+    pub(super) path: ProjectRelativeFilePath,
+    pub(super) content: &'content [u8],
+    /// Its bytes on disk now; `None` for a new file.
+    pub(super) bytes_on_disk_now: Option<Vec<u8>>,
+    pub(super) replaced_a_file: bool,
+}
+
 impl ProjectRepository {
     /// Every file of the project under `under`, or the whole project, as a listing shows it.
+    /// A folder under the link to the core project the runtime carries is listed through it,
+    /// as a read is.
     pub fn list_project_files(
         &self,
         under: Option<&str>,
     ) -> Result<Vec<ProjectFileListed>, ProjectRepositoryRefusal> {
         let under = under.map(ProjectRelativeFilePath::parse).transpose()?;
-        project_files_a_listing_shows(&self.project_directory, under.as_ref())
+        if let Some(under) = &under {
+            self.refuse_a_symbolic_link_on_the_way_to_a_read(under)?;
+        }
+        project_files_listed_under_a_checked_folder(&self.project_directory, under.as_ref())
     }
 
     /// The bytes of the project's file at `path`, as they are on disk now.
     pub fn read_project_file(&self, path: &str) -> Result<Vec<u8>, ProjectRepositoryRefusal> {
         let path = ProjectRelativeFilePath::parse(path)?;
-        let core_project_directory_the_runtime_carries = self
-            .core_project_directory_the_runtime_carries
-            .as_ref()
-            .and_then(|where_it_is| where_it_is());
-        path.refuse_a_symbolic_link_on_the_way_to_a_read_under(
-            &self.project_directory,
-            core_project_directory_the_runtime_carries.as_deref(),
-        )?;
+        self.refuse_a_symbolic_link_on_the_way_to_a_read(&path)?;
         let on_disk = path.on_disk_under(&self.project_directory);
         if !on_disk.is_file() {
             return Err(ProjectRepositoryRefusal::NoSuchProjectFile(
@@ -31,6 +38,22 @@ impl ProjectRepository {
             ));
         }
         Ok(std::fs::read(on_disk)?)
+    }
+
+    /// Refuse a read or a listing of `path` through a symbolic link, save the link to the core
+    /// project the runtime carries.
+    fn refuse_a_symbolic_link_on_the_way_to_a_read(
+        &self,
+        path: &ProjectRelativeFilePath,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let core_project_directory_the_runtime_carries = self
+            .core_project_directory_the_runtime_carries
+            .as_ref()
+            .and_then(|where_it_is| where_it_is());
+        path.refuse_a_symbolic_link_on_the_way_to_a_read_under(
+            &self.project_directory,
+            core_project_directory_the_runtime_carries.as_deref(),
+        )
     }
 
     /// Write `content` to the project's file at `path` by `author` as one transaction, whose
@@ -74,25 +97,59 @@ impl ProjectRepository {
                 ProjectRepositoryRefusal::ProjectFileAlreadyHoldsThisContent(path.to_string()),
             );
         }
-        self.record_the_file_when_history_holds_other_bytes(&path, bytes_on_disk_now.as_deref())?;
-        let staged_at = format!("{PROJECT_FILE_WRITE_STAGING_DIRECTORY}/{}", Uuid::new_v4());
-        let staged_copy = self.project_directory.join(&staged_at);
-        write_file_whole(&staged_copy, content)?;
-        let applied = self.apply_and_commit_project_operations(
+        self.write_project_files_as_one_transaction(
             author,
             idempotency_key,
-            Vec::new(),
-            vec![ProjectOperation::File(
+            vec![FileToWrite {
+                path,
+                content,
+                bytes_on_disk_now,
+                replaced_a_file,
+            }],
+        )
+    }
+
+    /// Write each of `files` as one transaction by `author`, whose inverse puts back what each
+    /// held or takes each new one out; the caller has refused what the file verbs never write.
+    pub(super) fn write_project_files_as_one_transaction(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        files: Vec<FileToWrite<'_>>,
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        let mut staged_copies = Vec::new();
+        let mut operations = Vec::new();
+        let staged = files.into_iter().try_for_each(|file| {
+            self.record_the_file_when_history_holds_other_bytes(
+                &file.path,
+                file.bytes_on_disk_now.as_deref(),
+            )?;
+            let staged_at = format!("{PROJECT_FILE_WRITE_STAGING_DIRECTORY}/{}", Uuid::new_v4());
+            let staged_copy = self.project_directory.join(&staged_at);
+            write_file_whole(&staged_copy, file.content)?;
+            staged_copies.push(staged_copy);
+            operations.push(ProjectOperation::File(
                 ProjectFileOperation::WriteProjectFile {
-                    path,
+                    path: file.path,
                     content: ProjectFileContent::StagedCopy { staged_at },
-                    replaced_a_file,
+                    replaced_a_file: file.replaced_a_file,
                 },
-            )],
-            ProjectTransactionLineage::NewEdit,
-        );
-        if staged_copy.exists() {
-            let _ = std::fs::remove_file(&staged_copy);
+            ));
+            Ok::<_, ProjectRepositoryRefusal>(())
+        });
+        let applied = staged.and_then(|()| {
+            self.apply_and_commit_project_operations(
+                author,
+                idempotency_key,
+                Vec::new(),
+                operations,
+                ProjectTransactionLineage::NewEdit,
+            )
+        });
+        for staged_copy in staged_copies {
+            if staged_copy.exists() {
+                let _ = std::fs::remove_file(&staged_copy);
+            }
         }
         applied.map(ProjectActionApplyOutcome::AppliedNow)
     }

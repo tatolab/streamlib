@@ -302,6 +302,7 @@ where
         &channel,
         &notify_service,
         None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("the destination side wires");
 
@@ -366,6 +367,7 @@ impl NativeLinkWiredForLossCounting {
             &channel,
             &notify_service,
             None,
+            crate::iceoryx2::BundleMembersAtTheRead::default(),
         )
         .expect("the destination side wires");
 

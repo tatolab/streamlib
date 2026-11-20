@@ -104,6 +104,7 @@ fn a_settled_contract_reaches_graph_on_the_port_that_settled_it() {
         &channel,
         &notify_service,
         Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream),
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("a sentinel wires rather than refusing");
 
@@ -183,6 +184,7 @@ fn a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time() 
         1,
         &"L-helper-windowed".into(),
         Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream),
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect_err("a helper child cannot settle a sentinel")
     .to_string();
@@ -234,6 +236,7 @@ fn a_settled_contract_reaches_a_helper_placed_destination_as_five_values() {
         1,
         &"L-helper-settled".into(),
         Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(settled)),
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("a settled contract renders onto the envelope");
 
@@ -284,7 +287,7 @@ fn a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_bot
     // The first link is fine on its own.
     let second_link: LinkUniqueId = wired[1].as_str().into();
     let refusal = refuse_a_second_inbound_link_into_a_windowed_port(
-        &mut graph,
+        &graph,
         &dest_unique_id,
         "audio",
         &second_link,
@@ -316,7 +319,7 @@ fn the_one_inbound_link_a_windowed_port_takes_is_not_refused() {
         .to_string();
 
     refuse_a_second_inbound_link_into_a_windowed_port(
-        &mut graph,
+        &graph,
         &dest_id.as_str().into(),
         "audio",
         &link.as_str().into(),
@@ -362,7 +365,7 @@ fn a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link(
         .to_string();
 
     refuse_a_second_inbound_link_into_a_windowed_port(
-        &mut graph,
+        &graph,
         &dest_id.as_str().into(),
         "audio",
         &reconnecting.as_str().into(),

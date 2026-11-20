@@ -54,6 +54,15 @@ impl HostVulkanTexture {
             .contains(vk::ImageUsageFlags::TRANSFER_SRC)
     }
 
+    /// Whether the image was created with SAMPLED usage — the capability a
+    /// kernel binding it as a sampled image requires
+    /// (VUID-VkWriteDescriptorSet-descriptorType-00337).
+    pub fn supports_sampled_read(&self) -> bool {
+        self.vk_image_meta
+            .vk_image_usage_flags
+            .contains(vk::ImageUsageFlags::SAMPLED)
+    }
+
     /// Whether the image was created with STORAGE usage — the capability a
     /// compute kernel writing it as a storage image requires.
     pub fn supports_storage_write(&self) -> bool {

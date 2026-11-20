@@ -34,7 +34,7 @@ PROJECT_NODE_SOURCE = (
 from dataclasses import dataclass
 from typing import Annotated
 
-from tatolab.stream import Description, Image, Input, Output, State, Stateful, Time, node
+from tatolab.stream import Color, Description, Image, Input, Output, State, Stateful, Time, Vector2, node
 
 
 INVERSE_KINEMATICS_DESCRIPTION = "Solves joint angles for a target pose."
@@ -85,8 +85,10 @@ def ramp(rate: float, previous: State[Phase]) -> Stateful[Annotated[float, Descr
     description="Scales every channel by `amount`.",
 )
 @node.meta(category="Effects")
-@node.shader("float4 tint(ImageInput image, float amount) { return image.pixel * amount; }")
-def tint(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...
+@node.shader("float4 tint(ImageInput image, float amount, float4 hue, float2 shift) { return image.pixel * amount; }")
+def tint(
+    image: ImageFrame, amount: float = 1.0, hue: Color = Color(1, 1, 1), shift: Vector2 = Vector2(0, 0)
+) -> ImageFrame: ...
 
 
 def not_a_node(x: float) -> float:
@@ -271,7 +273,7 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     tint = node_types["nodes.inverse_kinematics:tint"]
     assert tint["kind"] == "shader"
     assert (tint["category"], tint["description"]) == ("Color", "Scales every channel by `amount`.")
-    assert [port["family"] for port in tint["inputs"]] == ["image", "channels"]
+    assert [port["family"] for port in tint["inputs"]] == ["image", "channels", "channels", "channels"]
     assert tint["outputs"] == [{"name": "result", "family": "image", "description": "", "annotation": "ImageFrame"}]
 
     assert project["graph_generators"] == [
@@ -391,6 +393,54 @@ def test_a_class_under_bare_node_is_listed_with_its_fields_and_pins_and_no_state
     assert blur["inputs"][0]["description"] == "The pictures."
     assert blur["inputs"][1]["pin_default"] == 4.0
     assert [(port["name"], port["family"]) for port in blur["outputs"]] == [("result", "image")]
+
+
+def test_a_named_pin_type_is_listed_by_its_import_path_and_description_from_source() -> None:
+    module_source = "\n".join(
+        [
+            "import tatolab.stream as stream",
+            "from tatolab.stream import named_pin_type",
+            "",
+            'BOX_WORDS = "A face found in a picture, as a box and a score."',
+            "",
+            "@named_pin_type(description=BOX_WORDS)",
+            "class FaceBox:",
+            "    @classmethod",
+            "    def from_bytes(cls, payload): ...",
+            "    def to_bytes(self): ...",
+            "",
+            "class Finder:",
+            '    @stream.named_pin_type(description="What the finder saw.")',
+            "    class Sighting:",
+            "        @classmethod",
+            "        def from_bytes(cls, payload): ...",
+            "        def to_bytes(self): ...",
+            "",
+            "class Undecorated:",
+            "    pass",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("faces.boxes", "faces/boxes.py", module_source)]
+    )
+
+    assert read["named_pin_types"] == [
+        {
+            "named_pin_type": "faces.boxes:FaceBox",
+            "description": "A face found in a picture, as a box and a score.",
+            "path": "faces/boxes.py",
+            "line": 7,
+        },
+        {
+            "named_pin_type": "faces.boxes:Finder.Sighting",
+            "description": "What the finder saw.",
+            "path": "faces/boxes.py",
+            "line": 14,
+        },
+    ]
+    assert read["node_types"] == []
 
 
 def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: Path) -> None:

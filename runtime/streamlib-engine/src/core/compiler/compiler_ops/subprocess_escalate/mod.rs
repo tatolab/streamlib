@@ -236,10 +236,10 @@ pub(crate) fn handle_escalate_op(
             Some(graphics::handle_run_graphics_draw(sandbox, rid, req))
         }
         EscalateRequest::RegisterAccelerationStructureBlas(req) => Some(
-            ray_tracing::handle_register_acceleration_structure_blas(sandbox, rid, req),
+            ray_tracing::handle_register_acceleration_structure_blas(sandbox, registry, rid, req),
         ),
         EscalateRequest::RegisterAccelerationStructureTlas(req) => Some(
-            ray_tracing::handle_register_acceleration_structure_tlas(sandbox, rid, req),
+            ray_tracing::handle_register_acceleration_structure_tlas(sandbox, registry, rid, req),
         ),
         EscalateRequest::RegisterRayTracingKernel(req) => Some(
             ray_tracing::handle_register_ray_tracing_kernel(sandbox, rid, req),
@@ -264,23 +264,6 @@ fn escalate_op_unavailable_on_this_platform(request_id: String, op_name: &str) -
         request_id,
         message: format!("{op_name} is not available on this platform"),
     })
-}
-
-/// Publish to the surface-share service the layout each of `bound_textures`
-/// was left in by a dispatch this process ran, so a reader in another process
-/// barriers out of the layout the image is in.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn publish_the_layouts_a_dispatch_left_its_bound_textures_in(
-    gpu: &crate::core::context::GpuContext,
-    bound_textures: &[(String, crate::core::context::TextureRegistration)],
-) {
-    if bound_textures.is_empty() {
-        return;
-    }
-    surface_bound_kernel_binding::publish_bound_surface_layouts_to_surface_share(
-        gpu.surface_store(),
-        bound_textures,
-    );
 }
 
 /// The response refusing one escalate request by its frame, carrying `message`

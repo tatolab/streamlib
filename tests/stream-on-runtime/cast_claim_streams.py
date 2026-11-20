@@ -138,3 +138,36 @@ def a_raise_inside_the_cpu_write_door_propagates_probe_off_the_test_pattern(
         _add_the_test_pattern(stream_builder),
         cast_claim_probes.ARaiseInsideTheCpuWriteDoorPropagatesProbe,
     )
+
+
+@graph_generator
+def an_inner_cpu_door_keeps_the_outer_edit_probe_off_the_test_pattern(
+    stream_builder: StreamBuilder,
+) -> None:
+    _add_the_probe_off(
+        stream_builder,
+        _add_the_test_pattern(stream_builder),
+        cast_claim_probes.AnInnerCpuDoorKeepsTheOuterEditProbe,
+    )
+
+
+@graph_generator
+def an_inner_gpu_write_door_keeps_the_outer_edit_probe_off_the_test_pattern(
+    stream_builder: StreamBuilder,
+) -> None:
+    _add_the_probe_off(
+        stream_builder,
+        _add_the_test_pattern(stream_builder),
+        cast_claim_probes.AnInnerGpuWriteDoorKeepsTheOuterEditProbe,
+    )
+
+
+@graph_generator
+def a_cpu_door_inside_a_gpu_write_door_keeps_the_outer_edit_probe_off_the_test_pattern(
+    stream_builder: StreamBuilder,
+) -> None:
+    _add_the_probe_off(
+        stream_builder,
+        _add_the_test_pattern(stream_builder),
+        cast_claim_probes.ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe,
+    )

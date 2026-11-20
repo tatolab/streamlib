@@ -7,24 +7,26 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::EVERY_SURFACE;
+use super::worked_examples;
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
-    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+    ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
+    ControlOperationStability,
 };
 use crate::control_operation_requests::{
     DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest, SetNodeTypeGroupRequest,
 };
 
-/// `list_pin_types`: every built-in pin type, how each is written, and what converts it.
+/// `list_pin_types`: every built-in pin type, how each is written, and what converts it, and each
+/// named type the project's node code declares.
 pub struct ListPinTypes;
 
 impl ControlOperation for ListPinTypes {
     type Request = ListPinTypesRequest;
     type Result = ListPinTypesToolResult;
     const METHOD_NAME: &'static str = "list_pin_types";
-    const ONE_LINE_DOC: &'static str =
-        "List every built-in pin type, how each is written, and what converts it.";
-    const AGENT_USAGE_NOTE: &'static str = "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` refuses a link that needs a conversion, so a caller adds a node of that `node_type` and links each end to it. Reads nothing of the project but what its loaded streams described.";
+    const ONE_LINE_DOC: &'static str = "List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.";
+    const AGENT_USAGE_NOTE: &'static str = "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. `named_pin_types` lists each named type a module of the project, an import or an installed distribution declares with `@named_pin_type`, read from source without running it: the source it comes from as `list_node_types` names one, the `pin_type` a pin of it states (`{\"type\": \"named\", \"named_pin_type\": \"<module>:<class>\"}`, its class's import path), its `documentation`, and the `path` and `line` declaring it. A pin of a named type carries the bytes its class packs and links only to a pin of the same name or an input of any type, never to a port that states no pin type. When the project's node code does not list, `named_pin_types` is empty and `named_pin_types_not_listed_because` says why; the built-in types are listed regardless.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::NodeType;
@@ -32,6 +34,7 @@ impl ControlOperation for ListPinTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_PIN_TYPES);
 }
 
 /// `list_node_types`: the node types and graph generators a project offers, by the source each
@@ -52,6 +55,7 @@ impl ControlOperation for ListNodeTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::LIST_NODE_TYPES);
 }
 
 /// `describe_node_types`: the typed inputs and outputs of the node types named.
@@ -71,6 +75,7 @@ impl ControlOperation for DescribeNodeTypes {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_NODE_TYPES);
 }
 
 /// `set_node_type_group`: file a node type under a group of the project's own, or put it back
@@ -90,4 +95,5 @@ impl ControlOperation for SetNodeTypeGroup {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_NODE_TYPE_GROUP);
 }

@@ -22,10 +22,12 @@ fn a_link_between(source: Uuid, target: Uuid) -> StreamGraphDocumentLink {
         source: StreamGraphDocumentLinkEnd {
             node: source,
             port: "result".to_owned(),
+            member: None,
         },
         target: StreamGraphDocumentLinkEnd {
             node: target,
             port: "x".to_owned(),
+            member: None,
         },
     }
 }
@@ -65,7 +67,7 @@ fn a_link_closing_a_loop_of_function_nodes_is_carried_through_a_previous_value_n
     );
 
     let StreamGraphOperation::AddNode { node, links } =
-        the_previous_value_node_added_on_the_link(&document, closing_link)
+        the_previous_value_node_added_on_the_link(&document, closing_link).into_the_operation()
     else {
         panic!("the loop closes by adding a node");
     };
@@ -83,20 +85,24 @@ fn a_link_closing_a_loop_of_function_nodes_is_carried_through_a_previous_value_n
                 source: StreamGraphDocumentLinkEnd {
                     node: scale,
                     port: "result".to_owned(),
+                    member: None,
                 },
                 target: StreamGraphDocumentLinkEnd {
                     node: node.id,
                     port: "value".to_owned(),
+                    member: None,
                 },
             },
             StreamGraphDocumentLink {
                 source: StreamGraphDocumentLinkEnd {
                     node: node.id,
                     port: "result".to_owned(),
+                    member: None,
                 },
                 target: StreamGraphDocumentLinkEnd {
                     node: add,
                     port: "x".to_owned(),
+                    member: None,
                 },
             },
         ]
@@ -149,6 +155,7 @@ fn a_link_closing_no_loop_reads_nothing_of_the_running_stream() {
         target: StreamGraphDocumentLinkEnd {
             node: scale,
             port: "y".to_owned(),
+            member: None,
         },
         ..a_link_between(add, scale)
     };

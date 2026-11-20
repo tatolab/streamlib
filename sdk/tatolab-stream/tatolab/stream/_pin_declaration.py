@@ -43,6 +43,7 @@ from ._input_declaration_annotations import (
     INPUT_DECLARATION_ANNOTATION_CLASSES,
     StreamDelivery,
 )
+from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._number_range import NumberRange
 from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
 from ._pin_types import (
@@ -326,8 +327,35 @@ class _PinReading:
             declaration["may_be_unset"] = True
         if self._form == "pin":
             return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
+        if row.value_component is None:
+            return self._read_an_input_holding_no_value(declaration, row, optional, default)
         default_value = self._default_value(default, pin_type, row, annotations, optional)
         return DeclaredPin(declaration, optional=optional, default_value=default_value)
+
+    def _read_an_input_holding_no_value(
+        self,
+        declaration: PinDeclarationOnTheWire,
+        row: PinTypeDescription,
+        optional: bool,
+        default: object,
+    ) -> DeclaredPin:
+        """An input of a type that stores no value: wire only, reading `None` while unlinked when it may be unset."""
+        if optional and default is not None:
+            raise self._refusal(
+                f"{self._pin_named} is typed `T | None`, so it reads `None` while unlinked, and "
+                f"it defaults to {default!r}. To fix: `= None`.",
+                "unset_input_with_a_default",
+            )
+        if not optional and default is not NO_DEFAULT:
+            raise self._refusal(
+                f"{self._pin_named} is a {row.label}, which holds no value, so it reads only "
+                f"what a link brings, and it defaults to {default!r}. To fix: drop the default, "
+                f"or type it `T | None = None` so it reads `None` while unlinked.",
+                "wire_only_input_with_a_default",
+            )
+        return DeclaredPin(
+            declaration, optional=optional, default_value=None if optional else NO_DEFAULT
+        )
 
     def _flow_of(self, row: PinTypeDescription) -> PinFlow:
         """How the pin reads its messages: a field's value, an `InputPin`'s stream or event, else
@@ -564,6 +592,9 @@ class _PinReading:
             return self._menu_pin_type_of(written_type)
         if written_form == "list":
             return self._list_pin_type_of(written_type)
+        named = named_pin_type_declared_by(written_type)
+        if named is not None:
+            return {"type": "named", "named_pin_type": named.import_path}  # pyright: ignore[reportReturnType]
         if exact_size is None:
             pin_type: PinType = {"type": spelling.pin_type_name}  # pyright: ignore[reportAssignmentType]
             return pin_type
@@ -689,6 +720,8 @@ class _PinReading:
             or written_type in STREAM_PIN_TYPE_CLASSES
         ):
             return written_type.__name__  # pyright: ignore[reportAttributeAccessIssue]
+        if named_pin_type_declared_by(written_type) is not None:
+            return "named_pin_type"
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
             getattr(written_type, "__name__", "")
         )
@@ -1040,7 +1073,9 @@ def family_a_pin_type_travels_on(pin_type: "Mapping[str, Any]") -> str:
     A number, a Boolean and a value of parts travel as a control message on Channels, and a
     List of them as an Array frame; a String, a Menu, an Asset, a Trigger and any other List as
     a Records message. A Texture travels as an Image frame, Audio as a Channels block, a Tensor
-    as an Array frame and encoded media as Packets.
+    as an Array frame and encoded media as Packets. A named type travels as the bytes its class
+    packs, which belong to no family; its port is declared on Records, and the runtime refuses
+    its link to any pin that states no type.
     """
     if pin_type["type"] == "list_of":
         return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"

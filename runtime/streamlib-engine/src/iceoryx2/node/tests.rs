@@ -242,6 +242,33 @@ fn channel_service_reopen_larger_fails_smaller_succeeds() {
         .expect("reopening the channel service with a shallower buffer must succeed");
 }
 
+/// A reopen refused for its depth names the channel service and the buffer it
+/// asked for, so a WIRE failure says which link's channel could not open and
+/// why, instead of iceoryx2's bare variant.
+#[test]
+fn a_reopen_refused_for_its_depth_names_the_service_and_the_buffer_it_asked_for() {
+    let node = Iceoryx2Node::for_this_test_process();
+    let service_name = unique_service_name("reopen_refusal_named");
+    let _shallow = node
+        .open_or_create_service(&service_name, 2, 4)
+        .expect("create channel service at depth 4");
+
+    let Err(refusal) = node.open_or_create_service(&service_name, 2, 64) else {
+        panic!("reopening the channel service with a deeper buffer must fail");
+    };
+
+    let refusal = refusal.to_string();
+    assert!(refusal.contains(&format!("'{service_name}'")), "{refusal}");
+    assert!(
+        refusal.contains("a subscriber buffer of 64 samples"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("DoesNotSupportRequestedMinBufferSize"),
+        "{refusal}"
+    );
+}
+
 /// No link blocks a producer: the subscriber buffer auto-evicts its
 /// oldest sample on overflow and the publisher's `send()` returns
 /// promptly. Sends `depth * 3` samples to a depth-N service whose
@@ -753,6 +780,7 @@ fn disconnect_reconnect_cycle_reclaims_notifier_and_data_service() {
             link_id,
             &InboundLinkName::from("psource/out"),
             data.create_subscriber(depth).expect("dest subscriber"),
+            crate::iceoryx2::BundleMembersAtTheRead::default(),
         );
         if !in_inner.has_listener() {
             in_inner.set_listener(notify.create_listener().expect("dest listener"));

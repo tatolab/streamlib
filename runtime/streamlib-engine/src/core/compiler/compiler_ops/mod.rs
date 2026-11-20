@@ -4,6 +4,7 @@
 mod apply_node_config_update_op;
 pub(crate) mod cross_floor_check_in_the_projects_interpreter;
 pub(crate) mod entry_run_in_the_projects_interpreter;
+pub(crate) mod extension_code_checked_against_the_kit;
 pub(crate) mod function_node_island;
 pub(crate) mod function_node_pool;
 pub(crate) mod function_node_promotion;
@@ -33,7 +34,7 @@ pub(crate) use open_iceoryx2_service_op::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     close_iceoryx2_service_into_the_host_of_a_shader_node_island,
     open_iceoryx2_service_into_the_host_of_a_shader_node_island,
-    open_the_source_side_for_a_reader_on_the_reserved_slot,
+    open_the_source_side_for_a_reader_on_the_reserved_slot, refuse_a_link_a_channel_cannot_carry,
 };
 pub(crate) use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_node_op::prepare_node;

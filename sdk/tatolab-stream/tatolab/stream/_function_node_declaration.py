@@ -42,6 +42,7 @@ from ._node_config_schema import (
     derive_node_config_json_schema_refusing_a_key_with_no_default,
     json_schema_for_a_node_declaring_no_config,
 )
+from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
 from ._pin_declaration import (
     NO_DEFAULT,
@@ -109,6 +110,7 @@ _SIGNATURE_VALUE_TYPE_OF_EACH_PIN_TYPE_NAME: "dict[str, str]" = {
     "menu": "menu",
     "asset": "asset",
     "list_of": "list_of",
+    "named": "named",
 }
 
 
@@ -214,9 +216,23 @@ def _refuse_what_is_not_a_plain_module_level_function(function: object, decorato
 class _FunctionNodeSignatureReading:
     """A function's signature read into its ports, its config class and how it is called."""
 
-    def __init__(self, function: Callable[..., Any], *, reads_pin_types: bool) -> None:
+    def __init__(
+        self,
+        function: Callable[..., Any],
+        *,
+        reads_pin_types: bool,
+        reads_values_typed_beside_images: bool = False,
+    ) -> None:
+        """Read `function`'s signature, under the typed grammar when `reads_pin_types`.
+
+        `reads_values_typed_beside_images` reads each input typed by a port family's read type,
+        an `ImageFrame` among them, under the family grammar and every other under the typed
+        grammar, as a shader's signature is read: its Images are the pictures it computes over,
+        and its values carry their pin types.
+        """
         self._function_name = function.__name__
         self._reads_pin_types = reads_pin_types
+        self._reads_values_typed_beside_images = reads_values_typed_beside_images
         annotations = self._resolved_annotations(function)
         self.input_ports: "list[dict[str, Any]]" = []
         self._signature_inputs: "list[dict[str, Any]]" = []
@@ -337,7 +353,9 @@ class _FunctionNodeSignatureReading:
             )
         elif parameter.name == "config":
             self._read_config_parameter(annotation)
-        elif self._reads_pin_types:
+        elif self._reads_pin_types or (
+            self._reads_values_typed_beside_images and not _names_a_port_family(annotation)
+        ):
             self._read_typed_input_pin(parameter, annotation, port_description or "")
         else:
             self._read_input_pin(parameter, annotation, port_description or "")
@@ -670,7 +688,10 @@ class _FunctionNodeSignatureReading:
             described_output_annotation, f"output `{output_name}`"
         )
         value_annotation, _ = _value_annotation_and_whether_optional(output_annotation)
-        if value_annotation not in PIN_VALUE_CLASSES and (
+        if (
+            value_annotation not in PIN_VALUE_CLASSES
+            and named_pin_type_declared_by(value_annotation) is None
+        ) and (
             typing.get_origin(value_annotation) is tuple
             or value_annotation is tuple
             or (isinstance(value_annotation, type) and issubclass(value_annotation, tuple))
@@ -865,6 +886,7 @@ def _is_a_named_tuple(annotation: Any) -> bool:
         and issubclass(annotation, tuple)
         and hasattr(annotation, "_fields")
         and annotation not in PIN_VALUE_CLASSES
+        and named_pin_type_declared_by(annotation) is None
     )
 
 
@@ -882,11 +904,30 @@ def _families_by_read_type() -> "dict[Any, tuple[str, str]]":
     }
 
 
+def _names_a_port_family(annotation: Any) -> bool:
+    """Whether a parameter's annotation types it by a port family, also as `T | None`.
+
+    A family's read type, such as `ImageFrame`, an `UnreadMessage` or a `dict` of Records.
+    """
+    from ._node_context_protocols import UnreadMessage
+
+    value_annotation, _ = _value_annotation_and_whether_optional(annotation)
+    if typing.get_origin(value_annotation) is typing.Annotated:
+        value_annotation = typing.get_args(value_annotation)[0]
+    return (
+        value_annotation in _families_by_read_type()
+        or value_annotation is UnreadMessage
+        or value_annotation is dict
+        or typing.get_origin(value_annotation) is dict
+    )
+
+
 def _is_a_record_of_outputs(annotation: Any) -> bool:
     return (
         isinstance(annotation, type)
         and dataclasses.is_dataclass(annotation)
         and annotation not in _families_by_read_type()
+        and named_pin_type_declared_by(annotation) is None
     )
 
 

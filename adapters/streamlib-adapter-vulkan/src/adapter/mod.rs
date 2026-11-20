@@ -1,0 +1,832 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! `VulkanSurfaceAdapter<D>` — Vulkan-typed `SurfaceAdapter`.
+//!
+//! Generic over the device flavor: `D = HostVulkanDevice` for host-side
+//! adapter use (allocate + register), `D = ConsumerVulkanDevice` for
+//! cdylib subprocess use (import + register). The four trait methods on
+//! `VulkanRhiDevice` (`device()`, `queue()`, `queue_family_index()`,
+//! `submit_to_queue()`) are everything the adapter needs from the
+//! device; the timeline semaphore type is picked up via
+//! `D::Privilege::TimelineSemaphore` and abstracted behind
+//! `VulkanTimelineSemaphoreLike` so the same wait + signal calls work
+//! against either flavor.
+//!
+//! The adapter:
+//! - Owns a registry of registered surfaces keyed by [`SurfaceId`].
+//! - Waits on the timeline semaphore at the start of every acquire so
+//!   prior GPU work has drained.
+//! - Issues a layout transition into the consumer's expected layout
+//!   (`SHADER_READ_ONLY_OPTIMAL` for read, `GENERAL` for write — this
+//!   covers compute, transfer, and color-attachment use cases).
+//! - Signals the next timeline value on guard drop so the next acquire
+//!   wakes up.
+
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use streamlib_consumer_rhi::{
+    DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
+};
+use streamlib_surface_adapter::{
+    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
+    SurfaceRegistration, VkImageInfo, WriteGuard,
+};
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
+
+use streamlib_consumer_rhi::VulkanLayout;
+
+use crate::state::{HostSurfaceRegistration, SurfaceState};
+use crate::view::{VulkanReadView, VulkanWriteView};
+
+/// The `consume_done` timeline a releasing reader signals, and the value it signals.
+type ConsumeDoneSignal<D> = (
+    Arc<<<D as VulkanRhiDevice>::Privilege as DevicePrivilege>::TimelineSemaphore>,
+    u64,
+);
+
+/// Default per-acquire timeline-wait timeout. Long enough to cover any
+/// realistic compositor queue; short enough that a deadlock turns into
+/// an `AdapterError::SyncTimeout` rather than wedging the consumer.
+const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
+
+/// Vulkan-native [`SurfaceAdapter`] implementation. Generic over the
+/// device flavor — instantiate as `VulkanSurfaceAdapter<HostVulkanDevice>`
+/// host-side or `VulkanSurfaceAdapter<ConsumerVulkanDevice>` cdylib-side.
+pub struct VulkanSurfaceAdapter<D: VulkanRhiDevice> {
+    device: Arc<D>,
+    surfaces: Registry<SurfaceState<D::Privilege>>,
+    /// Per-acquire timeline wait timeout. Adjustable via
+    /// [`Self::with_acquire_timeout`].
+    acquire_timeout: Duration,
+    /// Persistent command pool + buffer + completion fence for the
+    /// per-acquire layout-transition path
+    /// ([`Self::transition_layout_sync`]). Lazy-init on first
+    /// transition; reused with `vkResetCommandPool` after each
+    /// submission's fence has signaled. See
+    /// [`AdapterPersistentSubmitContext`] for the full contract.
+    /// Single-threaded caller convention; multi-threaded callers
+    /// serialize through this mutex.
+    submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
+    /// Counts how many times the persistent submit context was
+    /// (re)created — used by tests to lock the amortisation invariant
+    /// (steady-state acquires must not grow live
+    /// pools).
+    submit_ctx_create_count: AtomicUsize,
+}
+
+impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
+    /// Construct an empty adapter bound to `device`.
+    pub fn new(device: Arc<D>) -> Self {
+        Self {
+            device,
+            surfaces: Registry::new(),
+            acquire_timeout: DEFAULT_TIMELINE_WAIT,
+            submit_ctx: Mutex::new(None),
+            submit_ctx_create_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// Number of times the adapter has materialised its persistent
+    /// command pool. Stays at 0 before the first acquire, becomes 1
+    /// after the first transition, and stays at 1 across every
+    /// subsequent acquire.
+    ///
+    /// Hidden from the public docs because callers shouldn't depend
+    /// on it; tests use it to lock its amortisation
+    /// invariant.
+    #[doc(hidden)]
+    pub fn submit_pool_create_count(&self) -> usize {
+        self.submit_ctx_create_count.load(Ordering::Relaxed)
+    }
+
+    /// Override the per-acquire timeline-wait timeout. Default 5 s.
+    pub fn with_acquire_timeout(mut self, timeout: Duration) -> Self {
+        self.acquire_timeout = timeout;
+        self
+    }
+
+    /// Returns the underlying device for callers (test harnesses, the
+    /// `VulkanContext`, raw-handle escape hatches) that need it.
+    pub fn device(&self) -> &Arc<D> {
+        &self.device
+    }
+
+    /// Register an allocated (or imported) surface with this adapter.
+    ///
+    /// `id` is assigned by the host (typically from the surface-share
+    /// service); it MUST be unique across the adapter's lifetime.
+    /// Returns [`AdapterError::SurfaceAlreadyRegistered`] if `id` is
+    /// already registered.
+    pub fn register_host_surface(
+        &self,
+        id: SurfaceId,
+        registration: HostSurfaceRegistration<D::Privilege>,
+    ) -> Result<(), AdapterError> {
+        let inserted = self.surfaces.register(
+            id,
+            SurfaceState {
+                texture: registration.texture,
+                produce_done: registration.produce_done,
+                consume_done: registration.consume_done,
+                current_layout: registration.initial_layout,
+                read_holders: 0,
+                write_held: false,
+                last_acquire_value: 0,
+                current_signal_value: 0,
+            },
+        );
+        if !inserted {
+            return Err(AdapterError::SurfaceAlreadyRegistered { surface_id: id });
+        }
+        Ok(())
+    }
+
+    /// Drop a registered surface. Pending guards keep the underlying
+    /// `Arc<TimelineSemaphore>` alive; the next acquire returns
+    /// [`AdapterError::SurfaceNotFound`].
+    pub fn unregister_host_surface(&self, id: SurfaceId) -> bool {
+        self.surfaces.unregister(id).is_some()
+    }
+
+    /// Producer-side QFOT release for cross-process publishing.
+    ///
+    /// Issues a queue-family-ownership-transfer release barrier on the
+    /// adapter's device queue, transitioning the surface from its
+    /// current layout to `post_release_layout` and transferring
+    /// ownership to [`vk::QUEUE_FAMILY_EXTERNAL`] (core Vulkan 1.1).
+    /// Updates the adapter's internal `SurfaceState::current_layout`
+    /// to the new layout and returns it so the caller can publish via
+    /// `SurfaceStore::update_image_layout` IPC.
+    ///
+    /// When the device's
+    /// [`VulkanRhiDevice::supports_qfot_acquire_unmodified`] is
+    /// `false`, the helper still records a same-family layout
+    /// transition (so `SurfaceState::current_layout` stays consistent
+    /// with the GPU tracker), but content preservation across the
+    /// consumer's import is then driver-empirical rather than
+    /// spec-correct. This is the right shape for the cross-process
+    /// publishing seam: the cdylib's release path or the host setup
+    /// hook calls this **after** the producer's framework-level
+    /// writes have drained, **before** signalling the timeline value
+    /// the consumer waits on. The consumer's [`Path 2`] acquire (host
+    /// side) or its own `acquire_from_foreign` (subprocess side) then
+    /// pairs with this release.
+    ///
+    /// [`Path 2`]: streamlib::sdk::context::GpuContext::resolve_videoframe_registration
+    ///
+    /// **Concurrency invariant.** Snapshots `current_layout` under
+    /// the registry lock, releases the lock for the GPU submit, then
+    /// re-acquires it via `with_mut` to commit
+    /// `post_release_layout`. This is safe under the surface-adapter
+    /// contract's **single-producer-per-surface** rule: only one
+    /// thread issues the producer-side release for a given
+    /// `surface_id` at a time, just as only one thread holds a
+    /// `WriteGuard`. Concurrent writers on the same surface are
+    /// rejected at `acquire_write` (see
+    /// [`SurfaceAdapter::acquire_write`]). Mirrors the same lock
+    /// pattern as [`Self::transition_layout_sync`] used by
+    /// `finalize_write` / `finalize_read` — a deviation here would
+    /// surface as inconsistent
+    /// `current_layout` ↔ GPU-tracker drift, the same failure mode
+    /// the existing pattern guards against.
+    pub fn release_to_foreign(
+        &self,
+        surface_id: SurfaceId,
+        post_release_layout: VulkanLayout,
+    ) -> Result<VulkanLayout, AdapterError> {
+        // Snapshot under the registry lock; release the lock before
+        // submitting GPU work so `submit_to_queue` doesn't contend with
+        // unrelated registry operations.
+        let snapshot = self.surfaces.with(surface_id, |state| {
+            state
+                .texture
+                .image()
+                .map(|image| (image, state.current_layout))
+        });
+        let (image, src_layout) = match snapshot {
+            Some(Some(pair)) => pair,
+            Some(None) => {
+                return Err(AdapterError::BackendRejected {
+                    reason: format!("release_to_foreign: surface {surface_id:?} has no VkImage"),
+                });
+            }
+            None => {
+                return Err(AdapterError::SurfaceNotFound { surface_id });
+            }
+        };
+        if src_layout == post_release_layout && src_layout == VulkanLayout::UNDEFINED {
+            // No-op: a fresh surface that hasn't been transitioned yet
+            // and the caller's declared post-release layout is also
+            // UNDEFINED. Skip the GPU submit.
+            return Ok(post_release_layout);
+        }
+        self.device
+            .release_to_foreign(image, src_layout.as_vk(), post_release_layout.as_vk())
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("release_to_foreign: {e}"),
+            })?;
+        self.surfaces.with_mut(surface_id, |state| {
+            state.current_layout = post_release_layout;
+        });
+        Ok(post_release_layout)
+    }
+
+    /// Snapshot the registry size — primarily for tests and
+    /// observability.
+    pub fn registered_count(&self) -> usize {
+        self.surfaces.len()
+    }
+
+    /// Resolve the full [`VkImageInfo`] descriptor for a registered
+    /// surface. Returns `None` if the surface isn't registered.
+    ///
+    /// The descriptor is per-image (fixed at registration time) — it
+    /// does NOT change across acquires. Polyglot Skia wrappers (and
+    /// any other adapter that needs to wrap the underlying `VkImage`
+    /// as a framework-native render target) call this once on
+    /// registration to build their backend-context state, then read
+    /// only the per-acquire `vk_image_layout` from the live view.
+    pub fn surface_image_info(&self, id: SurfaceId) -> Option<VkImageInfo> {
+        self.surfaces
+            .with(id, |state| self.make_image_info(&state.texture))
+    }
+
+    fn make_image_info(&self, texture: &<D::Privilege as DevicePrivilege>::Texture) -> VkImageInfo {
+        // Populated from VulkanTextureLike's create-time metadata.
+        // `memory_handle` is opaque (raw VkDeviceMemory bits) for
+        // frameworks like Skia that need to wrap the image as a
+        // GrBackendRenderTarget.
+        VkImageInfo {
+            format: texture.vk_format().as_raw(),
+            tiling: texture.vk_image_tiling().as_raw(),
+            usage_flags: texture.vk_image_usage_flags().bits(),
+            sample_count: texture.vk_sample_count().bits(),
+            level_count: texture.vk_level_count(),
+            queue_family: self.device.queue_family_index(),
+            memory_handle: texture.vk_memory().as_raw(),
+            memory_offset: texture.vk_memory_offset(),
+            memory_size: texture.vk_memory_size(),
+            memory_property_flags: texture.vk_memory_property_flags().bits(),
+            protected: u32::from(texture.vk_protected()),
+            ycbcr_conversion: texture.vk_ycbcr_conversion_handle(),
+            _reserved: [0; 16],
+        }
+    }
+
+    /// Submit a one-shot command buffer that transitions `image` from
+    /// `from` to `to`. Layout barriers are issued via Vulkan 1.3+
+    /// `cmd_pipeline_barrier2`; we use queue-family-foreign transitions
+    /// to support cross-process handoff.
+    ///
+    /// Synchronous: blocks on the per-submit fence until the GPU has
+    /// executed the barrier, because the next consumer needs the new
+    /// layout to be visible. The wait is on the submit's own fence, not
+    /// the whole queue, so concurrent unrelated activity sharing the
+    /// queue is not drained.
+    fn transition_layout_sync(
+        &self,
+        image: vk::Image,
+        from: vk::ImageLayout,
+        to: vk::ImageLayout,
+    ) -> Result<(), AdapterError> {
+        if from == to {
+            return Ok(());
+        }
+        let device = self.device.device();
+        let queue = self.device.queue();
+        let qf = self.device.queue_family_index();
+
+        let mut guard = self
+            .submit_ctx
+            .lock()
+            .map_err(|_| AdapterError::BackendRejected {
+                reason: "transition_layout_sync: persistent submit context mutex poisoned".into(),
+            })?;
+        if guard.is_none() {
+            *guard = Some(AdapterPersistentSubmitContext::new(device, qf)?);
+            self.submit_ctx_create_count.fetch_add(1, Ordering::Relaxed);
+        }
+        let submit_ctx = guard.as_ref().expect("submit_ctx populated above");
+        let cmd = submit_ctx.cmd;
+
+        submit_ctx.reset_for_recording(device)?;
+
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
+        unsafe { device.begin_command_buffer(cmd, &begin_info) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("begin_command_buffer: {e}"),
+            }
+        })?;
+
+        let image_barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+            .old_layout(from)
+            .new_layout(to)
+            .src_queue_family_index(qf)
+            .dst_queue_family_index(qf)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1)
+                    .build(),
+            )
+            .build();
+
+        let image_barriers = [image_barrier];
+        let dep_info = vk::DependencyInfo::builder()
+            .image_memory_barriers(&image_barriers)
+            .build();
+        unsafe { device.cmd_pipeline_barrier2(cmd, &dep_info) };
+
+        unsafe { device.end_command_buffer(cmd) }.map_err(|e| AdapterError::BackendRejected {
+            reason: format!("end_command_buffer: {e}"),
+        })?;
+
+        let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cmd)
+            .build()];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cmd_infos)
+            .build();
+
+        submit_ctx
+            .submit_carrying_the_fence(|fence| unsafe {
+                self.device.submit_to_queue(queue, &[submit], fence)
+            })
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("submit_to_queue: {e}"),
+            })?;
+
+        // Block until the GPU has executed the barrier — the next
+        // consumer's view assumes the new layout is visible. The wait
+        // is per-submit, so concurrent unrelated submits on the same
+        // queue aren't drained.
+        unsafe { device.wait_for_fences(&[submit_ctx.fence], true, u64::MAX) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("wait_for_fences (transition_layout_sync): {e}"),
+            }
+        })?;
+
+        Ok(())
+    }
+
+    fn try_begin_read(
+        &self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<ReadAcquired<D::Privilege>>, AdapterError> {
+        let id = surface.id;
+        self.surfaces.try_begin_read(id, |state| {
+            // Consumer-side acquire waits on `produce_done` — the
+            // peer-timeline's kernel `current_value()` snapshot is
+            // taken inside `finalize_read` (outside the registry
+            // lock) per
+            // the single-writer-per-edge timeline rule.
+            let peer_timeline = Arc::clone(&state.produce_done);
+            let image = state
+                .texture
+                .image()
+                .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
+            let from = state.current_layout;
+            let info = self.make_image_info(&state.texture);
+            Ok(ReadAcquired {
+                peer_timeline,
+                image,
+                from,
+                info,
+            })
+        })
+    }
+
+    fn try_begin_write(
+        &self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<WriteAcquired<D::Privilege>>, AdapterError> {
+        let id = surface.id;
+        self.surfaces.try_begin_write(id, |state| {
+            // Producer-side acquire waits on `consume_done` — confirms
+            // the consumer has drained prior content before re-write.
+            let peer_timeline = Arc::clone(&state.consume_done);
+            let image = state
+                .texture
+                .image()
+                .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
+            let from = state.current_layout;
+            let info = self.make_image_info(&state.texture);
+            Ok(WriteAcquired {
+                peer_timeline,
+                image,
+                from,
+                info,
+            })
+        })
+    }
+
+    /// Wait + transition + commit-layout for a successful read acquire.
+    fn finalize_read(
+        &self,
+        surface_id: SurfaceId,
+        acquired: ReadAcquired<D::Privilege>,
+    ) -> Result<vk::ImageLayout, AdapterError> {
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
+        if acquired
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
+            .is_err()
+        {
+            // Roll back: the acquire had bumped read_holders; undo it.
+            self.surfaces.rollback_read(surface_id);
+            return Err(AdapterError::SyncTimeout {
+                duration: self.acquire_timeout,
+            });
+        }
+        self.surfaces.with_mut(surface_id, |state| {
+            state.last_acquire_value = wait_value;
+        });
+
+        let to = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.as_vk(), to) {
+            self.surfaces.rollback_read(surface_id);
+            return Err(err);
+        }
+        self.surfaces.with_mut(surface_id, |state| {
+            state.current_layout = VulkanLayout(to.as_raw());
+        });
+        Ok(to)
+    }
+
+    fn finalize_write(
+        &self,
+        surface_id: SurfaceId,
+        acquired: WriteAcquired<D::Privilege>,
+    ) -> Result<vk::ImageLayout, AdapterError> {
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
+        if acquired
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
+            .is_err()
+        {
+            self.surfaces.rollback_write(surface_id);
+            return Err(AdapterError::SyncTimeout {
+                duration: self.acquire_timeout,
+            });
+        }
+        self.surfaces.with_mut(surface_id, |state| {
+            state.last_acquire_value = wait_value;
+        });
+
+        // GENERAL covers compute, transfer, and color-attachment writes.
+        // Picking COLOR_ATTACHMENT_OPTIMAL would force a re-transition
+        // every time a customer wants to use the image as a transfer
+        // destination; GENERAL is the right shape for the v1 adapter.
+        let to = vk::ImageLayout::GENERAL;
+        if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.as_vk(), to) {
+            self.surfaces.rollback_write(surface_id);
+            return Err(err);
+        }
+        self.surfaces.with_mut(surface_id, |state| {
+            state.current_layout = VulkanLayout(to.as_raw());
+        });
+        Ok(to)
+    }
+}
+
+/// Snapshot taken under the registry lock so the timeline wait + layout
+/// transition can run unlocked. `read_holders` / `write_held` are
+/// already incremented; rollback paths decrement them on failure.
+/// `peer_timeline` is the side this caller waits on (`produce_done` for
+/// read paths, `consume_done` for write paths) per
+/// single-writer-per-edge.
+struct ReadAcquired<P: DevicePrivilege> {
+    peer_timeline: Arc<P::TimelineSemaphore>,
+    image: vk::Image,
+    from: VulkanLayout,
+    info: VkImageInfo,
+}
+
+struct WriteAcquired<P: DevicePrivilege> {
+    peer_timeline: Arc<P::TimelineSemaphore>,
+    image: vk::Image,
+    from: VulkanLayout,
+    info: VkImageInfo,
+}
+
+impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
+    type ReadView<'g> = VulkanReadView<'g>;
+    type WriteView<'g> = VulkanWriteView<'g>;
+
+    fn acquire_read<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<ReadGuard<'g, Self>, AdapterError> {
+        let acquired = match self.try_begin_read(surface)? {
+            Some(a) => a,
+            None => {
+                return Err(AdapterError::WriteContended {
+                    surface_id: surface.id,
+                    holder: "writer".to_string(),
+                });
+            }
+        };
+        let info = acquired.info;
+        let image = acquired.image;
+        let layout = self.finalize_read(surface.id, acquired)?;
+        Ok(ReadGuard::new(
+            self,
+            surface.id,
+            VulkanReadView {
+                image,
+                layout,
+                info,
+                _marker: PhantomData,
+            },
+        ))
+    }
+
+    fn acquire_write<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<WriteGuard<'g, Self>, AdapterError> {
+        let acquired = match self.try_begin_write(surface)? {
+            Some(a) => a,
+            None => {
+                return Err(AdapterError::WriteContended {
+                    surface_id: surface.id,
+                    holder: self.surfaces.describe_contention(surface.id),
+                });
+            }
+        };
+        let info = acquired.info;
+        let image = acquired.image;
+        let layout = self.finalize_write(surface.id, acquired)?;
+        Ok(WriteGuard::new(
+            self,
+            surface.id,
+            VulkanWriteView {
+                image,
+                layout,
+                info,
+                _marker: PhantomData,
+            },
+        ))
+    }
+
+    fn try_acquire_read<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError> {
+        let acquired = match self.try_begin_read(surface)? {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let info = acquired.info;
+        let image = acquired.image;
+        let layout = self.finalize_read(surface.id, acquired)?;
+        Ok(Some(ReadGuard::new(
+            self,
+            surface.id,
+            VulkanReadView {
+                image,
+                layout,
+                info,
+                _marker: PhantomData,
+            },
+        )))
+    }
+
+    fn try_acquire_write<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<WriteGuard<'g, Self>>, AdapterError> {
+        let acquired = match self.try_begin_write(surface)? {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let info = acquired.info;
+        let image = acquired.image;
+        let layout = self.finalize_write(surface.id, acquired)?;
+        Ok(Some(WriteGuard::new(
+            self,
+            surface.id,
+            VulkanWriteView {
+                image,
+                layout,
+                info,
+                _marker: PhantomData,
+            },
+        )))
+    }
+
+    fn end_read_access(&self, surface_id: SurfaceId) {
+        // Consumer-side release: signal `consume_done` so the producer
+        // can wait on it before re-writing. Inner Option: `None` means
+        // "not the last reader, skip signal". Outer Option: `None`
+        // means "surface raced an unregister".
+        let signal: Option<Option<ConsumeDoneSignal<D>>> =
+            self.surfaces.with_mut(surface_id, |state| {
+                debug_assert!(state.read_holders > 0, "read release without acquire");
+                state.dec_read_holders();
+                if state.read_holders > 0 {
+                    return None;
+                }
+                let next = state.next_signal_value();
+                state.current_signal_value = next;
+                Some((Arc::clone(&state.consume_done), next))
+            });
+        let signal = match signal {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    ?surface_id,
+                    "end_read_access on unknown surface — racing unregister"
+                );
+                return;
+            }
+        };
+        if let Some((consume_done, value)) = signal
+            && let Err(e) = consume_done.signal_host(value)
+        {
+            tracing::error!(?surface_id, %value, %e, "consume_done signal failed on read release");
+        }
+    }
+
+    fn end_write_access(&self, surface_id: SurfaceId) {
+        // Producer-side release: signal `produce_done` so the consumer
+        // can wait on it before reading.
+        let signal: Option<(
+            Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
+            u64,
+        )> = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.write_held, "write release without acquire");
+            state.set_write_held(false);
+            let next = state.next_signal_value();
+            state.current_signal_value = next;
+            (Arc::clone(&state.produce_done), next)
+        });
+        let (produce_done, value) = match signal {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    ?surface_id,
+                    "end_write_access on unknown surface — racing unregister"
+                );
+                return;
+            }
+        };
+        if let Err(e) = produce_done.signal_host(value) {
+            tracing::error!(?surface_id, %value, %e, "produce_done signal failed on write release");
+        }
+    }
+}
+
+#[cfg(test)]
+mod adapter_persistent_submit_context_tests;
+
+/// Persistent per-adapter command pool, command buffer, and
+/// completion fence — replaces the create-and-destroy-per-acquire
+/// pattern that used to churn `vkCreateCommandPool` /
+/// `vkDestroyCommandPool` on every layout transition. Same shape
+/// lives in `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
+/// and `streamlib-adapter-cuda::adapter::AdapterPersistentSubmitContext`;
+/// fix ALL THREE if you change ANY: `streamlib-surface-adapter` deliberately does not depend on
+/// `vulkanalia`, so duplication is the project pattern here).
+///
+/// The fence is created signaled so the first submit doesn't block.
+/// Subsequent submits wait on it (instant when the prior submit has
+/// already drained — `transition_layout_sync` always drains
+/// synchronously at the end so the next call's wait is always
+/// instant). `vkResetCommandPool` is the cheap path per Vulkan spec
+/// — recycles every command buffer's memory in one call.
+struct AdapterPersistentSubmitContext {
+    pool: vk::CommandPool,
+    cmd: vk::CommandBuffer,
+    fence: vk::Fence,
+    /// Whether the fence is signaled or a queued batch will signal it.
+    /// False from the reset until a submit carrying the fence queues, so a
+    /// recording or submit that failed in between leaves nothing to wait
+    /// for instead of a fence nothing will ever signal.
+    the_fence_will_signal: AtomicBool,
+}
+
+impl AdapterPersistentSubmitContext {
+    fn new(device: &vulkanalia::Device, qf: u32) -> Result<Self, AdapterError> {
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(qf)
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .build();
+        let pool = unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("create_command_pool: {e}"),
+            }
+        })?;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1)
+            .build();
+        let cmd = match unsafe { device.allocate_command_buffers(&alloc_info) } {
+            Ok(v) => v[0],
+            Err(e) => {
+                unsafe { device.destroy_command_pool(pool, None) };
+                return Err(AdapterError::BackendRejected {
+                    reason: format!("allocate_command_buffers: {e}"),
+                });
+            }
+        };
+
+        let fence_info = vk::FenceCreateInfo::builder()
+            .flags(vk::FenceCreateFlags::SIGNALED)
+            .build();
+        let fence = match unsafe { device.create_fence(&fence_info, None) } {
+            Ok(f) => f,
+            Err(e) => {
+                unsafe { device.destroy_command_pool(pool, None) };
+                return Err(AdapterError::BackendRejected {
+                    reason: format!("create_fence: {e}"),
+                });
+            }
+        };
+
+        Ok(Self {
+            pool,
+            cmd,
+            fence,
+            the_fence_will_signal: AtomicBool::new(true),
+        })
+    }
+
+    /// Wait for the previous submit's fence, reset it, then reset the
+    /// command pool so the single command buffer is ready to be
+    /// re-recorded. Steady-state cost is the wait, which is instant
+    /// when the prior submit has already drained; after a recording or
+    /// submit that failed, nothing is queued and nothing is waited for.
+    fn reset_for_recording(&self, device: &vulkanalia::Device) -> Result<(), AdapterError> {
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
+            unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
+                AdapterError::BackendRejected {
+                    reason: format!("wait_for_fences (persistent submit fence): {e}"),
+                }
+            })?;
+        }
+        unsafe { device.reset_fences(&[self.fence]) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("reset_fences (persistent submit fence): {e}"),
+            }
+        })?;
+        self.the_fence_will_signal.store(false, Ordering::Relaxed);
+        unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("reset_command_pool (persistent submit pool): {e}"),
+            })?;
+        Ok(())
+    }
+
+    /// Run `submit` with the fence as its completion signal, and once it
+    /// has queued, have the next reset and the teardown wait for it.
+    fn submit_carrying_the_fence<E>(
+        &self,
+        submit: impl FnOnce(vk::Fence) -> Result<(), E>,
+    ) -> Result<(), E> {
+        submit(self.fence)?;
+        self.the_fence_will_signal.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Tear down the pool and fence, first waiting for a queued submit to
+    /// drain.
+    fn destroy(self, device: &vulkanalia::Device) {
+        if self.the_fence_will_signal.load(Ordering::Relaxed) {
+            let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        }
+        unsafe {
+            device.destroy_fence(self.fence, None);
+            device.destroy_command_pool(self.pool, None);
+        }
+    }
+}
+
+impl<D: VulkanRhiDevice> Drop for VulkanSurfaceAdapter<D> {
+    fn drop(&mut self) {
+        let mut guard = match self.submit_ctx.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(ctx) = guard.take() {
+            ctx.destroy(self.device.device());
+        }
+    }
+}

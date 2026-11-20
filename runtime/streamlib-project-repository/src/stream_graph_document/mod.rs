@@ -18,8 +18,15 @@ use crate::stream_graph_studio_contract::{
 };
 
 mod fragment_node_uuids_kept_by_name;
+mod input_value_of_one_member;
 mod input_values_and_asset_references_at_every_level;
 mod stream_graph_operation;
+
+use input_value_of_one_member::set_the_input_value_in;
+pub use input_value_of_one_member::{
+    input_values_after_the_set, the_input_value_after_the_set, the_input_value_held_on,
+    the_value_held_on_the_input_or_its_member,
+};
 
 pub use input_values_and_asset_references_at_every_level::{
     asset_references_made_references_into_the_import, assets_a_nodes_input_values_reference,
@@ -163,13 +170,22 @@ impl TryFrom<StreamGraphDocumentNodeAsRecorded> for StreamGraphDocumentNode {
     }
 }
 
-/// One end of a link, its node by UUID.
+/// The member of a bundle port a stored link end names, if any.
+pub(crate) fn member_named_by(end: &Value) -> Option<String> {
+    end.get("member").and_then(Value::as_str).map(str::to_owned)
+}
+
+/// One end of a link, its node by UUID, and the member of a bundle port it names, if any.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StreamGraphDocumentLinkEnd {
     /// The node's UUID.
     pub node: Uuid,
     /// The port's name.
     pub port: String,
+    /// The member of a bundle port the link starts at; `None` for the whole port. Only a link's
+    /// source names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
 }
 
 /// One link of a stream's graph, from an output port to an input port.
@@ -631,16 +647,17 @@ impl StreamGraphDocument {
                 }),
             StreamGraphOperation::SetPinValue {
                 node, input, to, ..
-            }
-            | StreamGraphOperation::SetNodeInputValue {
-                node, input, to, ..
-            } => self.change_the_input_values_of(*node, |input_values| match to {
-                Some(value) => {
-                    input_values.insert(input.clone(), value.clone());
-                }
-                None => {
-                    input_values.remove(input);
-                }
+            } => self.change_the_input_values_of(*node, |input_values| {
+                set_the_input_value_in(input_values, input, None, to.as_ref());
+            }),
+            StreamGraphOperation::SetNodeInputValue {
+                node,
+                input,
+                member,
+                to,
+                ..
+            } => self.change_the_input_values_of(*node, |input_values| {
+                set_the_input_value_in(input_values, input, member.as_deref(), to.as_ref());
             }),
             StreamGraphOperation::RenameNode { node, to, from } => {
                 if let Some(holder) = self.node_objects().find(|node_object| {
@@ -887,6 +904,7 @@ impl StreamGraphDocument {
             Some(StreamGraphDocumentLinkEnd {
                 node,
                 port: end.get("port")?.as_str()?.to_owned(),
+                member: member_named_by(end),
             })
         };
         Some(StreamGraphDocumentLink {

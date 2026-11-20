@@ -160,7 +160,7 @@ fn each_way_a_manifest_falls_short_is_named_by_its_field() {
     .expect_err("nothing about it opens");
 
     for expected in [
-        "`contract`: this runtime reads view contract 1.0.",
+        "`contract`: this runtime reads view contract 1.1.",
         "`title`: it is the name the view-type menu lists.",
         "`entry`: it is a path inside the view's folder",
         "`outputs[0].name`: a port name is lower-case letters, digits and underscores.",
@@ -268,4 +268,128 @@ fn an_image_or_packets_output_may_share_its_name_with_a_setting() {
         .expect("no input of an Image or Packets output's name is made, so a setting takes it");
 
     assert_eq!(manifest.outputs.len(), 2);
+}
+
+fn a_node_view_declaring(contract: &str, outputs: Value) -> Value {
+    json!({
+        "contract": contract,
+        "title": "Typed",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": outputs,
+    })
+}
+
+#[test]
+fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
+    let manifest = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([
+            { "name": "picture", "pin_type": { "type": "texture" } },
+            { "name": "level", "family": "channels", "pin_type": { "type": "float" } },
+            { "name": "fader", "family": "array" },
+        ]),
+    ))
+    .expect("a 1.1 view opens");
+    let read: Vec<_> = manifest
+        .outputs
+        .iter()
+        .map(|port| (port.name.as_str(), port.family, port.pin_type.clone()))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (
+                "picture",
+                PortFamily::Image,
+                Some(PinType::Texture {
+                    pixel_formats: vec![]
+                })
+            ),
+            (
+                "level",
+                PortFamily::Channels,
+                Some(PinType::Float { exact_size: None })
+            ),
+            ("fader", PortFamily::Array, None),
+        ]
+    );
+}
+
+#[test]
+fn a_port_with_no_pin_type_or_family_or_one_that_disagrees_is_refused_at_the_port() {
+    for (outputs, expected) in [
+        (
+            json!([{ "name": "level" }]),
+            "`outputs[0]`: a port names the `pin_type` it carries, or the older `family`.",
+        ),
+        (
+            json!([{ "name": "level", "family": "records", "pin_type": { "type": "float" } }]),
+            "`outputs[0]`: `family` is `records`, and a Float is carried as `channels`; drop \
+             `family`, which the `pin_type` sets.",
+        ),
+        (
+            json!([{ "name": "items", "pin_type": { "type": "list_of", "element_type": { "type": "float" } } }]),
+            "`outputs[0]`: `pin_type`: a List of Float rides no message a view's port reads or writes",
+        ),
+        (
+            json!([{ "name": "choice", "pin_type": { "type": "menu", "option_names": [] } }]),
+            "`outputs[0]`: `pin_type`: a Menu lists at least one option.",
+        ),
+    ] {
+        let refusal = read_tatolab_view_manifest(&a_node_view_declaring("1.1", outputs))
+            .expect_err("the port is refused");
+        assert!(refusal.contains(expected), "{expected} in {refusal}");
+    }
+}
+
+#[test]
+fn an_unknown_pin_type_is_refused_by_name() {
+    let refusal = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "level", "pin_type": { "type": "decibels" } }]),
+    ))
+    .expect_err("no such pin type");
+    assert!(
+        refusal.starts_with("`outputs[0].pin_type.type`:") && refusal.contains("`decibels`"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_pin_type_in_a_view_built_for_contract_one_point_zero_is_refused_naming_the_minor_to_write() {
+    let refusal = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.0",
+        json!([{ "name": "level", "pin_type": { "type": "float" } }]),
+    ))
+    .expect_err("1.0 has no pin_type");
+    assert!(
+        refusal.contains(
+            "`outputs[0].pin_type`: a port's `pin_type` is view contract 1.1; write \
+             `\"contract\": \"1.1\"`."
+        ),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn an_output_a_panel_writes_of_a_type_that_holds_no_value_is_refused() {
+    let refusal = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "go", "pin_type": { "type": "trigger" } }]),
+    ))
+    .expect_err("a panel writes no Trigger value");
+    assert!(
+        refusal.contains(
+            "`outputs[0].pin_type`: a panel writes a value onto a `records` output, and a \
+             Trigger holds none."
+        ),
+        "{refusal}"
+    );
+    read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "voice", "pin_type": { "type": "audio" } },
+               { "name": "weights", "pin_type": { "type": "tensor" } }]),
+    ))
+    .expect("a panel writes Audio samples and Tensor numbers");
 }

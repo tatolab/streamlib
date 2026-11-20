@@ -68,3 +68,4 @@ fn the_raises_noted_by(
 
 mod island_evaluation_tests;
 mod links_from_outside_the_island_tests;
+mod named_value_tests;

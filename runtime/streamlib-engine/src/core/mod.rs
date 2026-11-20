@@ -113,8 +113,7 @@ pub use execution::{
 };
 pub use graph::graph_snapshot::{
     GraphFragment, GraphOnlyNodesAsDrawn, GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode,
-    GraphSnapshotWithGraphOnlyNodesResolved, LinkSetAsideByTheGraphsValidation,
-    NodeChangeADrawnLinkBlocks,
+    GraphSnapshotWithGraphOnlyNodesResolved, LinkSetAside, NodeChangeADrawnLinkBlocks,
 };
 pub use graph::{
     ComponentMap, ComponentRenderer, DeviceMatchedAudioWindowContractsComponent,
@@ -157,12 +156,15 @@ pub use runtime::a_project_on_disk_for_a_test;
 pub use runtime::{
     ArmedEngineTeardownWatchdog, BoxFuture, CrashOfThePreviousRuntimeRun, CreateProjectRequest,
     CreatedProjectFirstCommit, DescriptionOfTheAbandonedNodeThreads,
-    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, EveryStreamEndedDuringTheWait,
-    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, FunctionNodeState,
-    FunctionNodeStatesCarriedForEveryStream, FunctionNodeStatesCarriedForOneStream,
-    HowALoadedStreamEnded, HowThePreviousRuntimeRunEnded, ImportedProjectPythonSources,
-    LoadedStreamHolding, LoadedStreamInThisRuntime, LoadedStreamTag, MachineName,
-    NodeDisplayNameAndId, NodeInTheGraph, OpenDescriptorSoftLimitRaise,
+    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, EXTENSION_SDK_KIT_ENVIRONMENT_VARIABLE,
+    EveryStreamEndedDuringTheWait, ExtensionCodeCheck, ExtensionCodeCheckKind,
+    ExtensionCodeCheckRun, ExtensionCodeCheckers, ExtensionCodeCheckersHeld, ExtensionCodeFinding,
+    ExtensionCodeFindingSeverity, ExtensionCodeNotChecked, ExtensionCodeNotCheckedCode,
+    ExtensionFileChecked, ExtensionSdkKitTemplate, FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT,
+    FunctionNodeState, FunctionNodeStatesCarriedForEveryStream,
+    FunctionNodeStatesCarriedForOneStream, HowALoadedStreamEnded, HowThePreviousRuntimeRunEnded,
+    ImportedProjectPythonSources, LoadedStreamHolding, LoadedStreamInThisRuntime, LoadedStreamTag,
+    MachineName, NodeDisplayNameAndId, NodeInTheGraph, OpenDescriptorSoftLimitRaise,
     OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
     OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen,
     PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE, PYTHON_NODE_DECLARATION_CHECK_ENTRY_MODULE,
@@ -226,7 +228,9 @@ pub mod node_interpreter {
         BROWSER_HOST_EXECUTABLE_FILE_NAME, BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME,
         BUNDLED_ICD_MANIFEST_FILE_NAME, FIRST_PARTY_MODULES_DIRECTORY_NAME,
         LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS,
-        LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
+        LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, RUNTIME_UNIT_LINTER_EXECUTABLE_FILE_NAME,
+        RUNTIME_UNIT_TYPESCRIPT_COMPILER_RELATIVE_TO_THE_BINARY_DIRECTORY,
+        RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
         app_bundle_contents_directory_holding_the_executable_directory,
         browser_host_executable_beside_the_lend, browser_host_executable_for_the_lend,
         bundled_vulkan_driver_directory_in_the_lend, first_party_modules_directory_beside_the_lend,

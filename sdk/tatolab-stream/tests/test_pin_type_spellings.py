@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import builtins
 from collections import Counter
-from typing import Literal
+from collections.abc import Buffer
+from typing import Literal, Self
 
 import pytest
 
 import tatolab.stream
 from tatolab.stream import NodeDeclarationRefusal
 from tatolab.stream._contract_pin_types import BUILT_IN_PIN_TYPES
-from tatolab.stream._pin_declaration import read_pin_declaration
+from tatolab.stream._pin_declaration import NO_DEFAULT, read_pin_declaration
 from tatolab.stream._pin_types import PIN_TYPE_SPELLINGS, PIN_VALUE_CLASSES, PinTypeSpelling
 
 
@@ -25,6 +26,19 @@ def test_the_spellings_are_exactly_the_written_forms_of_the_contracts_rows() -> 
     spellings = Counter((spelling.written_form, spelling.pin_type_name) for spelling in PIN_TYPE_SPELLINGS)
 
     assert spellings == written_forms_of_the_rows
+
+
+@tatolab.stream.named_pin_type(description="A probe's reading, packed as one byte.")
+class ProbeReading:
+    def __init__(self, level: int) -> None:
+        self.level = level
+
+    @classmethod
+    def from_bytes(cls, payload: Buffer) -> Self:
+        return cls(bytes(payload)[0])
+
+    def to_bytes(self) -> bytes:
+        return bytes([self.level])
 
 
 SPELLINGS_THE_TYPED_GRAMMAR_READS = [
@@ -60,12 +74,14 @@ A_VALUE_OF_EACH_SPELLING: dict[str, object] = {
     "Literal": "sine",
     "Asset": tatolab.stream.Asset("0eaf9ee2-0f73-4154-a3f6-a99c261b850d"),
     "list": [0.25, 0.5],
+    "named_pin_type": NO_DEFAULT,
 }
 
 # The type written for each spelling that names a family of types rather than one.
 A_TYPE_OF_EACH_GENERIC_SPELLING: dict[str, object] = {
     "Literal": Literal["sine", "square"],
     "list": list[float],
+    "named_pin_type": ProbeReading,
 }
 
 # The exact sizes a single pin refuses: each types only a List or Tensor element.
