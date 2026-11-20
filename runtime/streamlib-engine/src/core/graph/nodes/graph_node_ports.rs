@@ -31,6 +31,24 @@ impl InputHoldingAValueUnderANameItHad {
 }
 
 impl GraphNodePorts {
+    /// The ports of a node of the type `descriptor` declares just placed: the ones it declares,
+    /// then, with one slot in each of its pin groups, each slot's.
+    pub fn of_a_node_just_placed(descriptor: &crate::core::NodeDescriptor) -> Self {
+        let one_each = vec![1; descriptor.pin_groups.len()];
+        Self {
+            inputs: descriptor
+                .the_inputs_with_slots(&one_each)
+                .iter()
+                .map(PortInfo::from)
+                .collect(),
+            outputs: descriptor
+                .the_outputs_with_slots(&one_each)
+                .iter()
+                .map(PortInfo::from)
+                .collect(),
+        }
+    }
+
     /// These ports, of a node of `node_type` whose config is `config`, with what that config
     /// declares of them resolved: a `GraphInput`'s `value` input takes the family, the range and
     /// the lifetime its config names. The ports of every other node type are as it declares
@@ -85,6 +103,23 @@ impl GraphNodePorts {
     /// The input `name` finds: the input so named, else the one that had that name.
     pub fn input_named(&self, name: &str) -> Option<&PortInfo> {
         self.the_one_a_name_finds(PortDirection::Input, name)
+    }
+
+    /// The input `name` finds among the ports of a node type: the input so named or that had
+    /// that name, else, for a port of a slot of a pin group past the first, the same pin of the
+    /// first slot, which a type's ports hold and which declares what every slot's does.
+    pub fn the_input_of_the_type_a_name_finds(&self, name: &str) -> Option<&PortInfo> {
+        self.input_named(name).or_else(|| {
+            let slot_port = crate::core::descriptors::PinGroupSlotPort::named(name)?;
+            let separator = crate::core::descriptors::PIN_GROUP_SLOT_PORT_NAME_SEPARATOR;
+            self.inputs.iter().find(|input| {
+                input.name
+                    == format!(
+                        "{}{separator}0{separator}{}",
+                        slot_port.group, slot_port.pin
+                    )
+            })
+        })
     }
 
     /// The output `name` finds: the output so named, else the one that had that name.

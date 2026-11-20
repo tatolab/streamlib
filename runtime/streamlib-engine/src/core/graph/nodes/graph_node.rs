@@ -65,6 +65,9 @@ pub struct GraphNode {
     /// The upstream entries this node's inbound links reach.
     #[serde(skip)]
     upstream_stream_facts_by_inbound_link: Arc<UpstreamStreamFactsByInboundLink>,
+    /// The pin groups the node's type declares, whose slots' ports its ports hold.
+    #[serde(skip)]
+    pub(super) pin_groups: Arc<[crate::core::descriptors::PinGroupDescriptor]>,
 }
 
 impl PartialEq for GraphNode {
@@ -149,6 +152,7 @@ impl GraphNode {
             component_renderers: Vec::new(),
             stream_facts_of_output_ports,
             upstream_stream_facts_by_inbound_link: Arc::default(),
+            pin_groups: Arc::from([]),
         }
     }
 

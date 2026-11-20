@@ -104,7 +104,10 @@ pub use nodes::{
     GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PinTypeAsDeclared,
     PortInfo,
 };
-pub(crate) use nodes::{PortAnnotations, the_refusal_of_a_link_into_a_setting};
+pub(crate) use nodes::{
+    PortAnnotations, grow_a_pin_group_to_hold_the_port, reshape_the_pin_group_slots_of,
+    the_refusal_of_a_link_into_a_setting,
+};
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{
     LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut, TraversalSource,

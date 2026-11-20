@@ -926,6 +926,11 @@ export interface GraphNodePortOnTheWire {
    * bundle declares its members; absent on every other input.
    */
   member_values?: Array<BundleMemberValueReadOnTheWire> | null;
+  /**
+   * The slot of the node type's pin group this port belongs to; absent on a port of no
+   * group.
+   */
+  pin_group_slot?: PinGroupSlotOnTheWire | null;
 }
 
 /**
@@ -956,6 +961,24 @@ export interface BundleMemberValueReadOnTheWire {
    * Where the value comes from; absent when it reads nothing.
    */
   value_comes_from?: InputValueComesFromOnTheWire | null;
+}
+
+/**
+ * The slot of a pin group a port belongs to.
+ */
+export interface PinGroupSlotOnTheWire {
+  /**
+   * The group's name, as `describe_node_types` lists it.
+   */
+  group: string;
+  /**
+   * The slot's index, from 0.
+   */
+  slot: number;
+  /**
+   * The pin's name in the slot.
+   */
+  pin: string;
 }
 
 /**
@@ -5442,6 +5465,12 @@ export type NodeTypeDescription = {
    * absent when it takes none. Served until the contract's version changes.
    */
   exposable_config_fields?: Array<string>;
+  /**
+   * Each pin group: a slot of inputs and outputs that repeats on each node, each slot's ports
+   * named `<group>.<index>.<pin>` among the node's ports in `graph`; absent when it declares
+   * none.
+   */
+  pin_groups?: Array<NodeTypePinGroupDescribed>;
 } & ({
   source: "project";
 } | ({
@@ -5589,6 +5618,38 @@ export interface NodeTypePortDescribed {
    */
   annotation?: string | null;
 }
+
+/**
+ * A pin group of a node type: a slot of inputs and outputs that repeats on each node.
+ */
+export interface NodeTypePinGroupDescribed {
+  /**
+   * The group's name, the first part of each of its slots' port names.
+   */
+  name: string;
+  /**
+   * What the group is for.
+   */
+  documentation: string;
+  /**
+   * How many slots a node holds.
+   */
+  slots: NodeTypePinGroupSlots;
+  /**
+   * The inputs each slot holds, each named as its pin; a slot's port is named
+   * `<group>.<index>.<pin>`.
+   */
+  inputs: Array<NodeTypeInputDescribed>;
+  /**
+   * The outputs each slot holds, each named as its pin.
+   */
+  outputs: Array<NodeTypePortDescribed>;
+}
+
+/**
+ * How many slots a node holds in a pin group.
+ */
+export type NodeTypePinGroupSlots = "follow_their_wires" | "set_by_the_input_of_the_groups_name";
 
 /**
  * A node type named that the runtime could not describe.
@@ -6868,6 +6929,7 @@ export interface ControlContractComponents {
   PinProjectAssetAnnotation: PinProjectAssetAnnotation;
   InputValueComesFromOnTheWire: InputValueComesFromOnTheWire;
   BundleMemberValueReadOnTheWire: BundleMemberValueReadOnTheWire;
+  PinGroupSlotOnTheWire: PinGroupSlotOnTheWire;
   GraphNodeComponentsOnTheWire: GraphNodeComponentsOnTheWire;
   NodeStateOnTheWire: NodeStateOnTheWire;
   NodeHealthOnTheWire: NodeHealthOnTheWire;
@@ -7056,6 +7118,8 @@ export interface ControlContractComponents {
   SettingReadTime: SettingReadTime;
   NodeValueLifetime: NodeValueLifetime;
   NodeTypePortDescribed: NodeTypePortDescribed;
+  NodeTypePinGroupDescribed: NodeTypePinGroupDescribed;
+  NodeTypePinGroupSlots: NodeTypePinGroupSlots;
   NodeTypeNotDescribed: NodeTypeNotDescribed;
   SetNodeTypeGroupRequest: SetNodeTypeGroupRequest;
   SetNodeTypeGroupToolResult: SetNodeTypeGroupToolResult;
@@ -8149,7 +8213,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 31;
+export declare const CONTROL_CONTRACT_REVISION: 32;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

@@ -358,7 +358,7 @@ pub(super) fn delivery_resolution_of_input_port(
     let node_types = graph.node_types_this_stream_resolves();
     let declared_borrow_quota = node_types.port_info(&dest_type).and_then(|ports| {
         ports
-            .input_named(dest_port)
+            .the_input_of_the_type_a_name_finds(dest_port)
             .and_then(|port| port.borrow_quota)
     });
     Ok(DeliveryResolution {

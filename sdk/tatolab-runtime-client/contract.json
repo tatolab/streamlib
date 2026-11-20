@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 31
+    "x-contract-revision": 32
   },
   "methods": [
     {
@@ -9411,6 +9411,17 @@
               "$ref": "#/components/schemas/BundleMemberValueReadOnTheWire"
             },
             "description": "On a bundle input, the value each member reads and where it comes from, in the order the\nbundle declares its members; absent on every other input."
+          },
+          "pin_group_slot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinGroupSlotOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The slot of the node type's pin group this port belongs to; absent on a port of no\ngroup."
           }
         },
         "required": [
@@ -10364,6 +10375,31 @@
           "member"
         ],
         "description": "The value one member of a bundle input reads, resolved alone: `wire`, with no `value`, when a\nlink ends at the member or at the whole input; else its live value, else its saved one, else\nits default; `value` null and no `value_comes_from` when it reads nothing."
+      },
+      "PinGroupSlotOnTheWire": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": "The group's name, as `describe_node_types` lists it."
+          },
+          "slot": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "The slot's index, from 0."
+          },
+          "pin": {
+            "type": "string",
+            "description": "The pin's name in the slot."
+          }
+        },
+        "required": [
+          "group",
+          "slot",
+          "pin"
+        ],
+        "description": "The slot of a pin group a port belongs to."
       },
       "GraphNodeComponentsOnTheWire": {
         "type": "object",
@@ -18540,6 +18576,13 @@
             },
             "description": "The settings of a node type not yet typed that `set_exposed_config_fields` still takes;\nabsent when it takes none. Served until the contract's version changes.",
             "x-removed-in": 4
+          },
+          "pin_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypePinGroupDescribed"
+            },
+            "description": "Each pin group: a slot of inputs and outputs that repeats on each node, each slot's ports\nnamed `<group>.<index>.<pin>` among the node's ports in `graph`; absent when it declares\nnone."
           }
         },
         "required": [
@@ -18907,6 +18950,60 @@
           "documentation"
         ],
         "description": "One port of a node type: its name, what it carries and how it is typed."
+      },
+      "NodeTypePinGroupDescribed": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The group's name, the first part of each of its slots' port names."
+          },
+          "documentation": {
+            "type": "string",
+            "description": "What the group is for."
+          },
+          "slots": {
+            "$ref": "#/components/schemas/NodeTypePinGroupSlots",
+            "description": "How many slots a node holds."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypeInputDescribed"
+            },
+            "description": "The inputs each slot holds, each named as its pin; a slot's port is named\n`<group>.<index>.<pin>`."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTypePortDescribed"
+            },
+            "description": "The outputs each slot holds, each named as its pin."
+          }
+        },
+        "required": [
+          "name",
+          "documentation",
+          "slots",
+          "inputs",
+          "outputs"
+        ],
+        "description": "A pin group of a node type: a slot of inputs and outputs that repeats on each node."
+      },
+      "NodeTypePinGroupSlots": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "follow_their_wires",
+            "description": "One empty slot after the last a link reaches: wiring the empty slot adds the next."
+          },
+          {
+            "type": "string",
+            "const": "set_by_the_input_of_the_groups_name",
+            "description": "As many as the node's input named after the group says, a setting read at setup."
+          }
+        ],
+        "description": "How many slots a node holds in a pin group."
       },
       "NodeTypeNotDescribed": {
         "type": "object",

@@ -37,7 +37,7 @@ pub use graph_answer_wire_types::{
     FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire, GraphNodeKindOnTheWire,
     GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphToolResult,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
-    MachineWideGraphOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+    MachineWideGraphOnTheWire, PinGroupSlotOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
 };
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
@@ -56,9 +56,10 @@ pub use node_type_wire_types::{
     DescribeNodeTypesToolResult, GraphGeneratorListed, ListNodeTypesToolResult,
     ListPinTypesToolResult, NamedPinTypeListed, NamedPinTypeReadFromSource, NodeTypeCategoryFrom,
     NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed,
-    NodeTypeInputMode, NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed,
-    NodeTypePortPin, NodeTypeSourceListed, NodeTypeSourceListedOrigin, PinTypeConversionListed,
-    PinTypeListed, SetNodeTypeGroupToolResult,
+    NodeTypeInputMode, NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed,
+    NodeTypePinGroupDescribed, NodeTypePinGroupSlots, NodeTypePortDescribed, NodeTypePortPin,
+    NodeTypeSourceListed, NodeTypeSourceListedOrigin, PinTypeConversionListed, PinTypeListed,
+    SetNodeTypeGroupToolResult,
 };
 pub use node_ui_wire_types::{
     ListProjectNodeUiElementsToolResult, NodeUiControlPinType, NodeUiManifest,

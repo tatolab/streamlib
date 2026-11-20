@@ -115,7 +115,7 @@ pub fn refuse_an_input_value_its_input_does_not_take(
         .descriptor(node_type)
         .and_then(|descriptor| descriptor.config_schema);
     let the_input_port = ports
-        .input_named(input)
+        .the_input_of_the_type_a_name_finds(input)
         .filter(|_| !legacy_config.is_a_config_field(input));
     if let Some(member) = member {
         return refuse_a_member_value_its_bundle_input_does_not_take(
