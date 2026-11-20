@@ -1312,7 +1312,8 @@ export interface GraphLinkPortRefOnTheWire {
 export type GraphLinkStateOnTheWire = "pending" | "wired" | "disconnecting" | "disconnected" | "error";
 
 /**
- * What a link does that a person may not expect, tagged by its `warning`.
+ * What a link does that a person may not expect, tagged by its `warning`, with the runtime's
+ * sentence for it in `words`.
  */
 export type PinLinkWarningOnTheWire = {
   /**
@@ -1323,6 +1324,10 @@ export type PinLinkWarningOnTheWire = {
    * The input's meaning.
    */
   input_meaning: string;
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "meanings_differ";
 } | {
   /**
@@ -1337,18 +1342,38 @@ export type PinLinkWarningOnTheWire = {
    * The input member's meaning.
    */
   input_meaning: string;
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "member_meanings_differ";
 } | {
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "vector_read_as_a_color";
 } | {
   /**
    * Each such option, as the output names it.
    */
   option_names: Array<string>;
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "menu_options_the_input_does_not_list";
 } | {
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "texture_output_states_no_format";
 } | {
+  /**
+   * The warning in the runtime's words, for a person to read.
+   */
+  words: string;
   warning: "type_found_only_once_placed";
 };
 
