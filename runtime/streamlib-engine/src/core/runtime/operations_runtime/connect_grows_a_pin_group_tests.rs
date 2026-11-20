@@ -429,3 +429,149 @@ fn describe_node_types_lists_each_group_with_its_slots_pins_and_its_count_input(
     );
     assert!(mixer.inputs.is_empty(), "{:?}", mixer.inputs);
 }
+
+/// Mental-revert: without the facts store reshaped, a grown output has no entry, and a node
+/// stating facts on it is told the node declares no such port.
+#[test]
+fn a_grown_output_slot_carries_stream_facts_and_a_given_back_one_does_not() {
+    register_the_pin_group_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let taps = a_node_with_values(
+        &compiler,
+        TAPS,
+        serde_json::Map::from_iter([("taps".to_owned(), json!(3))]),
+    );
+
+    let no_entry = |port: &str| {
+        compiler.scope(|graph, _tx| {
+            let node = graph
+                .traversal()
+                .v(&taps)
+                .first()
+                .expect("the node is held");
+            node.stream_facts_of_output_ports()
+                .replace_facts_of(
+                    port,
+                    crate::core::descriptors::PortStreamFacts::Packets(Default::default()),
+                )
+                .err()
+                .is_some_and(|refused| refused.to_string().contains("no output port"))
+        })
+    };
+    assert!(
+        !no_entry("taps.2.tap"),
+        "a grown slot's output has an entry"
+    );
+    assert!(no_entry("taps.3.tap"), "a slot not held has none");
+}
+
+/// Mental-revert: without the grown slot given back, a check of a link into slot 3 leaves the
+/// mixer holding five slots.
+#[test]
+fn a_check_of_a_link_into_a_later_slot_judges_it_as_connect_does_and_changes_nothing() {
+    register_the_pin_group_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let mixer = a_node_of(&compiler, LAYER_MIXER);
+    let source = a_node_of(&compiler, FLOAT_SOURCE);
+
+    super::the_verdict_connect_takes_on_a_link(
+        &compiler,
+        OutputLinkPortRef::new(source, "value"),
+        InputLinkPortRef::new(mixer.clone(), "layers.3.layer"),
+    )
+    .expect("a Float into a Float slot connects");
+
+    assert_eq!(
+        the_ports_of(&compiler, &mixer, PortDirection::Input),
+        ["layers.0.layer"]
+    );
+}
+
+#[test]
+fn clearing_a_count_whose_default_leaves_out_a_linked_slot_is_refused() {
+    register_the_pin_group_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let taps = a_node_with_values(
+        &compiler,
+        TAPS,
+        serde_json::Map::from_iter([("taps".to_owned(), json!(3))]),
+    );
+    let mixer = a_node_of(&compiler, LAYER_MIXER);
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(taps.clone(), "taps.2.tap"),
+        InputLinkPortRef::new(mixer, "layers.0.layer"),
+    )
+    .expect("a tap links into a layer");
+
+    let refused = compiler.scope(|graph, _tx| {
+        graph.refuse_a_slot_count_leaving_out_a_linked_slot(&taps, "taps", None)
+    });
+
+    assert!(
+        matches!(&refused, Err(Error::Configuration(words)) if words.contains("cannot hold 1 slots")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_later_slots_value_is_an_input_value_and_no_config_field() {
+    register_the_pin_group_fixture_node_types();
+    let compiler = Compiler::new();
+    let legacy = compiler.scope(|graph, _tx| {
+        crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType::of(
+            graph.node_types_this_stream_resolves(),
+            &class_path(LAYER_MIXER),
+        )
+    });
+
+    assert!(!legacy.is_a_config_field("layers.2.layer"));
+    assert!(
+        legacy.is_a_config_field("layers.2.gain"),
+        "no pin of the slot is so named"
+    );
+}
+
+#[test]
+fn a_port_named_as_a_slots_port_is_refused_at_registration() {
+    let refused = NODE_REGISTRY.register_descriptor_only(
+        a_node_type("PinGroupShadowedPort")
+            .with_input(a_float_port("layers.1.layer"))
+            .with_pin_group(PinGroupDescriptor::new(
+                "layers",
+                "",
+                vec![a_float_port("layer")],
+                Vec::new(),
+            )),
+    );
+
+    let words = refused
+        .expect_err("the port would be read as slot 1's")
+        .to_string();
+    assert!(
+        words.contains("named as a port of one of its slots"),
+        "{words}"
+    );
+}
+
+#[test]
+fn a_pin_following_an_input_of_one_slot_by_its_slots_name_is_refused_at_registration() {
+    let refused = NODE_REGISTRY.register_descriptor_only(
+        a_node_type("PinGroupFollowingSlotZero").with_pin_group(PinGroupDescriptor::new(
+            "lanes",
+            "",
+            vec![a_records_port("in", DeclaredPinType::Any)],
+            vec![a_records_port(
+                "out",
+                DeclaredPinType::SameAsInput {
+                    input_port_name: "lanes.0.in".to_owned(),
+                },
+            )],
+        )),
+    );
+
+    let words = refused
+        .expect_err("each slot would follow slot 0")
+        .to_string();
+    assert!(words.contains("follows `lanes.0.in`"), "{words}");
+}

@@ -105,21 +105,28 @@ impl GraphNodePorts {
         self.the_one_a_name_finds(PortDirection::Input, name)
     }
 
-    /// The input `name` finds among the ports of a node type: the input so named or that had
-    /// that name, else, for a port of a slot of a pin group past the first, the same pin of the
-    /// first slot, which a type's ports hold and which declares what every slot's does.
-    pub fn the_input_of_the_type_a_name_finds(&self, name: &str) -> Option<&PortInfo> {
-        self.input_named(name).or_else(|| {
-            let slot_port = crate::core::descriptors::PinGroupSlotPort::named(name)?;
-            let separator = crate::core::descriptors::PIN_GROUP_SLOT_PORT_NAME_SEPARATOR;
-            self.inputs.iter().find(|input| {
-                input.name
-                    == format!(
-                        "{}{separator}0{separator}{}",
-                        slot_port.group, slot_port.pin
-                    )
-            })
+    /// The port of `direction` `name` finds among `ports`, the ports of a node type: the port
+    /// so named, else, for a port of a slot of a pin group past the first and within
+    /// [`crate::core::descriptors::PIN_GROUP_MOST_SLOTS`], the same pin of the first slot, which
+    /// a type's ports hold and which declares what every slot's does.
+    pub fn the_port_of_a_type_a_name_finds<'ports>(
+        ports: &'ports [PortInfo],
+        name: &str,
+    ) -> Option<&'ports PortInfo> {
+        ports.iter().find(|port| port.name == name).or_else(|| {
+            let slot_port = crate::core::descriptors::PinGroupSlotPort::named(name)
+                .filter(|port| port.slot < crate::core::descriptors::PIN_GROUP_MOST_SLOTS)?;
+            let in_the_first_slot = slot_port.named_in_the_first_slot();
+            ports.iter().find(|port| port.name == in_the_first_slot)
         })
+    }
+
+    /// The input `name` finds among the ports of a node type: the input so named or that had
+    /// that name, else the same pin of a pin group's first slot, as
+    /// [`Self::the_port_of_a_type_a_name_finds`] finds it.
+    pub fn the_input_of_the_type_a_name_finds(&self, name: &str) -> Option<&PortInfo> {
+        self.input_named(name)
+            .or_else(|| Self::the_port_of_a_type_a_name_finds(&self.inputs, name))
     }
 
     /// The output `name` finds: the output so named, else the one that had that name.

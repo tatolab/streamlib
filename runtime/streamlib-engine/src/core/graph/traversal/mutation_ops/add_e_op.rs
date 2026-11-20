@@ -32,16 +32,19 @@ impl<'a> TraversalSourceMut<'a> {
             crate::core::PortDirection::Input,
             to.port_name(),
         );
-        let Some(from) = self.graph[from_idx]
+        let ends = self.graph[from_idx]
             .try_output(from.port_name())
             .map(|current| current.at_member(from.member().map(str::to_owned)))
-        else {
-            return self.no_link();
-        };
-        let Some(to) = self.graph[to_idx]
-            .try_input(to.port_name())
-            .map(|current| current.at_member(to.member().map(str::to_owned)))
-        else {
+            .zip(
+                self.graph[to_idx]
+                    .try_input(to.port_name())
+                    .map(|current| current.at_member(to.member().map(str::to_owned))),
+            );
+        let Some((from, to)) = ends else {
+            // A slot grown for an end of a link not made is given back.
+            for node_index in [from_idx, to_idx] {
+                crate::core::graph::reshape_the_pin_group_slots_of(self.graph, node_index);
+            }
             return self.no_link();
         };
 

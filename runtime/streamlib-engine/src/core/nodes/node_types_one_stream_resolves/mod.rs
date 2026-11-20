@@ -359,6 +359,19 @@ impl NodeTypesOneStreamResolves {
         })
     }
 
+    /// The pin groups the node type `node_type` names repeats; none for a type this stream does
+    /// not resolve.
+    pub fn the_pin_groups_of(
+        &self,
+        node_type: &str,
+    ) -> Vec<crate::core::descriptors::PinGroupDescriptor> {
+        NodeClassImportPath::new(node_type)
+            .ok()
+            .and_then(|node_type| self.descriptor(&node_type))
+            .map(|descriptor| descriptor.pin_groups)
+            .unwrap_or_default()
+    }
+
     /// The program of shader node type `node_type`; `None` for any other type.
     pub(crate) fn shader_node_program_of(
         &self,
