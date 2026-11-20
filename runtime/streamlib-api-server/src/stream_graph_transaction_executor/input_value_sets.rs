@@ -354,11 +354,11 @@ impl StreamGraphTransactionExecutor<'_> {
 }
 
 /// Whether the engine checks the input values of `node`: every node but a stream fragment and
-/// a graph interface node, whose input values the runtime reads itself.
+/// a node of a type the graph resolves itself, whose input values the runtime reads itself.
 pub(super) fn its_input_values_are_checked(node: &StreamGraphDocumentNode) -> bool {
     node.fragment.is_none()
         && node.node_type != STREAM_FRAGMENT_NODE_TYPE
-        && !is_a_graph_interface_node_type(&node.node_type)
+        && !is_a_node_type_of_the_graph_itself(&node.node_type)
 }
 
 /// The link of `level` that feeds input `input` of `node`, which overrides a value set on it.

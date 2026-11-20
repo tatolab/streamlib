@@ -5393,7 +5393,8 @@ export interface NodeTypeListed {
    */
   category_from?: NodeTypeCategoryFrom | null;
   /**
-   * How its code runs; null for an entry point whose declaration source does not show it.
+   * How its code runs; null for an entry point whose declaration source does not show it,
+   * and for a node type the graph resolves itself, which no node code runs.
    */
   kind?: NodeTypeKind | null;
   /**
@@ -5493,7 +5494,8 @@ export type NodeTypeDescription = {
    */
   category_from?: NodeTypeCategoryFrom | null;
   /**
-   * How its code runs; null where its declaration source does not show it.
+   * How its code runs; null where its declaration source does not show it, and for a node
+   * type the graph resolves itself, which no node code runs.
    */
   kind?: NodeTypeKind | null;
   /**
@@ -8038,7 +8040,7 @@ export interface ControlOperations {
   /**
    * List the node types and graph generators a project offers, by the source each comes from.
    *
-   * List the node types and graph generators a project offers, each under `sources` by `source`: the project's own node code outside `imports/` (`project`), each import as its folder holds it now (`dependency`, with its `project`, `folder`, `version` and `project_name`), each installed distribution that declares `tatolab.nodes` entry points (`installed_distribution`, with its `distribution` and `distribution_version`), then the node types the runtime brings itself (`built_in`). Project code is read from source without running it. Each node type has its `node_type` (what `add_node` and `describe_node_types` take), the first line of its description as `documentation`, its `category`, its `kind` (`process`, `function` or `shader`) and `described_from`, where the runtime's description of it comes from: `built_in`, `source`, or `interpreter` when a loaded stream of the project described it in its own interpreter. `describe_node_types` answers each one's inputs and outputs. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, where it is declared, and the settings it promotes as `promoted_settings`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
+   * List the node types and graph generators a project offers, each under `sources` by `source`: the project's own node code outside `imports/` (`project`), each import as its folder holds it now (`dependency`, with its `project`, `folder`, `version` and `project_name`), each installed distribution that declares `tatolab.nodes` entry points (`installed_distribution`, with its `distribution` and `distribution_version`), then the node types the runtime brings itself (`built_in`), ending with the graph's own `GraphInput`, `GraphOutput`, `SetVariable` and `GetVariable` in the `Graph` category, which no node code runs and so have no `kind`. Project code is read from source without running it. Each node type has its `node_type` (what `add_node` and `describe_node_types` take), the first line of its description as `documentation`, its `category`, its `kind` (`process`, `function` or `shader`) and `described_from`, where the runtime's description of it comes from: `built_in`, `source`, or `interpreter` when a loaded stream of the project described it in its own interpreter. `describe_node_types` answers each one's inputs and outputs. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, where it is declared, and the settings it promotes as `promoted_settings`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
    *
    * Since contract version 3, experimental.
    */
