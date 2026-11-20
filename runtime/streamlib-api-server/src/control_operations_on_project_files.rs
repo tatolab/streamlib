@@ -140,6 +140,33 @@ impl ControlOperationDispatcher {
         }: CreateNodeUiElementRequest,
         request_origin: &ControlRequestOrigin,
     ) -> Result<CreateNodeUiElementToolResult, ControlOperationRefusal> {
+        let script_path = format!("{NODE_UI_DIRECTORY}/{script}");
+        let manifest_path = format!("{NODE_UI_DIRECTORY}/{NODE_UI_MANIFEST_FILE_NAME}");
+        let key_sent_again = idempotency_key.clone();
+        if let Some(AppliedProjectTransaction {
+            transaction,
+            commit,
+            ..
+        }) = self
+            .a_project_repository_call_off_the_async_runtime(
+                "create_node_ui_element",
+                project_directory.clone(),
+                move |project_repository| {
+                    project_repository.the_transaction_applied_under_a_key_the_caller_sent(
+                        the_idempotency_key_a_caller_sent(key_sent_again)?.as_ref(),
+                    )
+                },
+            )
+            .await?
+        {
+            return Ok(CreateNodeUiElementToolResult {
+                script_path,
+                manifest_path,
+                template_from: None,
+                transaction: transaction.transaction.to_string(),
+                commit,
+            });
+        }
         let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
         let template_project_directory = project_directory.clone();
         let template_element = element.clone();
@@ -190,9 +217,9 @@ impl ControlOperationDispatcher {
             )
             .await?;
         Ok(CreateNodeUiElementToolResult {
-            script_path: format!("{NODE_UI_DIRECTORY}/{script}"),
-            manifest_path: format!("{NODE_UI_DIRECTORY}/{NODE_UI_MANIFEST_FILE_NAME}"),
-            template_from,
+            script_path,
+            manifest_path,
+            template_from: Some(template_from),
             transaction: transaction.transaction.to_string(),
             commit,
         })

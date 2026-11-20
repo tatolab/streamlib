@@ -655,8 +655,9 @@ pub struct CreateNodeUiElementToolResult {
     pub script_path: String,
     /// The manifest that registers it, relative to the project.
     pub manifest_path: String,
-    /// The kit the template was read from, with its version and where it was found.
-    pub template_from: String,
+    /// The kit the template was read from, with its version and where it was found; `null` when
+    /// the call was sent again under the key of one already applied, which reads no kit.
+    pub template_from: Option<String>,
     /// The transaction's UUID.
     pub transaction: String,
     /// The commit on the project history's `main` that records it.

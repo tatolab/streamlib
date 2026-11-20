@@ -40,6 +40,23 @@ impl ProjectRepository {
         let manifest_path = ProjectRelativeFilePath::parse(&format!(
             "{NODE_UI_DIRECTORY}/{NODE_UI_MANIFEST_FILE_NAME}"
         ))?;
+        let not_registered = |why: String| ProjectRepositoryRefusal::NodeUiElementNotRegistered {
+            path: manifest_path.as_str().to_owned(),
+            why,
+        };
+        if script_path == manifest_path {
+            return Err(not_registered(format!(
+                "`{NODE_UI_MANIFEST_FILE_NAME}` is the manifest's own name; name the script \
+                 another, such as `knob.ts`"
+            )));
+        }
+        if let ProjectNodeUiElement::Control { control: None, .. } = element {
+            return Err(not_registered(
+                "a control with no `control` name is its pin type's default control, which only \
+                 the Studio's own module registers; give it a name, such as `knob`"
+                    .to_owned(),
+            ));
+        }
         let assets = self.every_asset()?;
         for path in [&script_path, &manifest_path] {
             self.refuse_a_file_another_action_writes(&assets, path)?;
@@ -55,10 +72,6 @@ impl ProjectRepository {
         }
         let manifest_on_disk = manifest_path.on_disk_under(&self.project_directory);
         let manifest_read = the_node_ui_manifest_file_read(&manifest_on_disk);
-        let not_registered = |why: String| ProjectRepositoryRefusal::NodeUiElementNotRegistered {
-            path: manifest_path.as_str().to_owned(),
-            why,
-        };
         let (manifest, bytes_on_disk_now) = match manifest_read {
             None => (
                 NodeUiManifest {

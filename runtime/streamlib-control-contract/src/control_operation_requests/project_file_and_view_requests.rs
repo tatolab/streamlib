@@ -107,12 +107,12 @@ pub struct CreateNodeUiElementRequest {
     pub project_directory: PathBuf,
     /// What to create, as its manifest entry registers it.
     #[schemars(
-        description = "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by (null for the pin type's default control), or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
+        description = "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by and which it must have, since a pin type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
     )]
     pub element: ProjectNodeUiElement,
     /// The new script, inside the project's `node_ui/` folder.
     #[schemars(
-        description = "The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, or through a symbolic link."
+        description = "The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, for the manifest's own name, or through a symbolic link."
     )]
     pub script: String,
     /// Who the change is by, as history records it and undo follows it.

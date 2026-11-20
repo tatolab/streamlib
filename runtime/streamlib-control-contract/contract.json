@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 20
+    "x-contract-revision": 21
   },
   "methods": [
     {
@@ -4032,7 +4032,7 @@
     {
       "name": "create_node_ui_element",
       "summary": "Create a control or a node body in a project from the kit's template and register it, as one transaction.",
-      "description": "Create a new control for one pin type, or a node body for one node type, in the project's own `node_ui/` folder, as one transaction an undo reverses: the script at `node_ui/<script>`, written from the extension SDK kit's template for its kind (`templates/control.ts` or `templates/node_body.ts`) with the pin type or node type written in, and its entry in `node_ui/tatolab_node_ui.json`, which is created when missing. The script default-exports its element class and never defines a custom element itself. What it writes passes `check_project_code` unchanged, so start from it: edit the script with `write_project_file`, then run `check_project_code` again and read each finding's code and place. The kit is found as `check_project_code` finds it: the runtime unit's, the one its starter names, then the project's installed SDK; the runtime holds no template of its own. Answers the `script_path` and `manifest_path` it wrote, `template_from`, the kit with its version and where it was found, and the `transaction` and `commit`. Refused when no kit is found or the kit holds no template for the kind, naming why; where a file already is at the script's path; when the manifest does not read against the view contract; and when it already registers a control of the same pin type and name, or a node body for the same node type.",
+      "description": "Create a new control for one pin type, or a node body for one node type, in the project's own `node_ui/` folder, as one transaction an undo reverses: the script at `node_ui/<script>`, written from the extension SDK kit's template for its kind (`templates/control.ts` or `templates/node_body.ts`) with the pin type or node type written in, and its entry in `node_ui/tatolab_node_ui.json`, which is created when missing. The script default-exports its element class and never defines a custom element itself. What it writes passes `check_project_code` unchanged, so start from it: edit the script with `write_project_file`, then run `check_project_code` again and read each finding's code and place. The kit is found as `check_project_code` finds it: the runtime unit's, the one its starter names, then the project's installed SDK; the runtime holds no template of its own. Answers the `script_path` and `manifest_path` it wrote, `template_from`, the kit with its version and where it was found (null when sent again under the key of a call already applied, which answers that call's transaction without reading the kit), and the `transaction` and `commit`. Refused when no kit is found or the kit holds no template for the kind, naming why; for a control with no `control` name, as a pin type's default control is the Studio's own to register; where a file already is at the script's path, or for the manifest's own name; when the manifest does not read against the view contract; and when it already registers a control of the same pin type and name, or a node body for the same node type.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -14610,11 +14610,11 @@
           },
           "element": {
             "$ref": "#/components/schemas/ProjectNodeUiElement",
-            "description": "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by (null for the pin type's default control), or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
+            "description": "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by and which it must have, since a pin type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
           },
           "script": {
             "type": "string",
-            "description": "The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, or through a symbolic link."
+            "description": "The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, for the manifest's own name, or through a symbolic link."
           },
           "author": {
             "anyOf": [
@@ -14812,8 +14812,11 @@
             "description": "The manifest that registers it, relative to the project."
           },
           "template_from": {
-            "type": "string",
-            "description": "The kit the template was read from, with its version and where it was found."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kit the template was read from, with its version and where it was found; `null` when\nthe call was sent again under the key of one already applied, which reads no kit."
           },
           "transaction": {
             "type": "string",
@@ -14827,7 +14830,6 @@
         "required": [
           "script_path",
           "manifest_path",
-          "template_from",
           "transaction",
           "commit"
         ],

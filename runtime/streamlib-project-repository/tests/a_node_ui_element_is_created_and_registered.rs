@@ -147,7 +147,7 @@ fn an_element_the_manifest_already_registers_or_a_script_already_there_is_refuse
         project.create(
             &ProjectNodeUiElement::Control {
                 pin_type: BuiltInPinTypeName::Float,
-                control: None,
+                control: Some("dial".to_owned()),
             },
             "knob.ts",
         ),
@@ -185,5 +185,29 @@ fn a_script_outside_the_node_ui_folder_is_refused() {
         project.create(&a_float_knob(), "../nodes/knob.ts"),
         Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
     ));
+    assert_eq!(project.on_disk("node_ui/tatolab_node_ui.json"), None);
+}
+
+#[test]
+fn a_control_with_no_name_or_a_script_named_as_the_manifest_is_refused_and_nothing_is_written() {
+    let mut project = AProject::new();
+
+    assert!(matches!(
+        project.create(
+            &ProjectNodeUiElement::Control {
+                pin_type: BuiltInPinTypeName::Float,
+                control: None,
+            },
+            "knob.ts",
+        ),
+        Err(ProjectRepositoryRefusal::NodeUiElementNotRegistered { why, .. })
+            if why.contains("default control")
+    ));
+    assert!(matches!(
+        project.create(&a_float_knob(), "tatolab_node_ui.json"),
+        Err(ProjectRepositoryRefusal::NodeUiElementNotRegistered { path, why })
+            if path == "node_ui/tatolab_node_ui.json" && why.contains("manifest's own name")
+    ));
+    assert_eq!(project.on_disk("node_ui/knob.ts"), None);
     assert_eq!(project.on_disk("node_ui/tatolab_node_ui.json"), None);
 }

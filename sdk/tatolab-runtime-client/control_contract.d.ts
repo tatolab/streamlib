@@ -4454,11 +4454,11 @@ export interface CreateNodeUiElementRequest {
    */
   project_directory: string;
   /**
-   * What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by (null for the pin type's default control), or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`.
+   * What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by and which it must have, since a pin type's default control is the Studio's own to register, or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`.
    */
   element: ProjectNodeUiElement;
   /**
-   * The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, or through a symbolic link.
+   * The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, for the manifest's own name, or through a symbolic link.
    */
   script: string;
   /**
@@ -4506,9 +4506,10 @@ export interface CreateNodeUiElementToolResult {
    */
   manifest_path: string;
   /**
-   * The kit the template was read from, with its version and where it was found.
+   * The kit the template was read from, with its version and where it was found; `null` when
+   * the call was sent again under the key of one already applied, which reads no kit.
    */
-  template_from: string;
+  template_from?: string | null;
   /**
    * The transaction's UUID.
    */
@@ -7654,7 +7655,7 @@ export interface ControlOperations {
   /**
    * Create a control or a node body in a project from the kit's template and register it, as one transaction.
    *
-   * Create a new control for one pin type, or a node body for one node type, in the project's own `node_ui/` folder, as one transaction an undo reverses: the script at `node_ui/<script>`, written from the extension SDK kit's template for its kind (`templates/control.ts` or `templates/node_body.ts`) with the pin type or node type written in, and its entry in `node_ui/tatolab_node_ui.json`, which is created when missing. The script default-exports its element class and never defines a custom element itself. What it writes passes `check_project_code` unchanged, so start from it: edit the script with `write_project_file`, then run `check_project_code` again and read each finding's code and place. The kit is found as `check_project_code` finds it: the runtime unit's, the one its starter names, then the project's installed SDK; the runtime holds no template of its own. Answers the `script_path` and `manifest_path` it wrote, `template_from`, the kit with its version and where it was found, and the `transaction` and `commit`. Refused when no kit is found or the kit holds no template for the kind, naming why; where a file already is at the script's path; when the manifest does not read against the view contract; and when it already registers a control of the same pin type and name, or a node body for the same node type.
+   * Create a new control for one pin type, or a node body for one node type, in the project's own `node_ui/` folder, as one transaction an undo reverses: the script at `node_ui/<script>`, written from the extension SDK kit's template for its kind (`templates/control.ts` or `templates/node_body.ts`) with the pin type or node type written in, and its entry in `node_ui/tatolab_node_ui.json`, which is created when missing. The script default-exports its element class and never defines a custom element itself. What it writes passes `check_project_code` unchanged, so start from it: edit the script with `write_project_file`, then run `check_project_code` again and read each finding's code and place. The kit is found as `check_project_code` finds it: the runtime unit's, the one its starter names, then the project's installed SDK; the runtime holds no template of its own. Answers the `script_path` and `manifest_path` it wrote, `template_from`, the kit with its version and where it was found (null when sent again under the key of a call already applied, which answers that call's transaction without reading the kit), and the `transaction` and `commit`. Refused when no kit is found or the kit holds no template for the kind, naming why; for a control with no `control` name, as a pin type's default control is the Studio's own to register; where a file already is at the script's path, or for the manifest's own name; when the manifest does not read against the view contract; and when it already registers a control of the same pin type and name, or a node body for the same node type.
    *
    * Since contract version 3, experimental.
    */
@@ -7939,7 +7940,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 20;
+export declare const CONTROL_CONTRACT_REVISION: 21;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];
