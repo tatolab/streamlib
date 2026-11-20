@@ -37,6 +37,7 @@ mod mcp_stdio_upgrade;
 mod mcp_stream_action_resources;
 mod new_node_file_template;
 mod node_type_groups_of_a_project;
+mod node_ui_element_template;
 mod notifications_sent_at_most_once_each_interval;
 #[cfg(test)]
 mod project_asset_tools_tests;

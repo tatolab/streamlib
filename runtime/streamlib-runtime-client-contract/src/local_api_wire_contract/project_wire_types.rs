@@ -647,6 +647,22 @@ pub struct CreateNodeFileToolResult {
     pub commit: String,
 }
 
+/// The `create_node_ui_element` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CreateNodeUiElementToolResult {
+    /// The script created, relative to the project, as `node_ui/knob.ts`.
+    pub script_path: String,
+    /// The manifest that registers it, relative to the project.
+    pub manifest_path: String,
+    /// The kit the template was read from, with its version and where it was found.
+    pub template_from: String,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+}
+
 /// A project this one imports, as a dependency tool answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]

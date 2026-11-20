@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 19
+    "x-contract-revision": 20
   },
   "methods": [
     {
@@ -4021,6 +4021,67 @@
       "x-since": 1,
       "x-stability": "stable",
       "x-group": "file",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
+      "name": "create_node_ui_element",
+      "summary": "Create a control or a node body in a project from the kit's template and register it, as one transaction.",
+      "description": "Create a new control for one pin type, or a node body for one node type, in the project's own `node_ui/` folder, as one transaction an undo reverses: the script at `node_ui/<script>`, written from the extension SDK kit's template for its kind (`templates/control.ts` or `templates/node_body.ts`) with the pin type or node type written in, and its entry in `node_ui/tatolab_node_ui.json`, which is created when missing. The script default-exports its element class and never defines a custom element itself. What it writes passes `check_project_code` unchanged, so start from it: edit the script with `write_project_file`, then run `check_project_code` again and read each finding's code and place. The kit is found as `check_project_code` finds it: the runtime unit's, the one its starter names, then the project's installed SDK; the runtime holds no template of its own. Answers the `script_path` and `manifest_path` it wrote, `template_from`, the kit with its version and where it was found, and the `transaction` and `commit`. Refused when no kit is found or the kit holds no template for the kind, naming why; where a file already is at the script's path; when the manifest does not read against the view contract; and when it already registers a control of the same pin type and name, or a node body for the same node type.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/CreateNodeUiElementRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "create_node_ui_element_result",
+        "schema": {
+          "$ref": "#/components/schemas/CreateNodeUiElementToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "view",
       "x-exposures": [
         "studio",
         "agent",
@@ -14509,6 +14570,239 @@
         ],
         "description": "The `create_node_file` tool's result."
       },
+      "CreateNodeUiElementRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project, by absolute path: a folder holding `tatolab-project.json`."
+          },
+          "element": {
+            "$ref": "#/components/schemas/ProjectNodeUiElement",
+            "description": "What to create, under `kind`: `control`, with the `pin_type` whose inputs it edits or shows and its `control` name, which a pin's `control` annotation picks it by (null for the pin type's default control), or `node_body`, with the `node_type` whose node it draws, as `acme:Crossfade`."
+          },
+          "script": {
+            "type": "string",
+            "description": "The new script, `/`-separated and relative to the project's `node_ui/` folder, such as `knob.ts`. Refused where a file already is, or through a symbolic link."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "project_directory",
+          "element",
+          "script"
+        ],
+        "description": "`create_node_ui_element`'s params."
+      },
+      "ProjectNodeUiElement": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "pin_type": {
+                "$ref": "#/components/schemas/BuiltInPinTypeName",
+                "description": "The pin type whose inputs it edits or shows."
+              },
+              "control": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Its name, which a pin's `control` annotation picks it by; `null` for its pin type's\ndefault."
+              },
+              "kind": {
+                "type": "string",
+                "const": "control"
+              }
+            },
+            "required": [
+              "kind",
+              "pin_type"
+            ],
+            "description": "A control, which edits or shows an input of one pin type."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "node_type": {
+                "type": "string",
+                "description": "The node type whose node it draws."
+              },
+              "kind": {
+                "type": "string",
+                "const": "node_body"
+              }
+            },
+            "required": [
+              "kind",
+              "node_type"
+            ],
+            "description": "A node body, which draws the inside of one node type's node."
+          }
+        ],
+        "description": "What a node UI element is, under `kind`."
+      },
+      "BuiltInPinTypeName": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "boolean",
+            "description": "True or false."
+          },
+          {
+            "type": "string",
+            "const": "integer",
+            "description": "A whole number, exact to 2^53, or within the exact size the type states."
+          },
+          {
+            "type": "string",
+            "const": "float",
+            "description": "A number, held as a 64-bit float unless the type states a size."
+          },
+          {
+            "type": "string",
+            "const": "string",
+            "description": "Text."
+          },
+          {
+            "type": "string",
+            "const": "menu",
+            "description": "One of a fixed list of option names."
+          },
+          {
+            "type": "string",
+            "const": "color",
+            "description": "An sRGB colour with alpha, four numbers from 0 to 1."
+          },
+          {
+            "type": "string",
+            "const": "vector",
+            "description": "Two, three or four numbers, named x, y, z and w."
+          },
+          {
+            "type": "string",
+            "const": "rectangle",
+            "description": "A rectangle by its left and top edges, width and height."
+          },
+          {
+            "type": "string",
+            "const": "transform",
+            "description": "A 4 by 4 matrix, row by row."
+          },
+          {
+            "type": "string",
+            "const": "texture",
+            "description": "A GPU picture, in one of the pixel formats the type states."
+          },
+          {
+            "type": "string",
+            "const": "audio",
+            "description": "A stream of audio samples."
+          },
+          {
+            "type": "string",
+            "const": "encoded_video",
+            "description": "Encoded video, one access unit per message, in one of the codecs the type states."
+          },
+          {
+            "type": "string",
+            "const": "encoded_audio",
+            "description": "Encoded audio, one packet per message, in one of the codecs the type states."
+          },
+          {
+            "type": "string",
+            "const": "tensor",
+            "description": "An array of numbers with a shape."
+          },
+          {
+            "type": "string",
+            "const": "asset",
+            "description": "One of the project's assets, of the media the type states."
+          },
+          {
+            "type": "string",
+            "const": "trigger",
+            "description": "An event with no payload; its message's timestamp is the event."
+          },
+          {
+            "type": "string",
+            "const": "list_of",
+            "description": "A list of values of the one type it names."
+          },
+          {
+            "type": "string",
+            "const": "bundle",
+            "description": "Named members, each of its own type, carried as one message. It has no name of its own: two bundles with the same members are one type."
+          },
+          {
+            "type": "string",
+            "const": "named",
+            "description": "A type a module declares by its class, carried as the bytes that class packs."
+          },
+          {
+            "type": "string",
+            "const": "node_reference",
+            "description": "A setting naming another node of the graph. It never takes a wire."
+          },
+          {
+            "type": "string",
+            "const": "pin_type_choice",
+            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes a wire."
+          }
+        ],
+        "description": "The name of a built-in pin type: the `type` tag of its pin type."
+      },
+      "CreateNodeUiElementToolResult": {
+        "type": "object",
+        "properties": {
+          "script_path": {
+            "type": "string",
+            "description": "The script created, relative to the project, as `node_ui/knob.ts`."
+          },
+          "manifest_path": {
+            "type": "string",
+            "description": "The manifest that registers it, relative to the project."
+          },
+          "template_from": {
+            "type": "string",
+            "description": "The kit the template was read from, with its version and where it was found."
+          },
+          "transaction": {
+            "type": "string",
+            "description": "The transaction's UUID."
+          },
+          "commit": {
+            "type": "string",
+            "description": "The commit on the project history's `main` that records it."
+          }
+        },
+        "required": [
+          "script_path",
+          "manifest_path",
+          "template_from",
+          "transaction",
+          "commit"
+        ],
+        "description": "The `create_node_ui_element` tool's result."
+      },
       "WriteProjectFileRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -15357,116 +15651,6 @@
           "converts_to"
         ],
         "description": "One built-in pin type: the contract's row for it, and what converts it on this runtime."
-      },
-      "BuiltInPinTypeName": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "boolean",
-            "description": "True or false."
-          },
-          {
-            "type": "string",
-            "const": "integer",
-            "description": "A whole number, exact to 2^53, or within the exact size the type states."
-          },
-          {
-            "type": "string",
-            "const": "float",
-            "description": "A number, held as a 64-bit float unless the type states a size."
-          },
-          {
-            "type": "string",
-            "const": "string",
-            "description": "Text."
-          },
-          {
-            "type": "string",
-            "const": "menu",
-            "description": "One of a fixed list of option names."
-          },
-          {
-            "type": "string",
-            "const": "color",
-            "description": "An sRGB colour with alpha, four numbers from 0 to 1."
-          },
-          {
-            "type": "string",
-            "const": "vector",
-            "description": "Two, three or four numbers, named x, y, z and w."
-          },
-          {
-            "type": "string",
-            "const": "rectangle",
-            "description": "A rectangle by its left and top edges, width and height."
-          },
-          {
-            "type": "string",
-            "const": "transform",
-            "description": "A 4 by 4 matrix, row by row."
-          },
-          {
-            "type": "string",
-            "const": "texture",
-            "description": "A GPU picture, in one of the pixel formats the type states."
-          },
-          {
-            "type": "string",
-            "const": "audio",
-            "description": "A stream of audio samples."
-          },
-          {
-            "type": "string",
-            "const": "encoded_video",
-            "description": "Encoded video, one access unit per message, in one of the codecs the type states."
-          },
-          {
-            "type": "string",
-            "const": "encoded_audio",
-            "description": "Encoded audio, one packet per message, in one of the codecs the type states."
-          },
-          {
-            "type": "string",
-            "const": "tensor",
-            "description": "An array of numbers with a shape."
-          },
-          {
-            "type": "string",
-            "const": "asset",
-            "description": "One of the project's assets, of the media the type states."
-          },
-          {
-            "type": "string",
-            "const": "trigger",
-            "description": "An event with no payload; its message's timestamp is the event."
-          },
-          {
-            "type": "string",
-            "const": "list_of",
-            "description": "A list of values of the one type it names."
-          },
-          {
-            "type": "string",
-            "const": "bundle",
-            "description": "Named members, each of its own type, carried as one message. It has no name of its own: two bundles with the same members are one type."
-          },
-          {
-            "type": "string",
-            "const": "named",
-            "description": "A type a module declares by its class, carried as the bytes that class packs."
-          },
-          {
-            "type": "string",
-            "const": "node_reference",
-            "description": "A setting naming another node of the graph. It never takes a wire."
-          },
-          {
-            "type": "string",
-            "const": "pin_type_choice",
-            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes a wire."
-          }
-        ],
-        "description": "The name of a built-in pin type: the `type` tag of its pin type."
       },
       "PinAnnotationName": {
         "oneOf": [
@@ -17084,54 +17268,6 @@
           "project_name"
         ],
         "description": "The module that registers a node UI element: the listed project itself, or one of its\nimports."
-      },
-      "ProjectNodeUiElement": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "pin_type": {
-                "$ref": "#/components/schemas/BuiltInPinTypeName",
-                "description": "The pin type whose inputs it edits or shows."
-              },
-              "control": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "Its name, which a pin's `control` annotation picks it by; `null` for its pin type's\ndefault."
-              },
-              "kind": {
-                "type": "string",
-                "const": "control"
-              }
-            },
-            "required": [
-              "kind",
-              "pin_type"
-            ],
-            "description": "A control, which edits or shows an input of one pin type."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "node_type": {
-                "type": "string",
-                "description": "The node type whose node it draws."
-              },
-              "kind": {
-                "type": "string",
-                "const": "node_body"
-              }
-            },
-            "required": [
-              "kind",
-              "node_type"
-            ],
-            "description": "A node body, which draws the inside of one node type's node."
-          }
-        ],
-        "description": "What a node UI element is, under `kind`."
       },
       "ProjectNodeUiManifestListed": {
         "type": "object",
