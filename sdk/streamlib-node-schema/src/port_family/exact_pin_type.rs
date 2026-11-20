@@ -59,6 +59,7 @@ impl PortFamily {
             BuiltInPinTypeName::ListOf
             | BuiltInPinTypeName::Bundle
             | BuiltInPinTypeName::Named
+            | BuiltInPinTypeName::Connection
             | BuiltInPinTypeName::NodeReference
             | BuiltInPinTypeName::PinTypeChoice => None,
         }

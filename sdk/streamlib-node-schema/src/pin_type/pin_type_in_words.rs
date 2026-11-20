@@ -49,7 +49,11 @@ impl fmt::Display for PinType {
                     .collect();
                 write!(formatter, "{label} ({})", members.join(", "))
             }
-            Self::Named { named_pin_type } => {
+            Self::Named { named_pin_type }
+            | Self::Connection {
+                connection_type: named_pin_type,
+                ..
+            } => {
                 write!(formatter, "{label} `{}`", named_pin_type.as_str())
             }
             _ => formatter.write_str(label),
