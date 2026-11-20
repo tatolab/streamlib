@@ -299,7 +299,7 @@ fn one_helper_destinations_recorded_input_entry(channel_service_name: &str) -> s
         1,
         &LinkUniqueId::from("L-envelope"),
         None,
-        None,
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("recording dest wiring must succeed");
 

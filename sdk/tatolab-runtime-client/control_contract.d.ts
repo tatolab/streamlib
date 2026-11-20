@@ -163,7 +163,7 @@ export interface GraphLinkEndOnTheWire {
    */
   port: string;
   /**
-   * The member of a bundle port the link starts at; absent for the whole port.
+   * The member of a bundle port the link starts or ends at; absent for the whole port.
    */
   member?: string | null;
 }
@@ -1325,7 +1325,7 @@ export interface GraphLinkOnTheWire {
 
 /**
  * One end of a link of a stream's graph: a node by its name, one of its ports, and the member
- * of a bundle port the link starts at, if any.
+ * of a bundle port the link starts or ends at, if any.
  */
 export interface GraphLinkPortRefOnTheWire {
   /**
@@ -1337,8 +1337,8 @@ export interface GraphLinkPortRefOnTheWire {
    */
   port: string;
   /**
-   * The member of a bundle port the link starts at, which it carries alone; absent for the
-   * whole port. Only a link's `source` names one.
+   * The member of a bundle port the link starts or ends at, which it carries alone; absent
+   * for the whole port.
    */
   member?: string | null;
 }
@@ -1956,7 +1956,7 @@ export type StreamGraphAction = ({
 
 /**
  * One end of a link a graph action names: a node, one of its ports, and the member of a bundle
- * port it starts at, if any.
+ * port it starts or ends at, if any.
  */
 export interface StreamGraphActionLinkEnd {
   /**
@@ -1968,7 +1968,7 @@ export interface StreamGraphActionLinkEnd {
    */
   port: string;
   /**
-   * The member of a bundle port the link starts at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. Only a link's `source` names one.
+   * The member of a bundle port the link starts or ends at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. A bundle input is fed either whole or member by member, and the node reads one bundle built from the newest value of each member.
    */
   member?: string | null;
 }
@@ -2423,7 +2423,7 @@ export type LinkCandidateEnd = ({
    */
   port: string;
   /**
-   * The member of the bundle an output port carries that the end is, by name; absent for
+   * The member of the bundle the port carries that the end is, by name; absent for
    * the whole port.
    */
   member?: string | null;
@@ -2438,7 +2438,7 @@ export type LinkCandidateEnd = ({
    */
   port: string;
   /**
-   * The member of the bundle an output port carries that the end is, by name; absent for
+   * The member of the bundle the port carries that the end is, by name; absent for
    * the whole port.
    */
   member?: string | null;
@@ -7270,7 +7270,7 @@ export interface ControlOperations {
   /**
    * Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.
    *
-   * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, so check a link inside a placed stream with `check_link`, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
+   * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`, with `member` naming one member of a bundle the port carries. Among placed or node type ports, each port carrying a bundle is followed by each of its members as an end of its own. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, so check a link inside a placed stream with `check_link`, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
    *
    * Since contract version 3, experimental.
    */

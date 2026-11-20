@@ -523,7 +523,8 @@ impl LoadedStreamInThisRuntime {
                     self.live_graph_change(),
                     OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port)
                         .at_member(link.source.member.clone()),
-                    InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
+                    InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port)
+                        .at_member(link.target.member.clone()),
                     ALinkConnected::OfASavedGraph,
                     WhenTheEngineCannotWireALink::SetAsideLeavingTheReaderRuleToASweep,
                 ))

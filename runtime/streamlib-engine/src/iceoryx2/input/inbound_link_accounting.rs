@@ -13,7 +13,7 @@ use crate::iceoryx2::loss_counters::{
 };
 
 use super::{
-    ChannelDataServiceSubscriber, InputMailboxesInner, MemberTakenAtTheRead, PortBoundSubscriber,
+    BundleMembersAtTheRead, ChannelDataServiceSubscriber, InputMailboxesInner, PortBoundSubscriber,
     WindowedPortInboundLink,
 };
 
@@ -42,7 +42,7 @@ impl InputMailboxesInner {
         link_id: &str,
         inbound_link_name: &InboundLinkName,
         subscriber: ChannelDataServiceSubscriber,
-        member_taken_at_the_read: Option<MemberTakenAtTheRead>,
+        bundle_members_at_the_read: BundleMembersAtTheRead,
     ) {
         let dropped_bag_counter = self.dropped_bag_counts.counter_for_inbound_link(link_id);
         let into_a_windowed_port = self
@@ -62,7 +62,7 @@ impl InputMailboxesInner {
                 local_port: local_port.to_string(),
                 inbound_link_name: inbound_link_name.clone(),
                 subscriber,
-                member_taken_at_the_read,
+                bundle_members_at_the_read,
                 dropped_bag_counter,
                 discarded_sample_counter,
                 bags_the_ring_overwrote: Default::default(),
@@ -197,13 +197,20 @@ impl InputMailboxesInner {
     /// nothing against a channel or notify service no link uses.
     pub fn remove_channel_link(&self, link_id: &str) {
         let mut subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
-        let Some(local_port) = subscribers_and_listener.remove_by_link(link_id) else {
+        let Some(removed) = subscribers_and_listener.remove_by_link(link_id) else {
             return;
         };
+        let local_port = removed.local_port;
         self.dropped_bag_counts.forget_inbound_link(link_id);
         self.discarded_sample_counts.forget_inbound_link(link_id);
         if !subscribers_and_listener.local_port_still_bound(&local_port) {
             self.ports.lock().remove(&local_port);
+        } else if let Some(put_into_its_input) =
+            removed.bundle_members_at_the_read.put_into_its_input
+            && let Some(port) = self.ports.lock().get_mut(&local_port)
+        {
+            port.newest_value_of_each_member_put_at_the_read
+                .remove(&put_into_its_input.member.name);
         }
         if subscribers_and_listener.subscribers.is_empty() {
             subscribers_and_listener.listener = None;

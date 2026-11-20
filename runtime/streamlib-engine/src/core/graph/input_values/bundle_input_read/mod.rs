@@ -12,7 +12,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 
 use crate::core::descriptors::{BundleMember, PinType};
 use crate::core::graph::legacy_config_of_a_node::input_values_of_a_config_and_pin_values;
-use crate::core::graph::{GraphNode, PortInfo};
+use crate::core::graph::{GraphNode, PortInfo, WhatTheLinksIntoAnInputFeed};
 
 /// The members of the bundle input `port` carries; `None` for an input carrying another type.
 pub(crate) fn the_bundle_members_of(port: &PortInfo) -> Option<&[BundleMember]> {
@@ -66,16 +66,16 @@ impl ValuesABundleInputHolds<'_> {
     }
 
     /// What each of `members` reads, in the order the bundle declares them, as `graph` renders
-    /// it; each `wire` when `is_linked`, as a link feeding the whole input feeds every member.
+    /// it; `wire` for each member `fed` says a link feeds, itself or as part of the whole input.
     pub(crate) fn each_member_read(
         &self,
         members: &[BundleMember],
-        is_linked: bool,
+        fed: &WhatTheLinksIntoAnInputFeed,
     ) -> Vec<BundleMemberValueReadOnTheWire> {
         members
             .iter()
             .map(|member| {
-                let (value, value_comes_from) = if is_linked {
+                let (value, value_comes_from) = if fed.the_member(&member.name) {
                     (None, Some(InputValueComesFromOnTheWire::Wire))
                 } else {
                     match self.the_member_read(member) {

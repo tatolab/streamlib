@@ -80,10 +80,7 @@ impl ControlOperationDispatcher {
                     let node_type = node_type.node_class_import_path.as_str().to_owned();
                     ports.into_iter().flat_map(move |port| {
                         let node_type = node_type.clone();
-                        let members = match candidate_direction {
-                            PortDirection::Output => the_members_a_declared_port_carries(&port),
-                            PortDirection::Input => Vec::new(),
-                        };
+                        let members = the_members_a_declared_port_carries(&port);
                         the_port_and_its_members(port.name, members).map(move |(port, member)| {
                             LinkCandidateEnd::NodeTypePort {
                                 node_type: node_type.clone(),
@@ -154,7 +151,7 @@ impl ControlOperationDispatcher {
 }
 
 /// Each port of `direction` of each node at the level `rendered` holds, as `graph` lists them,
-/// each output followed by each member of the bundle it carries.
+/// each followed by each member of the bundle it carries.
 fn the_placed_ports_of(
     rendered: &StreamGraphOnTheWire,
     direction: PortDirection,
@@ -166,12 +163,7 @@ fn the_placed_ports_of(
             the_ports_of(&node.ports, direction)
                 .iter()
                 .flat_map(move |port| {
-                    let members = match direction {
-                        PortDirection::Output => {
-                            the_members_of(port.pin.as_ref().map(|pin| &pin.pin_type))
-                        }
-                        PortDirection::Input => Vec::new(),
-                    };
+                    let members = the_members_of(port.pin.as_ref().map(|pin| &pin.pin_type));
                     the_port_and_its_members(port.name.clone(), members).map(|(port, member)| {
                         LinkCandidateEnd::PlacedPort {
                             node: node.id.clone(),

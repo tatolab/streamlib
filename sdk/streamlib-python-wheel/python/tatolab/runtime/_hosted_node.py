@@ -57,6 +57,8 @@ def wire_link_data_access(
             input_port_borrow_quota=input_link.get("input_port_borrow_quota"),
             # Present only on a link that starts at one member of a bundle.
             member_taken_at_the_read=input_link.get("member_taken_at_the_read"),
+            # Present only on a link that ends at one member of a bundle.
+            member_put_at_the_read=input_link.get("member_put_at_the_read"),
         )
     for output_link in port_wiring.get("outputs", []):
         link_data_access.wire_output_link(

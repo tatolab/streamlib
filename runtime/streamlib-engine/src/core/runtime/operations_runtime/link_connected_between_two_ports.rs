@@ -367,8 +367,7 @@ impl ALinkEndTheGraphHolds {
     }
 
     /// The link between this end and port `port_name` of the node `node_run_id`, output first;
-    /// `member` names the member of the bundle that port carries the link starts at, when the
-    /// port is the output.
+    /// `member` names the member of the bundle that port carries the link starts or ends at.
     fn the_link_to(
         &self,
         node_run_id: &NodeRunId,
@@ -378,7 +377,7 @@ impl ALinkEndTheGraphHolds {
         match self {
             Self::Output(from) => (
                 from.clone(),
-                InputLinkPortRef::new(node_run_id.clone(), port_name),
+                InputLinkPortRef::new(node_run_id.clone(), port_name).at_member(member),
             ),
             Self::Input(to) => (
                 OutputLinkPortRef::new(node_run_id.clone(), port_name).at_member(member),
@@ -414,7 +413,7 @@ pub(in crate::core::runtime) struct ANodeTypesPortToJudge {
 }
 
 impl ANodeTypesPortToJudge {
-    /// Port `port_name` of `node_type`, or its `member` when it is an output carrying a bundle,
+    /// Port `port_name` of `node_type`, or its `member` when it carries a bundle,
     /// as `node_types` resolves the type, among the type's `ports_of_its_direction`, which every
     /// port of the type judged in one batch shares.
     pub(in crate::core::runtime) fn of(
@@ -678,7 +677,8 @@ pub(in crate::core::runtime) fn what_a_connect_makes_of_each_link_at_a_placed_le
             };
             let from = OutputLinkPortRef::new(source, &link.source.port)
                 .at_member(link.source.member.clone());
-            let to = InputLinkPortRef::new(target, &link.target.port);
+            let to = InputLinkPortRef::new(target, &link.target.port)
+                .at_member(link.target.member.clone());
             let verdict = the_verdict_connect_takes_in(&mut graph, from.clone(), to.clone())?;
             if let Ok((from, to)) = the_ends_connect_links(&graph, from, to) {
                 graph.traversal_mut().add_e(from, to);
@@ -738,7 +738,7 @@ fn the_graph_a_placed_level_runs_as(
         if let Ok((from, to)) = the_ends_connect_links(
             &graph,
             OutputLinkPortRef::new(source, held.source.port).at_member(held.source.member),
-            InputLinkPortRef::new(target, held.target.port),
+            InputLinkPortRef::new(target, held.target.port).at_member(held.target.member),
         ) {
             graph.traversal_mut().add_e(from, to);
         }

@@ -147,14 +147,14 @@ fn two_channel_subscribers_fan_into_one_local_port() {
         "L-fanin-a",
         &InboundLinkName::from("pfanin-a/out"),
         sub_a,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     mailboxes.add_channel_subscriber(
         "in",
         "L-fanin-b",
         &InboundLinkName::from("pfanin-b/out"),
         sub_b,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     let mut payloads: Vec<Vec<u8>> = Vec::new();
@@ -200,14 +200,14 @@ fn each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port() {
         "L-first",
         &InboundLinkName::from("pfirst/out"),
         subscriber_a,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     mailboxes.add_channel_subscriber(
         "in",
         "L-second",
         &InboundLinkName::from("psecond/out"),
         subscriber_b,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     for _ in 0..FRAMES_PER_LINK {
@@ -259,7 +259,7 @@ fn every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted
         "L-plain",
         &InboundLinkName::from("pplain/out"),
         plain_subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     mailboxes
         .mirror_an_inbound_links_loss_counts_into(
@@ -287,7 +287,7 @@ fn every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted
         "L-windowed",
         &InboundLinkName::from("pwindowed/out"),
         windowed_subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     mailboxes
         .mirror_an_inbound_links_loss_counts_into(
@@ -393,7 +393,7 @@ fn a_replacement_publisher_on_a_live_subscriber_reads_as_a_new_baseline_not_a_ga
         "L-replaced",
         &InboundLinkName::from("psource/out"),
         channel.create_subscriber(RING_DEPTH).unwrap(),
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     let output_writer = output_writer_publishing_onto(&channel, "out");

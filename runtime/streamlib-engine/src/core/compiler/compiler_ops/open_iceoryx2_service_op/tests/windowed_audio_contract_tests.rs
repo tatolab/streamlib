@@ -104,7 +104,7 @@ fn a_settled_contract_reaches_graph_on_the_port_that_settled_it() {
         &channel,
         &notify_service,
         Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream),
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("a sentinel wires rather than refusing");
 
@@ -184,7 +184,7 @@ fn a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time() 
         1,
         &"L-helper-windowed".into(),
         Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream),
-        None,
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect_err("a helper child cannot settle a sentinel")
     .to_string();
@@ -236,7 +236,7 @@ fn a_settled_contract_reaches_a_helper_placed_destination_as_five_values() {
         1,
         &"L-helper-settled".into(),
         Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(settled)),
-        None,
+        &crate::iceoryx2::BundleMembersAtTheRead::default(),
     )
     .expect("a settled contract renders onto the envelope");
 

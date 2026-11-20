@@ -147,7 +147,7 @@ fn a_ring_gap_behind_queued_bags_is_told_to_the_first_bag_after_it() {
         "L-ring-gap",
         &InboundLinkName::from("psource/out"),
         subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     publish_one_frame(&publisher, "out", b"queued-0");
@@ -188,7 +188,7 @@ fn an_evicted_bag_is_told_to_the_next_bag_read_from_its_link() {
         "L-eviction",
         &InboundLinkName::from("psource/out"),
         subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     for index in 0..4 {
@@ -228,14 +228,14 @@ fn a_fan_in_read_is_told_only_the_losses_of_the_link_it_arrived_on() {
         "L-overrun",
         &InboundLinkName::from("poverrun/out"),
         overrun_subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
     mailboxes.add_channel_subscriber(
         "in",
         "L-healthy",
         &InboundLinkName::from("phealthy/out"),
         healthy_subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     publish_one_frame(&overrun_publisher, "out", b"overrun-first");
@@ -280,7 +280,7 @@ fn a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link() {
         "L-portless",
         &InboundLinkName::from("psource/out"),
         subscriber,
-        None,
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
     );
 
     publish_one_frame(&publisher, "out", b"nowhere to go");

@@ -19,7 +19,9 @@ use super::bundle_input_read::{
 };
 use super::live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime};
-use crate::core::graph::{Graph, GraphNode, PortInfo, WhyTheNodeLeaves};
+use crate::core::graph::{
+    Graph, GraphNode, PortInfo, WhatTheLinksIntoAnInputFeed, WhyTheNodeLeaves,
+};
 use crate::core::pubsub::RuntimeEvent;
 
 /// The values set live on one stream's inputs, by node UUID and then input, each with the
@@ -296,21 +298,21 @@ pub(crate) fn the_read_of_an_input_a_link_feeds() -> InputValueReadOnTheWire {
     }
 }
 
-/// The value input `port` of `node` in `graph` reads, `is_linked` when a link feeds it: wire;
-/// else its live value, its saved one, which is its config field's for a config field the node
+/// The value input `port` of `node` in `graph` reads, `fed` saying what the links into it feed:
+/// wire, while a link feeds the whole input; else its live value, its saved one, which is its config field's for a config field the node
 /// exposes as an input, or its declared default; else nothing. A bundle input reads each member
-/// so alone, as `member_values`. `None` for an input that takes no stored value and no link
+/// so alone, as `member_values`, `wire` for a member a link ends at. `None` for an input that takes no stored value and no link
 /// feeds.
 pub(crate) fn the_value_an_input_reads(
     graph: &Graph,
     node: &GraphNode,
     port: &PortInfo,
-    is_linked: bool,
+    fed: &WhatTheLinksIntoAnInputFeed,
 ) -> Option<InputValueReadOnTheWire> {
     if let Some(members) = the_bundle_members_of(port)
         && !node.is_an_exposed_config_field_input(&port.name)
     {
-        if !is_linked && !the_input_port_takes_a_value(node.node_kind(), port) {
+        if !fed.anything() && !the_input_port_takes_a_value(node.node_kind(), port) {
             return None;
         }
         let live = graph
@@ -324,10 +326,10 @@ pub(crate) fn the_value_an_input_reads(
         return Some(InputValueReadOnTheWire {
             value: None,
             value_comes_from: None,
-            member_values: Some(held.each_member_read(members, is_linked)),
+            member_values: Some(held.each_member_read(members, fed)),
         });
     }
-    if is_linked {
+    if fed.the_whole_input() {
         return Some(the_read_of_an_input_a_link_feeds());
     }
     let exposed_config_field = node.is_an_exposed_config_field_input(&port.name);
@@ -389,7 +391,7 @@ fn the_value_an_unlinked_input_is_handed(
         }
         .the_bundle_read(members);
     }
-    the_value_an_input_reads(graph, node, port, false)?
+    the_value_an_input_reads(graph, node, port, &WhatTheLinksIntoAnInputFeed::default())?
         .value
         .filter(|value| !value.is_null())
 }
@@ -426,7 +428,7 @@ pub(crate) fn the_input_value_change(
         graph,
         node,
         port,
-        graph.link_into(&node.id, &port.name).is_some(),
+        &WhatTheLinksIntoAnInputFeed::of(graph, &node.id, &port.name),
     );
     let Some(member_values) = value_read
         .as_ref()
