@@ -209,6 +209,68 @@ fn a_typed_value_a_process_nodes_read_cannot_carry_is_refused_and_a_function_or_
     );
 }
 
+/// A class node's field states that it takes a wire or a value, since its helper reads a value
+/// set on it whole: a Color on its Channels input and an Asset on its Records input are taken on
+/// a process node, held for its setup and its live sets, and a value its pin type refuses still
+/// is.
+///
+/// Mental-revert: judging the field by a process node's Channels read alone refuses both, as
+/// Solid Color's colour and Image File's asset were on the rig.
+#[test]
+fn a_process_nodes_input_stating_it_takes_a_wire_or_a_value_takes_any_value_of_its_pin_type() {
+    use crate::core::descriptors::{NodeInputMode, PinType, PortFamilyDeclaration};
+    let a_field = |pin_type: PinType, family: PortFamily| PortInfo {
+        input_mode: Some(NodeInputMode::WireOrValue),
+        family: PortFamilyDeclaration::of_family(family),
+        ..a_channels_input_typed(pin_type)
+    };
+    let colour = a_field(PinType::Color {}, PortFamily::Channels);
+    let asset = a_field(PinType::Asset { media: Vec::new() }, PortFamily::Records);
+    for (field, value) in [
+        (
+            &colour,
+            json!({"red": 1.0, "green": 0.5, "blue": 0.0, "alpha": 1.0}),
+        ),
+        (
+            &asset,
+            json!({"asset": "0f0e0d0c-0b0a-4909-8807-060504030201"}),
+        ),
+    ] {
+        assert!(the_input_port_takes_a_value(Some(NodeKind::Process), field));
+        assert_eq!(
+            refuse_a_value_the_input_port_does_not_take(
+                "solidcolor",
+                Some(NodeKind::Process),
+                field,
+                &value,
+            ),
+            Ok(()),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        refuse_a_value_the_input_port_does_not_take(
+            "solidcolor",
+            Some(NodeKind::Process),
+            &colour,
+            &json!("orange"),
+        )
+        .expect_err("a Color is no text")
+        .code,
+        InputValueRefusalCode::InputValueNotValid
+    );
+    assert!(
+        !the_input_port_takes_a_value(
+            Some(NodeKind::Process),
+            &PortInfo {
+                input_mode: None,
+                ..asset.clone()
+            }
+        ),
+        "an input stating no mode on a process node is read off its Channels alone"
+    );
+}
+
 /// A setting taken off a node is a config field taken off, which the config path makes, so a
 /// setting a node also exposes as an input is taken off as any other is.
 #[test]

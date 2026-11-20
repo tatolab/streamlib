@@ -271,22 +271,33 @@ pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeVa
 }
 
 /// Whether input `port` of a node running as `node_kind` takes a stored value: a setting does;
-/// else what its pin type holds and, on a node that is no function or shader node, only a
-/// Channels input; on a port that names no pin type, any input of a function node.
+/// else what its pin type holds and, on a node that is no function or shader node and whose
+/// input does not state that it takes a wire or a value, only a Channels input; on a port that
+/// names no pin type, any input of a function node.
 pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &PortInfo) -> bool {
     if !port.takes_a_wire() {
         return true;
     }
-    let read_whole_by_its_node = matches!(
-        node_kind,
-        Some(NodeKind::Function { .. } | NodeKind::Shader)
-    );
     match &port.pin {
         Some(pin) if !pin.pin_type.holds_a_stored_value() => false,
-        Some(_) if read_whole_by_its_node => true,
+        Some(_) if the_node_reads_a_value_set_on_the_input_whole(node_kind, port) => true,
         None if matches!(node_kind, Some(NodeKind::Function { .. })) => true,
         _ => port.family.family == crate::core::descriptors::PortFamily::Channels,
     }
+}
+
+/// Whether a node running as `node_kind` reads a value set on its typed input `port` whole,
+/// in any form its pin type takes: a function or shader node reads each so, and so does a
+/// node whose input states that it takes a wire or a value, as a class node's field does; any
+/// other node reads only what a Channels input carries.
+pub(crate) fn the_node_reads_a_value_set_on_the_input_whole(
+    node_kind: Option<NodeKind>,
+    port: &PortInfo,
+) -> bool {
+    matches!(
+        node_kind,
+        Some(NodeKind::Function { .. } | NodeKind::Shader)
+    ) || port.input_mode == Some(crate::core::descriptors::NodeInputMode::WireOrValue)
 }
 
 /// What an input a link feeds reads: no value of its own, and `wire` as where it comes from.

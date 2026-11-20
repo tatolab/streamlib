@@ -59,6 +59,11 @@ class FunctionNodeIslandsFedToTheirPorts:
         return list(self._prepared_by_import_path.values())
 
     @property
+    def input_ports_fed(self) -> "frozenset[str]":
+        """Each input port an island feeds."""
+        return frozenset(self._island_by_input_port)
+
+    @property
     def ran_compiled_by_node_id(self) -> "dict[str, bool]":
         """Whether each node of a fed island runs compiled (`True`) or as Python (`False`)."""
         return {

@@ -375,6 +375,19 @@ impl StreamGraphTransactionExecutor<'_> {
             let stream_operations = self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(stream_id)?;
+            // A value an older runtime recorded, or saved, in a form its input's type held then
+            // is checked in the form the stream applies it in now.
+            let ports = stream_operations.the_ports_a_node_type_declares(&set_on.node_type);
+            let to = match (&ports, member, to) {
+                (Some(ports), None, Some(to)) => {
+                    ports.input_value_in_the_form_it_takes_now(input, to.clone())
+                }
+                (_, _, to) => to.clone(),
+            };
+            if let Some(ports) = &ports {
+                set_on.input_values = ports
+                    .input_values_under_the_current_names(std::mem::take(&mut set_on.input_values));
+            }
             let input_values_after_the_set = input_values_after_the_set(
                 &set_on.input_values,
                 input,
