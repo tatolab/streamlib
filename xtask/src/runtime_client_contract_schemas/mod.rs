@@ -28,8 +28,9 @@ const KEYWORDS_CHECKED_AS_STATED: &[&str] = &[
     "required",
 ];
 
-/// The keywords that state no check: the checker reads past them.
-const KEYWORDS_THAT_STATE_NO_CHECK: &[&str] = &["description", "default"];
+/// The keywords that state no check: the checker reads past them. `x-removed-in` names the
+/// contract version a field leaves at, which a value of this version still carries.
+const KEYWORDS_THAT_STATE_NO_CHECK: &[&str] = &["description", "default", "x-removed-in"];
 
 /// The JSON types a `type` may name.
 const JSON_TYPE_NAMES: &[&str] = &[

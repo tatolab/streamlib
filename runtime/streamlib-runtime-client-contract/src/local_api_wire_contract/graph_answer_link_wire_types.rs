@@ -191,9 +191,11 @@ pub struct GraphInterfacePortOnTheWire {
     /// The port's name on the stream.
     pub port: String,
     /// The port family the port carries; null while the runtime waits for a link to settle it.
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub family: Option<String>,
     /// The pin type the port carries: the one its node's `pin_type` setting chooses, else the
-    /// one its family states exactly, as an Image port is a Texture. Absent on any other port.
+    /// one the port's older field states exactly, as a port carrying frames is a Texture.
+    /// Absent on any other port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
     /// On a `GraphInput` node, the value its `value` input reads now: the one set live, else its

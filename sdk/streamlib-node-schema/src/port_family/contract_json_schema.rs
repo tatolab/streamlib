@@ -15,7 +15,8 @@ use super::{
 };
 use crate::ImageStreamFrameRate;
 
-/// The schema of the variant `{"from_config": {"config_key": "<key>"}}`.
+/// The schema of the variant `{"from_config": {"config_key": "<key>"}}`, which leaves the contract
+/// at its version 4 with the node settings it reads.
 fn from_config_variant(description: &str) -> Schema {
     json_schema!({
         "type": "object",
@@ -29,6 +30,7 @@ fn from_config_variant(description: &str) -> Schema {
         "required": ["from_config"],
         "additionalProperties": false,
         "description": description,
+        "x-removed-in": 4,
     })
 }
 
@@ -66,7 +68,7 @@ impl JsonSchema for ImageStreamFrameRate {
             },
             "required": ["numerator", "denominator"],
             "additionalProperties": false,
-            "description": "An Image stream's frame rate, as a rational number of frames per second.",
+            "description": "A Texture stream's frame rate, as a rational number of frames per second.",
         })
     }
 }
@@ -85,8 +87,8 @@ impl JsonSchema for ImageOutputPortFrameRate {
                 ),
                 from_config_variant("The value of the node's config key of this name."),
             ],
-            "description": "The frame rate an Image output states, written on the class or read \
-                            from its node's config.",
+            "description": "The frame rate a Texture output states, written on the class or \
+                            read from one of its node's settings.",
         })
     }
 }
@@ -105,8 +107,8 @@ impl JsonSchema for ChannelsOutputPortSampleRate {
                 ),
                 from_config_variant("The value of the node's config key of this name."),
             ],
-            "description": "The sample rate a Channels output states, written on the class or \
-                            read from its node's config.",
+            "description": "The sample rate an Audio output states, written on the class or \
+                            read from one of its node's settings.",
         })
     }
 }
@@ -117,7 +119,7 @@ impl JsonSchema for ChannelsOutputPortSampleType {
     }
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        one_of_strings(&["f32", "f64"], "The sample type of a Channels output.")
+        one_of_strings(&["f32", "f64"], "The sample type of an Audio output.")
     }
 }
 
@@ -127,6 +129,6 @@ impl JsonSchema for ArrayOutputPortResidency {
     }
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        one_of_strings(&["gpu", "cpu"], "Where an Array output's attributes live.")
+        one_of_strings(&["gpu", "cpu"], "Where a Tensor output's attributes live.")
     }
 }

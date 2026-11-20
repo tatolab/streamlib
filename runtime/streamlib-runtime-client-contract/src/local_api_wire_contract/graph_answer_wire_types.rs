@@ -61,8 +61,8 @@ pub struct StreamGraphOnTheWire {
     pub nodes: Vec<GraphNodeOnTheWire>,
     /// Every link between those nodes' ports.
     pub links: Vec<GraphLinkOnTheWire>,
-    /// Every reference edge: a node's config key naming another node. A live key, read back
-    /// from the configs; absent when the graph holds none.
+    /// Every reference edge: a node's setting naming another node, read back live from the
+    /// nodes' settings; absent when the graph holds none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<ConfigNodeReferenceEdgeOnTheWire>,
     /// The name of the machine the stream runs on, the first part of
@@ -106,14 +106,15 @@ pub struct LabelledNodeGroup {
     pub colour: String,
 }
 
-/// One reference edge: the config key `config_key` of node `node` names node
-/// `referenced_node`. It carries no data and is never a link.
+/// One reference edge: a setting of node `node` names node `referenced_node`. It carries no
+/// data and is never a link.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ConfigNodeReferenceEdgeOnTheWire {
-    /// The name of the node whose config holds the reference.
+    /// The name of the node whose setting holds the reference.
     pub node: String,
-    /// The config key the reference sits under.
+    /// The setting the reference sits under, by its key in the node's settings.
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub config_key: String,
     /// The name of the node the reference names.
     pub referenced_node: String,
@@ -141,9 +142,11 @@ pub struct GraphNodeOnTheWire {
     /// The input values a node type not yet typed takes whole as its config, the rest of
     /// `input_values` being its `pins`. Served for a client that reads no `input_values`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub config: Option<Value>,
     /// A checksum of `config`, for change detection.
     #[serde(default)]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub config_checksum: u64,
     /// Every input port and output port.
     pub ports: GraphNodePortsOnTheWire,
@@ -155,9 +158,11 @@ pub struct GraphNodeOnTheWire {
     /// The input values that are no config field, by input name; empty when none is saved.
     /// Served for a client that reads no `input_values`.
     #[serde(default)]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub pins: Map<String, Value>,
     /// The config fields the node takes as inputs too, each an input of the field's name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub exposed_config_fields: Vec<String>,
     /// What the studio draws the node with: canvas position, group, comment, colour.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
@@ -281,12 +286,11 @@ pub struct GraphNodePortOnTheWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
     pub audio_window: Option<streamlib_node_schema::AudioWindowContract>,
-    /// The stream facts this output port carries now, tagged by `family`; absent on a port that
-    /// states none.
+    /// The stream facts this output port carries now; absent on a port that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
     pub stream_facts: Option<streamlib_node_schema::PortStreamFacts>,
-    /// `false` on a Records port, whose values no type checks; absent on every other family.
+    /// `false` on a port whose values no pin type checks; absent on every other port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_checked: Option<bool>,
     /// The port family this port declares and its family's keys. Absent on a graph variable's
@@ -294,6 +298,7 @@ pub struct GraphNodePortOnTheWire {
     /// reads no `pin_type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub family: Option<streamlib_node_schema::PortFamilyDeclaration>,
     /// The value this input reads while nothing is linked into it and no value is set on its
     /// node, null when it declares a null default; absent on a port that declares none.

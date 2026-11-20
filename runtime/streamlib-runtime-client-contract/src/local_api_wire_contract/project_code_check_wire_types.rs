@@ -81,8 +81,8 @@ pub enum ProjectCodeCheckKind {
     /// declared in a retired form.
     PythonNodeDeclarations,
     /// Each `tatolab_view.json` of the project's own views, read as the runtime reads it when
-    /// the view opens: each one that does not open, and each port still declared by the older
-    /// `family` field, with the `pin_type` to write. And the project's own
+    /// the view opens: each one that does not open, and each port still declared by its older
+    /// field, with the `pin_type` to write. And the project's own
     /// `node_ui/tatolab_node_ui.json`: one that does not read, and each entry that registers what
     /// only another module may.
     ExtensionManifest,
@@ -150,8 +150,8 @@ pub struct ProjectCodeCheckFinding {
     pub check: ProjectCodeCheckKind,
     /// What was found, for a caller to branch on: the code the declaration reader refused with,
     /// such as `value_input_has_no_default`, `module_does_not_import` for a module that does not
-    /// import, `declaration_retired` for a node declared in a retired form, or
-    /// `port_declared_by_family` for a view's port its manifest declares by `family` alone.
+    /// import, `declaration_retired` for a node declared in a retired form, or the manifest
+    /// check's own code for a view's port its manifest declares by its older field alone.
     pub finding_code: String,
     /// How much it matters.
     pub severity: ProjectCodeCheckSeverity,

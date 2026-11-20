@@ -253,7 +253,7 @@ pub enum NodeTypeDescribedFrom {
     /// The runtime brings it, and states its ports itself.
     BuiltIn,
     /// Its declaration, read from source without running it; a port's pin type is not read
-    /// there, so its ports state their family alone.
+    /// there, so its ports state none.
     Source,
     /// A loaded stream of the project described it in its own interpreter, every port typed
     /// as the code states it.
@@ -326,6 +326,7 @@ pub struct NodeTypeDescription {
     /// The settings of a node type not yet typed that `set_exposed_config_fields` still takes;
     /// absent when it takes none. Served until the contract's version changes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub exposable_config_fields: Vec<String>,
 }
 
@@ -351,8 +352,7 @@ pub struct NodeTypePortDescribed {
     pub name: String,
     /// What it carries, as declared beside it.
     pub documentation: String,
-    /// Its pin type and flow; absent on a port whose type the code does not state exactly,
-    /// which links by its `family` alone.
+    /// Its pin type and flow; absent on a port whose type the code does not state exactly.
     #[serde(flatten)]
     pub pin: Option<NodeTypePortPin>,
     /// What it states besides its type, none of which decides a link.
@@ -361,10 +361,12 @@ pub struct NodeTypePortDescribed {
     /// The port family a port of a node type not yet typed declares, with its family's keys.
     /// Served until the contract's version changes, for a client that reads no `pin_type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub family: Option<Value>,
     /// A function or shader port's annotation as its source writes it, where only source
     /// describes its node type. Served until the contract's version changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub annotation: Option<String>,
 }
 
