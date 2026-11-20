@@ -322,6 +322,13 @@ impl RhiColorConverterInner {
         self.inner.prepare_image_to_image_storage(src, dst)
     }
 
+    /// Build the image→image kernel's pipeline now, so no later
+    /// [`Self::prepare_image_to_image_storage`] builds one.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn build_the_image_to_image_kernel(&self) -> Result<()> {
+        self.inner.build_the_image_to_image_kernel()
+    }
+
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -515,6 +522,13 @@ impl RhiColorConverter {
         dst: &Texture,
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner().prepare_image_to_image_storage(src, dst)
+    }
+
+    /// Build the image→image kernel's pipeline now, under full access, so no
+    /// later [`Self::prepare_image_to_image_storage`] builds one on a hot path.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn build_the_image_to_image_kernel(&self) -> Result<()> {
+        self.host_inner().build_the_image_to_image_kernel()
     }
 
     /// Bind source / destination / push-constants on the buffer→image

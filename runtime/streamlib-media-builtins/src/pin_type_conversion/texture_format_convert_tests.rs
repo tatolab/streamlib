@@ -1,19 +1,20 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use streamlib::sdk::context::TEXTURE_FORMATS_CONVERTED_INTO_RGBA8_UNORM;
 use streamlib::sdk::descriptors::{PinType, TexturePixelFormat};
 use streamlib::sdk::iceoryx2::{
     ArrayFrameDescriptorBody, DataChannelPayloadDescriptor, GpuPoolSlotFrameDescriptorBody,
     ImageFrameDescriptorBody, ImageFrameH273Colour,
 };
 use streamlib::sdk::nodes::GeneratedNode;
-use streamlib::sdk::rhi::TextureFormat;
+use streamlib::sdk::rhi::{
+    TEXTURE_FORMATS_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_AS_STORED, TextureFormat,
+};
 
 use super::texture_format_convert::*;
 
-/// The conversion `TextureFormatConvert` states: what the engine's stage converts in, and
-/// `rgba8_unorm` out, so the verdict's coverage is what the kernel does.
+/// The conversion `TextureFormatConvert` states: what the image-to-image kernel samples as
+/// stored in, and `rgba8_unorm` out, so the verdict's coverage is what the kernel does.
 ///
 /// Mental-revert: stating `bgra8_unorm_srgb` on `image` makes the verdict place the node on an
 /// sRGB link the kernel would decode.
@@ -25,12 +26,13 @@ fn its_pins_state_what_the_kernel_converts_in_and_rgba8_unorm_out() {
         .unwrap_or_else(|refusal| panic!("{refusal}"))
         .expect("it states a conversion");
 
-    let the_kernels_formats: Vec<TexturePixelFormat> = TEXTURE_FORMATS_CONVERTED_INTO_RGBA8_UNORM
-        .iter()
-        .map(|format| {
-            TexturePixelFormat::from_wire_name(format.wire_name()).expect("a pixel format")
-        })
-        .collect();
+    let the_kernels_formats: Vec<TexturePixelFormat> =
+        TEXTURE_FORMATS_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_AS_STORED
+            .iter()
+            .map(|format| {
+                TexturePixelFormat::from_wire_name(format.wire_name()).expect("a pixel format")
+            })
+            .collect();
     assert_eq!(
         conversion.input_pin_type,
         PinType::Texture {

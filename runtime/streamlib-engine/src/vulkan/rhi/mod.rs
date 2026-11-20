@@ -98,6 +98,16 @@ pub use kernels::vulkan_ray_tracing_kernel::VulkanRayTracingKernel;
 
 pub use textures_and_readback::vulkan_texture_readback::VulkanTextureReadback;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use frame_conversion::rgba_or_bgra_image_to_rgba_image_conversion::{
+    ImageToImageColorConvertersWithTheirKernelsBuilt, LAYOUT_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_IN,
+    TextureTheImageToImageKernelSamples, record_the_image_to_image_dispatch,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use frame_conversion::rgba_or_bgra_image_to_rgba_image_conversion::{
+    TEXTURE_FORMATS_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_AS_STORED,
+    texture_format_the_image_to_image_kernel_samples, the_image_to_image_kernel_samples_as_stored,
+};
 pub(crate) use frame_conversion::vulkan_color_converter::image_to_nv12_buffer_dispatch_group_counts;
 pub(crate) use frame_conversion::vulkan_color_converter::{
     COLOR_CONVERTER_WORKGROUP_SIZE, VulkanColorConverter,

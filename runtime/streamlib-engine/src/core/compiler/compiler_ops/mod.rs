@@ -39,5 +39,3 @@ pub(crate) use open_iceoryx2_service_op::{
 pub(crate) use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_node_op::prepare_node;
 pub(crate) use spawn_node_op::spawn_node;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) use subprocess_escalate::publish_the_layouts_a_dispatch_left_its_bound_textures_in;

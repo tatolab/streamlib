@@ -43,9 +43,23 @@ def colour_bar_of_column(column: int, frame_width: int) -> int:
     return min(column * len(COLOUR_BARS_RGBA) // frame_width, len(COLOUR_BARS_RGBA) - 1)
 
 
+def first_column_of_colour_bar(bar: int, frame_width: int) -> int:
+    """The first column `colour_bar_of_column` puts in bar `bar` of a frame `frame_width` wide."""
+    return -(-bar * frame_width // len(COLOUR_BARS_RGBA))
+
+
 def middle_column_of_colour_bar(bar: int, frame_width: int) -> int:
-    """The column in the middle of bar `bar` of a frame `frame_width` wide."""
-    return (2 * bar + 1) * frame_width // (2 * len(COLOUR_BARS_RGBA))
+    """The column in the middle of the columns `colour_bar_of_column` puts in bar `bar`."""
+    last_column = first_column_of_colour_bar(bar + 1, frame_width) - 1
+    return (first_column_of_colour_bar(bar, frame_width) + last_column) // 2
+
+
+def refuse_a_width_narrower_than_the_colour_bars(frame_width: int) -> None:
+    """Raise unless a frame `frame_width` wide gives each bar a column of its own."""
+    if frame_width < len(COLOUR_BARS_RGBA):
+        raise ValueError(
+            f"a frame {frame_width} wide is narrower than its {len(COLOUR_BARS_RGBA)} colour bars"
+        )
 
 
 @dataclass
@@ -73,8 +87,10 @@ class BgraColourBars:
         self._frame_ring = NodeOutputTextureRing("bgra8_unorm", ["texture_binding"])
 
     def configure(self, config: BgraColourBarsConfig) -> None:
-        """Take a new frame size, written from the next frame on."""
-        self._width = max(1, int(config.width))
+        """Take a new frame size, written from the next frame on; refused when narrower than the
+        bars."""
+        refuse_a_width_narrower_than_the_colour_bars(int(config.width))
+        self._width = int(config.width)
         self._height = max(1, int(config.height))
 
     def process(self, runtime_context: RuntimeContextLimitedAccess) -> None:
@@ -137,6 +153,7 @@ class ColourBarsCheck:
         frame = runtime_context.inputs.read(self.bars)
         if frame is None:
             return
+        refuse_a_width_narrower_than_the_colour_bars(frame.width)
         with frame.cpu() as pixels:
             middle_row = frame.height // 2
             read_back = [

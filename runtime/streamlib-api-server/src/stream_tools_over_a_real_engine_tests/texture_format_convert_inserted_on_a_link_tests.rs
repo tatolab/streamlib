@@ -95,40 +95,53 @@ async fn two_textures_of_different_formats_connect_through_a_texture_format_conv
     );
 }
 
-/// A Texture linked into one of a format no conversion writes from it is refused with
-/// `link_pin_types_do_not_connect`, its words naming both formats, and nothing is added.
+/// A Texture linked into one of another format is refused with
+/// `link_pin_types_do_not_connect`, its words naming both formats, and nothing is added, both
+/// when `TextureFormatConvert` does not take the output's format and when it does not write the
+/// input's.
 ///
-/// Mental-revert: a `TextureFormatConvert` declaring `rgba16_float` on its input is placed.
+/// Mental-revert: a `TextureFormatConvert` declaring `rgba16_float` on its input is placed on
+/// the first link, and one declaring `bgra8_unorm` on its output on the second.
 #[tokio::test(flavor = "multi_thread")]
 async fn two_textures_whose_formats_no_conversion_covers_are_refused_naming_both() {
-    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
-    engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    let saved_before = project.the_graph_document_of("main");
+    for (output_port, input_port, output_format, input_format) in [
+        (
+            "half_float_video",
+            "rgba_video",
+            "rgba16_float",
+            "rgba8_unorm",
+        ),
+        ("video", "bgra_video", "rgba8_unorm", "bgra8_unorm"),
+    ] {
+        let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+        let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
+        engine.a_stream_loaded_from_its_graph_document(&project, "main");
+        let saved_before = project.the_graph_document_of("main");
 
-    let refusal = engine
-        .the_answer_or_the_refusal_of(
-            "connect",
-            connected_by_alice(&camera_into_model(
-                project.stream_asset_of("main"),
-                "half_float_video",
-                "bgra_video",
-            )),
-        )
-        .await
-        .expect_err("no conversion writes bgra8_unorm from rgba16_float");
+        let refusal = engine
+            .the_answer_or_the_refusal_of(
+                "connect",
+                connected_by_alice(&camera_into_model(
+                    project.stream_asset_of("main"),
+                    output_port,
+                    input_port,
+                )),
+            )
+            .await
+            .expect_err("no conversion writes the input's format from the output's");
 
-    assert_eq!(
-        refusal.refusal_code,
-        ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
-        "{refusal:?}"
-    );
-    for format in ["rgba16_float", "bgra8_unorm"] {
-        assert!(
-            refusal.runtime_words.contains(format),
-            "{}",
-            refusal.runtime_words
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
+            "{output_format} into {input_format}: {refusal:?}"
         );
+        for format in [output_format, input_format] {
+            assert!(
+                refusal.runtime_words.contains(format),
+                "{}",
+                refusal.runtime_words
+            );
+        }
+        assert_eq!(project.the_graph_document_of("main"), saved_before);
     }
-    assert_eq!(project.the_graph_document_of("main"), saved_before);
 }

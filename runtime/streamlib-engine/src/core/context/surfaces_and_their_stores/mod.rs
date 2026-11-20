@@ -17,3 +17,5 @@ pub(crate) mod surface_share_wire_verbs;
 pub(crate) mod surface_store;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) mod surface_to_surface_copy;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod texture_layouts_published_to_the_surface_store;

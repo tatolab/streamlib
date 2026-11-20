@@ -85,6 +85,10 @@ NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally", "caption", "ba
 #: not the colours `bars` wrote.
 PICTURES_SHOWING_THE_CONVERSION_RUNS = 10
 
+#: What `ColourBarsCheck` logs each time its count of frames read back right reaches a multiple
+#: of its `report_every_frames`.
+COLOUR_BARS_READ_BACK_RIGHT = "colour bars read back right"
+
 #: The function nodes, which run inside the read of the stream's function node pool, since
 #: `glow` is a shader node and `beat` runs as Python.
 FUNCTION_NODES = ("beat", "warmth")
@@ -207,6 +211,18 @@ def pictures_a_node_wrote_on(graph: dict[str, Any], node_id: str, output_name: s
     return int(written.get(output_name, 0))
 
 
+def colour_bars_read_back_right(
+    local_api: LocalApiClient, project_directory: str, stream_id: str
+) -> list[dict[str, Any]]:
+    """The records `ColourBarsCheck` logs once it has read every bar back the colour written."""
+    records = local_api.call_tool(
+        "logs", {"project_directory": project_directory, "stream": stream_id, "count": 4096}
+    )["records"]
+    return [
+        record for record in records if COLOUR_BARS_READ_BACK_RIGHT in record.get("message", "")
+    ]
+
+
 def assert_the_colour_bars_connect_through_a_texture_format_convert(
     tatolabd: TatolabdUnderTest,
     local_api: LocalApiClient,
@@ -243,9 +259,26 @@ def assert_the_colour_bars_connect_through_a_texture_format_convert(
                 f"{tatolabd.recent_stderr()}"
             )
         time.sleep(POLL_INTERVAL_SECONDS)
+    deadline = time.monotonic() + PICTURES_WRITTEN_TIMEOUT_SECONDS
+    while not colour_bars_read_back_right(local_api, project_directory, stream_id):
+        graph_converting = local_api.graph(stream=stream_id)
+        raising_because = (
+            node_named(graph_converting, "bars_check")
+            .get("components", {})
+            .get("process_raising_because")
+        )
+        assert raising_because is None, raising_because
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"ColourBarsCheck logged no {COLOUR_BARS_READ_BACK_RIGHT!r} within "
+                f"{PICTURES_WRITTEN_TIMEOUT_SECONDS}s: {json.dumps(graph_converting)[:4000]}\n"
+                f"{tatolabd.recent_stderr()}"
+            )
+        time.sleep(POLL_INTERVAL_SECONDS)
+    graph_checked = local_api.graph(stream=stream_id)
     for node_name in ("bars", "bars_check"):
         raising_because = (
-            node_named(graph_converting, node_name).get("components", {}).get(
+            node_named(graph_checked, node_name).get("components", {}).get(
                 "process_raising_because"
             )
         )

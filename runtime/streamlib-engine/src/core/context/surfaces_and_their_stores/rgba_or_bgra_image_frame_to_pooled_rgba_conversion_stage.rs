@@ -5,43 +5,36 @@
 //! colour converter's image-to-image kernel samples the frame into a scratch texture, which is
 //! copied into a pixel buffer from the converting node's own output pool, in one submission.
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-
 use streamlib_ipc_types::ImageFrameDescriptorBody;
 
-use crate::core::compiler::compiler_ops::publish_the_layouts_a_dispatch_left_its_bound_textures_in;
 use crate::core::context::surfaces_and_their_stores::surface_backing_resolution::ResolvedSurfaceBacking;
+use crate::core::context::surfaces_and_their_stores::texture_layouts_published_to_the_surface_store::publish_the_layouts_a_dispatch_left_its_bound_textures_in;
 use crate::core::context::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
     NodeOutputPixelBufferPoolOfOneNativeNode,
 };
 use crate::core::rhi::{
-    PixelBuffer, PixelFormat, RhiColorConverter, Texture, TextureDescriptor, TextureFormat,
-    TextureUsages, VulkanLayout,
+    PixelBuffer, PixelFormat, Texture, TextureDescriptor, TextureFormat, TextureUsages,
+    VulkanLayout, texture_format_the_image_to_image_kernel_samples,
 };
 use crate::core::{Error, Result};
 use crate::vulkan::rhi::{
-    COLOR_CONVERTER_WORKGROUP_SIZE, ImageCopyRegion, RhiCommandRecorder, VulkanAccess,
-    VulkanComputeKernel, VulkanStage,
+    ImageCopyRegion, ImageToImageColorConvertersWithTheirKernelsBuilt,
+    LAYOUT_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_IN, RhiCommandRecorder,
+    TextureTheImageToImageKernelSamples, VulkanAccess, VulkanStage,
+    record_the_image_to_image_dispatch,
 };
-
-/// The texture formats the image-to-image kernel samples as they are stored: 8-bit RGBA and
-/// BGRA. An sRGB format is not among them, since sampling one decodes it.
-pub const TEXTURE_FORMATS_CONVERTED_INTO_RGBA8_UNORM: [TextureFormat; 2] =
-    [TextureFormat::Rgba8Unorm, TextureFormat::Bgra8Unorm];
 
 /// The pixels the kernel samples, as one conversion records them.
 enum PixelsTheKernelSamples<'pixels> {
-    /// The frame's own texture, in the layout it was left in.
+    /// The frame's own texture, in the layout its registration holds.
     FramesOwnTexture {
         texture: &'pixels Texture,
         known_layout: VulkanLayout,
     },
-    /// The frame's pixel buffer, copied first into a texture of the stage's own.
+    /// The frame's tightly packed pixel buffer, copied first into a texture of the stage's own.
     PixelBufferCopiedIntoATexture {
         pixel_buffer: &'pixels PixelBuffer,
-        buffer_row_length_in_pixels: u32,
         texture: &'pixels Texture,
     },
 }
@@ -53,7 +46,7 @@ enum PixelsTheKernelSamples<'pixels> {
 /// returns once the GPU has written its frame.
 pub struct RgbaOrBgraImageFrameToPooledRgbaConversionStage {
     node_run_id_of_the_owning_node: String,
-    color_converters_by_source_format: HashMap<PixelFormat, RhiColorConverter>,
+    image_to_image_color_converters: ImageToImageColorConvertersWithTheirKernelsBuilt,
     recorder: RhiCommandRecorder,
     texture_a_source_pixel_buffer_is_copied_into: Option<Texture>,
     rgba_texture_the_kernel_writes: Option<Texture>,
@@ -62,21 +55,17 @@ pub struct RgbaOrBgraImageFrameToPooledRgbaConversionStage {
 
 impl RgbaOrBgraImageFrameToPooledRgbaConversionStage {
     /// The stage of the node `node_run_id_of_the_owning_node`, publishing from an output pool of
-    /// that node's own.
+    /// that node's own, with the kernel's pipelines built now.
+    #[tracing::instrument(skip(full))]
     pub fn create(
         full: &GpuContextFullAccess,
         node_run_id_of_the_owning_node: &str,
     ) -> Result<Self> {
-        Self::create_on(full.host_inner(), node_run_id_of_the_owning_node)
-    }
-
-    pub(crate) fn create_on(
-        gpu: &GpuContext,
-        node_run_id_of_the_owning_node: &str,
-    ) -> Result<Self> {
+        let gpu = full.host_inner();
         Ok(Self {
             node_run_id_of_the_owning_node: node_run_id_of_the_owning_node.to_string(),
-            color_converters_by_source_format: HashMap::new(),
+            image_to_image_color_converters:
+                ImageToImageColorConvertersWithTheirKernelsBuilt::create(gpu)?,
             recorder: gpu.create_command_recorder("rgba_or_bgra_image_frame_to_rgba")?,
             texture_a_source_pixel_buffer_is_copied_into: None,
             rgba_texture_the_kernel_writes: None,
@@ -89,69 +78,91 @@ impl RgbaOrBgraImageFrameToPooledRgbaConversionStage {
 
     /// Convert the Image frame `image` names into the next pixel buffer of the node's output
     /// pool, answering the `rgba8_unorm` Image frame that names it, of `image`'s extent and
-    /// colour. A frame of a format outside [`TEXTURE_FORMATS_CONVERTED_INTO_RGBA8_UNORM`] is
-    /// refused naming it.
+    /// colour. A frame of a format outside
+    /// [`TEXTURE_FORMATS_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_AS_STORED`](crate::core::rhi::TEXTURE_FORMATS_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_AS_STORED)
+    /// is refused naming it. A scratch texture of a new shape is allocated through `gpu`'s
+    /// escalate.
+    #[tracing::instrument(
+        skip(self, gpu),
+        fields(
+            node_run_id = %self.node_run_id_of_the_owning_node,
+            width = image.width,
+            height = image.height,
+            format = image.format
+        )
+    )]
     pub fn convert_into_the_next_pooled_pixel_buffer(
         &mut self,
         gpu: &GpuContextLimitedAccess,
         image: &ImageFrameDescriptorBody,
     ) -> Result<ImageFrameDescriptorBody> {
-        self.convert_on(gpu.host_inner(), image)
+        let allocate_a_scratch_texture = |descriptor: &TextureDescriptor<'_>| {
+            gpu.escalate(|full| full.host_inner().device().create_texture_local(descriptor))
+        };
+        self.convert(gpu.host_inner(), image, &allocate_a_scratch_texture)
     }
 
-    pub(crate) fn convert_on(
+    fn convert(
         &mut self,
         gpu: &GpuContext,
         image: &ImageFrameDescriptorBody,
+        allocate_a_scratch_texture: &dyn Fn(&TextureDescriptor<'_>) -> Result<Texture>,
     ) -> Result<ImageFrameDescriptorBody> {
-        let source_format = texture_format_the_kernel_samples(image.format)?;
         let (width, height) = (image.width, image.height);
+        if width == 0 || height == 0 {
+            return Err(Error::TextureError(format!(
+                "an Image frame of {width}x{height} has no pixels to convert"
+            )));
+        }
+        let source_format = texture_format_the_image_to_image_kernel_samples(image.format)?;
         let source_surface_id = gpu.published_frame_id_of_the_gpu_pool_slot_frame(&image.slot)?;
+        gpu.refuse_a_retired_frame_id(&source_surface_id)?;
         let _claim_until_the_conversion_has_run =
             gpu.claim_surface_against_producer_reuse(&source_surface_id)?;
         let source_backing = gpu.resolve_device_export_source(&source_surface_id)?;
+        match &source_backing {
+            ResolvedSurfaceBacking::RegisteredTexture(registration) => {
+                refuse_a_texture_the_kernel_cannot_sample_as_the_frame(
+                    &source_surface_id,
+                    registration.texture(),
+                    registration.current_layout(),
+                    source_format,
+                    (width, height),
+                )?
+            }
+            ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
+                refuse_a_pixel_buffer_that_holds_no_tightly_packed_frame(
+                    &source_surface_id,
+                    pixel_buffer,
+                    source_format,
+                    (width, height),
+                )?
+            }
+        }
+
         let rgba_texture_the_kernel_writes = texture_of_the_shape(
-            gpu,
             &mut self.rgba_texture_the_kernel_writes,
-            width,
-            height,
-            TextureFormat::Rgba8Unorm,
-            TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
+            TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
+                .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC),
+            allocate_a_scratch_texture,
         )?;
         let pixels_the_kernel_samples = match &source_backing {
+            // The registration, not the frame's `image_layout`, holds the layout its texture is
+            // in: every engine transition of the texture updates it.
             ResolvedSurfaceBacking::RegisteredTexture(registration) => {
-                let texture = registration.texture();
-                if texture.format() != source_format {
-                    return Err(Error::GpuError(format!(
-                        "surface {source_surface_id} is a {} texture, and its Image frame states \
-                         {}",
-                        texture.format().wire_name(),
-                        source_format.wire_name()
-                    )));
-                }
                 PixelsTheKernelSamples::FramesOwnTexture {
-                    texture,
+                    texture: registration.texture(),
                     known_layout: registration.current_layout(),
                 }
             }
             ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
-                let buffer_row_length_in_pixels = buffer_row_length_in_pixels_of(
-                    &source_surface_id,
-                    pixel_buffer,
-                    source_format,
-                    width,
-                    height,
-                )?;
                 PixelsTheKernelSamples::PixelBufferCopiedIntoATexture {
                     pixel_buffer,
-                    buffer_row_length_in_pixels,
                     texture: texture_of_the_shape(
-                        gpu,
                         &mut self.texture_a_source_pixel_buffer_is_copied_into,
-                        width,
-                        height,
-                        source_format,
-                        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                        TextureDescriptor::new(width, height, source_format)
+                            .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
+                        allocate_a_scratch_texture,
                     )?,
                 }
             }
@@ -160,17 +171,14 @@ impl RgbaOrBgraImageFrameToPooledRgbaConversionStage {
             PixelsTheKernelSamples::FramesOwnTexture { texture, .. }
             | PixelsTheKernelSamples::PixelBufferCopiedIntoATexture { texture, .. } => *texture,
         };
-        let kernel = color_converter_kept_for(
-            gpu,
-            &mut self.color_converters_by_source_format,
-            source_format,
-        )?
-        .prepare_image_to_image_storage(source_texture, rgba_texture_the_kernel_writes)?;
+        let kernel = self
+            .image_to_image_color_converters
+            .prepare_dispatch(source_texture, rgba_texture_the_kernel_writes)?;
         let output_frame = self
             .node_output_pixel_buffer_pool
             .acquire_the_next_output_pixel_buffer(width, height, PixelFormat::Rgba32)?;
         let output_slot = output_frame.gpu_pool_slot_frame.ok_or_else(|| {
-            Error::GpuError(format!(
+            Error::BufferError(format!(
                 "node {}: output pixel buffer {} leases no claim-table row, so no reader could \
                  claim it",
                 self.node_run_id_of_the_owning_node, output_frame.published_frame_id
@@ -191,17 +199,16 @@ impl RgbaOrBgraImageFrameToPooledRgbaConversionStage {
         }
         self.recorder.submit()?;
         // Between the submit and the wait: once the queue holds the recording the transition
-        // belongs to the GPU, and a failed wait must not leave the tracked layout behind it.
-        if let ResolvedSurfaceBacking::RegisteredTexture(registration) = &source_backing {
-            registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-        }
-        self.recorder.wait_for_completion()?;
+        // belongs to the GPU, and a failed wait must not leave the tracked or the published
+        // layout behind it.
         if let ResolvedSurfaceBacking::RegisteredTexture(registration) = source_backing {
+            registration.update_layout(LAYOUT_THE_IMAGE_TO_IMAGE_KERNEL_SAMPLES_IN);
             publish_the_layouts_a_dispatch_left_its_bound_textures_in(
                 gpu,
                 &[(source_surface_id, registration)],
             );
         }
+        self.recorder.wait_for_completion()?;
         Ok(ImageFrameDescriptorBody {
             slot: output_slot,
             width,
@@ -212,91 +219,90 @@ impl RgbaOrBgraImageFrameToPooledRgbaConversionStage {
     }
 }
 
-/// The colour converter `kept` holds for `source_format`, else a new one kept there.
-fn color_converter_kept_for<'kept>(
-    gpu: &GpuContext,
-    kept: &'kept mut HashMap<PixelFormat, RhiColorConverter>,
-    source_format: TextureFormat,
-) -> Result<&'kept RhiColorConverter> {
-    let source_pixel_format = match source_format {
-        TextureFormat::Bgra8Unorm => PixelFormat::Bgra32,
-        _ => PixelFormat::Rgba32,
-    };
-    Ok(match kept.entry(source_pixel_format) {
-        Entry::Occupied(kept_converter) => kept_converter.into_mut(),
-        Entry::Vacant(no_converter_yet) => no_converter_yet
-            .insert(gpu.create_color_converter(source_pixel_format, PixelFormat::Rgba32)?),
-    })
-}
-
-/// The format `format_wire_value` names, refused unless the kernel samples it as it is stored.
-pub(super) fn texture_format_the_kernel_samples(format_wire_value: u32) -> Result<TextureFormat> {
-    let format = TextureFormat::from_repr_value(format_wire_value);
-    format
-        .filter(|format| TEXTURE_FORMATS_CONVERTED_INTO_RGBA8_UNORM.contains(format))
-        .ok_or_else(|| {
-            let named_format = format.map_or_else(
-                || format!("an unknown texture format ({format_wire_value})"),
-                |format| format.wire_name().to_string(),
-            );
-            Error::PortError(format!(
-                "an Image frame of {named_format} is not converted into rgba8_unorm; only \
-                 rgba8_unorm and bgra8_unorm are"
-            ))
-        })
-}
-
-/// The texture `kept` holds when it is of this shape, else a new one of it kept there.
-fn texture_of_the_shape<'kept>(
-    gpu: &GpuContext,
-    kept: &'kept mut Option<Texture>,
-    width: u32,
-    height: u32,
-    format: TextureFormat,
-    usage: TextureUsages,
-) -> Result<&'kept Texture> {
-    let of_the_shape = |texture: &Texture| {
-        (texture.width(), texture.height(), texture.format()) == (width, height, format)
-    };
-    if !kept.as_ref().is_some_and(of_the_shape) {
-        // Read and written only inside this stage's own submissions, so it is local, never
-        // exported.
-        *kept = Some(gpu.device().create_texture_local(
-            &TextureDescriptor::new(width, height, format).with_usage(usage),
-        )?);
+/// Refuse a frame's texture the kernel cannot sample as the frame its Image frame states: never
+/// written, of another format or extent, or allocated without sampled usage.
+fn refuse_a_texture_the_kernel_cannot_sample_as_the_frame(
+    surface_id: &str,
+    texture: &Texture,
+    known_layout: VulkanLayout,
+    format_the_frame_states: TextureFormat,
+    (width, height): (u32, u32),
+) -> Result<()> {
+    if known_layout == VulkanLayout::UNDEFINED {
+        return Err(Error::TextureError(format!(
+            "surface {surface_id} has never been written, so it holds no pixels to convert"
+        )));
     }
-    kept.as_ref()
-        .ok_or_else(|| Error::GpuError("a texture was made and is gone".into()))
+    if texture.format() != format_the_frame_states {
+        return Err(Error::TextureError(format!(
+            "surface {surface_id} is a {} texture, and its Image frame states {}",
+            texture.format().wire_name(),
+            format_the_frame_states.wire_name()
+        )));
+    }
+    if (texture.width(), texture.height()) != (width, height) {
+        return Err(Error::TextureError(format!(
+            "surface {surface_id} is a {}x{} texture, and its Image frame states {width}x{height}",
+            texture.width(),
+            texture.height()
+        )));
+    }
+    if !texture.supports_sampled_read() {
+        return Err(Error::TextureError(format!(
+            "surface {surface_id}'s texture was allocated without \"texture_binding\" usage, so \
+             no kernel may sample it"
+        )));
+    }
+    Ok(())
 }
 
-/// How many pixels one row of `pixel_buffer` spans, refused unless it holds a `width` by
-/// `height` frame of `format`.
-fn buffer_row_length_in_pixels_of(
+/// Refuse a frame's pixel buffer that does not hold its `width` by `height` frame of `format`
+/// tightly packed: the copy into a texture reads its rows tightly packed, and would shear any
+/// other.
+fn refuse_a_pixel_buffer_that_holds_no_tightly_packed_frame(
     surface_id: &str,
     pixel_buffer: &PixelBuffer,
     format: TextureFormat,
-    width: u32,
-    height: u32,
-) -> Result<u32> {
+    (width, height): (u32, u32),
+) -> Result<()> {
     if Some(pixel_buffer.format()) != format.host_view_pixel_format() {
-        return Err(Error::GpuError(format!(
+        return Err(Error::BufferError(format!(
             "surface {surface_id} is a {:?} pixel buffer, and its Image frame states {}",
             pixel_buffer.format(),
             format.wire_name()
         )));
     }
-    let bytes_per_pixel = u64::from(format.bytes_per_pixel());
-    let row_length_in_pixels =
-        pixel_buffer.plane_size(0) / (u64::from(height.max(1)) * bytes_per_pixel);
-    match u32::try_from(row_length_in_pixels) {
-        Ok(row_length_in_pixels) if row_length_in_pixels >= width => Ok(row_length_in_pixels),
-        _ => Err(Error::GpuError(format!(
-            "surface {surface_id} is a pixel buffer of {} bytes, which holds no {width}x{height} \
-             frame of {}",
+    let tightly_packed_byte_size =
+        u64::from(width) * u64::from(height) * u64::from(format.bytes_per_pixel());
+    if pixel_buffer.plane_size(0) != tightly_packed_byte_size {
+        return Err(Error::BufferError(format!(
+            "surface {surface_id} is a pixel buffer of {} bytes, not the \
+             {tightly_packed_byte_size} a tightly packed {width}x{height} frame of {} fills",
             pixel_buffer.plane_size(0),
             format.wire_name()
-        ))),
+        )));
     }
+    Ok(())
+}
+
+/// The texture `kept` holds when it is of `descriptor`'s shape, else one `allocate` makes of it,
+/// kept there.
+fn texture_of_the_shape<'kept>(
+    kept: &'kept mut Option<Texture>,
+    descriptor: TextureDescriptor<'_>,
+    allocate: &dyn Fn(&TextureDescriptor<'_>) -> Result<Texture>,
+) -> Result<&'kept Texture> {
+    let of_the_shape = |texture: &Texture| {
+        (texture.width(), texture.height(), texture.format())
+            == (descriptor.width, descriptor.height, descriptor.format)
+    };
+    let texture = match kept.take() {
+        Some(kept_texture) if of_the_shape(&kept_texture) => kept_texture,
+        // Read and written only inside this stage's own submissions, so it is local, never
+        // exported.
+        _ => allocate(&descriptor)?,
+    };
+    Ok(kept.insert(texture))
 }
 
 /// Record the copy of a pixel-buffer source into its texture, the kernel's dispatch, and the
@@ -304,63 +310,55 @@ fn buffer_row_length_in_pixels_of(
 fn record_one_conversion(
     recorder: &mut RhiCommandRecorder,
     pixels_the_kernel_samples: &PixelsTheKernelSamples<'_>,
-    kernel: &VulkanComputeKernel,
+    kernel: &crate::vulkan::rhi::VulkanComputeKernel,
     rgba_texture_the_kernel_writes: &Texture,
     output_pixel_buffer: &PixelBuffer,
     (width, height): (u32, u32),
 ) -> Result<()> {
-    let (source_texture, source_layout) = match pixels_the_kernel_samples {
+    let texture_the_kernel_samples = match pixels_the_kernel_samples {
         PixelsTheKernelSamples::FramesOwnTexture {
             texture,
             known_layout,
-        } => (*texture, *known_layout),
+        } => TextureTheImageToImageKernelSamples {
+            texture,
+            layout: *known_layout,
+            last_written_in_stage: VulkanStage::ALL_COMMANDS,
+            last_written_with_access: VulkanAccess::MEMORY_WRITE,
+        },
         PixelsTheKernelSamples::PixelBufferCopiedIntoATexture {
             pixel_buffer,
-            buffer_row_length_in_pixels,
             texture,
         } => {
             recorder.record_buffer_barrier_before_a_transfer_read(*pixel_buffer)?;
-            let resting_layout = recorder.record_image_write_as_transfer_destination(
+            recorder.record_image_barrier(
                 texture,
                 VulkanLayout::UNDEFINED,
-                |recorder| {
-                    recorder.record_copy_buffer_to_image(
-                        *pixel_buffer,
-                        texture,
-                        VulkanLayout::TRANSFER_DST_OPTIMAL,
-                        ImageCopyRegion {
-                            buffer_row_length: *buffer_row_length_in_pixels,
-                            ..ImageCopyRegion::tightly_packed(width, height)
-                        },
-                    )
-                },
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                VulkanStage::ALL_COMMANDS,
+                VulkanStage::ALL_TRANSFER,
+                VulkanAccess::MEMORY_READ,
+                VulkanAccess::TRANSFER_WRITE,
             )?;
-            (*texture, resting_layout)
+            recorder.record_copy_buffer_to_image(
+                *pixel_buffer,
+                texture,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                ImageCopyRegion::tightly_packed(width, height),
+            )?;
+            TextureTheImageToImageKernelSamples {
+                texture,
+                layout: VulkanLayout::TRANSFER_DST_OPTIMAL,
+                last_written_in_stage: VulkanStage::ALL_TRANSFER,
+                last_written_with_access: VulkanAccess::TRANSFER_WRITE,
+            }
         }
     };
-    recorder.record_image_barrier(
-        source_texture,
-        source_layout,
-        VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-        VulkanStage::ALL_COMMANDS,
-        VulkanStage::COMPUTE_SHADER,
-        VulkanAccess::MEMORY_WRITE,
-        VulkanAccess::SHADER_SAMPLED_READ,
-    )?;
-    recorder.record_image_barrier(
+    record_the_image_to_image_dispatch(
+        recorder,
+        kernel,
+        &texture_the_kernel_samples,
         rgba_texture_the_kernel_writes,
         VulkanLayout::UNDEFINED,
-        VulkanLayout::GENERAL,
-        VulkanStage::ALL_COMMANDS,
-        VulkanStage::COMPUTE_SHADER,
-        VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
-        VulkanAccess::SHADER_WRITE,
-    )?;
-    recorder.record_dispatch(
-        kernel,
-        width.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
-        height.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
-        1,
     )?;
     recorder.record_image_read_as_transfer_source(
         rgba_texture_the_kernel_writes,
