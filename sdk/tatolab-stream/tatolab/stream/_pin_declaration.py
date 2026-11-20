@@ -19,7 +19,6 @@ parameter types.
 from __future__ import annotations
 
 import dataclasses
-import math
 import types
 import typing
 from collections.abc import Mapping, Sequence
@@ -27,8 +26,6 @@ from dataclasses import dataclass
 from typing import Any, Final, Literal, Optional, final
 
 from ._contract_pin_types import (
-    BUILT_IN_PIN_TYPES,
-    BuiltInPinTypeName,
     PinAnnotationName,
     PinAnnotations,
     DeclaredPinType,
@@ -39,14 +36,24 @@ from ._contract_pin_types import (
 )
 from ._description import Description
 from ._formerly_named import FormerlyNamed
+from ._input_declaration_annotations import (
+    INPUT_DECLARATION_ANNOTATION_CLASSES,
+    StreamDelivery,
+)
 from ._named_pin_type_declaration import named_pin_type_declared_by
 from ._number_range import NumberRange
 from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
+from ._pin_value_stored_form import (
+    PIN_TYPE_DESCRIPTION_BY_NAME as _PIN_TYPE_DESCRIPTION_BY_NAME,
+    PinValueNotTaken,
+    stored_form_of_a_pin_value,
+)
 from ._pin_types import (
     INTEGER_BOUNDS_OF_EACH_SIZE,
     INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS,
     PIN_TYPE_SPELLINGS,
     PIN_VALUE_CLASSES,
+    STREAM_PIN_TYPE_CLASSES,
     ExactNumberSize,
     Asset,
     PinValueOfParts,
@@ -59,6 +66,7 @@ __all__ = [
     "NodeDeclarationFindingCode",
     "NodeDeclarationRefusal",
     "PinDirection",
+    "PinForm",
     "PinValueNotTaken",
     "read_pin_declaration",
     "refuse_former_names_that_find_no_one_pin",
@@ -67,6 +75,11 @@ __all__ = [
 
 type PinDirection = Literal["input", "output"]
 """Which side of its node a pin sits on."""
+
+type PinForm = Literal["function", "field", "pin"]
+"""How a pin is written: `function`, a function or shader node's parameter or return, which
+holds a value; `field`, a class node's annotated field, a value input; `pin`, a class node's
+`InputPin[...]` or `OutputPin[...]`, which streams or fires."""
 
 type NodeDeclarationFindingCode = Literal[
     "pin_has_no_type",
@@ -89,6 +102,13 @@ type NodeDeclarationFindingCode = Literal[
     "wire_only_input_with_a_default",
     "output_type_found_from_no_input",
     "type_parameter_types_several_inputs",
+    "field_typed_as_a_stream",
+    "pin_flow_not_taken",
+    "attribute_not_a_pin",
+    "pin_has_a_value",
+    "init_takes_parameters",
+    "class_takes_a_config",
+    "class_declares_a_retired_port",
 ]
 """What a refused declaration got wrong, as the declaration check's finding names it."""
 
@@ -140,16 +160,13 @@ class DeclaredPin:
 
     default_value: object
     """An input's default in its stored JSON form, `None` for an input that may be unset, and
-    `NO_DEFAULT` on an output and on a wire only input that may not be unset."""
+    `NO_DEFAULT` on an output, on a wire only input that may not be unset and on a class node's
+    `InputPin`, which reads what its wire carries."""
 
     type_parameter: Optional[typing.TypeVar] = None
     """The type parameter that types it, whose value its node can only hand on; `None` for a
     pin typed otherwise."""
 
-
-_PIN_TYPE_DESCRIPTION_BY_NAME: Final[dict[BuiltInPinTypeName, PinTypeDescription]] = {
-    row.name: row for row in BUILT_IN_PIN_TYPES
-}
 
 _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
     ExactNumberSize(size).written_form for size in INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS
@@ -180,16 +197,19 @@ def read_pin_declaration(
     *,
     default: object = NO_DEFAULT,
     direction: PinDirection,
+    form: PinForm = "function",
     input_ports_of_each_type_parameter: "Mapping[typing.TypeVar, Sequence[str]]" = {},  # noqa: B006
 ) -> DeclaredPin:
     """Read the pin `pin_name` of the node `node` from its annotation and default.
 
     `annotation` is the pin's whole annotation, `Annotated[...]` and `T | None` included, with
-    any `Description` still on it. `default` is `NO_DEFAULT` for an input that states none and
-    always for an output. `input_ports_of_each_type_parameter` names, by port, the node's
-    inputs each type parameter types, which an output typed by one follows.
+    any `Description` still on it; for a class node's pin, the type inside `InputPin[...]` or
+    `OutputPin[...]`. `default` is `NO_DEFAULT` for an input that states none and always for an
+    output and a pin. `form` is how the pin is written, which decides its flow and the types
+    it takes. `input_ports_of_each_type_parameter` names, by port, the node's inputs each type
+    parameter types, which an output typed by one follows.
     """
-    reading = _PinReading(node, pin_name, direction)
+    reading = _PinReading(node, pin_name, direction, form)
     return reading.read(annotation, default, input_ports_of_each_type_parameter)
 
 
@@ -238,10 +258,11 @@ def refuse_former_names_that_find_no_one_pin(
 class _PinReading:
     """One pin's annotation and default, read once."""
 
-    def __init__(self, node: str, pin_name: str, direction: PinDirection) -> None:
+    def __init__(self, node: str, pin_name: str, direction: PinDirection, form: PinForm) -> None:
         self._node = node
         self._pin_name = pin_name
         self._direction = direction
+        self._form = form
 
     @property
     def _pin_named(self) -> str:
@@ -274,6 +295,13 @@ class _PinReading:
             or isinstance(written_type, typing.TypeVar)
             or _is_a_union(written_type)
         ):
+            if self._form != "function":
+                raise self._refusal(
+                    f"{self._pin_named} is typed {_name_of(written_type)}, which its link finds "
+                    f"the type of, and a class node's field or pin states one pin type. To fix: "
+                    f"type it as one of {_spellings_read_today()}.",
+                    "pin_type_not_read_yet",
+                )
             return self._read_a_pin_whose_link_finds_its_type(
                 written_type, metadata, optional, default, input_ports_of_each_type_parameter
             )
@@ -283,7 +311,7 @@ class _PinReading:
         annotations = self._annotations_among(metadata, row)
         declaration: PinDeclarationOnTheWire = {
             "pin_type": {"kind": "is", "pin_type": pin_type},
-            "flow": row.flows[0],
+            "flow": self._flow_of(row),
         }
         if annotations:
             declaration["annotations"] = annotations
@@ -292,6 +320,8 @@ class _PinReading:
             return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
         if optional:
             declaration["may_be_unset"] = True
+        if self._form == "pin":
+            return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
         if row.value_component is None:
             return self._read_an_input_holding_no_value(declaration, row, optional, default)
         default_value = self._default_value(default, pin_type, row, annotations, optional)
@@ -321,6 +351,23 @@ class _PinReading:
         return DeclaredPin(
             declaration, optional=optional, default_value=None if optional else NO_DEFAULT
         )
+
+    def _flow_of(self, row: PinTypeDescription) -> PinFlow:
+        """How the pin reads its messages: a field's value, an `InputPin`'s stream or event, else
+        its type's first flow."""
+        if self._form == "function" or self._direction == "output":
+            return row.flows[0]
+        if self._form == "field":
+            return "value"
+        flow: PinFlow = "trigger" if row.flows == ("trigger",) else "stream"
+        if flow not in row.flows:
+            raise self._refusal(
+                f"{self._pin_named} is an `InputPin` of a {row.label}, which does not stream. "
+                f"To fix: declare it as a field with its default, "
+                f"`{self._pin_name}: {row.python_forms[0]} = ...`.",
+                "pin_flow_not_taken",
+            )
+        return flow
 
     def _state_former_names(
         self, declaration: PinDeclarationOnTheWire, metadata: "list[object]"
@@ -520,6 +567,8 @@ class _PinReading:
         written_form = self._written_form_of(written_type, exact_size)
         spelling = pin_type_spelling_written_as(written_form)
         row = _PIN_TYPE_DESCRIPTION_BY_NAME[spelling.pin_type_name]
+        if spelling.only_a_pin_carries and (self._form != "pin" or as_an_element):
+            raise self._refusal_of_a_type_only_a_pin_carries(row, as_an_element=as_an_element)
         if spelling.not_read_yet_because is not None:
             typed_as = (
                 f"{_name_of(written_type)}, a dataclass, so"
@@ -554,6 +603,32 @@ class _PinReading:
         if exact_size.size in INTEGER_BOUNDS_OF_EACH_SIZE:
             return {"type": "integer", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
         return {"type": "float", "exact_size": exact_size.size}  # pyright: ignore[reportReturnType]
+
+    def _refusal_of_a_type_only_a_pin_carries(
+        self, row: PinTypeDescription, *, as_an_element: bool
+    ) -> NodeDeclarationRefusal:
+        if as_an_element:
+            return self._refusal(
+                f"{self._pin_named} is a List of {row.label}, which holds no stored value, and a "
+                f"List element is a small type, {_written_forms_a_list_element_takes()}. To fix: "
+                f"type its elements as one of them.",
+                "list_element_not_taken",
+            )
+        if self._form == "field":
+            return self._refusal(
+                f"{self._pin_named} is a field typed `{row.python_forms[0]}`, a {row.label}, "
+                f"which holds no stored value, so only a pin carries it. To fix: "
+                f"`{self._pin_name}: InputPin[{row.python_forms[0]}]`.",
+                "field_typed_as_a_stream",
+            )
+        return self._refusal(
+            f"{self._pin_named} is typed `{row.python_forms[0]}`, a {row.label}, which a "
+            f"function under bare `@node` does not take: it holds no stored value, so only a "
+            f"class node's pin carries it. To fix: keep this node on `@node.function`, or "
+            f"declare a class node with "
+            f"`{self._pin_name}: InputPin[{row.python_forms[0]}]`.",
+            "pin_type_not_read_yet",
+        )
 
     def _menu_pin_type_of(self, written_type: object) -> PinType:
         option_names = typing.get_args(written_type)
@@ -634,8 +709,12 @@ class _PinReading:
             return "Literal"
         if written_type is list or typing.get_origin(written_type) is list:
             return "list"
-        if _is_a_value_class_of_parts(written_type) or written_type is Asset:
-            return written_type.__name__
+        if (
+            _is_a_value_class_of_parts(written_type)
+            or written_type is Asset
+            or written_type in STREAM_PIN_TYPE_CLASSES
+        ):
+            return written_type.__name__  # pyright: ignore[reportAttributeAccessIssue]
         if named_pin_type_declared_by(written_type) is not None:
             return "named_pin_type"
         typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
@@ -654,12 +733,19 @@ class _PinReading:
         if typed_spelling is not None and getattr(written_type, "__module__", "").startswith(
             "tatolab.stream"
         ):
+            if self._form == "function":
+                raise self._refusal(
+                    f"{self._pin_named} is typed {_name_of(written_type)}, a read type of a "
+                    f"port family, and a pin under bare `@node` is typed by its pin type, "
+                    f"`{typed_spelling}`, which a function does not take yet. To fix: keep "
+                    f"this node on `@node.function` until it does.",
+                    "pin_type_not_read_yet",
+                )
             raise self._refusal(
                 f"{self._pin_named} is typed {_name_of(written_type)}, a read type of a port "
-                f"family, and a pin under bare `@node` is typed by its pin type, "
-                f"`{typed_spelling}`, which the typed grammar does not read yet. To fix: keep "
-                f"this node on `@node.function` until it does.",
-                "pin_type_not_read_yet",
+                f"family, and a class node's pin is typed by its pin type. To fix: type it "
+                f"`{typed_spelling}`.",
+                "pin_type_unknown",
             )
         if isinstance(written_type, type) and dataclasses.is_dataclass(written_type):
             return "dataclass"
@@ -676,6 +762,8 @@ class _PinReading:
         for entry in metadata:
             if isinstance(entry, (ExactNumberSize, Description, FormerlyNamed)):
                 continue
+            if isinstance(entry, INPUT_DECLARATION_ANNOTATION_CLASSES):
+                raise self._refusal_of_an_input_declaration_annotation(entry)
             annotation_name = _ANNOTATION_NAME_OF_EACH_CLASS.get(type(entry))
             if annotation_name is None:
                 raise self._refusal(
@@ -699,6 +787,19 @@ class _PinReading:
                 )
             annotations[annotation_name] = _annotation_on_the_wire(entry)
         return annotations
+
+    def _refusal_of_an_input_declaration_annotation(self, entry: object) -> NodeDeclarationRefusal:
+        """The refusal of `entry`, an annotation saying how a class node's input is served, on a
+        pin that does not take it."""
+        if isinstance(entry, StreamDelivery):
+            takes_it = "a class node's Stream input takes, inside `InputPin[Annotated[T, ...]]`"
+        else:
+            takes_it = "a class node's field takes"
+        return self._refusal(
+            f"{self._pin_named} carries `{entry!r}`, which only {takes_it}. To fix: drop it, or "
+            f"declare the input that way.",
+            "pin_annotation_not_taken",
+        )
 
     def _default_value(
         self,
@@ -756,116 +857,6 @@ class _PinReading:
                 return "give it a default inside its range."
 
 
-type PinValueNotTakenKind = Literal[
-    "not_of_its_type",
-    "outside_its_exact_size",
-    "not_finite",
-    "not_an_option",
-    "outside_its_range",
-]
-"""Why a pin does not hold a value."""
-
-
-class PinValueNotTaken(ValueError):
-    """A value a pin of its type does not hold: the value refused, and why, worded to follow it."""
-
-    def __init__(self, value: object, why: str, *, kind: PinValueNotTakenKind, pin_type: PinType) -> None:
-        super().__init__(f"{value!r}, {why}")
-        self.value: object = value
-        """The value refused: the whole value, or the element of a List that was refused."""
-        self.why: str = why
-        """Why, as a clause that follows the value, such as `which is not a Float`."""
-        self.kind: PinValueNotTakenKind = kind
-        """What kind of refusal it is."""
-        self.pin_type: PinType = pin_type
-        """The type the refused value was judged as: the pin's, or a List's element type."""
-
-
-def stored_form_of_a_pin_value(
-    value: object, pin_type: PinType, annotations: Optional[PinAnnotations] = None
-) -> object:
-    """`value` in the stored JSON form a pin of `pin_type` holds it in, inside the range
-    `annotations` state; refused with `PinValueNotTaken` when the pin does not hold it."""
-    stored = _stored_form_of_its_type(value, pin_type)
-    number_range = (annotations or {}).get("range")
-    if number_range is not None and isinstance(stored, (int, float)) and not isinstance(stored, bool):
-        minimum, maximum = number_range.get("minimum"), number_range.get("maximum")
-        if (minimum is not None and stored < minimum) or (maximum is not None and stored > maximum):
-            raise PinValueNotTaken(
-                stored,
-                f"outside its `NumberRange(minimum={minimum!r}, maximum={maximum!r})`",
-                kind="outside_its_range",
-                pin_type=pin_type,
-            )
-    return stored
-
-
-def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
-    row = _PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]]
-    not_of_its_type = PinValueNotTaken(
-        value, f"which is not a {row.label}", kind="not_of_its_type", pin_type=pin_type
-    )
-    match pin_type:
-        case {"type": "boolean"}:
-            if not isinstance(value, bool):
-                raise not_of_its_type
-            return value
-        case {"type": "integer"}:
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise not_of_its_type
-            exact_size = pin_type.get("exact_size")
-            if exact_size is not None:
-                lowest, highest = INTEGER_BOUNDS_OF_EACH_SIZE[exact_size]
-                if not lowest <= value <= highest:
-                    raise PinValueNotTaken(
-                        value,
-                        f"outside the {lowest} to {highest} its exact size `{exact_size}` holds",
-                        kind="outside_its_exact_size",
-                        pin_type=pin_type,
-                    )
-            return value
-        case {"type": "float"}:
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise not_of_its_type
-            if not math.isfinite(value):
-                raise PinValueNotTaken(
-                    value, "and a stored number is finite", kind="not_finite", pin_type=pin_type
-                )
-            return float(value)
-        case {"type": "color" | "vector" | "rectangle" | "transform"}:
-            value_class = _the_value_class_of(pin_type)
-            if type(value) is not value_class:
-                raise not_of_its_type
-            return value.stored_value()
-        case {"type": "string"}:
-            if not isinstance(value, str):
-                raise not_of_its_type
-            return value
-        case {"type": "menu", "option_names": option_names}:
-            if value not in option_names:
-                raise PinValueNotTaken(
-                    value,
-                    f"which is none of its options, "
-                    f"{', '.join(repr(option) for option in option_names)}",
-                    kind="not_an_option",
-                    pin_type=pin_type,
-                )
-            return value
-        case {"type": "asset"}:
-            if type(value) is not Asset:
-                raise not_of_its_type
-            return value.stored_value()
-        case {"type": "list_of", "element_type": element_type}:
-            if not isinstance(value, (list, tuple)):
-                raise not_of_its_type
-            return [
-                _stored_form_of_its_type(element, element_type)
-                for element in value  # pyright: ignore[reportUnknownVariableType]
-            ]
-        case _:
-            raise not_of_its_type
-
-
 # The written forms of the small types, which a List element takes.
 _WRITTEN_FORMS_A_LIST_ELEMENT_TAKES: Final[frozenset[str]] = frozenset(
     spelling.written_form
@@ -898,13 +889,6 @@ def _is_a_value_class_of_parts(written_type: object) -> typing.TypeGuard[type[Pi
     return written_type in PIN_VALUE_CLASSES
 
 
-def _the_value_class_of(pin_type: PinType) -> type[PinValueOfParts]:
-    (value_class,) = [
-        value_class for value_class in PIN_VALUE_CLASSES if value_class.pin_type == pin_type
-    ]
-    return value_class
-
-
 def _annotation_on_the_wire(annotation: object) -> Any:
     match annotation:
         case NumberRange():
@@ -935,6 +919,7 @@ def _spellings_read_today() -> str:
         f"`{spelling.written_form}`"
         for spelling in PIN_TYPE_SPELLINGS
         if spelling.not_read_yet_because is None
+        and not spelling.only_a_pin_carries
         and spelling.written_form not in _WRITTEN_FORMS_ONLY_AN_ELEMENT_TAKES
     ]
     return ", ".join(read_today)

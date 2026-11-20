@@ -358,6 +358,43 @@ def test_a_function_under_bare_node_is_listed_as_a_function_node_returning_one_o
     assert [port["name"] for port in tone["outputs"]] == ["result"]
 
 
+def test_a_class_under_bare_node_is_listed_with_its_fields_and_pins_and_no_state() -> None:
+    module_source = "\n".join(
+        [
+            "from typing import Annotated, ClassVar",
+            "from tatolab.stream import Description, InputPin, OutputPin, SettingOnly, Texture, node",
+            "",
+            '@node.meta(description="Blurs each picture.")',
+            "@node(execution='reactive')",
+            "class Blur:",
+            "    video: Annotated[InputPin[Texture], Description('The pictures.')]",
+            "    radius: Annotated[float, SettingOnly()] = 4.0",
+            "    result: OutputPin[Texture]",
+            "    frames: ClassVar[int] = 0",
+            "    _kernel: list[float]",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.blur", "nodes/blur.py", module_source)]
+    )
+
+    (blur,) = read["node_types"]
+    assert (blur["type"], blur["kind"], blur["description"]) == (
+        "nodes.blur:Blur",
+        "process",
+        "Blurs each picture.",
+    )
+    assert [(port["name"], port["family"]) for port in blur["inputs"]] == [
+        ("video", "image"),
+        ("radius", "channels"),
+    ]
+    assert blur["inputs"][0]["description"] == "The pictures."
+    assert blur["inputs"][1]["pin_default"] == 4.0
+    assert [(port["name"], port["family"]) for port in blur["outputs"]] == [("result", "image")]
+
+
 def test_a_named_pin_type_is_listed_by_its_import_path_and_description_from_source() -> None:
     module_source = "\n".join(
         [

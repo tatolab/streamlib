@@ -160,6 +160,81 @@ mod tests {
             .inputs
     }
 
+    /// A class under bare `@node` reaches the catalog `describe_node_types` serves: each field
+    /// an input of its type with its default, a `SettingOnly()` one a setting read at setup, one
+    /// stating `InputValueLifetime("reset")` forgotten at Stop, and each pin of its type and flow.
+    #[test]
+    fn a_class_nodes_fields_and_pins_reach_the_catalog_with_their_modes_and_lifetimes() {
+        let declaration = read_python_declaration(
+            "\
+from typing import Annotated, Literal
+
+
+@node
+class AudioConsumer:
+    voice: InputPin[Annotated[Audio, StreamDelivery('ordered')]]
+    quality: Annotated[Literal['fast', 'fine'], SettingOnly()] = 'fast'
+    gain: Annotated[float, InputValueLifetime('reset')] = 1.0
+    level: OutputPin[float]
+",
+        )
+        .expect("the declaration reads");
+
+        let described =
+            streamlib::sdk::nodes::NodeTypePortsDescribedOnTheWire::of(&declaration.descriptor);
+        let input = |name: &str| {
+            serde_json::to_value(
+                described
+                    .inputs
+                    .iter()
+                    .find(|input| input.port.name == name)
+                    .expect("the catalog lists the input"),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            (
+                &input("quality")["mode"],
+                &input("quality")["read"],
+                &input("quality")["default_value"],
+                &input("quality")["pin_type"],
+            ),
+            (
+                &serde_json::json!("setting_only"),
+                &serde_json::json!("at_setup"),
+                &serde_json::json!("fast"),
+                &serde_json::json!({"kind": "is", "pin_type": {"type": "menu", "option_names": ["fast", "fine"]}}),
+            )
+        );
+        assert_eq!(
+            (
+                &input("gain")["mode"],
+                &input("gain")["lifetime"],
+                &input("gain")["default_value"]
+            ),
+            (
+                &serde_json::json!("wire_or_value"),
+                &serde_json::json!("reset"),
+                &serde_json::json!(1.0)
+            )
+        );
+        assert_eq!(
+            (&input("voice")["mode"], &input("voice")["flow"]),
+            (
+                &serde_json::json!("wire_only"),
+                &serde_json::json!("stream")
+            )
+        );
+        assert_eq!(
+            declaration.descriptor.inputs[0].delivery_profile.as_deref(),
+            Some("ordered")
+        );
+        assert_eq!(
+            serde_json::to_value(&described.outputs[0]).unwrap()["flow"],
+            serde_json::json!("value")
+        );
+    }
+
     #[test]
     fn the_descriptor_carries_the_config_classs_derived_schema() {
         let declaration = read_python_declaration(

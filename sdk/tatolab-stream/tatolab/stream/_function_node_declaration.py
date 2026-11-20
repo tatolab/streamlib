@@ -51,6 +51,7 @@ from ._pin_declaration import (
     read_pin_declaration,
     refuse_former_names_that_find_no_one_pin,
 )
+from ._pin_family import family_a_pin_type_travels_on, family_declaration_of_a_typed_output
 from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 __all__ = [
@@ -745,13 +746,7 @@ class _FunctionNodeSignatureReading:
                 "family": UNREAD_MESSAGE_INPUT_FAMILY["family"],
                 "family_follows_input_port": declared_pin_type["input_port_name"],
             }
-        value_class = _the_value_class_of_parts_a_pin_declares(declared.declaration)
-        family = _family_a_pin_type_travels_on(_the_pin_type_a_pin_declares(declared.declaration))
-        family_declaration: "dict[str, Any]" = {"family": family}
-        if family == "channels":
-            channel_names = [port_name] if value_class is None else list(value_class.part_names())
-            family_declaration.update({"names": {"stated": channel_names}, "dtype": "f64"})
-        return family_declaration
+        return family_declaration_of_a_typed_output(port_name, declared.declaration)
 
     def _the_unread_message_input_an_output_follows(self, output_name: str) -> str:
         if len(self._unread_message_input_ports) != 1:
@@ -840,19 +835,6 @@ def _the_pin_type_a_pin_declares(declaration: PinDeclarationOnTheWire) -> "dict[
     return dict(declared_pin_type["pin_type"])
 
 
-def _family_a_pin_type_travels_on(pin_type: "dict[str, Any]") -> str:
-    """The port family whose message a value of `pin_type` travels as.
-
-    A number, a Boolean and a value of parts travel as a control message on Channels; a List of
-    them as an Array frame; a String, a Menu, an Asset and any other List as a Records message.
-    A named type travels as the bytes its class packs, which belong to no family; its port is
-    declared on Records, and the runtime refuses its link to any pin that states no type.
-    """
-    if pin_type["type"] == "list_of":
-        return "array" if pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
-    return "channels" if pin_type["type"] in _TYPES_OF_A_CONTROL_MESSAGE else "records"
-
-
 def _family_an_input_travels_on(declared: DeclaredPin) -> "dict[str, Any]":
     """The family a typed input reads: its one type's, the one all its types share, or every family.
 
@@ -865,17 +847,12 @@ def _family_an_input_travels_on(declared: DeclaredPin) -> "dict[str, Any]":
         pin_types = declared_pin_type["pin_types"]
     else:
         pin_types = []
-    families = {_family_a_pin_type_travels_on(dict(pin_type)) for pin_type in pin_types}
+    families = {family_a_pin_type_travels_on(pin_type) for pin_type in pin_types}
     if len(families) == 1:
         (family,) = families
         return {"family": family}
     return dict(UNREAD_MESSAGE_INPUT_FAMILY)
 
-
-# The pin types whose value travels as a control message, its parts one on each channel.
-_TYPES_OF_A_CONTROL_MESSAGE = frozenset(
-    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
-)
 
 # The pin types whose value travels as one f64, which a pin of several of them is handed as.
 _TYPES_OF_ONE_NUMBER = frozenset({"boolean", "integer", "float"})
