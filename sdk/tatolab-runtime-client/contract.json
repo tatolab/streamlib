@@ -18319,7 +18319,7 @@
                 "type": "null"
               }
             ],
-            "description": "How its code runs; null for an entry point whose declaration source does not show it."
+            "description": "How its code runs; null for an entry point whose declaration source does not show it,\nand for a node type the graph resolves itself, which no node code runs."
           },
           "described_from": {
             "$ref": "#/components/schemas/NodeTypeDescribedFrom",
@@ -18506,7 +18506,7 @@
                 "type": "null"
               }
             ],
-            "description": "How its code runs; null where its declaration source does not show it."
+            "description": "How its code runs; null where its declaration source does not show it, and for a node\ntype the graph resolves itself, which no node code runs."
           },
           "declared_at": {
             "anyOf": [

@@ -5322,7 +5322,8 @@ export interface NodeTypeListed {
    */
   category_from?: NodeTypeCategoryFrom | null;
   /**
-   * How its code runs; null for an entry point whose declaration source does not show it.
+   * How its code runs; null for an entry point whose declaration source does not show it,
+   * and for a node type the graph resolves itself, which no node code runs.
    */
   kind?: NodeTypeKind | null;
   /**
@@ -5422,7 +5423,8 @@ export type NodeTypeDescription = {
    */
   category_from?: NodeTypeCategoryFrom | null;
   /**
-   * How its code runs; null where its declaration source does not show it.
+   * How its code runs; null where its declaration source does not show it, and for a node
+   * type the graph resolves itself, which no node code runs.
    */
   kind?: NodeTypeKind | null;
   /**
