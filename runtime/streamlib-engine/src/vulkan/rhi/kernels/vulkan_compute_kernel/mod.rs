@@ -6,8 +6,9 @@
 //! Pattern (Granite-style): the kernel author declares the binding layout once
 //! as data; the RHI reflects the SPIR-V at creation, validates the declaration
 //! against the shader, and from that point on the user calls typed setters by
-//! slot. `dispatch()` flushes pending descriptor writes, records the dispatch
-//! command buffer, submits, and waits.
+//! slot. `dispatch()` flushes pending descriptor writes into one of the
+//! kernel's dispatch slots, records that slot's command buffer, submits, and
+//! waits.
 //!
 //! Binding kinds supported today: storage buffer, uniform buffer, sampled
 //! texture (with a default linear-clamp sampler), storage image. All bindings
@@ -16,6 +17,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use parking_lot::Mutex;
 use vulkanalia::prelude::v1_4::*;
@@ -31,11 +33,11 @@ use crate::vulkan::rhi::{HostVulkanDevice, SampledImageReadLayout};
 
 /// One compute kernel: shader pipeline + descriptor set + per-dispatch primitives.
 ///
-/// `set_*` methods stage descriptor writes; `dispatch(x, y, z)` flushes them,
-/// records the command buffer, submits, and waits for completion. Each kernel
-/// holds a single descriptor set, so dispatches against it are serial — that's
-/// fine for the format-converter / compositor / codec-pre-process workloads
-/// this abstraction targets.
+/// `set_*` methods stage descriptor writes; `dispatch(x, y, z)` flushes them
+/// into a free dispatch slot, records its command buffer, submits, and waits
+/// for completion. Dispatches from different threads take different slots, so
+/// they overlap on the GPU.
+///
 /// Rich data backing a [`VulkanComputeKernel`], reached through the
 /// kernel's opaque handle.
 pub(crate) struct VulkanComputeKernelInner {
@@ -49,11 +51,14 @@ pub(crate) struct VulkanComputeKernelInner {
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
-    descriptor_set: vk::DescriptorSet,
+    /// The descriptor set [`Self::record`] writes, apart from every dispatch
+    /// slot's.
+    record_descriptor_set: vk::DescriptorSet,
     shader_module: vk::ShaderModule,
-    command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    fence: vk::Fence,
+    /// What one in-flight dispatch owns; a dispatch takes the next free one.
+    dispatch_slots: Vec<Mutex<ComputeDispatchSlot>>,
+    /// The slot the next dispatch tries first.
+    next_dispatch_slot: AtomicUsize,
     /// The samplers [`ComputeBindingKind::SampledTexture`] bindings read
     /// through, created when a binding is first set.
     samplers: VulkanKernelSamplers,
@@ -65,6 +70,19 @@ pub(crate) struct VulkanComputeKernelInner {
     /// via [`Self::new`].
     immutable_sampler_bindings: Vec<u32>,
     pending: Mutex<PendingState>,
+}
+
+/// How many dispatches one kernel can have in flight at once: the engine's two
+/// frames in flight.
+const COMPUTE_DISPATCH_SLOTS: usize = 2;
+
+/// The Vulkan state one dispatch records, submits and waits on. Each slot has
+/// its own command pool, because a pool may record on one thread at a time.
+struct ComputeDispatchSlot {
+    descriptor_set: vk::DescriptorSet,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
+    fence: vk::Fence,
 }
 
 struct PendingState {
@@ -100,9 +118,11 @@ enum BindingResource {
 
 mod dispatch_and_recording;
 mod kernel_construction;
+mod one_dispatch;
 mod pipeline_creation;
 mod spirv_validation;
 
+pub use one_dispatch::ComputeKernelDispatch;
 use pipeline_creation::vk_image_view_for;
 
 impl VulkanComputeKernelInner {
@@ -120,15 +140,16 @@ impl VulkanComputeKernelInner {
         binding: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanStorageBindable + ?Sized),
     ) -> Result<()> {
-        self.set_storage_buffer_from_byte_offset(binding, buffer, 0)
+        self.stage_storage_buffer_from_byte_offset(&mut self.pending.lock(), binding, buffer, 0)
     }
 
     /// Bind the part of a storage buffer from `byte_offset` to its end at
     /// `binding`, so the shader's byte 0 is the buffer's `byte_offset`.
     /// Refused unless `byte_offset` is a multiple of the device's
     /// `minStorageBufferOffsetAlignment` and inside the buffer.
-    pub(crate) fn set_storage_buffer_from_byte_offset(
+    fn stage_storage_buffer_from_byte_offset(
         &self,
+        staged: &mut PendingState,
         binding: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanStorageBindable + ?Sized),
         byte_offset: vk::DeviceSize,
@@ -150,7 +171,7 @@ impl VulkanComputeKernelInner {
                 self.label
             )));
         }
-        self.pending.lock().bindings.insert(
+        staged.bindings.insert(
             binding,
             BindingResource::Buffer {
                 buffer: buffer.vk_buffer(),
@@ -168,13 +189,14 @@ impl VulkanComputeKernelInner {
     /// cannot be bound as UBOs because their allocations don't carry
     /// `UNIFORM_BUFFER` usage; this is enforced at compile time via
     /// [`crate::vulkan::rhi::VulkanUniformBindable`].
-    pub(crate) fn set_uniform_buffer(
+    fn stage_uniform_buffer(
         &self,
+        staged: &mut PendingState,
         binding: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanUniformBindable + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::UniformBuffer)?;
-        self.pending.lock().bindings.insert(
+        staged.bindings.insert(
             binding,
             BindingResource::Buffer {
                 buffer: buffer.vk_buffer(),
@@ -189,7 +211,12 @@ impl VulkanComputeKernelInner {
     /// sampler. Errors if the binding was given an immutable sampler at
     /// construction, which Vulkan reads in place of any sampler written here;
     /// bind that slot with [`Self::set_combined_image_sampler_view`].
-    pub(crate) fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
+    fn stage_sampled_texture(
+        &self,
+        staged: &mut PendingState,
+        binding: u32,
+        texture: &Texture,
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledTexture)?;
         if self.immutable_sampler_bindings.contains(&binding) {
             return Err(Error::GpuError(format!(
@@ -208,8 +235,7 @@ impl VulkanComputeKernelInner {
             .find(|spec| spec.binding == binding)
             .and_then(|spec| spec.sampler);
         let sampler = self.samplers.sampler_for(declared)?;
-        self.pending
-            .lock()
+        staged
             .bindings
             .insert(binding, BindingResource::SampledImage { view, sampler });
         Ok(())
@@ -217,11 +243,15 @@ impl VulkanComputeKernelInner {
 
     /// Bind a storage image at `binding`. Caller is responsible for ensuring
     /// the texture's `STORAGE_BINDING` usage was set when it was created.
-    pub(crate) fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
+    fn stage_storage_image(
+        &self,
+        staged: &mut PendingState,
+        binding: u32,
+        texture: &Texture,
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageImage)?;
         let view = vk_image_view_for(texture)?;
-        self.pending
-            .lock()
+        staged
             .bindings
             .insert(binding, BindingResource::StorageImage { view });
         Ok(())
@@ -236,15 +266,15 @@ impl VulkanComputeKernelInner {
     /// higher-level [`Self::set_sampled_texture`] / [`Self::set_storage_image`]
     /// setters that take engine `Texture` handles. `layout` is the layout the
     /// view is in at dispatch time, written into the descriptor.
-    pub(crate) fn set_sampled_image_view(
+    fn stage_sampled_image_view(
         &self,
+        staged: &mut PendingState,
         binding: u32,
         view: vk::ImageView,
         layout: SampledImageReadLayout,
     ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledImage)?;
-        self.pending
-            .lock()
+        staged
             .bindings
             .insert(binding, BindingResource::SampledImageOnly { view, layout });
         Ok(())
@@ -254,10 +284,14 @@ impl VulkanComputeKernelInner {
     /// slot. Escape hatch for callers that build per-plane reinterpreted-
     /// format storage views by hand against a multi-planar image. The
     /// view must be in `GENERAL` layout at dispatch time.
-    pub(crate) fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
+    fn stage_storage_image_view(
+        &self,
+        staged: &mut PendingState,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageImage)?;
-        self.pending
-            .lock()
+        staged
             .bindings
             .insert(binding, BindingResource::StorageImage { view });
         Ok(())
@@ -265,7 +299,7 @@ impl VulkanComputeKernelInner {
 
     /// Stage push constants for the next dispatch. Size must match the kernel's
     /// declared `push_constant_size` (and be 4-byte aligned per Vulkan).
-    pub(crate) fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
+    fn stage_push_constants(&self, staged: &mut PendingState, bytes: &[u8]) -> Result<()> {
         if bytes.len() as u32 != self.push_constant_size {
             return Err(Error::GpuError(format!(
                 "Compute kernel '{}': push-constant size mismatch — got {} bytes, kernel declares {}",
@@ -274,16 +308,73 @@ impl VulkanComputeKernelInner {
                 self.push_constant_size
             )));
         }
-        self.pending.lock().push_constants = bytes.to_vec();
+        staged.push_constants = bytes.to_vec();
         Ok(())
     }
 
     /// Convenience: stage a `Copy` value as push constants by reinterpreting its
     /// bytes. The value's size in bytes must match `push_constant_size`.
-    pub(crate) fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
+    fn stage_push_constants_value<T: Copy>(
+        &self,
+        staged: &mut PendingState,
+        value: &T,
+    ) -> Result<()> {
         let size = std::mem::size_of::<T>();
         let bytes = unsafe { std::slice::from_raw_parts(value as *const T as *const u8, size) };
-        self.set_push_constants(bytes)
+        self.stage_push_constants(staged, bytes)
+    }
+
+    /// [`Self::stage_storage_buffer_from_byte_offset`] into the kernel's own
+    /// staged bindings, which the next [`Self::dispatch`] takes.
+    pub(crate) fn set_storage_buffer_from_byte_offset(
+        &self,
+        binding: u32,
+        buffer: &(impl crate::vulkan::rhi::VulkanStorageBindable + ?Sized),
+        byte_offset: vk::DeviceSize,
+    ) -> Result<()> {
+        self.stage_storage_buffer_from_byte_offset(
+            &mut self.pending.lock(),
+            binding,
+            buffer,
+            byte_offset,
+        )
+    }
+
+    pub(crate) fn set_uniform_buffer(
+        &self,
+        binding: u32,
+        buffer: &(impl crate::vulkan::rhi::VulkanUniformBindable + ?Sized),
+    ) -> Result<()> {
+        self.stage_uniform_buffer(&mut self.pending.lock(), binding, buffer)
+    }
+
+    pub(crate) fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
+        self.stage_sampled_texture(&mut self.pending.lock(), binding, texture)
+    }
+
+    pub(crate) fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
+        self.stage_storage_image(&mut self.pending.lock(), binding, texture)
+    }
+
+    pub(crate) fn set_sampled_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+        layout: SampledImageReadLayout,
+    ) -> Result<()> {
+        self.stage_sampled_image_view(&mut self.pending.lock(), binding, view, layout)
+    }
+
+    pub(crate) fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
+        self.stage_storage_image_view(&mut self.pending.lock(), binding, view)
+    }
+
+    pub(crate) fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
+        self.stage_push_constants(&mut self.pending.lock(), bytes)
+    }
+
+    pub(crate) fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
+        self.stage_push_constants_value(&mut self.pending.lock(), value)
     }
 
     /// Bindings declared at construction time, in declaration order.
@@ -322,8 +413,11 @@ impl Drop for VulkanComputeKernelInner {
         unsafe {
             let _ = self.vulkan_device.wait_idle();
             self.samplers.destroy();
-            self.device.destroy_fence(self.fence, None);
-            self.device.destroy_command_pool(self.command_pool, None);
+            for slot in self.dispatch_slots.drain(..) {
+                let slot = slot.into_inner();
+                self.device.destroy_fence(slot.fence, None);
+                self.device.destroy_command_pool(slot.command_pool, None);
+            }
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_pipeline(self.pipeline, None);
@@ -336,10 +430,9 @@ impl Drop for VulkanComputeKernelInner {
     }
 }
 
-// Vulkan handles in this struct are protected by the kernel's owned fence:
-// only one dispatch is in-flight at a time, and `dispatch()` blocks until
-// the GPU completes. The `Mutex` around `pending` serializes setter writes
-// across threads.
+// Each dispatch slot's handles are used only under that slot's `Mutex`, held
+// from recording until its fence signals. The `Mutex` around `pending`
+// serializes setter writes across threads.
 unsafe impl Send for VulkanComputeKernelInner {}
 unsafe impl Sync for VulkanComputeKernelInner {}
 
@@ -546,6 +639,22 @@ impl VulkanComputeKernel {
     ) -> Result<()> {
         self.host_inner()
             .dispatch(group_count_x, group_count_y, group_count_z)
+    }
+
+    /// Stage one dispatch's bindings apart from the kernel's own, so another
+    /// thread dispatching this kernel meanwhile binds into its own dispatch.
+    /// The `set_*` and [`Self::dispatch`] above share one staging, so they
+    /// suit one thread.
+    pub fn begin_dispatch(&self) -> ComputeKernelDispatch {
+        // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanComputeKernelInner>)`
+        // and stays alive while `self` does; the increment is balanced by the
+        // `Arc` this builds being dropped.
+        let kernel = unsafe {
+            let inner = self.handle as *const VulkanComputeKernelInner;
+            Arc::increment_strong_count(inner);
+            Arc::from_raw(inner)
+        };
+        ComputeKernelDispatch::of(kernel)
     }
 
     /// Record bind + push-constants + dispatch into a caller-owned

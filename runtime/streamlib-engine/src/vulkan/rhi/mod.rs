@@ -78,7 +78,7 @@ pub use frame_conversion::vulkan_offscreen_compositor::{
 
 pub(crate) use memory_and_buffers::vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
-pub use kernels::vulkan_compute_kernel::VulkanComputeKernel;
+pub use kernels::vulkan_compute_kernel::{ComputeKernelDispatch, VulkanComputeKernel};
 pub(crate) use streamlib_consumer_rhi::SampledImageReadLayout;
 
 pub use kernels::vulkan_graphics_kernel::{

@@ -7,7 +7,11 @@ use vulkanalia::vk;
 use crate::core::rhi::ComputeBindingKind;
 use crate::core::{Error, Result};
 
-use super::{BindingResource, PendingState, VulkanComputeKernelInner};
+use std::sync::atomic::Ordering;
+
+use parking_lot::MutexGuard;
+
+use super::{BindingResource, ComputeDispatchSlot, PendingState, VulkanComputeKernelInner};
 
 impl VulkanComputeKernelInner {
     /// Run the kernel: write all staged descriptors, record bind+push+dispatch,
@@ -22,38 +26,45 @@ impl VulkanComputeKernelInner {
         group_count_y: u32,
         group_count_z: u32,
     ) -> Result<()> {
-        // Drain + validate up-front so concurrent set_* calls during the
-        // dispatch don't leak into the next one.
-        let pending = self.drain_and_validate_pending()?;
+        // Drained up-front so set_* calls during the dispatch go to the next.
+        let staged = self.drain_pending();
+        self.dispatch_staged(staged, group_count_x, group_count_y, group_count_z)
+    }
 
-        // Wait for prior dispatch (if any) to drain so the command buffer +
-        // descriptor set are safe to mutate.
-        self.vulkan_device.wait_for_fences_blocking_counted(
-            &[self.fence],
-            format_args!(
-                "Compute kernel '{}' draining its prior dispatch",
-                self.label
-            ),
-        )?;
+    /// [`Self::dispatch`] with bindings staged apart from the kernel's own,
+    /// as one [`super::ComputeKernelDispatch`] stages them.
+    pub(super) fn dispatch_staged(
+        &self,
+        pending: PendingState,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        self.refuse_bindings_left_unset(&pending)?;
+
+        // Held until this dispatch's fence signals, so no other dispatch
+        // touches the slot's command buffer or descriptor set meanwhile.
+        let slot = self.take_a_dispatch_slot();
         unsafe {
             self.device
-                .reset_fences(&[self.fence])
+                .reset_fences(&[slot.fence])
                 .map_err(|e| Error::GpuError(format!("Failed to reset compute fence: {e}")))?;
 
             self.device
-                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
+                .reset_command_buffer(slot.command_buffer, vk::CommandBufferResetFlags::empty())
                 .map_err(|e| Error::GpuError(format!("Failed to reset command buffer: {e}")))?;
 
             let begin_info = vk::CommandBufferBeginInfo::builder()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
                 .build();
             self.device
-                .begin_command_buffer(self.command_buffer, &begin_info)
+                .begin_command_buffer(slot.command_buffer, &begin_info)
                 .map_err(|e| Error::GpuError(format!("Failed to begin command buffer: {e}")))?;
         }
 
         self.record_inner(
-            self.command_buffer,
+            slot.command_buffer,
+            slot.descriptor_set,
             &pending,
             group_count_x,
             group_count_y,
@@ -62,11 +73,11 @@ impl VulkanComputeKernelInner {
 
         unsafe {
             self.device
-                .end_command_buffer(self.command_buffer)
+                .end_command_buffer(slot.command_buffer)
                 .map_err(|e| Error::GpuError(format!("Failed to end command buffer: {e}")))?;
 
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
-                .command_buffer(self.command_buffer)
+                .command_buffer(slot.command_buffer)
                 .build();
             let cmd_infos = [cmd_info];
             let submit = vk::SubmitInfo2::builder()
@@ -74,13 +85,30 @@ impl VulkanComputeKernelInner {
                 .build();
 
             self.vulkan_device
-                .submit_to_queue(self.queue, &[submit], self.fence)?;
+                .submit_to_queue(self.queue, &[submit], slot.fence)?;
         }
 
         self.vulkan_device.wait_for_fences_blocking_counted(
-            &[self.fence],
+            &[slot.fence],
             format_args!("Compute kernel '{}' awaiting its dispatch", self.label),
         )
+    }
+
+    /// A dispatch slot no other dispatch holds, waiting for one when every
+    /// slot is in flight. Each held slot's fence is signaled: a dispatch keeps
+    /// its slot until its own fence signals.
+    fn take_a_dispatch_slot(&self) -> MutexGuard<'_, ComputeDispatchSlot> {
+        let first =
+            self.next_dispatch_slot.fetch_add(1, Ordering::Relaxed) % self.dispatch_slots.len();
+        let in_order = self.dispatch_slots[first..]
+            .iter()
+            .chain(&self.dispatch_slots[..first]);
+        for slot in in_order {
+            if let Some(free) = slot.try_lock() {
+                return free;
+            }
+        }
+        self.dispatch_slots[first].lock()
     }
 
     /// Record bind + push-constants + dispatch into a caller-owned
@@ -93,10 +121,10 @@ impl VulkanComputeKernelInner {
     /// set; mismatches surface as [`Error::GpuError`] before any GPU
     /// recording happens.
     ///
-    /// **Caller contract:** no concurrent `record` or `dispatch` on
-    /// this kernel may be in flight — the kernel's descriptor set is
-    /// shared across calls and Vulkan disallows updating an in-use
-    /// descriptor set. For per-frame use, the recorder's own
+    /// **Caller contract:** no other `record` on this kernel may be in
+    /// flight — every `record` writes the one descriptor set kept for it,
+    /// and Vulkan disallows updating an in-use descriptor set. A
+    /// `dispatch` uses its own slot's set, so it may run alongside. For per-frame use, the recorder's own
     /// timeline-semaphore wait between frames satisfies this.
     pub(crate) fn record(
         &self,
@@ -105,9 +133,11 @@ impl VulkanComputeKernelInner {
         group_count_y: u32,
         group_count_z: u32,
     ) -> Result<()> {
-        let pending = self.drain_and_validate_pending()?;
+        let pending = self.drain_pending();
+        self.refuse_bindings_left_unset(&pending)?;
         self.record_inner(
             command_buffer,
+            self.record_descriptor_set,
             &pending,
             group_count_x,
             group_count_y,
@@ -115,15 +145,15 @@ impl VulkanComputeKernelInner {
         )
     }
 
-    fn drain_and_validate_pending(&self) -> Result<PendingState> {
-        let pending = {
-            let mut guard = self.pending.lock();
-            PendingState {
-                bindings: std::mem::take(&mut guard.bindings),
-                push_constants: std::mem::take(&mut guard.push_constants),
-            }
-        };
+    fn drain_pending(&self) -> PendingState {
+        let mut guard = self.pending.lock();
+        PendingState {
+            bindings: std::mem::take(&mut guard.bindings),
+            push_constants: std::mem::take(&mut guard.push_constants),
+        }
+    }
 
+    fn refuse_bindings_left_unset(&self, pending: &PendingState) -> Result<()> {
         for spec in &self.bindings {
             if !pending.bindings.contains_key(&spec.binding) {
                 return Err(Error::GpuError(format!(
@@ -138,19 +168,19 @@ impl VulkanComputeKernelInner {
                 self.label
             )));
         }
-
-        Ok(pending)
+        Ok(())
     }
 
     fn record_inner(
         &self,
         command_buffer: vk::CommandBuffer,
+        descriptor_set: vk::DescriptorSet,
         pending: &PendingState,
         group_count_x: u32,
         group_count_y: u32,
         group_count_z: u32,
     ) -> Result<()> {
-        self.flush_descriptor_writes(pending)?;
+        self.flush_descriptor_writes(descriptor_set, pending)?;
 
         unsafe {
             self.device.cmd_bind_pipeline(
@@ -164,7 +194,7 @@ impl VulkanComputeKernelInner {
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipeline_layout,
                 0,
-                &[self.descriptor_set],
+                &[descriptor_set],
                 &[],
             );
 
@@ -185,7 +215,11 @@ impl VulkanComputeKernelInner {
         Ok(())
     }
 
-    fn flush_descriptor_writes(&self, pending: &PendingState) -> Result<()> {
+    fn flush_descriptor_writes(
+        &self,
+        descriptor_set: vk::DescriptorSet,
+        pending: &PendingState,
+    ) -> Result<()> {
         let mut buffer_infos: Vec<vk::DescriptorBufferInfo> =
             Vec::with_capacity(self.bindings.len());
         let mut image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(self.bindings.len());
@@ -313,7 +347,7 @@ impl VulkanComputeKernelInner {
 
         for slot in &slots {
             let mut write = vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_set)
+                .dst_set(descriptor_set)
                 .dst_binding(slot.binding)
                 .descriptor_type(slot.ty);
             if let Some(i) = slot.buffer_idx {

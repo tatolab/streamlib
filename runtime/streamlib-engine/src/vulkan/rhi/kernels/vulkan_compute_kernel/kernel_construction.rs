@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use parking_lot::Mutex;
 use vulkanalia::prelude::v1_4::*;
@@ -17,9 +18,9 @@ use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::{
 };
 
 use super::pipeline_creation::{
-    allocate_command_buffer, allocate_descriptor_set, create_command_pool,
-    create_compute_pipeline_with_cache, create_descriptor_pool, create_descriptor_set_layout,
-    create_pipeline_layout, create_shader_module,
+    allocate_descriptor_set, create_compute_pipeline_with_cache, create_descriptor_pool,
+    create_descriptor_set_layout, create_dispatch_slots, create_pipeline_layout,
+    create_shader_module,
 };
 use super::spirv_validation::validate_against_spirv;
 use super::{PendingState, VulkanComputeKernelInner};
@@ -210,7 +211,7 @@ impl VulkanComputeKernelInner {
             }
         };
 
-        let descriptor_set =
+        let record_descriptor_set =
             match allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout) {
                 Ok(s) => s,
                 Err(e) => {
@@ -225,8 +226,13 @@ impl VulkanComputeKernelInner {
                 }
             };
 
-        let command_pool = match create_command_pool(device, queue_family_index) {
-            Ok(p) => p,
+        let dispatch_slots = match create_dispatch_slots(
+            device,
+            descriptor_pool,
+            descriptor_set_layout,
+            queue_family_index,
+        ) {
+            Ok(slots) => slots,
             Err(e) => {
                 unsafe {
                     device.destroy_descriptor_pool(descriptor_pool, None);
@@ -236,42 +242,6 @@ impl VulkanComputeKernelInner {
                     device.destroy_shader_module(shader_module, None);
                 }
                 return Err(e);
-            }
-        };
-
-        let command_buffer = match allocate_command_buffer(device, command_pool) {
-            Ok(cb) => cb,
-            Err(e) => {
-                unsafe {
-                    device.destroy_command_pool(command_pool, None);
-                    device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(pipeline, None);
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(shader_module, None);
-                }
-                return Err(e);
-            }
-        };
-
-        // Pre-signaled so the first dispatch can wait+reset without hanging.
-        let fence_info = vk::FenceCreateInfo::builder()
-            .flags(vk::FenceCreateFlags::SIGNALED)
-            .build();
-        let fence = match unsafe { device.create_fence(&fence_info, None) } {
-            Ok(f) => f,
-            Err(e) => {
-                unsafe {
-                    device.destroy_command_pool(command_pool, None);
-                    device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(pipeline, None);
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(shader_module, None);
-                }
-                return Err(Error::GpuError(format!(
-                    "Failed to create compute fence: {e}"
-                )));
             }
         };
 
@@ -286,11 +256,10 @@ impl VulkanComputeKernelInner {
             pipeline_layout,
             descriptor_set_layout,
             descriptor_pool,
-            descriptor_set,
+            record_descriptor_set,
             shader_module,
-            command_pool,
-            command_buffer,
-            fence,
+            dispatch_slots: dispatch_slots.into_iter().map(Mutex::new).collect(),
+            next_dispatch_slot: AtomicUsize::new(0),
             samplers: VulkanKernelSamplers::new(
                 device.clone(),
                 format!("Compute kernel '{}'", descriptor.label),
