@@ -169,7 +169,7 @@ impl ControlOperation for DescribeRuntime {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ListedAsATool;
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_RUNTIME);
 }
 
