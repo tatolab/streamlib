@@ -862,8 +862,8 @@ fn json_kind_name(value: &serde_json::Value) -> &'static str {
 mod ports_typed_by_a_signature;
 
 #[cfg(test)]
+mod pin_type_found_another_way_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod typed_input_mode_and_lifetime_tests;
-#[cfg(test)]
-mod pin_type_found_another_way_tests;
