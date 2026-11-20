@@ -81,6 +81,8 @@ class FunctionNodeEvaluatedAsAStandaloneNode:
         outputs_that_may_hand_out_nothing: list[int] = ...,
         inputs_carrying_an_unread_message: list[int] = ...,
         outputs_carrying_an_unread_message: list[int] = ...,
+        inputs_carried_in_parts: list[tuple[int, str]] = ...,
+        outputs_carried_in_parts: list[tuple[int, str]] = ...,
     ) -> FunctionNodeEvaluatedAsAStandaloneNode:
         """`called_through` is a compiled evaluate entry's address, or the object that runs the body as Python.
 

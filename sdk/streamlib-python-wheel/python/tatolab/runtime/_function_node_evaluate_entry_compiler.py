@@ -12,7 +12,9 @@ on disk by Numba; the wrapper is compiled at each load.
 
 An `UnreadMessage` reaches a compiled body as a token, the index of the input
 that holds it plus one, and an output the body may hand out nothing on carries,
-past every output, a slot saying whether it handed one out.
+past every output, a slot saying whether it handed one out. A Color, a Vector
+or a Rectangle takes one slot per part, in the order its type packs them, and
+reaches the body as a named tuple of its fields.
 """
 
 from __future__ import annotations
@@ -46,7 +48,9 @@ from tatolab.runtime._function_node_carried_values import (
     _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES,
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
+    PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES,
     UNREAD_MESSAGE_VALUE_TYPE,
+    value_class_of_a_part_value_type,
 )
 
 # The status the evaluate entry answers when the body raises; `MODULE_HOST_TABLE_STATUS_REFUSED`.
@@ -85,6 +89,20 @@ def compile_function_node_to_its_evaluate_entry(
         _refuse_a_value_the_evaluate_entry_cannot_carry(
             import_path, f"output `{each_output['port']}`", each_output["value_type"]
         )
+        if (
+            each_output.get("may_hand_out_nothing")
+            and each_output["value_type"] in PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES
+        ):
+            raise FunctionNodeDoesNotCompile(
+                f"{import_path}'s output `{each_output['port']}` is an optional "
+                f"{each_output['value_type']}, and a compiled function node hands out a value "
+                f"of parts on every call. To fix: return a {each_output['value_type']} always."
+            )
+    part_classes = {
+        value_class_of_a_part_value_type(each_port["value_type"])
+        for each_port in (*function_signature["inputs"], *function_signature["outputs"])
+        if each_port["value_type"] in PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES
+    }
 
     config_class: Optional[type] = getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
     state_parameter: Optional[str] = function_signature["state_parameter"]
@@ -100,7 +118,12 @@ def compile_function_node_to_its_evaluate_entry(
             dataclass_lowered.__name__,
             [field.name for field in dataclasses.fields(dataclass_lowered)],
         )
-        for dataclass_lowered in (config_class, state_record_class, output_record_class)
+        for dataclass_lowered in (
+            config_class,
+            state_record_class,
+            output_record_class,
+            *sorted(part_classes, key=lambda part_class: part_class.__name__),
+        )
         if dataclass_lowered is not None
     }
     try:
@@ -243,12 +266,13 @@ def _refuse_a_value_the_evaluate_entry_cannot_carry(
 ) -> None:
     if (
         value_type not in _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES.values()
+        and value_type not in PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES
         and value_type != UNREAD_MESSAGE_VALUE_TYPE
     ):
         raise FunctionNodeDoesNotCompile(
             f"{import_path}'s {what_it_types} is {value_type}, and a compiled function node "
-            f"carries numbers, bools and `UnreadMessage`s in this release. To fix: make it "
-            f"`float`, `int` or `bool`."
+            f"carries numbers, bools, Colors, Vectors, Rectangles and `UnreadMessage`s in this "
+            f"release. To fix: make it one of them."
         )
 
 
@@ -346,16 +370,21 @@ def _evaluate_entry_wrapper_source(
         each_input["parameter"] for each_input in function_signature["inputs"] if each_input["optional"]
     }
     input_parameters = list(value_type_by_input_parameter)
+    first_input_slot, input_slot_count = _slots_of_each_value(
+        [value_type_by_input_parameter[parameter] for parameter in input_parameters]
+    )
     lines = ["def evaluate(input_values, config_values, state_values, output_values, now_ns):"]
     if input_parameters:
-        lines.append(f"    inputs = carray(input_values, ({len(input_parameters)},))")
+        lines.append(f"    inputs = carray(input_values, ({input_slot_count},))")
     if config_value_types:
         lines.append(f"    config = carray(config_values, ({len(config_value_types)},))")
     if state_value_types:
         lines.append(f"    state = carray(state_values, ({len(state_value_types)},))")
-    output_ports = [each_output["port"] for each_output in function_signature["outputs"]]
+    first_output_slot, output_slot_count = _slots_of_each_value(
+        [each_output["value_type"] for each_output in function_signature["outputs"]]
+    )
     handed_out_slot_by_output_index = {
-        output_index: len(output_ports) + handed_out_slot_index
+        output_index: output_slot_count + handed_out_slot_index
         for handed_out_slot_index, output_index in enumerate(
             index
             for index, each_output in enumerate(function_signature["outputs"])
@@ -363,7 +392,7 @@ def _evaluate_entry_wrapper_source(
         )
     }
     lines.append(
-        f"    outputs = carray(output_values, ({len(output_ports) + len(handed_out_slot_by_output_index)},))"
+        f"    outputs = carray(output_values, ({output_slot_count + len(handed_out_slot_by_output_index)},))"
     )
 
     arguments: "list[str]" = []
@@ -393,8 +422,21 @@ def _evaluate_entry_wrapper_source(
                 + ")"
             )
         else:
-            input_expression = f"inputs[{input_parameters.index(parameter_name)}]"
-            if parameter_name in optional_input_parameters:
+            input_index = input_parameters.index(parameter_name)
+            value_type = value_type_by_input_parameter[parameter_name]
+            input_expression = f"inputs[{first_input_slot[input_index]}]"
+            if value_type in PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES:
+                part_class = value_class_of_a_part_value_type(value_type)
+                wrapper_globals[part_class.__name__] = named_tuple_by_dataclass[part_class]
+                arguments.append(
+                    f"{part_class.__name__}("
+                    + ", ".join(
+                        f"inputs[{first_input_slot[input_index] + part_index}]"
+                        for part_index in range(len(dataclasses.fields(part_class)))
+                    )
+                    + ")"
+                )
+            elif parameter_name in optional_input_parameters:
                 arguments.append(f"(None if {input_expression} == 0.0 else {input_expression})")
             else:
                 arguments.append(
@@ -413,21 +455,43 @@ def _evaluate_entry_wrapper_source(
     for index, each_output in enumerate(function_signature["outputs"]):
         output_expression = "output" if each_output["field"] is None else f"output.{each_output['field']}"
         handed_out_slot = handed_out_slot_by_output_index.get(index)
+        first_slot = first_output_slot[index]
+        if each_output["value_type"] in PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES:
+            part_class = value_class_of_a_part_value_type(each_output["value_type"])
+            lines.append(f"    output_{index} = {output_expression}")
+            for part_index, part in enumerate(dataclasses.fields(part_class)):
+                lines.append(f"    outputs[{first_slot + part_index}] = float(output_{index}.{part.name})")
+            continue
         if handed_out_slot is None:
-            lines.append(f"    outputs[{index}] = {_to_f64(output_expression, each_output['value_type'])}")
+            lines.append(f"    outputs[{first_slot}] = {_to_f64(output_expression, each_output['value_type'])}")
             continue
         lines.append(f"    output_{index} = {output_expression}")
         lines.append(f"    if output_{index} is None:")
-        lines.append(f"        outputs[{index}] = 0.0")
+        lines.append(f"        outputs[{first_slot}] = 0.0")
         lines.append(f"        outputs[{handed_out_slot}] = 0.0")
         lines.append("    else:")
         lines.append(
-            f"        outputs[{index}] = "
+            f"        outputs[{first_slot}] = "
             f"{_optional_to_f64(f'output_{index}', each_output['value_type'])}"
         )
         lines.append(f"        outputs[{handed_out_slot}] = 1.0")
     lines.append("    return 0")
     return "\n".join(lines) + "\n", wrapper_globals
+
+
+def _slots_of_each_value(value_types: "list[str]") -> "tuple[list[int], int]":
+    """The first slot of each value of `value_types` among a compiled call's f64 slots, and the
+    slots they take together: one for a number or a token, one per part for a value of parts."""
+    first_slot: "list[int]" = []
+    slot_count = 0
+    for value_type in value_types:
+        first_slot.append(slot_count)
+        slot_count += (
+            len(dataclasses.fields(value_class_of_a_part_value_type(value_type)))
+            if value_type in PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES
+            else 1
+        )
+    return first_slot, slot_count
 
 
 def _to_f64(value_expression: str, value_type: str) -> str:
