@@ -14,11 +14,20 @@ start and stop, never at frame cadence.
 
 from __future__ import annotations
 
-import dataclasses
 import sys
 from typing import Annotated
 
-from tatolab.stream import Image, Output, RuntimeContextFullAccess, log, node
+from tatolab.stream import (
+    Description,
+    NumberRange,
+    OutputPin,
+    RuntimeContextFullAccess,
+    SettingOnly,
+    Texture,
+    TexturePixelFormats,
+    log,
+    node,
+)
 
 from . import _native
 
@@ -31,22 +40,6 @@ else:
     _CameraCapture = _native.V4l2ZeroCopyCameraCapture
 
 
-@dataclasses.dataclass
-class CameraSourceConfig:
-    """What a `CameraSource` is configured with."""
-
-    device_id: Annotated[
-        "str | None",
-        "A V4L2 node such as `/dev/video0` on Linux, an AVFoundation camera's unique ID on "
-        "macOS; the first camera found when absent, on macOS the built-in one first.",
-    ] = None
-    max_width: Annotated[int, "The widest frame size negotiated."] = 1920
-    max_height: Annotated[int, "The tallest frame size negotiated."] = 1080
-    output_pool_rotation_depth: Annotated[
-        int, "How many converted frames the output pool rotates before reusing a free slot."
-    ] = 4
-
-
 @node.meta(
     description=(
         "Captures a camera — V4L2 on Linux, AVFoundation on macOS — and converts each frame "
@@ -55,19 +48,48 @@ class CameraSourceConfig:
         "re-loads on its own never asks, and is refused at setup until access has been answered."
     ),
 )
-@node.process(execution="manual", paced_by_real_time=True)
+@node(execution="manual", paced_by_real_time=True)
 class CameraSource:
-    """A camera, published as RGBA Image frames."""
+    """A camera, published as RGBA pictures.
 
-    def __init__(self, config: CameraSourceConfig) -> None:
-        self._config = config
+    Each setting is read at setup, where the camera opens, so a change opens it again.
+    """
+
+    device_id: Annotated[
+        str | None,
+        SettingOnly(),
+        Description(
+            "A V4L2 node such as `/dev/video0` on Linux, an AVFoundation camera's unique ID on "
+            "macOS; the first camera found when unset, on macOS the built-in one first."
+        ),
+    ] = None
+    max_width: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The widest frame size negotiated.")
+    ] = 1920
+    max_height: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("The tallest frame size negotiated."),
+    ] = 1080
+    output_pool_rotation_depth: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description(
+            "How many converted frames the output pool rotates before reusing a free slot."
+        ),
+    ] = 4
+    video: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(CONVERTED_FRAME_TEXTURE_FORMAT),
+            Description("RGBA frames from the camera, each colour as captured"),
+        ]
+    ]
+
+    def __init__(self) -> None:
         self._capture: "_CameraCapture | None" = None
-
-    video = Output(
-        Image,
-        formats=(CONVERTED_FRAME_TEXTURE_FORMAT,),
-        description="RGBA frames from the camera, each colour as captured",
-    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend `video` to the native half and open the camera, so a camera that
@@ -77,10 +99,10 @@ class CameraSource:
             avfoundation_capture = _native.AvFoundationZeroCopyCameraCapture(
                 module_host_table,
                 VIDEO_OUTPUT_PORT,
-                self._config.device_id,
-                self._config.max_width,
-                self._config.max_height,
-                self._config.output_pool_rotation_depth,
+                self.device_id,
+                self.max_width,
+                self.max_height,
+                self.output_pool_rotation_depth,
             )
             self._capture = avfoundation_capture
             log.info(
@@ -93,10 +115,10 @@ class CameraSource:
         v4l2_capture = _native.V4l2ZeroCopyCameraCapture(
             module_host_table,
             VIDEO_OUTPUT_PORT,
-            self._config.device_id,
-            self._config.max_width,
-            self._config.max_height,
-            self._config.output_pool_rotation_depth,
+            self.device_id,
+            self.max_width,
+            self.max_height,
+            self.output_pool_rotation_depth,
         )
         self._capture = v4l2_capture
         log.info(

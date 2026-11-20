@@ -69,7 +69,7 @@ def test_the_microphone_publishes_blocks_a_python_node_reads_as_numpy(
     node interpreter.
 
     `stream_builder.add` with no `input_values` records `{}`, so this is also the
-    added-without-values proof: every field of the node's config class has a
+    added-without-values proof: every setting of the node has a
     default.
     """
     tatolabd = start_tatolabd_running_stream(microphone_into_an_audio_block_probe)

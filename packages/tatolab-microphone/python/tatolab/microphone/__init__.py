@@ -14,29 +14,23 @@ block.
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Annotated
 
-from tatolab.stream import Channels, Output, RuntimeContextFullAccess, log, node
+from tatolab.stream import (
+    Audio,
+    Description,
+    OutputPin,
+    RuntimeContextFullAccess,
+    SettingOnly,
+    log,
+    node,
+)
 
 from . import _native
 
-__all__ = ["MicrophoneSource", "MicrophoneSourceConfig"]
+__all__ = ["MicrophoneSource"]
 
 AUDIO_OUTPUT_PORT = "audio"
-
-
-@dataclasses.dataclass
-class MicrophoneSourceConfig:
-    """What a `MicrophoneSource` is configured with."""
-
-    device_id: Annotated[
-        "str | None",
-        "Backend-named capture device. Absent: the backend's default device. A name the "
-        "backend cannot open raises rather than landing on a different device — a wrong "
-        "device id is a wiring error. On the PipeWire backend, `<sink>.monitor` captures "
-        "what that sink is playing.",
-    ] = None
 
 
 @node.meta(
@@ -45,7 +39,7 @@ class MicrophoneSourceConfig:
         "(silence where no backend exists)."
     ),
 )
-@node.process(execution="manual", scheduling="realtime", paced_by_real_time=True)
+@node(execution="manual", scheduling="realtime", paced_by_real_time=True)
 class MicrophoneSource:
     """Captures audio from the machine's audio backend as timestamped sample blocks
     (silence where no backend exists).
@@ -65,22 +59,31 @@ class MicrophoneSource:
     asks, and is refused at `setup()` until microphone access has been answered.
     """
 
-    def __init__(self, config: MicrophoneSourceConfig) -> None:
-        self._device_id = config.device_id
-        self._capture: "_native.MicrophoneCapture | None" = None
+    device_id: Annotated[
+        str | None,
+        SettingOnly(),
+        Description(
+            "Backend-named capture device. Unset: the backend's default device. A name the "
+            "backend cannot open raises rather than landing on a different device — a wrong "
+            "device id is a wiring error. On the PipeWire backend, `<sink>.monitor` captures "
+            "what that sink is playing."
+        ),
+    ] = None
+    audio: OutputPin[
+        Annotated[Audio, Description("Timestamped planar blocks of f32 capture samples")]
+    ]
 
-    audio = Output(
-        Channels, dtype="f32", description="Timestamped planar blocks of capture samples"
-    )
+    def __init__(self) -> None:
+        self._capture: "_native.MicrophoneCapture | None" = None
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend `audio` to the native half and open the capture stream, so a
         device that cannot be opened refuses the node here."""
         module_host_table = ctx.open_module_host_table(output_ports=[AUDIO_OUTPUT_PORT])
-        self._capture = _native.MicrophoneCapture(module_host_table, self._device_id)
+        self._capture = _native.MicrophoneCapture(module_host_table, self.device_id)
         log.info(
             f"MicrophoneSource: capture stream opened on "
-            f"{self._device_id or '<default>'} at {self._capture.sample_rate} Hz × "
+            f"{self.device_id or '<default>'} at {self._capture.sample_rate} Hz × "
             f"{self._capture.channels} ch, {self._capture.sample_format}"
         )
 
