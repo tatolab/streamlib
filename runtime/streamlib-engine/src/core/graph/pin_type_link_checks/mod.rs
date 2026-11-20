@@ -22,9 +22,10 @@ use super::{
     PendingDeletionComponent, PortInfo,
 };
 use crate::core::descriptors::{
-    BundleMember, ConvertNodeToInsert, DeclaredPinType, PinConversion, PinLinkEnd, PinLinkInputEnd,
-    PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType, PortFamilyDeclaration,
-    PortFamilyLinkEndpoint, pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
+    BundleMember, ConvertNodeToInsert, DeclaredPinType, NodeClassImportPath, PinConversion,
+    PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType,
+    PortFamilyDeclaration, PortFamilyLinkEndpoint, pin_link_verdict,
+    refusal_of_the_names_and_codec_a_link_carries,
 };
 use crate::core::{Error, PortDirection, Result};
 
@@ -96,12 +97,13 @@ impl TypedLinkEnds<'_> {
 }
 
 /// The verdict of a link from `output_port` of the node named `output_node_name` to
-/// `input_port` of the one named `input_node_name`, judged by the one type each port states, as
+/// `input_port` of the one named `input_node_name`, of `input_node_type`, judged by the one
+/// type each port states, as
 /// their node types declare them, among `conversions`, before either node is in a graph; `None`
 /// when either port states no one type.
 pub(crate) fn the_verdict_of_a_link_between_declared_ports(
     (output_node_name, output_port): (&str, &PortInfo),
-    (input_node_name, input_port): (&str, &PortInfo),
+    (input_node_name, input_node_type, input_port): (&str, &NodeClassImportPath, &PortInfo),
     conversions: &[PinConversion],
 ) -> Option<PinLinkVerdict> {
     let the_one_type_it_states = |port: &PortInfo| {
@@ -138,6 +140,7 @@ pub(crate) fn the_verdict_of_a_link_between_declared_ports(
         end(output_node_name, output_port, &output_pin_type),
         PinLinkInputEnd {
             end: end(input_node_name, input_port, &input_pin_type),
+            node_type: input_node_type,
             input_mode: input_port.input_mode,
         },
         conversions,
@@ -206,13 +209,14 @@ fn verdict_between(
                 output.link_end(output_pin_type),
                 PinLinkInputEnd {
                     end: input.link_end(output_pin_type),
+                    node_type: &input.node.node_type,
                     input_mode: input.port.input_mode,
                 },
                 &[],
             );
         }
         return PinLinkVerdict {
-            outcome: if input.port.takes_a_wire() {
+            outcome: if input.port.takes_a_wire_on_a_node_of(&input.node.node_type) {
                 PinLinkOutcome::Connects
             } else {
                 PinLinkOutcome::Refused(Box::new(PinLinkRefusal::input_takes_no_wire(
@@ -230,6 +234,7 @@ fn verdict_between(
                 output.link_end(output_pin_type),
                 PinLinkInputEnd {
                     end: input.link_end(input_pin_type),
+                    node_type: &input.node.node_type,
                     input_mode: input.port.input_mode,
                 },
                 conversions,

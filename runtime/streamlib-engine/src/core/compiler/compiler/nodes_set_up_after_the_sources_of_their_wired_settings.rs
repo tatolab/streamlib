@@ -6,6 +6,7 @@
 //! the value it wrote, or none, is what the node is built with. A node no wire into a setting
 //! waits on is let set up in the first wave, as every node was before.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -19,36 +20,39 @@ use crate::core::graph::{
     StateComponent,
 };
 
-/// The longest a node waits for the source of a wire into one of its settings to set up before
-/// it is built with what that wire carried by then.
-const LONGEST_WAIT_FOR_THE_SOURCE_OF_A_WIRE_INTO_A_SETTING: Duration = Duration::from_secs(30);
+/// The longest one compile's nodes wait, all waves together, for the sources of the wires into
+/// their settings to set up before each is built with what its wires carried by then.
+const LONGEST_WAIT_FOR_THE_SOURCES_OF_WIRES_INTO_SETTINGS: Duration = Duration::from_secs(30);
 
 /// Let each node of `barrier_handles` set up, each delivered the values its unlinked inputs
 /// read already: a node a wire into one of its settings read at setup comes into after the node
 /// that wire comes from has set up, delivered again with each value that wire carried by then
-/// as what it is built with.
+/// as what it is built with. Nodes whose wires into their settings come from each other set up
+/// together.
+///
+/// When a later wave's values are not handed over, the nodes of that wave and every wave after
+/// it are never let set up, each failing as a node of a compile refused before its setup does,
+/// and the refusal is answered as the compile's; the nodes of earlier waves are set up already.
 pub(super) fn let_each_node_set_up_after_the_sources_of_the_wires_into_its_settings(
     graph_arc: &RwLock<Graph>,
     mut barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)>,
 ) -> Result<()> {
-    let mut set_up_first = true;
+    let deadline = Instant::now() + LONGEST_WAIT_FOR_THE_SOURCES_OF_WIRES_INTO_SETTINGS;
+    let mut a_wave_has_set_up = false;
     while !barrier_handles.is_empty() {
         let waiting_on_a_source =
             the_nodes_a_wire_into_a_setting_waits_on_among(&graph_arc.read(), &barrier_handles);
-        let (later, now): (Vec<_>, Vec<_>) = barrier_handles
+        let (mut later, mut now): (Vec<_>, Vec<_>) = barrier_handles
             .into_iter()
             .partition(|(node, _)| waiting_on_a_source.contains(node));
-        let (now, later) = if now.is_empty() {
-            (later, Vec::new())
-        } else {
-            (now, later)
-        };
-        if !set_up_first {
-            let node_ids: Vec<NodeRunId> = now.iter().map(|(node, _)| node.clone()).collect();
-            build_each_with_what_the_wires_into_its_settings_carried(graph_arc, &node_ids);
-            deliver_the_unlinked_input_values_of_each_node(graph_arc, &node_ids)?;
+        if now.is_empty() {
+            now = std::mem::take(&mut later);
         }
         let set_up_now: Vec<NodeRunId> = now.iter().map(|(node, _)| node.clone()).collect();
+        if a_wave_has_set_up {
+            build_each_with_what_the_wires_into_its_settings_carried(graph_arc, &set_up_now);
+            deliver_the_unlinked_input_values_of_each_node(graph_arc, &set_up_now)?;
+        }
         for (node, handle) in now {
             tracing::trace!("[{}] Signaling CONTINUE", node);
             if handle.continue_sender.send(()).is_err() {
@@ -56,9 +60,9 @@ pub(super) fn let_each_node_set_up_after_the_sources_of_the_wires_into_its_setti
             }
         }
         if !later.is_empty() {
-            wait_until_each_has_set_up(graph_arc, &set_up_now);
+            wait_until_each_has_set_up(graph_arc, &set_up_now, deadline);
         }
-        set_up_first = false;
+        a_wave_has_set_up = true;
         barrier_handles = later;
     }
     Ok(())
@@ -88,30 +92,31 @@ pub(super) fn build_each_with_what_the_wires_into_its_settings_carried(
         .build_each_of_the_nodes_with_what_waits(&node_uuids);
 }
 
-/// Each of `barrier_handles`' nodes a wire into one of its settings read at setup comes into
-/// from another of them, which is to set up first.
+/// Each of `barrier_handles`' nodes that a wire into one of its settings read at setup comes
+/// into from another of them, which is to set up first. Only a link into such a setting carries
+/// the engine's reader.
 fn the_nodes_a_wire_into_a_setting_waits_on_among(
     graph: &Graph,
     barrier_handles: &[(NodeRunId, NodeReadyBarrierHandle)],
-) -> Vec<NodeRunId> {
-    let still_to_set_up = |node: &NodeRunId| barrier_handles.iter().any(|(held, _)| held == node);
+) -> HashSet<NodeRunId> {
+    let still_to_set_up: HashSet<&NodeRunId> =
+        barrier_handles.iter().map(|(node, _)| node).collect();
     barrier_handles
         .iter()
         .filter(|(node, _)| {
             graph.traversal().v(node).in_e().iter().any(|link| {
-                let to = link.to_port();
+                let source = link.source().node_run_id();
                 link.has::<ReaderOfALinkIntoASettingComponent>()
-                    && graph.is_a_setting_read_at_setup(to.node_run_id(), to.port_name())
-                    && still_to_set_up(link.source().node_run_id())
-                    && link.source().node_run_id() != node
+                    && source != node
+                    && still_to_set_up.contains(source)
             })
         })
         .map(|(node, _)| node.clone())
         .collect()
 }
 
-/// Wait until each of `nodes` has set up or failed, or the wait's bound passes.
-fn wait_until_each_has_set_up(graph_arc: &RwLock<Graph>, nodes: &[NodeRunId]) {
+/// Wait until each of `nodes` has set up or failed, or `deadline` passes.
+fn wait_until_each_has_set_up(graph_arc: &RwLock<Graph>, nodes: &[NodeRunId], deadline: Instant) {
     let states: Vec<_> = {
         let graph = graph_arc.read();
         nodes
@@ -126,7 +131,6 @@ fn wait_until_each_has_set_up(graph_arc: &RwLock<Graph>, nodes: &[NodeRunId]) {
             })
             .collect()
     };
-    let deadline = Instant::now() + LONGEST_WAIT_FOR_THE_SOURCE_OF_A_WIRE_INTO_A_SETTING;
     for state in states {
         state.wait_until_setup_resolved(deadline);
     }

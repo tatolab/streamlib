@@ -46,3 +46,41 @@ fn a_value_wire_into_the_port_of_a_graph_input_is_refused() {
     );
     assert_eq!(stream.to_json().unwrap()["links"], json!([]));
 }
+
+/// A stream document holding a link into the `port` of a top-level `GraphInput`, a setting read
+/// at setup, is refused as it is validated, naming the setting, before the load adds any node.
+///
+/// Mental-revert: judging the document's link by its mode alone, without the `GraphInput` rule,
+/// loads the link.
+#[test]
+#[serial]
+fn a_document_linking_into_the_port_of_a_graph_input_is_refused_at_load() {
+    let project_directory = a_project_on_disk();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    let document = json!({
+        "nodes": [
+            { "name": "cues", "type": MockOutputOnlyNode::node_class_import_path().as_str() },
+            a_graph_input_in_a_document(
+                Uuid::new_v4(), "echo", json!({ "port": "echo", "family": "records" }),
+            ),
+        ],
+        "links": [{
+            "source": { "node": "cues", "port": "out1" },
+            "target": { "node": "echo", "port": "port" },
+        }],
+    });
+
+    let refusal = stream
+        .load_graph_snapshot_into_this_stream(
+            &GraphSnapshot::from_graph_document(document).unwrap(),
+            None,
+        )
+        .expect_err("a document linking into a setting of a GraphInput is refused")
+        .to_string();
+
+    assert!(
+        refusal.contains("input `port` of `echo`, a setting, which takes no wire"),
+        "{refusal}"
+    );
+    assert_eq!(stream.node_count(), 0, "the refused load added no node");
+}

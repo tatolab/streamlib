@@ -354,9 +354,15 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
         })
         .unwrap_or_default();
     match ports.iter().find(|declared| declared.name == port_cast) {
-        Some(declared) if direction == PortDirection::Input && !declared.takes_a_wire() => Err(
-            the_refusal_of_a_link_into_a_setting(&declared.name, node_name),
-        ),
+        Some(declared)
+            if direction == PortDirection::Input
+                && !declared.takes_a_wire_on_a_node_of(&node.node_type) =>
+        {
+            Err(the_refusal_of_a_link_into_a_setting(
+                &declared.name,
+                node_name,
+            ))
+        }
         Some(_) => Ok(()),
         None => Err(Error::GraphError(format!(
             "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",

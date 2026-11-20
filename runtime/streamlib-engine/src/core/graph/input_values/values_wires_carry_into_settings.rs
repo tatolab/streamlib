@@ -157,17 +157,19 @@ impl ValuesWiresCarryIntoSettings {
         }
     }
 
-    /// Put back what each of `refused` was built with before, each value it carried held as
-    /// refused until its wire carries another.
+    /// Put back what each of `refused` was built with before, the value its node was refused
+    /// with held as refused until its wire carries another: the newest its node was about to be
+    /// built with, which a burst that went on past the value taken leaves in its place.
     pub(crate) fn put_back(&self, refused: &[ValueAWireCarriedIntoASetting]) {
         let mut held = self.held.lock();
         for carried in refused {
             let key = (carried.node, carried.setting.clone());
-            match &carried.built_with_before {
+            let refused_with = match &carried.built_with_before {
                 Some(before) => held.built_with.insert(key.clone(), before.clone()),
                 None => held.built_with.remove(&key),
             };
-            held.refused.insert(key, carried.value.clone());
+            held.refused
+                .insert(key, refused_with.unwrap_or_else(|| carried.value.clone()));
         }
     }
 

@@ -35,6 +35,8 @@ pub struct PinLinkEnd<'end> {
 pub struct PinLinkInputEnd<'end> {
     /// The end.
     pub end: PinLinkEnd<'end>,
+    /// The type of the input's node.
+    pub node_type: &'end crate::NodeClassImportPath,
     /// Whether the input takes a wire, a stored value, or both; `None` for one that takes a wire.
     pub input_mode: Option<NodeInputMode>,
 }
@@ -229,15 +231,17 @@ impl fmt::Display for PinLinkRefusal {
                 output_flow,
                 node_name,
                 input_name,
-            } => write!(
-                formatter,
-                "cannot link {output} to setting `{input_name}` of `{node_name}`: the output \
-                 flows as `{}`, and a setting takes a `value` wire only, since each change of \
-                 it rebuilds its node. To fix: place a node that samples the {} into a value \
-                 between them, or set the setting's value with `set_node_input_value`",
-                output_flow.name(),
-                output_flow.name(),
-            ),
+            } => {
+                let flow = output_flow.name();
+                write!(
+                    formatter,
+                    "cannot link {output} to setting `{input_name}` of `{node_name}`: the output \
+                     flows as `{flow}`, and a setting takes a `value` wire only, since each \
+                     change of it rebuilds its node. To fix: place a node that samples the \
+                     {flow} into a value between them, or set the setting's value with \
+                     `set_node_input_value`"
+                )
+            }
             Self::ComputedValueIntoASetting {
                 output_node_name,
                 output_node_kind,
@@ -437,7 +441,7 @@ pub fn pin_link_verdict(
     input: PinLinkInputEnd<'_>,
     conversions: &[PinConversion],
 ) -> PinLinkVerdict {
-    if !an_input_takes_a_wire(input.input_mode, Some(input.end.pin_type)) {
+    if !an_input_takes_a_wire(input.node_type, input.input_mode, Some(input.end.pin_type)) {
         return PinLinkVerdict {
             outcome: PinLinkOutcome::Refused(Box::new(PinLinkRefusal::input_takes_no_wire(
                 input.end.node_name,

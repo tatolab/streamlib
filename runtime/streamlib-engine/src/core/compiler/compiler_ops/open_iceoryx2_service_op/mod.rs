@@ -71,20 +71,13 @@ pub(crate) fn open_iceoryx2_service(
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    let to_port = graph
+    let (from_port, to_port) = graph
         .traversal()
         .e(link_id)
         .first()
-        .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found in graph", link_id)))?
-        .to_port()
-        .clone();
+        .map(|link| (link.source().clone(), link.to_port().clone()))
+        .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found in graph", link_id)))?;
     if graph.is_a_setting_read_at_setup(to_port.node_run_id(), to_port.port_name()) {
-        let from_port = graph
-            .traversal()
-            .e(link_id)
-            .first()
-            .map(|link| link.source().clone())
-            .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
         return open_a_link_into_a_setting_read_by_the_engine(
             graph,
             link_id,

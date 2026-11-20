@@ -57,6 +57,13 @@ fn an_output(pin_type: &PinType) -> PinLinkEnd<'_> {
     }
 }
 
+/// The type of the node every input end of these tests is on.
+fn the_sinks_node_type() -> &'static NodeClassImportPath {
+    static SINK: std::sync::LazyLock<NodeClassImportPath> =
+        std::sync::LazyLock::new(|| NodeClassImportPath::new("nodes.sink:Sink").unwrap());
+    &SINK
+}
+
 fn an_input(pin_type: &PinType) -> PinLinkInputEnd<'_> {
     PinLinkInputEnd {
         end: PinLinkEnd {
@@ -64,6 +71,7 @@ fn an_input(pin_type: &PinType) -> PinLinkInputEnd<'_> {
             port_name: "in",
             ..an_output(pin_type)
         },
+        node_type: the_sinks_node_type(),
         input_mode: None,
     }
 }
@@ -470,6 +478,41 @@ fn a_setting_of_a_type_no_message_carries_takes_no_wire() {
         panic!("a node reference takes no wire: {verdict:?}");
     };
     assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
+}
+
+/// A setting of a `GraphInput` read at setup takes no wire, though the same setting on another
+/// node takes a Value wire; an input of a `GraphInput` that is no setting still takes one.
+///
+/// Mental-revert: judging an input by its mode and type alone connects the `GraphInput`'s
+/// setting.
+#[test]
+fn a_setting_of_a_graph_input_takes_no_wire() {
+    let graph_input = NodeClassImportPath::new(crate::GRAPH_INPUT_NODE_TYPE).unwrap();
+    let verdict = pin_link_verdict(
+        a_value_output(&float()),
+        PinLinkInputEnd {
+            node_type: &graph_input,
+            ..a_setting(SettingReadTime::AtSetup, &float())
+        },
+        &[],
+    );
+    let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
+        panic!("a setting of a GraphInput takes no wire: {verdict:?}");
+    };
+    assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
+
+    assert!(an_input_takes_a_wire(
+        &graph_input,
+        Some(NodeInputMode::WireOrValue),
+        Some(&float())
+    ));
+    assert!(an_input_takes_a_wire(
+        the_sinks_node_type(),
+        Some(NodeInputMode::SettingOnly {
+            read: SettingReadTime::AtSetup
+        }),
+        Some(&float())
+    ));
 }
 
 #[test]

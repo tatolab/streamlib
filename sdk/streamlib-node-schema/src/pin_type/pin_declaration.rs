@@ -231,24 +231,26 @@ pub enum NodeInputMode {
     },
 }
 
-/// Whether a link may end at an input of `mode` carrying `pin_type`, the one rule every place
-/// that asks follows: every input but a setting read each run and a setting of a type no
-/// message carries, such as a node reference or a choice of pin type. An input of no `mode` is
-/// a port that takes a wire; one of no `pin_type` links by its family.
-pub fn an_input_takes_a_wire(mode: Option<NodeInputMode>, pin_type: Option<&PinType>) -> bool {
+/// Whether a link may end at an input of `mode` carrying `pin_type` on a node of `node_type`,
+/// the one rule every place that asks follows: every input but a setting read each run, a
+/// setting of a type no message carries, such as a node reference or a choice of pin type, and
+/// any setting of a `GraphInput`, which declares its stream's interface rather than running on
+/// a value. An input of no `mode` is a port that takes a wire; one of no `pin_type` links by
+/// its family.
+pub fn an_input_takes_a_wire(
+    node_type: &crate::NodeClassImportPath,
+    mode: Option<NodeInputMode>,
+    pin_type: Option<&PinType>,
+) -> bool {
     mode.is_none_or(|mode| {
-        mode.takes_a_wire()
-            && !(mode.is_a_setting() && pin_type.is_some_and(|pin_type| !pin_type.takes_a_wire()))
+        !mode.is_a_setting()
+            || !(mode.is_a_setting_read_each_run()
+                || node_type.is_the_graph_input_type()
+                || pin_type.is_some_and(|pin_type| !pin_type.takes_a_wire()))
     })
 }
 
 impl NodeInputMode {
-    /// Whether a link may end at an input of this mode, whatever its type: every mode but a
-    /// setting read each run. [`an_input_takes_a_wire`] judges an input by its type too.
-    pub fn takes_a_wire(self) -> bool {
-        !self.is_a_setting_read_each_run()
-    }
-
     /// Whether an input of this mode is a setting, read at setup or each run.
     pub fn is_a_setting(self) -> bool {
         matches!(self, Self::SettingOnly { .. })

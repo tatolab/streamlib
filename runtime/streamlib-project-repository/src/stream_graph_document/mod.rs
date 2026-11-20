@@ -39,12 +39,11 @@ use input_values_and_asset_references_at_every_level::{
 pub use fragment_node_uuids_kept_by_name::fragment_with_each_node_uuid_kept_by_its_name;
 pub use stream_graph_operation::StreamGraphOperation;
 
-/// The import path a graph names `GraphInput` by, in the built-in node module.
-pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
+pub use streamlib_node_schema::GRAPH_INPUT_NODE_TYPE;
 
 /// Whether `node_type` is `GraphInput`.
 pub fn is_the_graph_input_type(node_type: &streamlib_node_schema::NodeClassImportPath) -> bool {
-    node_type.as_str() == GRAPH_INPUT_NODE_TYPE
+    node_type.is_the_graph_input_type()
 }
 
 /// The import path a graph names `GraphOutput` by, in the built-in node module.

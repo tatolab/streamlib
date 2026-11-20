@@ -21,10 +21,11 @@ use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPo
 use crate::core::nodes::NodeSpec;
 use crate::core::runtime::Runner;
 use crate::core::runtime::a_node_reading_its_settings_at_setup_for_a_test::{
-    A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH, THE_SOURCES_OUTPUT, WhatANodeRan,
-    each_setup_and_teardown_run, forget_every_setup_run,
-    the_node_type_reading_its_settings_at_setup, the_node_type_whose_output_a_test_writes,
-    the_settings_each_setup_read, write_from_the_source, write_from_the_source_at_its_setup,
+    A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH, A_KERNEL_SIZE_IT_IS_NOT_HANDED, THE_SOURCES_OUTPUT,
+    THE_SOURCES_SETTING, WhatANodeRan, each_setup_and_teardown_run, fail_the_setup_of_the_source,
+    forget_every_setup_run, the_node_type_reading_its_settings_at_setup,
+    the_node_type_whose_output_a_test_writes, the_settings_each_setup_read, write_from_the_source,
+    write_from_the_source_at_its_setup,
 };
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::operations::RuntimeOperations;
@@ -52,6 +53,17 @@ fn a_running_stream_with_wires_into_settings(
     project_directory: &std::path::Path,
     wires: usize,
     before_start: impl FnOnce(&[Uuid]),
+) -> AStreamWithWiresIntoSettings {
+    let wired = a_stream_with_wires_into_settings(project_directory, wires);
+    before_start(&wired.sources);
+    start(&wired.stream);
+    wired
+}
+
+/// A stream holding `wires` wires into settings, not started.
+fn a_stream_with_wires_into_settings(
+    project_directory: &std::path::Path,
+    wires: usize,
 ) -> AStreamWithWiresIntoSettings {
     let reader_type = the_node_type_reading_its_settings_at_setup();
     let source_type = the_node_type_whose_output_a_test_writes();
@@ -94,8 +106,6 @@ fn a_running_stream_with_wires_into_settings(
         sources.push(source);
         readers.push(reader);
     }
-    before_start(&sources);
-    start(&stream);
     AStreamWithWiresIntoSettings {
         _runner: runner,
         stream,
@@ -210,6 +220,105 @@ fn each_value_a_wire_carries_into_a_setting_rebuilds_its_node_once_with_it() {
         "a value its node is built with rebuilds nothing"
     );
     wired.stream.stop().expect("the stream stops");
+}
+
+/// Two nodes whose settings read at setup are wired from each other both set up, together, and
+/// the start that compiles them returns.
+///
+/// Mental-revert: waiting for each node's sources before letting it set up waits on a node that
+/// waits on it in turn, and the start never returns before its bound.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn two_nodes_wired_into_each_others_settings_both_set_up() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let source_type = the_node_type_whose_output_a_test_writes();
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
+        .expect("an empty stream loads");
+    let [first, second] = [(); 2].map(|()| {
+        stream
+            .add_node(NodeSpec::new(source_type.clone(), Value::Null))
+            .expect("the source is added")
+    });
+    for (from, to) in [(&first, &second), (&second, &first)] {
+        stream
+            .connect(
+                OutputLinkPortRef::new(from.clone(), THE_SOURCES_OUTPUT),
+                InputLinkPortRef::new(to.clone(), THE_SOURCES_SETTING),
+            )
+            .expect("a Value wire into a setting read at setup connects");
+    }
+
+    let started_at = Instant::now();
+    start(&stream);
+    assert!(
+        started_at.elapsed() < Duration::from_secs(10),
+        "the start returned within {:?}",
+        started_at.elapsed()
+    );
+    stream.stop().expect("the stream stops");
+}
+
+/// A node whose wired setting's source fails its setup is still built, with the setting's own
+/// value, once that source has failed.
+///
+/// Mental-revert: waiting for the source to set up rather than to fail holds the reader back
+/// until the wait's bound, and it is never built in the time the test gives it.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_node_whose_wired_settings_source_fails_its_setup_is_built_with_its_own_value() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let wired = a_stream_with_wires_into_settings(project_directory.path(), 1);
+    fail_the_setup_of_the_source(wired.sources[0]);
+
+    let _ = wired.stream.start();
+    assert_eq!(
+        the_kernel_sizes(&once_it_has_run(wired.readers[0], 1)),
+        [json!(3)]
+    );
+    let _ = wired.stream.stop();
+}
+
+/// When the values of a node set up after the source of its wired setting are not handed to
+/// it, that node is never let set up, and the start is refused as a compile is.
+///
+/// Mental-revert: letting the node set up whatever its delivery answered builds it with the
+/// stored 3.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_node_whose_values_are_not_handed_over_after_its_source_set_up_never_sets_up() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let wired = a_stream_with_wires_into_settings(project_directory.path(), 1);
+    write_from_the_source_at_its_setup(wired.sources[0], A_KERNEL_SIZE_IT_IS_NOT_HANDED);
+
+    let refusal = wired
+        .stream
+        .start()
+        .expect_err("the start is refused as its compile is")
+        .to_string();
+    assert!(refusal.contains("is not taken"), "{refusal}");
+    std::thread::sleep(ANY_REBUILD_HAS_RUN_AFTER);
+    assert!(
+        the_settings_each_setup_read(wired.readers[0]).is_empty(),
+        "the reader never set up"
+    );
+    let _ = wired.stream.stop();
 }
 
 /// Mental-revert: with no window for a burst to settle in, the first value rebuilds its node at

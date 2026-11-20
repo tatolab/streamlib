@@ -195,28 +195,21 @@ impl PortInfo {
         self.annotations.0.meaning.as_deref()
     }
 
-    /// Whether a link may end at this input: every input but a setting read each run, and a
-    /// setting of a type no message carries, such as a node reference.
-    pub fn takes_a_wire(&self) -> bool {
+    /// Whether a link may end at this input of a node of `node_type`, by the one rule
+    /// [`crate::core::descriptors::an_input_takes_a_wire`].
+    pub(crate) fn takes_a_wire_on_a_node_of(
+        &self,
+        node_type: &crate::core::NodeClassImportPath,
+    ) -> bool {
         crate::core::descriptors::an_input_takes_a_wire(
+            node_type,
             self.input_mode,
             self.pin.as_ref().map(|pin| &pin.pin_type),
         )
     }
 
-    /// Whether a link may end at this input of a node of `node_type`: as
-    /// [`Self::takes_a_wire`] says, and never at a setting of a `GraphInput`, which declares its
-    /// stream's interface rather than running on a value.
-    pub fn takes_a_wire_on_a_node_of(&self, node_type: &crate::core::NodeClassImportPath) -> bool {
-        self.takes_a_wire()
-            && !(self.is_a_setting()
-                && crate::core::graph::graph_interface_resolution::is_the_graph_input_type(
-                    node_type,
-                ))
-    }
-
     /// Whether this input is a setting, read at setup or each run.
-    pub fn is_a_setting(&self) -> bool {
+    pub(crate) fn is_a_setting(&self) -> bool {
         self.input_mode
             .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting)
     }

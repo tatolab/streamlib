@@ -95,11 +95,11 @@ impl PinGroupDescriptor {
     /// How many slots the group has on a node: following its wires when a slot holds an input
     /// that takes a wire, else set by the node's input named after the group.
     pub fn slot_count(&self) -> PinGroupSlotCount {
-        if self
-            .inputs
-            .iter()
-            .any(|input| input.input_mode.is_none_or(NodeInputMode::takes_a_wire))
-        {
+        if self.inputs.iter().any(|input| {
+            !input
+                .input_mode
+                .is_some_and(NodeInputMode::is_a_setting_read_each_run)
+        }) {
             PinGroupSlotCount::FollowsItsWires
         } else {
             PinGroupSlotCount::SetByItsInput

@@ -388,13 +388,6 @@ pub struct NodeDescriptorOutput {
     pub examples: CodeExamplesOutput,
 }
 
-impl NodeDescriptorOutput {
-    /// Each input a link may end at: every input but a setting read each run.
-    pub fn inputs_taking_a_wire(&self) -> impl Iterator<Item = &PortDescriptorOutput> {
-        self.inputs.iter().filter(|input| input.takes_a_wire())
-    }
-}
-
 /// Descriptor for a node port.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct PortDescriptorOutput {
@@ -454,16 +447,6 @@ pub struct PortDescriptorOutput {
 }
 
 impl PortDescriptorOutput {
-    /// Whether a link may end at this input, by the one rule
-    /// [`crate::core::descriptors::an_input_takes_a_wire`].
-    pub fn takes_a_wire(&self) -> bool {
-        let pin_type = self.pin.as_ref().and_then(|pin| match &pin.pin_type {
-            crate::core::descriptors::DeclaredPinType::Is { pin_type } => Some(pin_type),
-            _ => None,
-        });
-        crate::core::descriptors::an_input_takes_a_wire(self.input_mode, pin_type)
-    }
-
     /// The input a config field of a node type not yet typed is: a setting read
     /// when the node is set up, which takes no wire until its type is typed.
     fn of_a_config_field(setting: ConfigFieldDescribedAsASetting) -> Self {

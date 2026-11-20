@@ -71,6 +71,35 @@ fn a_value_put_back_keeps_the_earlier_one_and_waits_for_nothing_until_another_ar
     assert_eq!(carried.take_each_value_waiting()[0].value, json!(7));
 }
 
+/// A value that arrived as its node's rebuild was being built, and which the node was built
+/// with in place of the one taken, is the one held as refused when the rebuild is refused.
+///
+/// Mental-revert: holding the value taken as refused leaves 9, the value the node refused, to
+/// be tried again, and the value taken, 4, never tried.
+#[test]
+fn a_rebuild_refused_holds_the_value_its_node_was_built_with_as_refused() {
+    let carried = ValuesWiresCarryIntoSettings::default();
+    let node = Uuid::new_v4();
+    carried.built_with_unless_its_wire_carried_one(node, "kernel_size", json!(3));
+    carried.carried(node, "kernel_size", json!(4));
+    let taken = carried.take_each_value_waiting();
+    carried.carried(node, "kernel_size", json!(9));
+    carried.build_each_of_the_nodes_with_what_waits(&[node]);
+    carried.put_back(&taken);
+
+    assert_eq!(
+        carried.the_value_its_node_is_built_with(node, "kernel_size"),
+        Some(json!(3))
+    );
+    carried.carried(node, "kernel_size", json!(9));
+    assert!(
+        carried.take_each_value_waiting().is_empty(),
+        "the value its node was refused with is not tried again"
+    );
+    carried.carried(node, "kernel_size", json!(4));
+    assert_eq!(carried.take_each_value_waiting()[0].value, json!(4));
+}
+
 #[test]
 fn a_node_forgotten_holds_nothing() {
     let carried = ValuesWiresCarryIntoSettings::default();

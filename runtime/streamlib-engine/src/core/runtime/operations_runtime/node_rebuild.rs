@@ -39,10 +39,11 @@ struct NodeRebuilt {
     state: Arc<ObservableNodeState>,
 }
 
-/// How one node's rebuild went: its UUID, and why it did not build, in its own words.
+/// How one node's rebuild went: the node, and whether it built, or why not in its own words.
 struct HowANodesRebuildWent {
+    node_run_id: NodeRunId,
     node_uuid: Uuid,
-    refused_because: Option<String>,
+    built: std::result::Result<(), String>,
 }
 
 /// Why `node` did not build, settled as `settled` after its rebuild, in its own words.
@@ -99,7 +100,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<Vec<Uuid>> {
         let node_run_ids = std::mem::take(&mut *self.nodes_a_setting_read_at_setup_rebuilds.lock());
         let rebuilt = self.rebuild_the_nodes(node_run_ids).await?;
-        if let Some(refusal) = rebuilt.iter().find_map(|node| node.refused_because.clone()) {
+        if let Some(refusal) = rebuilt.iter().find_map(|node| node.built.clone().err()) {
             return Err(Error::Configuration(refusal));
         }
         Ok(rebuilt.iter().map(|node| node.node_uuid).collect())
@@ -175,9 +176,13 @@ impl LoadedStreamInThisRuntime {
             .iter()
             .zip(settled)
             .map(|(node, settled)| HowANodesRebuildWent {
+                node_run_id: node.node_run_id.clone(),
                 node_uuid: node.node_uuid,
-                refused_because: (!matches!(settled, NodeState::Running | NodeState::Paused))
-                    .then(|| the_refusal_of_a_rebuild(node, settled)),
+                built: if matches!(settled, NodeState::Running | NodeState::Paused) {
+                    Ok(())
+                } else {
+                    Err(the_refusal_of_a_rebuild(node, settled))
+                },
             })
             .collect())
     }
@@ -213,19 +218,18 @@ impl LoadedStreamInThisRuntime {
                 return;
             }
         };
-        let refused: Vec<Uuid> = rebuilt
-            .iter()
-            .filter_map(|node| {
-                let refusal = node.refused_because.as_ref()?;
+        let (built, refused): (Vec<_>, Vec<_>) =
+            rebuilt.into_iter().partition(|node| node.built.is_ok());
+        for node in &refused {
+            if let Err(refusal) = &node.built {
                 tracing::warn!(
                     node = %node.node_uuid,
                     "{refusal}; it is built again from the values it had"
                 );
-                Some(node.node_uuid)
-            })
-            .collect();
+            }
+        }
         tracing::info!(
-            nodes_rebuilt = rebuilt.len() - refused.len(),
+            nodes_rebuilt = built.len(),
             nodes_refused = refused.len(),
             "rebuilt each node a wire into its settings carried a new value into"
         );
@@ -234,16 +238,13 @@ impl LoadedStreamInThisRuntime {
         }
         let values_refused: Vec<ValueAWireCarriedIntoASetting> = values
             .into_iter()
-            .filter(|carried| refused.contains(&carried.node))
+            .filter(|carried| refused.iter().any(|node| node.node_uuid == carried.node))
             .collect();
         carried.put_back(&values_refused);
-        let node_run_ids = self.the_nodes_holding_the_settings(&values_refused);
+        let node_run_ids = refused.into_iter().map(|node| node.node_run_id).collect();
         match self.rebuild_the_nodes(node_run_ids).await {
             Ok(rebuilt) => {
-                for refusal in rebuilt
-                    .iter()
-                    .filter_map(|node| node.refused_because.as_ref())
-                {
+                for refusal in rebuilt.iter().filter_map(|node| node.built.as_ref().err()) {
                     tracing::error!(
                         "{refusal}, after the values a wire carried into its settings were put \
                          back"

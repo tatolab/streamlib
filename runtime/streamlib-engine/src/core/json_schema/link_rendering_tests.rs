@@ -136,6 +136,7 @@ fn the_verdict_between(
         meaning: None,
         flow: None,
     };
+    let sinks_type = crate::core::descriptors::NodeClassImportPath::new("nodes.sink:Sink").unwrap();
     let input = PinLinkInputEnd {
         end: PinLinkEnd {
             node_name: "sink",
@@ -143,6 +144,7 @@ fn the_verdict_between(
             pin_type: input,
             ..output
         },
+        node_type: &sinks_type,
         input_mode: None,
     };
     pin_link_verdict(output, input, &[])

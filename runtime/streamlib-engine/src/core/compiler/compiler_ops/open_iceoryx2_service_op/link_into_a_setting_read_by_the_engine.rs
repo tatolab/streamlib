@@ -28,7 +28,7 @@ use crate::core::graph::input_values::{
     ValuesWiresCarryIntoSettings, the_value_a_setting_reads_with_no_wire,
 };
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, OutputLinkPortRef,
+    Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, LinkUniqueId, OutputLinkPortRef,
 };
 use crate::core::pin_value_packing::{PackedPinValueRef, unpack_pin_value};
 use crate::iceoryx2::{
@@ -66,18 +66,16 @@ impl Drop for ReaderOfALinkIntoASettingComponent {
     }
 }
 
-/// The type the value a link from `from` into the setting `to` carries is read as: the
-/// setting's own, else, on a setting that states none exactly, the output's.
+/// The type the value a link from `from` into setting `setting` of `to_node` carries is read
+/// as: the setting's own, else, on a setting that states none exactly, the output's.
 fn the_type_its_values_are_read_as(
     graph: &Graph,
     from: &OutputLinkPortRef,
-    to: &InputLinkPortRef,
+    to_node: &GraphNode,
+    setting: &str,
 ) -> Result<PinType> {
-    let the_settings = graph
-        .traversal()
-        .v(to.node_run_id())
-        .first()
-        .and_then(|node| node.input_port(to.port_name()))
+    let the_settings = to_node
+        .input_port(setting)
         .and_then(|port| port.pin.as_ref());
     let the_outputs = || {
         graph
@@ -92,8 +90,9 @@ fn the_type_its_values_are_read_as(
         .map(|pin| pin.pin_type.clone())
         .ok_or_else(|| {
             Error::InvalidLink(format!(
-                "the link from `{from}` into setting `{to}` is not wired: neither end states a \
-                 pin type, so the value it carries cannot be read"
+                "the link from `{from}` into setting `{}.{setting}` is not wired: neither end \
+                 states a pin type, so the value it carries cannot be read",
+                to_node.display_name
             ))
         })
 }
@@ -111,18 +110,14 @@ pub(super) fn open_a_link_into_a_setting_read_by_the_engine(
     to: &InputLinkPortRef,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    let pin_type = the_type_its_values_are_read_as(graph, from, to)?;
-    let (node_uuid, read_with_no_wire) = graph
+    let to_node = graph
         .traversal()
         .v(to.node_run_id())
         .first()
-        .map(|node| {
-            (
-                node.node_uuid,
-                the_value_a_setting_reads_with_no_wire(graph, node, to.port_name()),
-            )
-        })
         .ok_or_else(|| Error::NodeNotFound(to.node_run_id().to_string()))?;
+    let pin_type = the_type_its_values_are_read_as(graph, from, to_node, to.port_name())?;
+    let node_uuid = to_node.node_uuid;
+    let read_with_no_wire = the_value_a_setting_reads_with_no_wire(graph, to_node, to.port_name());
     let the_engines_reader = NodeRunId::new();
     let delivery = DeliveryProfile::Newest.resolve();
     let destination = DestinationOfALinkAsItsWiringReadsIt {
@@ -188,10 +183,11 @@ fn start_the_reader(
     );
     let wake = opened.destination_notify_service.create_listener()?;
     let read = Arc::new(TheReadOfALinkIntoASetting {
-        mailboxes,
+        handed_over: Mutex::new(WhatTheReadHandsOverFrom {
+            mailboxes,
+            a_message_was_passed_over: false,
+        }),
         reader,
-        a_message_was_passed_over: AtomicBool::new(false),
-        handing_over: Mutex::new(()),
     });
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -226,13 +222,17 @@ struct TheSettingAndWhereItsValuesGo {
     pin_type: PinType,
 }
 
-/// What one reader holds: the mailbox its link's channel lands in, and the setting it feeds.
+/// What one reader holds: what it hands over from, locked across each hand-over by the
+/// reader's thread or by a node about to be built, and the setting it feeds.
 struct TheReadOfALinkIntoASetting {
-    mailboxes: InputMailboxesInner,
+    handed_over: Mutex<WhatTheReadHandsOverFrom>,
     reader: TheSettingAndWhereItsValuesGo,
-    a_message_was_passed_over: AtomicBool,
-    /// Held across each hand-over, by the reader's thread or by a node about to be built.
-    handing_over: Mutex<()>,
+}
+
+/// The mailbox a reader's link lands in, and whether a message there was passed over yet.
+struct WhatTheReadHandsOverFrom {
+    mailboxes: InputMailboxesInner,
+    a_message_was_passed_over: bool,
 }
 
 impl TheReadOfALinkIntoASetting {
@@ -256,8 +256,8 @@ impl TheReadOfALinkIntoASetting {
     /// passed over, one hand-over at a time, so a node built once one returns is built with
     /// what it read. A message that does not read as the setting's type is logged once.
     fn hand_over_the_newest_message(&self) {
-        let _one_hand_over_at_a_time = self.handing_over.lock();
-        let newest = match self.the_newest_message() {
+        let mut handed_over = self.handed_over.lock();
+        let newest = match handed_over.the_newest_message(&self.reader.setting) {
             Ok(Some(newest)) => newest,
             Ok(None) => return,
             Err(read_failure) => {
@@ -277,7 +277,7 @@ impl TheReadOfALinkIntoASetting {
             },
         ) {
             Ok(value) => reader.carried.carried(reader.node, &reader.setting, value),
-            Err(why) if !self.a_message_was_passed_over.swap(true, Ordering::AcqRel) => {
+            Err(why) if !std::mem::replace(&mut handed_over.a_message_was_passed_over, true) => {
                 tracing::warn!(
                     setting = %reader.setting,
                     "a message on the link into setting `{}` does not read as a {}, so it is \
@@ -289,11 +289,14 @@ impl TheReadOfALinkIntoASetting {
             Err(_) => {}
         }
     }
+}
 
-    /// The newest message the link carried since the last read, its older ones passed over.
-    fn the_newest_message(&self) -> Result<Option<MessageReadFromInputPort>> {
+impl WhatTheReadHandsOverFrom {
+    /// The newest message the link into `setting` carried since the last read, its older ones
+    /// passed over.
+    fn the_newest_message(&self, setting: &str) -> Result<Option<MessageReadFromInputPort>> {
         let mut newest = None;
-        while let Some(message) = self.mailboxes.read_raw(&self.reader.setting)? {
+        while let Some(message) = self.mailboxes.read_raw(setting)? {
             newest = Some(message);
         }
         Ok(newest)

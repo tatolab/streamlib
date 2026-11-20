@@ -364,6 +364,8 @@ fn hold_frame_takes_a_texture_as_a_value_and_refuses_a_number_linked_into_it() {
                 pin_type: &texture,
                 ..output
             },
+            node_type: &crate::core::descriptors::NodeClassImportPath::new("nodes.hold:HoldFrame")
+                .unwrap(),
             input_mode: frame.input_mode,
         },
         &[],

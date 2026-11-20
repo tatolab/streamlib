@@ -206,7 +206,7 @@ impl Graph {
 
     /// Whether input `input` of the node `node_run_id` is a setting its node reads at setup;
     /// `false` when this graph holds no such node or input.
-    pub fn is_a_setting_read_at_setup(&self, node_run_id: &NodeRunId, input: &str) -> bool {
+    pub(crate) fn is_a_setting_read_at_setup(&self, node_run_id: &NodeRunId, input: &str) -> bool {
         self.traversal().v(node_run_id).first().is_some_and(|node| {
             node.input_port(input)
                 .is_some_and(super::PortInfo::is_a_setting_read_at_setup)

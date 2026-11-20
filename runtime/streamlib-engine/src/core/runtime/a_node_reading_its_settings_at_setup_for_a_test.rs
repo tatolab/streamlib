@@ -3,7 +3,8 @@
 
 //! A node type for tests that reads three settings once, at setup, and records each setup it
 //! runs: what a test of a node rebuilt to take a setting read at setup runs; and a node type
-//! whose Integer output, which flows as a value, a test writes, to wire into one of them.
+//! whose Integer output, which flows as a value, a test writes, to wire into one of them, with
+//! a setting read at setup of its own that another source's wire may feed.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Once};
@@ -25,6 +26,9 @@ use crate::core::nodes::{DynGeneratedNode, NODE_REGISTRY};
 /// The kernel size the fixture node cannot build with.
 pub const A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH: i64 = 0;
 
+/// The kernel size the fixture node refuses to be handed at all, before its setup.
+pub const A_KERNEL_SIZE_IT_IS_NOT_HANDED: i64 = -1;
+
 /// Each setup the fixture node ran, by node: the settings it read.
 static SETUPS_RUN: Mutex<Vec<(Uuid, Map<String, Value>)>> = Mutex::new(Vec::new());
 
@@ -44,6 +48,12 @@ static SOURCE_OUTPUTS: Mutex<Option<HashMap<Uuid, Arc<crate::iceoryx2::OutputWri
 
 /// The value each source node writes as it sets up, by node.
 static VALUES_WRITTEN_AT_SETUP: Mutex<Option<HashMap<Uuid, i64>>> = Mutex::new(None);
+
+/// Each source node whose setup fails.
+static SOURCES_WHOSE_SETUP_FAILS: Mutex<Vec<Uuid>> = Mutex::new(Vec::new());
+
+/// The setting of the source node type, read at setup, that a wire from another source feeds.
+pub const THE_SOURCES_SETTING: &str = "offset";
 
 /// The output of the source node type, an Integer that flows as a value.
 pub const THE_SOURCES_OUTPUT: &str = "integer";
@@ -158,6 +168,11 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
     }
 
     fn set_unlinked_input_values(&mut self, input_values: &Map<String, Value>) -> Result<()> {
+        if input_values.get("kernel_size") == Some(&json!(A_KERNEL_SIZE_IT_IS_NOT_HANDED)) {
+            return Err(Error::Configuration(format!(
+                "a kernel of size {A_KERNEL_SIZE_IT_IS_NOT_HANDED} is not taken"
+            )));
+        }
         self.settings = input_values.clone();
         Ok(())
     }
@@ -195,6 +210,11 @@ impl DynGeneratedNode for IntegerSourceATestWrites {
                 .lock()
                 .get_or_insert_with(HashMap::new)
                 .insert(self.node_uuid, Arc::clone(output));
+        }
+        if SOURCES_WHOSE_SETUP_FAILS.lock().contains(&self.node_uuid) {
+            return Err(Error::Configuration(
+                "the source was told to fail its setup".to_owned(),
+            ));
         }
         let written_at_setup = VALUES_WRITTEN_AT_SETUP
             .lock()
@@ -303,8 +323,9 @@ fn register_the_source_node_type_once() {
                     PortFamily::carrying(&integer).unwrap_or(PortFamily::Records),
                 ),
             )
-            .with_pin_declaration(PinDeclaration::exactly(integer)),
+            .with_pin_declaration(PinDeclaration::exactly(integer.clone())),
         ];
+        descriptor.inputs = vec![a_setting_read_at_setup(THE_SOURCES_SETTING, integer)];
         let described = descriptor.clone();
         NODE_REGISTRY
             .register_with_a_constructor_for_a_test(
@@ -333,6 +354,11 @@ pub fn write_from_the_source_at_its_setup(node: Uuid, value: i64) {
         .lock()
         .get_or_insert_with(HashMap::new)
         .insert(node, value);
+}
+
+/// Have the setup of the source node `node` fail.
+pub fn fail_the_setup_of_the_source(node: Uuid) {
+    SOURCES_WHOSE_SETUP_FAILS.lock().push(node);
 }
 
 /// Write `value` on the output of the source node `node`, set up in a running stream.
