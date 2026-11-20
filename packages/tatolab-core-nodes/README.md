@@ -39,11 +39,13 @@ number node can drive.
 `streams/` holds two streams:
 
 - `main`: drifting noise folded into a kaleidoscope that cycles through colours, with a tone,
-  into Program.
+  into the Audio Video Preview.
 - `spotlight`: a circle swinging over a gradient.
 
-`views/program/` is the Program view: a node with a `video` input, drawn full frame, and an
-`audio` input, played on the default output device and drawn as one level meter per channel.
+`views/audio_video_preview/` is the Audio Video Preview, Studio's default output view: a node with a
+typed `video` input, drawn letterboxed with its size, frame rate and timecode, and a typed `audio`
+input, played on the default output device and drawn as one meter per channel. It is written in
+strict TypeScript on the view SDK alone, as an example for a view of your own.
 
 ## What a shader node cannot do yet
 

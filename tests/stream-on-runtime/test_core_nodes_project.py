@@ -43,7 +43,7 @@ NOT_COPIED_WITH_THE_PROJECT = shutil.ignore_patterns(
 
 EVERY_SHADER_NODE_STREAM_NAME = "every_shader_node"
 
-PROGRAM_VIEW_TYPE = "Core Nodes:program"
+AUDIO_VIDEO_PREVIEW_VIEW_TYPE = "Core Nodes:audio_video_preview"
 
 #: The project's first load makes its venv, which installs Numba.
 PROJECT_LOAD_TIMEOUT_SECONDS = 900.0
@@ -153,14 +153,14 @@ def a_copy_of_the_core_nodes_project(directory: Path) -> Path:
     return project_directory
 
 
-def names_of_the_nodes_feeding_the_program_view(
+def names_of_the_nodes_feeding_the_audio_video_preview(
     stream_document: "dict[str, Any]",
 ) -> "set[str]":
     node_by_id = {node["id"]: node for node in stream_document["nodes"]}
     return {
         node_by_id[link["source"]["node"]]["name"]
         for link in stream_document["links"]
-        if node_by_id[link["target"]["node"]]["type"] == PROGRAM_VIEW_TYPE
+        if node_by_id[link["target"]["node"]]["type"] == AUDIO_VIDEO_PREVIEW_VIEW_TYPE
     }
 
 
@@ -242,7 +242,7 @@ def test_each_stream_of_the_core_nodes_project_and_each_shader_node_keeps_runnin
         node_names_awaited = (
             {node["name"] for node in stream_document["nodes"]}
             if stream_name == EVERY_SHADER_NODE_STREAM_NAME
-            else names_of_the_nodes_feeding_the_program_view(stream_document)
+            else names_of_the_nodes_feeding_the_audio_video_preview(stream_document)
         )
         assert node_names_awaited, stream_name
         await_evaluations_of(
@@ -273,7 +273,7 @@ dependencies = ["tatolab-stream"]
 def a_stream_of_core_nodes_placed_from_the_runtimes_copy() -> "dict[str, Any]":
     """A canvas tinted by an amount an `Lfo` moves, into the Program view: a process node, a
     shader node, a function node and a view, each named as an import's."""
-    canvas, tint, lfo, program = (str(uuid.uuid4()) for _ in range(4))
+    canvas, tint, lfo, preview = (str(uuid.uuid4()) for _ in range(4))
     return {
         "asset": str(uuid.uuid4()),
         "display_name": "Main",
@@ -296,7 +296,7 @@ def a_stream_of_core_nodes_placed_from_the_runtimes_copy() -> "dict[str, Any]":
                 "type": f"{CORE_NODES_IMPORT_FOLDER}/core_nodes.color:Tint",
                 "config": {},
             },
-            {"id": program, "name": "program", "type": PROGRAM_VIEW_TYPE, "config": {}},
+            {"id": preview, "name": "audiovideopreview", "type": AUDIO_VIDEO_PREVIEW_VIEW_TYPE, "config": {}},
         ],
         "links": [
             {
@@ -309,7 +309,7 @@ def a_stream_of_core_nodes_placed_from_the_runtimes_copy() -> "dict[str, Any]":
             },
             {
                 "source": {"node": tint, "port": "result"},
-                "target": {"node": program, "port": "video"},
+                "target": {"node": preview, "port": "video"},
             },
         ],
     }
@@ -364,7 +364,7 @@ def test_a_project_with_no_node_of_its_own_places_core_nodes_from_the_runtimes_c
     views = local_api.call_tool(
         "list_project_views", {"project_directory": str(project_directory)}
     )
-    assert PROGRAM_VIEW_TYPE in json.dumps(views)
+    assert AUDIO_VIDEO_PREVIEW_VIEW_TYPE in json.dumps(views)
 
     await_evaluations_of(
         tatolabd,
