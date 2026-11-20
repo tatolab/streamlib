@@ -146,10 +146,12 @@ fn a_link(
         source: StreamGraphDocumentLinkEnd {
             node: source.id,
             port: "video".to_owned(),
+            member: None,
         },
         target: StreamGraphDocumentLinkEnd {
             node: target.id,
             port: "video_in".to_owned(),
+            member: None,
         },
     }
 }

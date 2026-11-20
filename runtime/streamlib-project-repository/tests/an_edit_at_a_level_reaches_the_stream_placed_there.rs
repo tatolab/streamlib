@@ -137,10 +137,12 @@ fn a_document_link(
         source: StreamGraphDocumentLinkEnd {
             node: source,
             port: source_port.to_owned(),
+            member: None,
         },
         target: StreamGraphDocumentLinkEnd {
             node: target,
             port: target_port.to_owned(),
+            member: None,
         },
     }
 }

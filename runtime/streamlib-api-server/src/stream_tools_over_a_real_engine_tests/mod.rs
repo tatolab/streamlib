@@ -43,6 +43,7 @@ use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 mod a_stream_outliving_its_connection_tests;
 mod an_edit_recorded_before_the_update_tests;
+mod bundle_member_link_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
 mod convert_node_inserted_on_a_link_tests;
@@ -72,6 +73,7 @@ mod renamed_pin_tests;
 mod stream_input_of_a_playing_stream_tests;
 mod stream_listing_actions_and_record_tests;
 mod stream_named_by_its_id_tests;
+mod texture_format_convert_inserted_on_a_link_tests;
 mod trigger_fire_tests;
 mod typed_pin_link_tests;
 mod venv_sync_stream_action_resource_tests;

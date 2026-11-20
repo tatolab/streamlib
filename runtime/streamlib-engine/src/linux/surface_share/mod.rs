@@ -13,6 +13,8 @@ pub(crate) mod state;
 pub(crate) mod surface_share_sockets_left_by_dead_runtimes;
 pub(crate) mod unix_socket_service;
 
+#[cfg(test)]
+pub(crate) use state::SurfaceRegistration;
 pub(crate) use state::{SurfaceShareState, ViewedFrameSource};
 pub(crate) use surface_share_sockets_left_by_dead_runtimes::remove_the_surface_share_sockets_left_by_dead_runtimes;
 pub use unix_socket_service::UnixSocketSurfaceService;

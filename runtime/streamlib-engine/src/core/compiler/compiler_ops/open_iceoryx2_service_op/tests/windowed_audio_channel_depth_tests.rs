@@ -446,6 +446,7 @@ fn a_declared_borrow_quota_reaches_the_resolution_and_a_helpers_wiring() {
         1,
         &"L-helper-borrow-quota".into(),
         None,
+        None,
     )
     .expect("a helper port wires");
     let recorded = dest_instance
@@ -492,6 +493,7 @@ fn a_helper_placed_windowed_port_is_handed_the_windowed_ring_depth() {
         1,
         &"L-helper-windowed-ring".into(),
         Some(declared),
+        None,
     )
     .expect("a windowed helper port wires");
 

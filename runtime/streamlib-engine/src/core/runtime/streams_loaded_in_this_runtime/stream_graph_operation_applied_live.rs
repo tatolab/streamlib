@@ -263,7 +263,7 @@ impl LoadedStreamInThisRuntime {
     pub(crate) async fn reconcile_each_stream_fragment_to_the_stream_it_references(
         &self,
     ) -> Result<()> {
-        let graph_as_drawn = self.to_json()?;
+        let graph_as_drawn = self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?;
         self.reconcile_the_live_graph_to_the_graph_document(
             graph_as_drawn,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
@@ -277,7 +277,7 @@ impl LoadedStreamInThisRuntime {
         &self,
         mut graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
-        let graph_as_drawn = self.to_json()?;
+        let graph_as_drawn = self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?;
         let mut graph_document =
             StreamGraphDocument::from_value(graph_as_drawn.clone()).map_err(Error::GraphError)?;
         if let StreamGraphOperation::AddNode { node, .. } = &mut graph_operation {
@@ -327,6 +327,25 @@ impl LoadedStreamInThisRuntime {
             return Err(refusal);
         }
         Ok(graph_operation)
+    }
+
+    /// This stream's graph as drawn without the nodes and links an earlier edit of the graph
+    /// edits held for one commit took out, which stay drawn, pending deletion, until it closes:
+    /// a reconcile to a document holding them would place them again.
+    fn the_graph_as_drawn_once_what_is_pending_deletion_leaves(&self) -> Result<serde_json::Value> {
+        let mut graph_as_drawn = self.to_json()?;
+        let is_pending_deletion = |drawn: &serde_json::Value| {
+            drawn
+                .pointer("/components/pending_deletion")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
+        for drawn_entities in ["nodes", "links"] {
+            if let Some(serde_json::Value::Array(drawn)) = graph_as_drawn.get_mut(drawn_entities) {
+                drawn.retain(|drawn| !is_pending_deletion(drawn));
+            }
+        }
+        Ok(graph_as_drawn)
     }
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
@@ -638,9 +657,9 @@ impl LoadedStreamInThisRuntime {
             }
         };
         let held = match held_direction {
-            PortDirection::Output => {
-                ALinkEndTheGraphHolds::Output(OutputLinkPortRef::new(node_run_id, &held.port))
-            }
+            PortDirection::Output => ALinkEndTheGraphHolds::Output(
+                OutputLinkPortRef::new(node_run_id, &held.port).at_member(held.member.clone()),
+            ),
             PortDirection::Input => {
                 ALinkEndTheGraphHolds::Input(InputLinkPortRef::new(node_run_id, &held.port))
             }
@@ -696,7 +715,8 @@ impl LoadedStreamInThisRuntime {
             OutputLinkPortRef::new(
                 self.the_node_of_the_node(link.source.node)?,
                 &link.source.port,
-            ),
+            )
+            .at_member(link.source.member.clone()),
             InputLinkPortRef::new(
                 self.the_node_of_the_node(link.target.node)?,
                 &link.target.port,
@@ -712,6 +732,7 @@ impl LoadedStreamInThisRuntime {
         RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
             link.source.node,
             &link.source.port,
+            link.source.member.as_deref(),
             link.target.node,
             &link.target.port,
         )
@@ -731,6 +752,7 @@ impl LoadedStreamInThisRuntime {
         let link_as_given = RunningLinkBetweenTwoNodesByUuid::of_drawn_link(
             link.source.node,
             &link.source.port,
+            link.source.member.as_deref(),
             link.target.node,
             &link.target.port,
         )?;
@@ -811,6 +833,7 @@ fn how_a_node_types_port_is_judged(
         node_type,
         ports_of_its_direction,
         port.port,
+        port.member,
     )))
 }
 

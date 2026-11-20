@@ -38,7 +38,10 @@ mod function_node_island_feeding;
 mod inbound_link_accounting;
 mod input_port_mailbox_reads;
 mod input_port_setup;
+mod member_taken_at_the_read;
 mod queued_trigger_fires;
+
+pub use member_taken_at_the_read::MemberTakenAtTheRead;
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
 /// mixdown and framing work runs with that mutex released.
@@ -144,6 +147,9 @@ struct PortBoundSubscriber {
     /// This link's share of the destination's discarded-sample counts, held only
     /// by a link into a windowed port.
     discarded_sample_counter: Option<InboundLinkDiscardedSampleCounter>,
+    /// The member of a bundle this link reads, taken from each message as it arrives; `None`
+    /// for a link that reads its output's messages whole.
+    member_taken_at_the_read: Option<MemberTakenAtTheRead>,
     /// What this subscriber's ring has overwritten, read off jumps in the
     /// numbering of the publisher that is sending it — one unbroken run per
     /// publisher, so a replaced producer is a baseline rather than a gap.

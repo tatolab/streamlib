@@ -163,13 +163,22 @@ impl TryFrom<StreamGraphDocumentNodeAsRecorded> for StreamGraphDocumentNode {
     }
 }
 
-/// One end of a link, its node by UUID.
+/// The member of a bundle port a stored link end names, if any.
+pub(crate) fn member_named_by(end: &Value) -> Option<String> {
+    end.get("member").and_then(Value::as_str).map(str::to_owned)
+}
+
+/// One end of a link, its node by UUID, and the member of a bundle port it names, if any.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StreamGraphDocumentLinkEnd {
     /// The node's UUID.
     pub node: Uuid,
     /// The port's name.
     pub port: String,
+    /// The member of a bundle port the link starts at; `None` for the whole port. Only a link's
+    /// source names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
 }
 
 /// One link of a stream's graph, from an output port to an input port.
@@ -887,6 +896,7 @@ impl StreamGraphDocument {
             Some(StreamGraphDocumentLinkEnd {
                 node,
                 port: end.get("port")?.as_str()?.to_owned(),
+                member: member_named_by(end),
             })
         };
         Some(StreamGraphDocumentLink {

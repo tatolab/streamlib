@@ -8,12 +8,16 @@
 //! the input's own bundle: only the members it asks for, so an output holding more connects.
 
 use serde_json::{Map, Value};
-use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
+use streamlib_ipc_types::{
+    ArrayFrameAttributeResidency, ArrayFrameCpuAttributeToPack, ArrayFrameDescriptorBody,
+    DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, array_frame_attribute_table_of,
+    array_frame_payload_of_cpu_attributes,
+};
 use streamlib_node_schema::pin_type::BundleMember;
 
 use super::{
-    PackedPinValue, PackedPinValueRef, the_array_attribute_of_a_value,
-    the_array_frame_of_attributes, the_records_message_of_a_record,
+    PackedPinValue, PackedPinValueRef, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
+    the_array_attribute_of_a_value, the_array_frame_of_attributes, the_records_message_of_a_record,
 };
 use crate::core::descriptors::PinType;
 
@@ -123,4 +127,87 @@ pub(super) fn the_array_frame_of_a_bundle_of_tensors(
         })
         .collect::<Result<Vec<_>, _>>()?;
     the_array_frame_of_attributes(&attributes)
+}
+
+/// The message member `member` of the bundle `bundle` travels as on its own, taken from
+/// `message`, a message of the whole bundle: a small member's value, or its default, packed as
+/// its own type travels; a Tensor member's attribute as an Array frame of that one attribute,
+/// renamed `values`. Fails saying why the message holds no such member.
+pub fn the_member_a_bundle_message_carries(
+    bundle: &PinType,
+    member: &BundleMember,
+    message: PackedPinValueRef<'_>,
+) -> Result<PackedPinValue, String> {
+    let PinType::Bundle { members } = bundle else {
+        return Err(format!("a {bundle} is no bundle, so it holds no member"));
+    };
+    if is_a_bundle_of_tensors(members) {
+        return the_tensor_member_an_array_frame_carries(&member.name, message);
+    }
+    if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)
+        != Some(DataChannelPayloadDescriptorKind::RecordsMessage)
+    {
+        return Err(format!(
+            "a {bundle} travels as a Records message, and the message is none"
+        ));
+    }
+    let record: Value = rmp_serde::from_slice(message.payload)
+        .map_err(|why| format!("the Records message does not decode: {why}"))?;
+    let member_value = match (record.get(&member.name), &member.default_value) {
+        (Some(held), _) => the_value_read_as(&member.member_type, held)?,
+        (None, Some(default_value)) => default_value.clone(),
+        (None, None) => {
+            return Err(format!(
+                "the bundle's message holds no member `{}`, which has no default",
+                member.name
+            ));
+        }
+    };
+    super::pack_pin_value(&member.member_type, &member_value, 0)
+}
+
+/// The Array frame of the one attribute `member` names in `message`, an Array frame of a bundle
+/// of Tensors, under the name a Tensor travels as.
+fn the_tensor_member_an_array_frame_carries(
+    member: &str,
+    message: PackedPinValueRef<'_>,
+) -> Result<PackedPinValue, String> {
+    if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)
+        != Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+    {
+        return Err(
+            "a bundle of Tensors travels as an Array frame, and the message is none".into(),
+        );
+    }
+    let body = ArrayFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body);
+    let rows = array_frame_attribute_table_of(body, message.payload).map_err(|why| why.reason)?;
+    let row = rows
+        .iter()
+        .find(|row| row.name == member)
+        .ok_or_else(|| format!("the bundle's Array frame holds no attribute `{member}`"))?;
+    let ArrayFrameAttributeResidency::Cpu {
+        payload_byte_offset,
+        byte_len,
+    } = row.residency
+    else {
+        return Err(format!(
+            "member `{member}` is on the GPU, and a member is taken from its bundle on the CPU"
+        ));
+    };
+    let data = message
+        .payload
+        .get(payload_byte_offset as usize..)
+        .and_then(|from_it| from_it.get(..byte_len as usize))
+        .ok_or_else(|| format!("member `{member}` lies past the end of its message"))?;
+    let (body, payload) = array_frame_payload_of_cpu_attributes(&[ArrayFrameCpuAttributeToPack {
+        name: VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
+        dtype: &row.dtype,
+        shape: &row.shape,
+        data,
+    }])
+    .map_err(|why| why.to_string())?;
+    Ok(PackedPinValue {
+        payload_descriptor: DataChannelPayloadDescriptor::array_frame(body),
+        payload,
+    })
 }

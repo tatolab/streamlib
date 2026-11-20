@@ -28,12 +28,14 @@ fn two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on() {
         "L-camera",
         &InboundLinkName::from("pcamera/video_out"),
         sub_a,
+        None,
     );
     mailboxes.add_channel_subscriber(
         "in",
         "L-microphone",
         &InboundLinkName::from("pmicrophone/audio_out"),
         sub_b,
+        None,
     );
 
     publish_one_frame(&publisher_a, "video_out", b"from-the-camera");
@@ -95,12 +97,14 @@ fn naming_the_inbound_link_a_bag_arrived_on_leaves_the_per_link_drop_counts_alon
         "L-first",
         &InboundLinkName::from("pfirst/out"),
         subscriber_a,
+        None,
     );
     mailboxes.add_channel_subscriber(
         "in",
         "L-second",
         &InboundLinkName::from("psecond/out"),
         subscriber_b,
+        None,
     );
 
     for _ in 0..FRAMES_PER_LINK {
@@ -164,6 +168,7 @@ fn the_typed_read_deserializes_the_bag_and_a_drained_port_is_not_an_error() {
         "L-camera",
         &InboundLinkName::from("pcamera/video_out"),
         subscriber,
+        None,
     );
     publish_one_frame(
         &publisher,
@@ -206,6 +211,7 @@ fn a_port_is_read_by_any_spelling_that_casts_to_its_name() {
         "L-camera",
         &InboundLinkName::from("pcamera/videoout"),
         subscriber,
+        None,
     );
     let mailboxes = InputMailboxes::from_inner_arc(Arc::new(mailboxes));
 
@@ -270,18 +276,21 @@ fn a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none(
         "L-camera",
         &InboundLinkName::from("pcamera/video_out"),
         sub_a,
+        None,
     );
     mailboxes.add_channel_subscriber(
         "tracks",
         "L-microphone",
         &InboundLinkName::from("pmicrophone/audio_out"),
         sub_b,
+        None,
     );
     mailboxes.add_channel_subscriber(
         "control",
         "L-operator",
         &InboundLinkName::from("poperator/commands"),
         sub_c,
+        None,
     );
 
     assert_eq!(
@@ -325,6 +334,7 @@ fn a_windowed_ports_read_names_the_one_link_that_feeds_it() {
         "L-only",
         &InboundLinkName::from("pmicrophone/audio_out"),
         subscriber,
+        None,
     );
 
     for block in 0..4u64 {
@@ -370,6 +380,7 @@ fn a_read_holding_a_stage_from_before_a_rewire_feeds_it_nothing_from_the_new_wir
         "L-first",
         &InboundLinkName::from("pfirst/audio_out"),
         first_subscriber,
+        None,
     );
     publish_one_mono_channels_block(&first_publisher, 300, 16_000, 0);
     assert!(
@@ -396,6 +407,7 @@ fn a_read_holding_a_stage_from_before_a_rewire_feeds_it_nothing_from_the_new_wir
         "L-second",
         &InboundLinkName::from("psecond/audio_out"),
         second_subscriber,
+        None,
     );
     let a_second_later_ns = 1_000_000_000;
     publish_one_mono_channels_block(&second_publisher, 300, 16_000, a_second_later_ns);

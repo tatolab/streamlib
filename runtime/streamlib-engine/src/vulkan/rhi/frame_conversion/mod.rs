@@ -3,6 +3,8 @@
 
 //! Color conversion, tone mapping and offscreen compositing of frames.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) mod rgba_or_bgra_image_to_rgba_image_conversion;
 pub(super) mod vulkan_color_converter;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) mod vulkan_offscreen_compositor;

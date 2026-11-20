@@ -126,6 +126,16 @@
       "id": "c4f7a2d0-5b1e-4c3a-9f86-2e7d1b0a9c53",
       "name": "caption",
       "type": "nodes.caption:Caption"
+    },
+    {
+      "id": "6a3e9f12-8b4c-4d71-a5e0-3c9b2f7d1e84",
+      "name": "bars",
+      "type": "nodes.colour_bars:BgraColourBars"
+    },
+    {
+      "id": "9d2c5b70-1f8e-4a36-b4c9-7e0a6d3f2b15",
+      "name": "bars_check",
+      "type": "nodes.colour_bars:ColourBarsCheck"
     }
   ]
 }

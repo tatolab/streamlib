@@ -302,6 +302,7 @@ where
         &channel,
         &notify_service,
         None,
+        None,
     )
     .expect("the destination side wires");
 
@@ -365,6 +366,7 @@ impl NativeLinkWiredForLossCounting {
             dest_delivery,
             &channel,
             &notify_service,
+            None,
             None,
         )
         .expect("the destination side wires");

@@ -65,7 +65,7 @@ impl InputMailboxesInner {
                         break;
                     }
                 };
-                let channel_user_header = *sample.user_header();
+                let mut channel_user_header = *sample.user_header();
                 let bags_the_ring_overwrote =
                     bound.bags_the_ring_overwrote.how_many_were_lost_before(
                         sample.origin(),
@@ -101,7 +101,27 @@ impl InputMailboxesInner {
                     );
                     continue;
                 };
-                let payload = if port_config.audio_windowing.is_windowed() {
+                let payload = if let Some(member) = &bound.member_taken_at_the_read {
+                    let area = borrowed.sample_payload_area_bytes();
+                    let bundle_payload = channel_user_header.payload_within(area).unwrap_or(area);
+                    match member.the_message_of_the_member(&channel_user_header, bundle_payload) {
+                        Ok((member_header, member_payload)) => {
+                            channel_user_header = member_header;
+                            InputPortMessagePayload::OwnedBytes(member_payload)
+                        }
+                        Err(refusal) => {
+                            bound.dropped_bag_counter.record_one_dropped_bag();
+                            tracing::warn!(
+                                port = %bound.local_port,
+                                link = %bound.inbound_link_name,
+                                member = %member.member.name,
+                                "InputMailboxes: the link reads one member of its bundle, and \
+                                 this message gives none, so it is dropped and counted: {refusal}"
+                            );
+                            continue;
+                        }
+                    }
+                } else if port_config.audio_windowing.is_windowed() {
                     let area = borrowed.sample_payload_area_bytes();
                     InputPortMessagePayload::OwnedBytes(
                         channel_user_header

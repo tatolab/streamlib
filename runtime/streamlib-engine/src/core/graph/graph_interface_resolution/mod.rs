@@ -753,10 +753,12 @@ impl GraphInterfaceAsDrawn {
                     source: LinkPortRefOutput {
                         node: cast_or_as_written(&drawn.link.source.node),
                         port: drawn.link.source.port.clone(),
+                        member: drawn.link.source.member.clone(),
                     },
                     target: LinkPortRefOutput {
                         node: cast_or_as_written(&drawn.link.target.node),
                         port: drawn.link.target.port.clone(),
+                        member: drawn.link.target.member.clone(),
                     },
                     components,
                     ..LinkOutput::default()

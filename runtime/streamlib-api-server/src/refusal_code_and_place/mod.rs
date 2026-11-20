@@ -217,6 +217,7 @@ impl RefusalCodeAndPlace {
                 refused_node: Some(node.clone()),
                 ..Self::coded(PortNotFound)
             },
+            Error::OutputPortHasNoMemberNamed(_) => Self::coded(PortNotFound),
             Error::NodeNotFound(_) => Self::coded(NodeNotFound),
             Error::UnknownNodeType { .. } | Error::BuiltInNodeTypeMovedToAModule { .. } => {
                 Self::coded(NodeTypeNotFound)

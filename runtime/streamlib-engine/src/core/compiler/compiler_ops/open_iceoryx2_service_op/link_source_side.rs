@@ -304,6 +304,7 @@ pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
         max_notifiers: MAX_INBOUND_LINKS_PER_DESTINATION,
         room_for_a_windowed_reader_joining_later:
             RoomForAWindowedReaderTheSourcesGraphCannotSee::Made,
+        member_taken_at_the_read: None,
     };
     let opened = open_the_source_side_of_a_link(
         source_graph,

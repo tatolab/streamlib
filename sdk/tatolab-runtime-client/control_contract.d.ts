@@ -150,7 +150,8 @@ export interface RefusedGraphLinkOnTheWire {
 }
 
 /**
- * One end of a link a graph tool names: a node by its UUID and one of its ports.
+ * One end of a link a graph tool names: a node by its UUID, one of its ports, and the member of
+ * a bundle port it starts at, if any.
  */
 export interface GraphLinkEndOnTheWire {
   /**
@@ -161,6 +162,10 @@ export interface GraphLinkEndOnTheWire {
    * The port's name.
    */
   port: string;
+  /**
+   * The member of a bundle port the link starts at; absent for the whole port.
+   */
+  member?: string | null;
 }
 
 /**
@@ -1293,7 +1298,8 @@ export interface GraphLinkOnTheWire {
 }
 
 /**
- * One end of a link of a stream's graph: a node by its name, and one of its ports.
+ * One end of a link of a stream's graph: a node by its name, one of its ports, and the member
+ * of a bundle port the link starts at, if any.
  */
 export interface GraphLinkPortRefOnTheWire {
   /**
@@ -1304,6 +1310,11 @@ export interface GraphLinkPortRefOnTheWire {
    * The port's own name on that node.
    */
   port: string;
+  /**
+   * The member of a bundle port the link starts at, which it carries alone; absent for the
+   * whole port. Only a link's `source` names one.
+   */
+  member?: string | null;
 }
 
 /**
@@ -1914,7 +1925,8 @@ export type StreamGraphAction = ({
 };
 
 /**
- * One end of a link a graph action names: a node and one of its ports.
+ * One end of a link a graph action names: a node, one of its ports, and the member of a bundle
+ * port it starts at, if any.
  */
 export interface StreamGraphActionLinkEnd {
   /**
@@ -1925,6 +1937,10 @@ export interface StreamGraphActionLinkEnd {
    * The port's name, as `graph` lists it under the node's `ports`.
    */
   port: string;
+  /**
+   * The member of a bundle port the link starts at, as `graph` lists it under the port's `pin_type`; omitted for the whole port. Only a link's `source` names one.
+   */
+  member?: string | null;
 }
 
 /**
@@ -2367,7 +2383,7 @@ export type LinkCandidatesAmong = "placed_ports" | "node_type_ports" | {
 /**
  * One end `check_link_candidates` judges its placed end against, of the other direction.
  */
-export type LinkCandidateEnd = {
+export type LinkCandidateEnd = ({
   /**
    * The node, by the UUID `graph` lists as its `id`.
    */
@@ -2376,8 +2392,13 @@ export type LinkCandidateEnd = {
    * The port's name, as `graph` lists it under the node's `ports`.
    */
   port: string;
+  /**
+   * The member of the bundle an output port carries that the end is, by name; absent for
+   * the whole port.
+   */
+  member?: string | null;
   kind: "placed_port";
-} | {
+}) | ({
   /**
    * The node type, by the import path `add_node` takes as its `type`.
    */
@@ -2386,8 +2407,13 @@ export type LinkCandidateEnd = {
    * The port's name, as the node type declares it.
    */
   port: string;
+  /**
+   * The member of the bundle an output port carries that the end is, by name; absent for
+   * the whole port.
+   */
+  member?: string | null;
   kind: "node_type_port";
-};
+});
 
 /**
  * `check_link_candidates`'s answer: for each candidate end, in the order judged, what

@@ -33,6 +33,8 @@ mod bundle_packing;
 #[cfg(test)]
 mod tests;
 
+pub use bundle_packing::the_member_a_bundle_message_carries;
+
 use bundle_packing::{
     is_a_bundle_of_tensors, the_array_frame_of_a_bundle_of_tensors,
     the_bundle_a_records_message_carries, the_records_message_of_a_bundle, the_value_read_as,
