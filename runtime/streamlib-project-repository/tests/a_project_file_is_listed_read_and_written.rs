@@ -532,7 +532,7 @@ fn a_file_another_verb_changes_or_history_does_not_record_is_never_written() {
 }
 
 #[test]
-fn a_read_passes_through_the_link_to_the_core_project_and_no_link_below_it() {
+fn a_read_and_a_listing_pass_through_the_link_to_the_core_project_and_no_link_below_it() {
     let mut project = AProjectWithNodeCode::new();
     let core_project_directory = project.root.path().join("unit/tatolab-core-nodes");
     let carried_by_the_runtime = core_project_directory.clone();
@@ -576,10 +576,34 @@ fn a_read_passes_through_the_link_to_the_core_project_and_no_link_below_it() {
             .read_project_file("imports/core-nodes/views/leak.txt"),
         Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
     ));
+    let listed_paths = |under: &str| {
+        project
+            .repository
+            .list_project_files(Some(under))
+            .map(|listed| listed.into_iter().map(|file| file.path).collect::<Vec<_>>())
+    };
+    assert_eq!(
+        listed_paths("imports/core-nodes/views/program").unwrap(),
+        ["imports/core-nodes/views/program/index.html"]
+    );
+    assert_eq!(
+        listed_paths("imports/core-nodes/views").unwrap(),
+        ["imports/core-nodes/views/program/index.html"],
+        "a link below the core project's link is not listed"
+    );
+    std::os::unix::fs::symlink(
+        project.root.path(),
+        core_project_directory.join("views/elsewhere"),
+    )
+    .unwrap();
+    assert!(matches!(
+        listed_paths("imports/core-nodes/views/elsewhere"),
+        Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
+    ));
 }
 
 #[test]
-fn a_read_passes_through_no_link_that_points_anywhere_but_the_runtimes_core_project() {
+fn a_read_or_a_listing_passes_through_no_link_that_points_anywhere_but_the_runtimes_core_project() {
     let mut project = AProjectWithNodeCode::new();
     let another_project = project.root.path().join("another-project");
     std::fs::create_dir_all(&another_project).unwrap();
@@ -594,11 +618,26 @@ fn a_read_passes_through_no_link_that_points_anywhere_but_the_runtimes_core_proj
     let link = streamlib_project_repository::the_core_project_link_in(&project.project_directory);
     std::fs::create_dir_all(link.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(&another_project, &link).unwrap();
+    std::fs::create_dir_all(another_project.join("private")).unwrap();
+    std::fs::write(
+        another_project.join("private/secret.txt"),
+        b"not the project's",
+    )
+    .unwrap();
     let read_the_secret = |project: &AProjectWithNodeCode| {
         project
             .repository
             .read_project_file("imports/core-nodes/secret.txt")
     };
+    let list_the_secrets = |project: &AProjectWithNodeCode| {
+        project
+            .repository
+            .list_project_files(Some("imports/core-nodes/private"))
+    };
+    assert!(matches!(
+        list_the_secrets(&project),
+        Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
+    ));
 
     assert!(
         matches!(
@@ -616,6 +655,10 @@ fn a_read_passes_through_no_link_that_points_anywhere_but_the_runtimes_core_proj
         }));
     assert!(matches!(
         read_the_secret(&project),
+        Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
+    ));
+    assert!(matches!(
+        list_the_secrets(&project),
         Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
     ));
 }
