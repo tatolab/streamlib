@@ -489,7 +489,8 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         "links": [{"id": "L1", "source": {"node": "a", "port": "out"},
                    "target": {"node": "mixer", "port": "level"}, "capacity": 4,
                    "state": "wired", "free_conversion": true,
-                   "warnings": [{"warning": "vector_read_as_a_color"}],
+                   "warnings": [{"warning": "vector_read_as_a_color",
+                                 "words": "a Vector is read as a Color"}],
                    "components": {"state": "Wired"}}],
         "clock": {"mode": "stepped", "step_ns": 1000, "pace": null, "stop_after_steps": 3},
         "machine": "rig",
@@ -560,8 +561,10 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
     );
     assert_eq!(
         link.marks.warnings,
-        [PinLinkWarningOnTheWire::VectorReadAsAColor],
-        "a warned link carries its warnings"
+        [PinLinkWarningOnTheWire::VectorReadAsAColor {
+            words: "a Vector is read as a Color".to_owned()
+        }],
+        "a warned link carries its warnings and their words"
     );
     assert_eq!(
         graph.nodes[0].components.state,

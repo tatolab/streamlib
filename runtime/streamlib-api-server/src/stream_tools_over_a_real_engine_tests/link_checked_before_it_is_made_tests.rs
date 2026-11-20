@@ -10,6 +10,7 @@ use streamlib::sdk::descriptors::{
     NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor, PortFamily,
     PortFamilyDeclaration,
 };
+use streamlib_node_schema::pin_type::{PinLinkWarning, VectorComponentCount};
 
 use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
 use super::*;
@@ -355,6 +356,8 @@ const REMAP_TYPE: &str = "link_check_test:Remap";
 const WINDOWED_TYPE: &str = "link_check_test:Windowed";
 pub(super) const SECONDS_TYPE: &str = "link_check_test:Seconds";
 pub(super) const FRAMES_TYPE: &str = "link_check_test:Frames";
+pub(super) const RGBA_TYPE: &str = "link_check_test:Rgba";
+pub(super) const TINT_TYPE: &str = "link_check_test:Tint";
 
 const FIRST_LFO_UUID: &str = "1f1f1f1f-1f1f-4f1f-8f1f-1f1f1f1f1f1f";
 const SECOND_LFO_UUID: &str = "2f2f2f2f-2f2f-4f2f-8f2f-2f2f2f2f2f2f";
@@ -438,6 +441,16 @@ pub(super) fn register_the_link_check_node_types_once() {
                 PinType::Integer { exact_size: None },
                 "frames",
             ),
+            a_node_type_with_a_port_meaning(
+                RGBA_TYPE,
+                "rgba",
+                false,
+                PinType::Vector {
+                    component_count: VectorComponentCount::Four,
+                },
+                "tint",
+            ),
+            a_node_type_with_a_port_meaning(TINT_TYPE, "color", true, PinType::Color {}, "tint"),
         ] {
             NODE_REGISTRY
                 .register_descriptor_only(descriptor)
@@ -571,15 +584,33 @@ async fn check_link_refuses_unchecked_a_link_connect_closes_through_a_previous_v
     );
 }
 
-/// Each link a transaction connects carries the warnings its verdict gives: a Float `seconds`
-/// read as an Integer `frames` warns that the meanings differ.
+/// The warning that a Float `seconds` read as an Integer `frames` states another meaning, as
+/// the wire carries it: its tag, both meanings, and the runtime's sentence for it.
+fn the_seconds_read_as_frames_warning() -> Value {
+    let words = PinLinkWarning::MeaningsDiffer {
+        output_meaning: "seconds".to_owned(),
+        input_meaning: "frames".to_owned(),
+    }
+    .to_string();
+    json!({
+        "warning": "meanings_differ",
+        "output_meaning": "seconds",
+        "input_meaning": "frames",
+        "words": words,
+    })
+}
+
+/// Each link a transaction connects carries the warnings its verdict gives, and `graph` then
+/// lists the link with the same warnings: a Float `seconds` read as an Integer `frames` warns
+/// that the meanings differ, in the words the runtime writes for that warning.
 ///
-/// Mental-revert: an answer that never judges its links carries no `warnings`.
+/// Mental-revert: an answer that never judges its links carries no `warnings`; a warning put on
+/// the wire without its sentence carries no `words`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connected_link_carries_the_warnings_its_verdict_gives() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_function_nodes();
-    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
 
     let connected = engine
         .the_answer_or_the_refusal_of(
@@ -595,12 +626,23 @@ async fn a_connected_link_carries_the_warnings_its_verdict_gives() {
 
     assert_eq!(
         connected["connected_links"][0]["warnings"],
-        json!([{
-            "warning": "meanings_differ",
-            "output_meaning": "seconds",
-            "input_meaning": "frames",
-        }]),
+        json!([the_seconds_read_as_frames_warning()]),
         "{connected}"
+    );
+    let graph = engine
+        .the_answer_or_the_refusal_of("graph", json!({ "stream": stream_id }))
+        .await
+        .unwrap_or_else(|refusal| panic!("graph answers: {refusal:?}"));
+    let into_the_counter = graph["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .find(|link| link["target"]["node"] == "counter")
+        .unwrap_or_else(|| panic!("graph lists the link into the counter: {graph}"));
+    assert_eq!(
+        into_the_counter["warnings"],
+        json!([the_seconds_read_as_frames_warning()]),
+        "{into_the_counter}"
     );
 }
 
@@ -674,10 +716,10 @@ async fn a_loop_closed_inside_a_placed_stream_has_its_previous_value_links_judge
 }
 
 /// A Float output into an Integer input, each stating another meaning, connects for free with a
-/// warning that the meanings differ, in their wire spellings.
+/// warning that the meanings differ, in their wire spellings and the runtime's sentence.
 ///
 /// Mental-revert: a check answering the outcome without the verdict's warnings would answer no
-/// `warnings`.
+/// `warnings`; one answering a warning without its sentence would answer no `words`.
 #[tokio::test(flavor = "multi_thread")]
 async fn check_link_answers_a_free_conversion_and_the_warning_the_verdict_gives() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -696,11 +738,7 @@ async fn check_link_answers_a_free_conversion_and_the_warning_the_verdict_gives(
         checked,
         json!({
             "outcome": "connects_with_free_conversion",
-            "warnings": [{
-                "warning": "meanings_differ",
-                "output_meaning": "seconds",
-                "input_meaning": "frames",
-            }],
+            "warnings": [the_seconds_read_as_frames_warning()],
         })
     );
 }
