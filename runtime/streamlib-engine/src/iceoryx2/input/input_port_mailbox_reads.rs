@@ -283,7 +283,8 @@ impl InputMailboxesInner {
                 | DataChannelPayloadDescriptorKind::ChannelsBlock
                 | DataChannelPayloadDescriptorKind::PacketsUnit
                 | DataChannelPayloadDescriptorKind::RecordsMessage
-                | DataChannelPayloadDescriptorKind::ArrayFrame,
+                | DataChannelPayloadDescriptorKind::ArrayFrame
+                | DataChannelPayloadDescriptorKind::BundleFrame,
             ) => {}
             Err(refusal) => {
                 return Err(Error::Link(format!(
