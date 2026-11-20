@@ -221,7 +221,7 @@ mod tests {
             "tatolab-project.json",
             "pyproject.toml",
             "core_nodes/color.py",
-            "views/program/tatolab_view.json",
+            "views/audio_video_preview/tatolab_view.json",
             "streams/main.graph.json",
         ] {
             assert!(staged_directory.join(carried).is_file(), "{carried}");

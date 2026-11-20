@@ -668,8 +668,8 @@
     },
     {
       "id": "c39fea05-57b1-5144-87db-7c614307bfbf",
-      "name": "program",
-      "type": "Core Nodes:program",
+      "name": "audio_video_preview",
+      "type": "Core Nodes:audio_video_preview",
       "studio": {
         "contract": 1,
         "position": [

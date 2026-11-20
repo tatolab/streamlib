@@ -43,7 +43,7 @@ GROUPS_THE_ADD_NODE_SEARCH_LISTS = {
     "Audio",
 }
 
-PROGRAM_VIEW_TYPE = "Core Nodes:program"
+AUDIO_VIDEO_PREVIEW_VIEW_TYPE = "Core Nodes:audio_video_preview"
 
 
 def every_declared_node() -> dict[str, Any]:
@@ -115,8 +115,8 @@ def ports_of(declared: Any, side: str) -> set[str]:
     return {port["name"] for port in getattr(declared, f"__tatolab_node_{side}_ports__")}
 
 
-def program_view_ports(side: str) -> set[str]:
-    manifest = json.loads((PROJECT_DIRECTORY / "views/program/tatolab_view.json").read_text())
+def audio_video_preview_view_ports(side: str) -> set[str]:
+    manifest = json.loads((PROJECT_DIRECTORY / "views/audio_video_preview/tatolab_view.json").read_text())
     return {port["name"] for port in manifest.get(side, [])}
 
 
@@ -132,12 +132,12 @@ def test_each_stream_names_only_nodes_and_ports_the_project_brings(stream_docume
     assert len(type_by_node_id) == len(graph["nodes"])
 
     def ports(node_type: str, side: str) -> set[str]:
-        if node_type == PROGRAM_VIEW_TYPE:
-            return program_view_ports(f"{side}s")
+        if node_type == AUDIO_VIDEO_PREVIEW_VIEW_TYPE:
+            return audio_video_preview_view_ports(f"{side}s")
         return ports_of(DECLARED_NODES[node_type], side)
 
     for node in graph["nodes"]:
-        assert node["type"] == PROGRAM_VIEW_TYPE or node["type"] in DECLARED_NODES
+        assert node["type"] == AUDIO_VIDEO_PREVIEW_VIEW_TYPE or node["type"] in DECLARED_NODES
         assert set(node.get("pins", {})) <= ports(node["type"], "input")
     inputs_linked: set[tuple[str, str]] = set()
     for link in graph["links"]:

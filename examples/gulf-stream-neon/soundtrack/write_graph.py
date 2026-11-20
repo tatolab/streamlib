@@ -137,7 +137,7 @@ def graph(
         add("stage_look", "nodes.take_functions:StageLook", 2.0, 8.5)
         add("smooth_camera", "nodes.take_functions:SmoothCamera", 11, 3.2, seconds=0.18)
     else:
-        add("program", "Core Nodes:program", 12, 0.5)
+        add("audio_video_preview", "Core Nodes:audio_video_preview", 12, 0.5)
 
     wire("take_clock", "result", "soundtrack_beat", "seconds")
     if not stage:
@@ -204,7 +204,7 @@ def graph(
         wire("stage_look", "result", "neon_horizon", "look")
         wire("stage_look", "result", "hycom_gulf_stream", "look")
     else:
-        wire("vignette", "result", "program", "video")
+        wire("vignette", "result", "audio_video_preview", "video")
 
     document: dict = {"asset": GRAPH_ASSET}
     if output is not None:
