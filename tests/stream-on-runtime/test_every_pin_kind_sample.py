@@ -5,8 +5,9 @@
 from the copy the runtime unit carries, played, saved and opened again.
 
 `examples/every-pin-kind` holds typed function and shader nodes, a Graph Input, one node not
-yet typed that holds a setting, and a node type whose inputs each name the control the Studio
-draws. The pin types `graph` names here are what the Studio's
+yet typed that holds a setting, a node type whose inputs each name the control the Studio
+draws, and two nodes whose Texture pins state different formats, which `connect` links through
+a `TextureFormatConvert`. The pin types `graph` names here are what the Studio's
 recordings are made from, so each later type, mode and flow joins the sample and this check.
 """
 
@@ -59,6 +60,8 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
     },
     "glow": {"image": "texture", "glow": "float", "warmth": "float", "result": "texture"},
     "tally": {"picture": "texture", "tally": None},
+    "bars": {"bars": "texture"},
+    "bars_check": {"bars": "texture"},
 }
 
 #: The control each input of `Caption` names, which the Studio draws in place of its type's
@@ -76,7 +79,11 @@ CONTROL_NAMED_BY_EACH_CAPTION_INPUT = {
 }
 
 #: The nodes whose `process()`, or evaluation, must never raise while the stream plays.
-NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally", "caption")
+NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally", "caption", "bars", "bars_check")
+
+#: More than the first converted picture: `bars_check` raises on the first one whose bars are
+#: not the colours `bars` wrote.
+PICTURES_SHOWING_THE_CONVERSION_RUNS = 10
 
 #: The function nodes, which run inside the read of the stream's function node pool, since
 #: `glow` is a shader node and `beat` runs as Python.
@@ -193,6 +200,67 @@ def await_pictures_through_glow(
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
+def pictures_a_node_wrote_on(graph: dict[str, Any], node_id: str, output_name: str) -> int:
+    """The pictures the node of `node_id` wrote on its linked output `output_name`."""
+    (node,) = [node for node in graph["nodes"] if node["id"] == node_id]
+    written = node.get("components", {}).get("metrics", {}).get("written_bags_by_output_port", {})
+    return int(written.get(output_name, 0))
+
+
+def assert_the_colour_bars_connect_through_a_texture_format_convert(
+    tatolabd: TatolabdUnderTest,
+    local_api: LocalApiClient,
+    project_directory: str,
+    stream_id: str,
+    graph: dict[str, Any],
+) -> None:
+    """`connect` links the `bgra8_unorm` bars into the check that takes only `rgba8_unorm`
+    through a `TextureFormatConvert` it places in the same edit; the check reads each bar back
+    the colour written, and one `undo` removes the node and both links."""
+    connected = local_api.call_tool(
+        "connect",
+        {
+            "stream": stream_id,
+            "source": {"node": node_named(graph, "bars")["id"], "port": "bars"},
+            "target": {"node": node_named(graph, "bars_check")["id"], "port": "bars"},
+        },
+    )
+    (inserted,) = connected["added_nodes"]
+    assert inserted["node_type"] == "tatolab.stream:TextureFormatConvert", connected
+    assert inserted["inserted_because"] == "converts_pin_types", connected
+    assert len(connected["connected_links"]) == 2, connected
+
+    deadline = time.monotonic() + PICTURES_WRITTEN_TIMEOUT_SECONDS
+    while True:
+        graph_converting = local_api.graph(stream=stream_id)
+        converted = pictures_a_node_wrote_on(graph_converting, inserted["node"], "rgba_image")
+        if converted >= PICTURES_SHOWING_THE_CONVERSION_RUNS:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"the TextureFormatConvert wrote {converted} pictures within "
+                f"{PICTURES_WRITTEN_TIMEOUT_SECONDS}s: {json.dumps(graph_converting)[:4000]}\n"
+                f"{tatolabd.recent_stderr()}"
+            )
+        time.sleep(POLL_INTERVAL_SECONDS)
+    for node_name in ("bars", "bars_check"):
+        raising_because = (
+            node_named(graph_converting, node_name).get("components", {}).get(
+                "process_raising_because"
+            )
+        )
+        assert raising_because is None, (node_name, raising_because)
+
+    local_api.call_tool("undo", {"project_directory": project_directory})
+    graph_undone = local_api.graph(stream=stream_id)
+    assert inserted["node"] not in {node["id"] for node in graph_undone["nodes"]}, graph_undone
+    assert not [
+        link
+        for link in graph_undone["links"]
+        if inserted["node"] in (link["source"]["node"], link["target"]["node"])
+    ], graph_undone
+
+
 def play(local_api: LocalApiClient, project_directory: str, stream_id: str) -> None:
     queued_playback = local_api.call_tool(
         "start_playback", {"project_directory": project_directory}
@@ -270,6 +338,9 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
         pin["name"]: pin.get("annotations", {}).get("control") for pin in caption["inputs"]
     } == CONTROL_NAMED_BY_EACH_CAPTION_INPUT, caption
     assert_the_stream_runs_cleanly_through_its_links(graph)
+    assert_the_colour_bars_connect_through_a_texture_format_convert(
+        tatolabd, local_api, project_directory, stream_id, graph
+    )
     beats_per_minute = input_port_named(node_named(graph, "beat"), "beats_per_minute")
     assert beats_per_minute.get("value_comes_from") == "saved", beats_per_minute
     for (node_name, input_name), value in VALUE_THE_DOCUMENT_HOLDS_BY_NODE_AND_INPUT.items():
