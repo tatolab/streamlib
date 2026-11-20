@@ -71,11 +71,13 @@ const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
         binding: 0,
         kind: ComputeBindingKind::StorageBuffer,
         name: None,
+        sampler: None,
     },
     ComputeBindingSpec {
         binding: 1,
         kind: ComputeBindingKind::StorageBuffer,
         name: None,
+        sampler: None,
     },
 ];
 

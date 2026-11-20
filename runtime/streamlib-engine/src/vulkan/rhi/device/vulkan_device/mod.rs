@@ -150,6 +150,9 @@ pub struct HostVulkanDevice {
     /// The subgroup operations and stages the driver serves, checked against
     /// each kernel's shaders at construction.
     subgroup_operation_support: VulkanSubgroupOperationSupport,
+    /// The most samples an anisotropic kernel sampler may take, 1 when the
+    /// device serves no anisotropic filtering.
+    sampler_anisotropy_limit: u32,
     compute_queue_family_index: Option<u32>,
     compute_queue: Option<vk::Queue>,
     /// VMA allocator for all GPU memory allocation. Option for controlled drop order.
