@@ -119,6 +119,12 @@ impl PythonChannelsBlock {
         self.timestamp_ns
     }
 
+    /// The pin type a Channels block is the read of: `"audio"`.
+    #[getter]
+    fn pin_type(&self) -> &'static str {
+        "audio"
+    }
+
     /// The samples as a read-only `[channel][sample]` CPU tensor over the sample.
     #[pyo3(signature = (*, stream = None, max_version = None, dl_device = None, copy = None))]
     fn __dlpack__<'py>(
@@ -294,4 +300,18 @@ impl PythonPacketsUnit {
     fn codec(&self) -> &str {
         &self.codec
     }
+
+    /// The pin type the unit is the read of: `"encoded_audio"` for a unit of an audio codec,
+    /// `"encoded_video"` for any other.
+    #[getter]
+    fn pin_type(&self) -> &'static str {
+        if AUDIO_CODECS.contains(&self.codec.as_str()) {
+            "encoded_audio"
+        } else {
+            "encoded_video"
+        }
+    }
 }
+
+/// The codecs a Packets unit of encoded audio names; a unit of any other is encoded video.
+const AUDIO_CODECS: &[&str] = &["opus", "aac", "flac", "vorbis", "mp3"];

@@ -28,7 +28,7 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
-from ._class_node_declaration import read_class_node_ports
+from ._class_node_declaration import read_class_node_ports_and_members
 from ._function_node_declaration import FunctionNode, declare_function_node
 from ._node_meta_declaration import (
     PROCESS_NODE_KIND,
@@ -68,6 +68,8 @@ NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority
 NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP = "__tatolab_node_paced_by_real_time__"
 NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
 NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
+# The field or pin behind each port of a class under bare `@node`, which its helper builds it from.
+NODE_DECLARATION_CLASS_NODE_MEMBERS_STAMP = "__tatolab_class_node_members__"
 
 # Every kind stamps these, by the role each plays in the declaration.
 _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
@@ -374,7 +376,10 @@ class NodeDeclarationDecorator:
                     f"{getattr(class_under_decoration, '__name__', class_under_decoration)!r} is "
                     f"not a class. A function takes `@node` bare."
                 )
-            input_ports, output_ports = read_class_node_ports(class_under_decoration)
+            input_ports, output_ports, members = read_class_node_ports_and_members(
+                class_under_decoration
+            )
+            setattr(class_under_decoration, NODE_DECLARATION_CLASS_NODE_MEMBERS_STAMP, members)
             return _stamp_a_class_node(
                 class_under_decoration,
                 declared_by="@node",

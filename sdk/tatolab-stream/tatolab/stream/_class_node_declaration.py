@@ -17,7 +17,8 @@ from __future__ import annotations
 import inspect
 import types
 import typing
-from typing import Any, ClassVar, Final, Optional
+from dataclasses import dataclass
+from typing import Any, ClassVar, Final, Literal, Optional
 
 from ._class_node_pins import InputPin, OutputPin
 from ._contract_pin_types import PinDeclarationOnTheWire
@@ -42,10 +43,34 @@ from ._former_name_check import refuse_former_names_that_find_no_one_pin
 from ._pin_family import family_a_pin_travels_on, family_declaration_of_a_typed_output
 from ._port_family_declaration import Input, Output
 
-__all__ = ["read_class_node_ports"]
+__all__ = ["ClassNodeMember", "read_class_node_ports", "read_class_node_ports_and_members"]
 
 type DeclaredPort = dict[str, Any]
 """One port as the engine reads it off a described node type."""
+
+type ClassNodeMemberForm = Literal["field", "input_pin", "output_pin"]
+"""How a class node declares one of its ports: a value field, an `InputPin` or an `OutputPin`."""
+
+
+@dataclass(frozen=True, slots=True)
+class ClassNodeMember:
+    """One field or pin of a class node: the attribute that holds it on the running node, and its port."""
+
+    attribute: str
+    """The attribute's name, as the class spells it."""
+
+    port: str
+    """The port's name, the attribute's name cast, as the engine and a stored value name it."""
+
+    form: ClassNodeMemberForm
+
+    pin_declaration: PinDeclarationOnTheWire
+
+    a_setting: bool
+    """Whether the field is read at setup, so a change rebuilds the node and is never assigned live."""
+
+    default: object
+    """The field's default, `NO_DEFAULT` for a pin."""
 
 # The direction each pin form declares.
 _DIRECTION_OF_EACH_PIN_FORM: Final[dict[type, PinDirection]] = {
@@ -67,6 +92,17 @@ def read_class_node_ports(
     pin typed `Annotated[object, PinTypeFromSetting("...")]`, a setting read each run, and a field
     `PublishedOnAnOutput()`, which declares an output of its name as well.
     """
+    input_ports, output_ports, _ = read_class_node_ports_and_members(
+        node_class, constructed_in_python=constructed_in_python
+    )
+    return input_ports, output_ports
+
+
+def read_class_node_ports_and_members(
+    node_class: type, *, constructed_in_python: bool = True
+) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
+    """The ports `read_class_node_ports` reads, and the field or pin that declares each, in
+    declaration order; refused as `read_class_node_ports` refuses."""
     return _ClassNodeReading(node_class, of_the_runtimes_own_node=not constructed_in_python).ports(
         constructed_in_python=constructed_in_python
     )
@@ -81,12 +117,15 @@ class _ClassNodeReading:
         self._of_the_runtimes_own_node = of_the_runtimes_own_node
         self._port_spelling_by_cast_name: dict[str, str] = {}
 
-    def ports(self, *, constructed_in_python: bool) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
+    def ports(
+        self, *, constructed_in_python: bool
+    ) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
         self._refuse_a_port_declared_in_the_retired_form()
         if constructed_in_python:
             self._refuse_an_init_taking_parameters()
         input_ports: list[DeclaredPort] = []
         output_ports: list[DeclaredPort] = []
+        members: list[ClassNodeMember] = []
         typed_pins: list[tuple[str, str, PinDeclarationOnTheWire]] = []
         for attribute_name, annotation in self._resolved_annotations().items():
             if attribute_name.startswith("_") or _is_a_class_variable(annotation):
@@ -95,20 +134,38 @@ class _ClassNodeReading:
                 annotation, f"`{self._node}`'s attribute `{attribute_name}`"
             )
             pin_form, pin_type_annotation = self._pin_form_and_its_type(attribute_name, annotation)
+            form: ClassNodeMemberForm
             if pin_form is None:
                 port, published_on = self._field(attribute_name, annotation, description)
                 input_ports.append(port)
                 if published_on is not None:
                     output_ports.append(published_on)
+                form = "field"
             elif _DIRECTION_OF_EACH_PIN_FORM[pin_form] == "input":
                 port = self._input_pin(attribute_name, pin_type_annotation, description)
                 input_ports.append(port)
+                form = "input_pin"
             else:
                 port = self._output_pin(attribute_name, pin_type_annotation, description)
                 output_ports.append(port)
+                form = "output_pin"
             typed_pins.append((attribute_name, port["name"], port["pin_declaration"]))
+            members.append(
+                ClassNodeMember(
+                    attribute=attribute_name,
+                    port=port["name"],
+                    form=form,
+                    pin_declaration=port["pin_declaration"],
+                    a_setting=port.get("input_mode", {}).get("mode") == "setting_only",
+                    default=(
+                        getattr(self._node_class, attribute_name, NO_DEFAULT)
+                        if form == "field"
+                        else NO_DEFAULT
+                    ),
+                )
+            )
         refuse_former_names_that_find_no_one_pin(self._node, typed_pins)
-        return input_ports, output_ports
+        return input_ports, output_ports, tuple(members)
 
     def _refusal(
         self, words: str, finding_code: NodeDeclarationFindingCode, pin: Optional[str] = None

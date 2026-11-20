@@ -107,6 +107,7 @@ class HelperProcessLifecycle:
         self._config_as_last_applied: "dict[str, Any]" = {}
         self._config_its_node_was_last_handed: "dict[str, Any]" = {}
         self._exposed_config_values_last_refused: "dict[str, Any]" = {}
+        self._field_wire_values_last_refused: "Optional[str]" = None
         self._whether_the_parent_last_took_process_as_raising: "Optional[bool]" = False
         self._raises_the_parent_holds_by_function_node: "dict[str, str]" = {}
         self._not_ready_reason_the_parent_last_took: "Optional[str]" = None
@@ -344,6 +345,7 @@ class HelperProcessLifecycle:
                 self._runtime_id,
                 self._node_run_id,
                 self._bridge,
+                port_wiring.get("input_values"),
             )
             self._hosted.call_hook_letting_failure_propagate(
                 "setup", self._hosted.full_access_context
@@ -474,6 +476,8 @@ class HelperProcessLifecycle:
             return
         if hook_name == "process" and self._config_fields_its_node_exposes_as_inputs:
             self._take_each_new_value_a_link_gives_an_exposed_config_field()
+        if hook_name == "process" and self._hosted.fields is not None:
+            self._take_each_new_value_a_wire_gives_a_field()
         if hook_name == "process":
             self._send_transparent_frames_while_the_node_is_not_ready()
         raised = self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
@@ -600,6 +604,34 @@ class HelperProcessLifecycle:
         self._exposed_config_values_last_refused = {}
         self._config_as_last_applied = configuration
 
+    def _take_each_new_value_a_wire_gives_a_field(self) -> None:
+        assert self._hosted is not None and self._hosted.fields is not None
+        try:
+            self._hosted.fields.take_each_new_value_a_wire_gives(self._hosted.instance)
+        except Exception as wire_value_refused:
+            if str(wire_value_refused) != self._field_wire_values_last_refused:
+                self._field_wire_values_last_refused = str(wire_value_refused)
+                log.error(
+                    "this node's fields could not take the values their wires gave",
+                    error=str(wire_value_refused),
+                )
+            return
+        self._field_wire_values_last_refused = None
+
+    def _hand_back_what_a_link_stopped_driving(self, input_port: str) -> None:
+        """Give the field or exposed config field of `input_port` its own value again, now a link stopped feeding it."""
+        self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(input_port)
+        if self._hosted is None or self._hosted.fields is None:
+            return
+        try:
+            self._hosted.fields.hand_back_the_set_value_of(self._hosted.instance, input_port)
+        except Exception as set_value_refused:
+            log.error(
+                "this node's field could not take its set value again once its wire was gone",
+                input_port=input_port,
+                error=str(set_value_refused),
+            )
+
     def _hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(self, field: str) -> None:
         if self._hosted is None or field not in self._config_fields_its_node_exposes_as_inputs:
             return
@@ -719,9 +751,7 @@ class HelperProcessLifecycle:
                 error=str(unwire_failure),
             )
         if command.get("direction") == "input" and isinstance(command.get("port"), str):
-            self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(
-                command["port"]
-            )
+            self._hand_back_what_a_link_stopped_driving(command["port"])
 
     def _wire_link(self, command: "dict[str, Any]") -> None:
         direction = command.get("direction")
@@ -792,7 +822,7 @@ class HelperProcessLifecycle:
                 input_port=input_port,
                 error=str(unfeed_failure),
             )
-        self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(input_port)
+        self._hand_back_what_a_link_stopped_driving(input_port)
 
     def _set_input_values(self, command: "dict[str, Any]") -> None:
         try:
@@ -805,6 +835,16 @@ class HelperProcessLifecycle:
                 "this node could not read the input values the engine handed it",
                 error=str(input_values_refused),
             )
+        if self._hosted is not None and self._hosted.fields is not None:
+            try:
+                self._hosted.fields.take_set_values(
+                    self._hosted.instance, command.get("input_values") or {}
+                )
+            except Exception as field_values_refused:
+                log.error(
+                    "this node's fields could not take the input values the engine handed it",
+                    error=str(field_values_refused),
+                )
         fired = command.get("fired") or []
         if not fired:
             return

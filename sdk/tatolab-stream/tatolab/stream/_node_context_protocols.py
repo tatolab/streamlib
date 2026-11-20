@@ -114,6 +114,11 @@ class ChannelsBlock(Protocol):
         """The stream time the block was stamped with, in nanoseconds."""
         ...
 
+    @property
+    def pin_type(self) -> Literal["audio"]:
+        """The pin type a Channels block is the read of: `"audio"`."""
+        ...
+
     def __dlpack__(
         self,
         *,
@@ -188,6 +193,11 @@ class PacketsUnit(Protocol):
     @property
     def codec(self) -> str:
         """The codec the bytes are encoded with, or `""` for a plain byte stream."""
+        ...
+
+    @property
+    def pin_type(self) -> Literal["encoded_video", "encoded_audio"]:
+        """The pin type the unit is the read of: `"encoded_audio"` for a unit of an audio codec, `"encoded_video"` for any other."""
         ...
 
 

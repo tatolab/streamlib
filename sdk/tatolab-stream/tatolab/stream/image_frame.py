@@ -12,7 +12,7 @@ surface against producer reuse while it lives and speaks `__dlpack__`, with
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 from .color_info import ColorInfo
@@ -31,6 +31,9 @@ class ImageFrame(ClaimedSurfacePixelAccess):
     wire name such as `rgba16_float`, and `colour` its H.273 description.
     `ctx.outputs.write(self.video_out, frame)` publishes it again.
     """
+
+    pin_type: ClassVar[Literal["texture"]] = "texture"
+    """The pin type an Image frame is the read of."""
 
     surface_id: str
     width: int
