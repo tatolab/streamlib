@@ -181,6 +181,26 @@ def read_the_stored_value_at_an_input_port(
 ) -> dict[str, Any] | None:
     """The record `{"value": ...}` of the String, Menu, Asset or List of `pin_type` (JSON) `input_port` holds for this read; `None` when none arrived."""
 
+def read_the_bundle_frame_at_an_input_port(
+    *,
+    inputs: _stream_protocols.LinkInputDataReader,
+    node_id: str,
+    input_port: str,
+    pin_type: str,
+) -> dict[str, Any] | None:
+    """Each member of the bundle holding a Texture of `pin_type` (JSON) `input_port` holds for this read, by name: a small member its stored JSON form, a Texture its `ImageFrame`; `None` when none arrived."""
+
+def write_the_bundle_frame_on_an_output_port(
+    *,
+    outputs: _stream_protocols.LinkOutputDataWriter,
+    output_port: str,
+    pin_type: str,
+    small_members: str,
+    textures: dict[str, Any],
+    timestamp_ns: int | None = None,
+) -> None:
+    """Write a bundle holding a Texture of `pin_type` (JSON) on `output_port` as one Bundle frame: `small_members` (JSON) by name, and each Texture by name."""
+
 def write_the_stored_value_on_an_output_port(
     *,
     link_data_access: _stream_protocols.NodeLinkDataAccess,

@@ -558,7 +558,7 @@ fn color_info_of_the_image_frame_colour<'py>(
 }
 
 /// The `ImageFrame` an Image descriptor states, its slot claimed.
-fn image_frame_of_the_read<'py>(
+pub(crate) fn image_frame_of_the_read<'py>(
     python: Python<'py>,
     port_name: &str,
     image_frame: ImageFrameDescriptorBody,

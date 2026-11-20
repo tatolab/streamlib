@@ -36,7 +36,10 @@ pub(crate) use kernels::{
     PythonAccelerationStructureHandle, PythonComputeKernel, PythonGraphicsKernel,
     PythonKernelDispatchBatch, PythonRayTracingKernel,
 };
-pub(crate) use link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWriter};
+pub(crate) use link_data_access::{
+    PythonLinkInputDataReader, PythonLinkOutputDataWriter, read_the_bundle_frame_at_an_input_port,
+    write_the_bundle_frame_on_an_output_port,
+};
 pub(crate) use runtime_context::{
     PythonRuntimeContextFullAccess, PythonRuntimeContextLimitedAccess,
     limited_access_view_of_runtime_context_for_helper_process, not_ready_report_on_runtime_context,
