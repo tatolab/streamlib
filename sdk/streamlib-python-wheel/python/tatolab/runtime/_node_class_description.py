@@ -116,12 +116,13 @@ DESCRIBED_SHADER_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
 SHADER_NODE_KIND = "shader"
 
 
-#: Each key of a described node type, process or function, filled from a stamp an older
+#: Each key of a described node type of any kind, filled from a stamp an older
 #: `tatolab-stream` does not write, and left out when the node carries none: the engine reads an
 #: absent key as undeclared. Spelled here, not imported, because the `tatolab-stream` in a
 #: project's venv may predate the stamp, and its attribute name is the wire contract both sides hold.
 DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE = (
     ("category", "__tatolab_node_category__"),
+    ("conversion", "__tatolab_node_conversion__"),
 )
 
 

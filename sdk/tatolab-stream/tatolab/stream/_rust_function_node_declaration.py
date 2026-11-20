@@ -278,6 +278,7 @@ def declare_rust_function_node(
         declaration_stamps["config_schema"]: _config_schema(declaration.config_fields),
         declaration_stamps["description"]: declaration.description,
         declaration_stamps["category"]: declaration.category,
+        declaration_stamps["conversion"]: False,
         declaration_stamps["input_ports"]: input_ports,
         declaration_stamps["output_ports"]: [
             {

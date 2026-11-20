@@ -207,7 +207,7 @@ pub(crate) fn describe_and_register_node_types_in_a_node_interpreter(
 }
 
 /// Register `declaration` into `node_types_of_the_stream`: as a type `installed_module`
-/// declares, which may state a conversion, or, with none, as a type a graph or a live add named.
+/// declares, or, with none, as a type a graph or a live add named.
 fn register_the_described_node_type(
     node_types_of_the_stream: &NodeTypesOneStreamResolves,
     declaration: PythonNodeDeclaration,

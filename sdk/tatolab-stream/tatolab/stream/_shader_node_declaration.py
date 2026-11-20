@@ -23,7 +23,10 @@ from collections.abc import Callable
 from typing import Any, NoReturn, ParamSpec, TypeVar
 
 from ._function_node_declaration import FunctionNode, _FunctionNodeSignatureReading
-from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
+from ._node_meta_declaration import (
+    take_node_meta_held_for_the_kind_decorator,
+    the_conversion_a_node_states,
+)
 
 __all__ = ["ShaderNode"]
 
@@ -88,6 +91,14 @@ def declare_shader_node(
         declaration_stamps["config_schema"]: _json_schema_for_a_shader_node(),
         declaration_stamps["description"]: declared_meta.get("description", ""),
         declaration_stamps["category"]: declared_meta.get("category"),
+        declaration_stamps["conversion"]: the_conversion_a_node_states(
+            name,
+            declared_meta,
+            declared_by="@node.shader",
+            kind=SHADER_NODE_KIND,
+            input_ports=signature_reading.input_ports,
+            output_ports=signature_reading.output_ports,
+        ),
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_SHADER_SOURCE_STAMP: shader_source,

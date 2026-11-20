@@ -22,7 +22,7 @@ import inspect
 import sys
 import typing
 from collections.abc import Mapping
-from typing import Any, Callable, NoReturn, Optional, ParamSpec, TypeVar, overload
+from typing import Any, Callable, Literal, NoReturn, Optional, ParamSpec, TypeVar, overload
 
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
@@ -34,9 +34,10 @@ from ._node_meta_declaration import (
     hold_node_meta_for_the_kind_decorator,
     read_node_meta,
     take_node_meta_held_for_the_kind_decorator,
+    the_conversion_a_node_states,
 )
 from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
-from ._shader_node_declaration import ShaderNode, declare_shader_node
+from ._shader_node_declaration import SHADER_NODE_KIND, ShaderNode, declare_shader_node
 from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
     derive_node_config_json_schema_refusing_a_key_with_no_default,
@@ -57,6 +58,7 @@ NODE_DECLARATION_CONFIG_CLASS_STAMP = "__tatolab_node_config_class__"
 NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
 NODE_DECLARATION_CATEGORY_STAMP = "__tatolab_node_category__"
+NODE_DECLARATION_CONVERSION_STAMP = "__tatolab_node_conversion__"
 NODE_DECLARATION_EXECUTION_STAMP = "__tatolab_node_execution__"
 NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority__"
 NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP = "__tatolab_node_paced_by_real_time__"
@@ -73,6 +75,7 @@ _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
     "config_schema": NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     "description": NODE_DECLARATION_DESCRIPTION_STAMP,
     "category": NODE_DECLARATION_CATEGORY_STAMP,
+    "conversion": NODE_DECLARATION_CONVERSION_STAMP,
     "input_ports": NODE_DECLARATION_INPUT_PORTS_STAMP,
     "output_ports": NODE_DECLARATION_OUTPUT_PORTS_STAMP,
 }
@@ -371,6 +374,7 @@ class NodeDeclarationDecorator:
             input_ports, output_ports = read_class_node_ports(class_under_decoration)
             return _stamp_a_class_node(
                 class_under_decoration,
+                declared_by="@node",
                 input_ports=input_ports,
                 output_ports=output_ports,
                 config_class=None,
@@ -394,9 +398,13 @@ class NodeDeclarationDecorator:
         )
 
     def meta(
-        self, *, category: Optional[str] = None, description: Optional[str] = None
+        self,
+        *,
+        category: Optional[str] = None,
+        description: Optional[str] = None,
+        conversion: Optional[Literal[True]] = None,
     ) -> "Callable[[_NodeUnderDeclaration], _NodeUnderDeclaration]":
-        """Declare what describes a node type: its `category` and its `description`.
+        """Declare what describes a node type: its `category`, its `description`, and whether it is a conversion.
 
         Written above or below the decorator that says the node's kind, and the same
         on every kind. `category` is the group an editor files the node type under,
@@ -405,11 +413,28 @@ class NodeDeclarationDecorator:
         HTML, served exactly as written, and a docstring never stands in for it.
         Each is a string written in the code, which is what lets a project's node
         types be listed from source without running them.
+
+        `conversion=True` states that the node converts the pin type of its one input that
+        takes a wire into that of its one output; every other input is `SettingOnly()`. Its
+        pins say what it bridges. A link only it bridges is refused naming it, with the call
+        that places it, and `connect` never places it itself. Only bare `@node` and
+        `@node.shader` declare one, and any other shape is refused at decoration as a
+        `NodeDeclarationRefusal`. A node that is no conversion leaves it out.
         """
-        declared = read_node_meta(category=category, description=description)
+        declared = read_node_meta(
+            category=category, description=description, conversion=conversion
+        )
 
         def apply_to_node(node_under_declaration: _NodeUnderDeclaration) -> _NodeUnderDeclaration:
             if vars(node_under_declaration).get(NODE_DECLARATION_DECLARED_STAMP) is True:
+                the_conversion_a_node_states(
+                    getattr(node_under_declaration, "__name__"),
+                    declared,
+                    declared_by=_the_decorator_that_declared(node_under_declaration),
+                    kind=getattr(node_under_declaration, NODE_DECLARATION_KIND_STAMP),
+                    input_ports=getattr(node_under_declaration, NODE_DECLARATION_INPUT_PORTS_STAMP),
+                    output_ports=getattr(node_under_declaration, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+                )
                 for meta_key, declared_value in declared.items():
                     setattr(
                         node_under_declaration,
@@ -596,6 +621,7 @@ def _declare_node(
     input_ports, output_ports = _collect_declared_ports(node_class)
     return _stamp_a_class_node(
         node_class,
+        declared_by="@node.process",
         input_ports=input_ports,
         output_ports=output_ports,
         config_class=_config_class_named_by_the_init_annotation(node_class),
@@ -609,6 +635,7 @@ def _declare_node(
 def _stamp_a_class_node(
     node_class: NodeClassUnderDeclaration,
     *,
+    declared_by: str,
     input_ports: "list[dict[str, Any]]",
     output_ports: "list[dict[str, Any]]",
     config_class: "Optional[type]",
@@ -618,8 +645,16 @@ def _stamp_a_class_node(
     paced_by_real_time: bool,
 ) -> NodeClassUnderDeclaration:
     """Stamp `node_class` as a class node of `input_ports` and `output_ports`, which runs in a
-    process of its own, under whichever grammar read its ports."""
+    process of its own, under the grammar of `declared_by`, the decorator that read its ports."""
     declared_meta = take_node_meta_held_for_the_kind_decorator(node_class)
+    conversion = the_conversion_a_node_states(
+        node_class.__name__,
+        declared_meta,
+        declared_by=declared_by,
+        kind=PROCESS_NODE_KIND,
+        input_ports=input_ports,
+        output_ports=output_ports,
+    )
 
     setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)
     setattr(node_class, NODE_DECLARATION_KIND_STAMP, PROCESS_NODE_KIND)
@@ -635,6 +670,7 @@ def _stamp_a_class_node(
     )
     setattr(node_class, NODE_DECLARATION_DESCRIPTION_STAMP, declared_meta.get("description", ""))
     setattr(node_class, NODE_DECLARATION_CATEGORY_STAMP, declared_meta.get("category"))
+    setattr(node_class, NODE_DECLARATION_CONVERSION_STAMP, conversion)
     setattr(
         node_class,
         NODE_DECLARATION_EXECUTION_STAMP,
@@ -656,6 +692,27 @@ def _stamp_a_class_node(
     setattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
 
     return node_class
+
+
+def _the_decorator_that_declared(declared_node: object) -> str:
+    """The decorator that read the ports of `declared_node`, a node already declared.
+
+    A shader is `@node.shader`, and a Rust function node `node.rust_function`. A function or
+    class whose every port states a pin type was read by bare `@node`, and one whose ports
+    declare families by `@node.function` or `@node.process`, which never stamp a pin type.
+    """
+    kind = getattr(declared_node, NODE_DECLARATION_KIND_STAMP)
+    if kind == SHADER_NODE_KIND:
+        return "@node.shader"
+    if isinstance(declared_node, RustFunctionNode):
+        return "node.rust_function"
+    ports = [
+        *getattr(declared_node, NODE_DECLARATION_INPUT_PORTS_STAMP),
+        *getattr(declared_node, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+    ]
+    if all("pin_declaration" in port for port in ports):
+        return "@node"
+    return "@node.process" if kind == PROCESS_NODE_KIND else "@node.function"
 
 
 def _config_class_named_by_the_init_annotation(

@@ -60,6 +60,7 @@ mod tests {
             "config_schema": stamp("__tatolab_node_config_schema__")?,
             "input_ports": stamp("__tatolab_node_input_ports__")?,
             "output_ports": stamp("__tatolab_node_output_ports__")?,
+            "conversion": stamp("__tatolab_node_conversion__")?,
         }))
     }
 
@@ -232,6 +233,39 @@ class AudioConsumer:
         assert_eq!(
             serde_json::to_value(&described.outputs[0]).unwrap()["flow"],
             serde_json::json!("value")
+        );
+    }
+
+    /// A class under bare `@node` stating `conversion=True` reaches the catalog as a conversion
+    /// from its one input that takes a wire to its one output, its setting left out of it.
+    #[test]
+    fn a_class_stating_a_conversion_reaches_the_catalog_as_one() {
+        let declaration = read_python_declaration(
+            "\
+from typing import Annotated
+
+
+@node.meta(conversion=True)
+@node(execution='manual')
+class AudioConsumer:
+    bitrate_bps: Annotated[int, SettingOnly()] = 4_000_000
+    video: InputPin[Texture]
+    encoded_video: OutputPin[EncodedVideo]
+",
+        )
+        .expect("the declaration reads");
+
+        let conversion = declaration
+            .descriptor
+            .pin_conversion()
+            .expect("its shape is a conversion's")
+            .expect("it states a conversion");
+        assert_eq!(
+            (
+                conversion.input_port_name.as_str(),
+                conversion.output_port_name.as_str()
+            ),
+            ("video", "encoded_video")
         );
     }
 

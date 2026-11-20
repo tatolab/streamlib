@@ -43,7 +43,10 @@ from ._node_config_schema import (
     json_schema_for_a_node_declaring_no_config,
 )
 from ._named_pin_type_declaration import named_pin_type_declared_by
-from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
+from ._node_meta_declaration import (
+    take_node_meta_held_for_the_kind_decorator,
+    the_conversion_a_node_states,
+)
 from ._pin_declaration import (
     NO_DEFAULT,
     DeclaredPin,
@@ -168,6 +171,14 @@ def declare_function_node(
         ),
         declaration_stamps["description"]: declared_meta.get("description", ""),
         declaration_stamps["category"]: declared_meta.get("category"),
+        declaration_stamps["conversion"]: the_conversion_a_node_states(
+            function.__name__,
+            declared_meta,
+            declared_by=decorator,
+            kind=FUNCTION_NODE_KIND,
+            input_ports=signature_reading.input_ports,
+            output_ports=signature_reading.output_ports,
+        ),
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
