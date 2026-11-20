@@ -95,8 +95,8 @@ impl ProjectRelativeFilePath {
         Ok(())
     }
 
-    /// Refuse a read of the path when a folder on its way, or the file itself, is a symbolic
-    /// link, save the one link the runtime makes to the core project it carries: a path into
+    /// Refuse a read or a listing of the path when a folder on its way, or the file itself, is
+    /// a symbolic link, save the one link the runtime makes to the core project it carries: a path into
     /// that import passes through the link while it points at
     /// `core_project_directory_the_runtime_carries`, and a link below it, or `imports` being
     /// one, is refused as any other.
@@ -172,9 +172,20 @@ pub fn project_files_a_listing_shows(
     project_directory: &Path,
     under: Option<&ProjectRelativeFilePath>,
 ) -> Result<Vec<ProjectFileListed>, ProjectRepositoryRefusal> {
+    if let Some(under) = under {
+        under.refuse_a_symbolic_link_on_the_way_under(project_directory)?;
+    }
+    project_files_listed_under_a_checked_folder(project_directory, under)
+}
+
+/// [`project_files_a_listing_shows`] once the caller has refused the links on the way to
+/// `under`.
+pub(crate) fn project_files_listed_under_a_checked_folder(
+    project_directory: &Path,
+    under: Option<&ProjectRelativeFilePath>,
+) -> Result<Vec<ProjectFileListed>, ProjectRepositoryRefusal> {
     let (start, start_relative) = match under {
         Some(under) => {
-            under.refuse_a_symbolic_link_on_the_way_under(project_directory)?;
             let start = under.on_disk_under(project_directory);
             if !start.is_dir() {
                 return Err(ProjectRepositoryRefusal::NoSuchProjectFolder(
