@@ -76,8 +76,8 @@ export function PreviewPicture({ connection, fit, showsSafeAreas, onReading }: {
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
-        setSize({ width, height });
       }
+      setSize((shown) => (shown !== null && shown.width === width && shown.height === height ? shown : { width, height }));
       return canvas.getContext("2d");
     };
     const tellTheReading = (width: number, height: number, timestamp: number) => {

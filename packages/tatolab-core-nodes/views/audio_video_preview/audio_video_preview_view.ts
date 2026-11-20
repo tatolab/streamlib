@@ -15,7 +15,7 @@ import designSystemStyles from "@tatolab/tato-app-view-sdk/design_system/styles/
 import { ToggleSwitch } from "@tatolab/tato-app-view-sdk/design_system/toggle_switch";
 import { useViewReading } from "@tatolab/tato-app-view-sdk/design_system/view_readings";
 import { WaitingState } from "@tatolab/tato-app-view-sdk/design_system/waiting_state";
-import { createElement, useCallback, useState } from "react";
+import { createElement, useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import viewStyles from "./audio_video_preview_view.css" with { type: "css" };
 import { PreviewMeters, type SoundReading } from "./preview_meters.ts";
@@ -56,8 +56,11 @@ function AudioVideoPreview({ connection }: { connection: TatoAppViewConnection }
   const [monitorLevel, setMonitorLevel] = useState(1);
   const [picture, setPicture] = useState<PictureReading>({ kind: "waiting" });
   const [sound, setSound] = useState<SoundReading>({ kind: "waiting" });
-  const keepSettings = (changed: Partial<PreviewSettings>) =>
-    void connection.rememberSettings({ ...settings, ...changed }).then((answer) => setSettingRefusal(answer.kind === "refused" ? answer.because : null));
+  const askedSettings = useRef<Partial<PreviewSettings>>({});
+  const keepSettings = (changed: Partial<PreviewSettings>) => {
+    askedSettings.current = { ...askedSettings.current, ...changed };
+    void connection.rememberSettings({ ...settings, ...askedSettings.current }).then((answer) => setSettingRefusal(answer.kind === "refused" ? answer.because : null));
+  };
   return createElement(
     "div",
     { className: "audio-video-preview" },

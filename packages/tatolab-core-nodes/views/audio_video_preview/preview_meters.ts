@@ -18,6 +18,9 @@ const SCALE_MARKS_DECIBELS = [0, -6, -12, -24, -40, -60] as const;
 /** How long a channel's peak mark holds before it falls back to the level. */
 const PEAK_HOLD_MS = 1500;
 
+/** The held peak's mark, as tall as `.preview-meter-peak` draws it, so a full-scale peak stays inside the bar. */
+const PEAK_MARK_HEIGHT_PX = 2;
+
 /** One channel's meter as drawn: its level and held peak, each from 0 (the floor) to 1 (full scale). */
 interface ChannelMeter {
   level: number;
@@ -113,7 +116,7 @@ export function PreviewMeters({ connection, monitorLevel, onReading }: { connect
           "div",
           { className: "preview-meter-bar" },
           meter === null ? null : createElement("div", { className: "preview-meter-level", style: { clipPath: `inset(${(1 - meter.level) * 100}% 0 0 0)` } }),
-          meter === null ? null : createElement("div", { className: "preview-meter-peak", style: { bottom: `${meter.peak * 100}%` } }),
+          meter === null ? null : createElement("div", { className: "preview-meter-peak", style: { bottom: `calc(${meter.peak * 100}% - ${meter.peak * PEAK_MARK_HEIGHT_PX}px)` } }),
         ),
         createElement("span", { className: "preview-meter-channel" }, meter === null ? "" : channelNameOf(channel, meters.length)),
       ),
