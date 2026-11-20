@@ -22,6 +22,7 @@ mod pixel_planes_within_one_allocation;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod plane_fd_under_test;
 mod ray_tracing_kernel;
+mod sampler_descriptor;
 mod shader_specialization_constants;
 #[cfg(test)]
 mod shader_specialization_constants_tests;
@@ -102,6 +103,10 @@ pub use ray_tracing_kernel::{
     RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
     derive_ray_tracing_bindings_from_spirv_multistage, ray_tracing_stages_covered_by,
     validate_shader_groups,
+};
+pub use sampler_descriptor::{
+    SamplerAddressMode, SamplerAnisotropy, SamplerBorderColor, SamplerDescriptor, SamplerFilter,
+    SamplerMipmapMode,
 };
 pub use shader_specialization_constants::{
     ShaderSpecializationConstant, ShaderSpecializationValue,
