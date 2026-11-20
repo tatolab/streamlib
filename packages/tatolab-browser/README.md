@@ -14,9 +14,10 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
   each frame the host paints, handed over in shared memory, into a texture
   from the node's output pool (`surface_write_from_host_memory`), published as
   an RGBA Image frame in sRGB. Python never runs at frame or sample cadence.
-- `data` input: each Records map reaches the page as
+- `data` input: each `PageMessage`, one JSON object and this module's own pin
+  type, reaches the page as
   `window.dispatchEvent(new CustomEvent("tatolab:data", { detail }))`.
-- `events` output: each `window.tatolab.publish(object)` call is one Records map.
+- `events` output: each `window.tatolab.publish(object)` call is one `PageMessage`.
 - `audio` output: what the page plays, as planar `f32` Channels blocks at
   `audio_sample_rate`. A silent page publishes nothing.
 - A page's renderer that crashes is reloaded by the host. When the host
@@ -28,7 +29,7 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
 - `BrowserSourceOutputProbe` logs a source's frame rate, its audio's
   continuity and how long a `data` message takes to reach the page's paint.
 
-Config: `url`, `width`, `height`, `frame_rate` (1 to 60), `transparent_background`,
+Settings: `url`, `width`, `height`, `frame_rate` (1 to 60), `transparent_background`,
 `audio_sample_rate`, `output_pool_rotation_depth`. A `url` with no scheme is a page
 file inside the project, relative to the project directory, and opens as its
 `file://` URL.

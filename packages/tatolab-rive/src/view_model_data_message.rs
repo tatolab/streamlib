@@ -1,10 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A `data` message: one msgpack map from view-model property path to value,
-//! each entry assigned to the property of that path by the property's own type.
+//! A `data` message: one `ViewModelValues`, a JSON object from view-model
+//! property path to value, each entry assigned to the property of that path by
+//! the property's own type, in the order the object names them.
 
 use std::collections::HashSet;
+
+use serde_json::Value as JsonValue;
 
 /// A view-model property's type, as rive-runtime's `DataType` numbers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,34 +55,30 @@ impl ViewModelPropertyAssignment {
     /// it makes none.
     pub fn for_property_of_type(
         property_type: ViewModelPropertyType,
-        value: &rmpv::Value,
+        value: &JsonValue,
     ) -> Result<Option<Self>, String> {
         match (property_type, value) {
-            (ViewModelPropertyType::Number, value) if value.is_number() => Ok(Some(Self::Number(
-                value.as_f64().unwrap_or_default() as f32,
+            (ViewModelPropertyType::Number, JsonValue::Number(number)) => Ok(Some(Self::Number(
+                number.as_f64().unwrap_or_default() as f32,
             ))),
-            (ViewModelPropertyType::String, rmpv::Value::String(text)) => text
-                .as_str()
-                .map(|text| Some(Self::String(text.to_owned())))
-                .ok_or_else(|| "its text is not UTF-8".to_owned()),
-            (ViewModelPropertyType::Boolean, rmpv::Value::Boolean(flag)) => {
+            (ViewModelPropertyType::String, JsonValue::String(text)) => {
+                Ok(Some(Self::String(text.clone())))
+            }
+            (ViewModelPropertyType::Boolean, JsonValue::Bool(flag)) => {
                 Ok(Some(Self::Boolean(*flag)))
             }
-            (ViewModelPropertyType::Color, rmpv::Value::Integer(argb)) => argb
+            (ViewModelPropertyType::Color, JsonValue::Number(argb)) => argb
                 .as_u64()
                 .and_then(|argb| u32::try_from(argb).ok())
                 .map(|argb| Some(Self::Color(argb)))
                 .ok_or_else(|| "a colour is an unsigned 0xAARRGGBB".to_owned()),
-            (ViewModelPropertyType::Color, rmpv::Value::String(text)) => text
-                .as_str()
-                .and_then(argb_of_a_hex_colour)
+            (ViewModelPropertyType::Color, JsonValue::String(text)) => argb_of_a_hex_colour(text)
                 .map(|argb| Some(Self::Color(argb)))
                 .ok_or_else(|| "a colour is written #RRGGBB or #AARRGGBB".to_owned()),
-            (ViewModelPropertyType::Enum, rmpv::Value::String(text)) => text
-                .as_str()
-                .map(|text| Some(Self::Enum(text.to_owned())))
-                .ok_or_else(|| "its text is not UTF-8".to_owned()),
-            (ViewModelPropertyType::Trigger, rmpv::Value::Boolean(false)) => Ok(None),
+            (ViewModelPropertyType::Enum, JsonValue::String(text)) => {
+                Ok(Some(Self::Enum(text.clone())))
+            }
+            (ViewModelPropertyType::Trigger, JsonValue::Bool(false)) => Ok(None),
             (ViewModelPropertyType::Trigger, _) => Ok(Some(Self::FireTrigger)),
             (ViewModelPropertyType::NotSettableFromData(data_type), _) => Err(format!(
                 "its type (rive DataType {data_type}) is not one a data message sets"
@@ -117,39 +116,24 @@ pub trait ViewModelPropertyTarget {
     ) -> bool;
 }
 
-/// The entries of one `data` message: its map's keys and values, in order.
-pub fn entries_of_a_data_message(payload: &[u8]) -> Result<Vec<(String, rmpv::Value)>, String> {
-    let message = rmpv::decode::read_value(&mut &payload[..])
-        .map_err(|decode_failure| format!("not msgpack: {decode_failure}"))?;
-    let rmpv::Value::Map(entries) = message else {
-        return Err(format!("a msgpack {}, not a map", value_kind(&message)));
+/// The entries of one `data` message: its object's keys and values, in order.
+pub fn entries_of_a_data_message(payload: &[u8]) -> Result<Vec<(String, JsonValue)>, String> {
+    let message: JsonValue = serde_json::from_slice(payload)
+        .map_err(|unreadable| format!("not one JSON object: {unreadable}"))?;
+    let JsonValue::Object(entries) = message else {
+        return Err(format!("a JSON {}, not an object", value_kind(&message)));
     };
-    entries
-        .into_iter()
-        .map(|(key, value)| match key {
-            rmpv::Value::String(path) => path
-                .into_str()
-                .map(|path| (path, value))
-                .ok_or_else(|| "a property path that is not UTF-8".to_owned()),
-            other => Err(format!(
-                "a {} key; each key is a view-model property path",
-                value_kind(&other)
-            )),
-        })
-        .collect()
+    Ok(entries.into_iter().collect())
 }
 
-fn value_kind(value: &rmpv::Value) -> &'static str {
+fn value_kind(value: &JsonValue) -> &'static str {
     match value {
-        rmpv::Value::Nil => "nil",
-        rmpv::Value::Boolean(_) => "boolean",
-        rmpv::Value::Integer(_) => "integer",
-        rmpv::Value::F32(_) | rmpv::Value::F64(_) => "float",
-        rmpv::Value::String(_) => "string",
-        rmpv::Value::Binary(_) => "binary",
-        rmpv::Value::Array(_) => "array",
-        rmpv::Value::Map(_) => "map",
-        rmpv::Value::Ext(_, _) => "extension",
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
     }
 }
 
@@ -195,7 +179,7 @@ impl ViewModelDataMessageApplier {
     fn apply_one_entry(
         target: &mut impl ViewModelPropertyTarget,
         property_path: &str,
-        value: &rmpv::Value,
+        value: &JsonValue,
     ) -> Result<(), String> {
         let property_type = target
             .view_model_property_type(property_path)
@@ -263,31 +247,23 @@ mod tests {
         }
     }
 
-    fn data_message(entries: Vec<(&str, rmpv::Value)>) -> Vec<u8> {
-        let map = rmpv::Value::Map(
-            entries
-                .into_iter()
-                .map(|(path, value)| (rmpv::Value::from(path), value))
-                .collect(),
-        );
-        let mut payload = Vec::new();
-        rmpv::encode::write_value(&mut payload, &map).expect("encodes");
-        payload
+    fn data_message(values: JsonValue) -> Vec<u8> {
+        values.to_string().into_bytes()
     }
 
     #[test]
     fn each_entry_sets_the_property_of_its_path_by_that_propertys_type() {
         let mut view_model = lower_third_view_model();
         let reports = ViewModelDataMessageApplier::default().apply(
-            &data_message(vec![
-                ("title", "Jane Doe".into()),
-                ("progress", 0.5.into()),
-                ("visible", true.into()),
-                ("accent", "#FF8800".into()),
-                ("variant", "breaking".into()),
-                ("reveal", rmpv::Value::Nil),
-                ("speaker/name", "Ada".into()),
-            ]),
+            &data_message(serde_json::json!({
+                "title": "Jane Doe",
+                "progress": 0.5,
+                "visible": true,
+                "accent": "#FF8800",
+                "variant": "breaking",
+                "reveal": null,
+                "speaker/name": "Ada",
+            })),
             &mut view_model,
         );
         assert!(reports.is_empty(), "{reports:?}");
@@ -321,10 +297,10 @@ mod tests {
     fn an_integer_sets_a_number_and_a_colour_takes_argb() {
         let mut view_model = lower_third_view_model();
         ViewModelDataMessageApplier::default().apply(
-            &data_message(vec![
-                ("progress", 3.into()),
-                ("accent", 0x80FF_0000_u32.into()),
-            ]),
+            &data_message(serde_json::json!({
+                "progress": 3,
+                "accent": 0x80FF_0000_u32,
+            })),
             &mut view_model,
         );
         assert_eq!(
@@ -343,7 +319,7 @@ mod tests {
     fn a_missing_path_is_reported_once_and_skipped_while_the_rest_apply() {
         let mut view_model = lower_third_view_model();
         let mut applier = ViewModelDataMessageApplier::default();
-        let message = data_message(vec![("subtitle", "x".into()), ("title", "kept".into())]);
+        let message = data_message(serde_json::json!({"subtitle": "x", "title": "kept"}));
         let first_reports = applier.apply(&message, &mut view_model);
         let second_reports = applier.apply(&message, &mut view_model);
         assert_eq!(first_reports.len(), 1);
@@ -359,12 +335,12 @@ mod tests {
     fn a_value_the_propertys_type_cannot_take_is_reported_and_skipped() {
         let mut view_model = lower_third_view_model();
         let reports = ViewModelDataMessageApplier::default().apply(
-            &data_message(vec![
-                ("progress", "half".into()),
-                ("items", 1.into()),
-                ("accent", "orange".into()),
-                ("variant", "unknown".into()),
-            ]),
+            &data_message(serde_json::json!({
+                "progress": "half",
+                "items": 1,
+                "accent": "orange",
+                "variant": "unknown",
+            })),
             &mut view_model,
         );
         assert_eq!(reports.len(), 4, "{reports:?}");
@@ -375,7 +351,7 @@ mod tests {
     fn a_false_trigger_fires_nothing() {
         let mut view_model = lower_third_view_model();
         let reports = ViewModelDataMessageApplier::default().apply(
-            &data_message(vec![("reveal", false.into())]),
+            &data_message(serde_json::json!({"reveal": false})),
             &mut view_model,
         );
         assert!(reports.is_empty());
@@ -383,12 +359,17 @@ mod tests {
     }
 
     #[test]
-    fn a_message_that_is_not_a_map_is_reported_whole() {
-        let mut payload = Vec::new();
-        rmpv::encode::write_value(&mut payload, &rmpv::Value::from(7)).expect("encodes");
+    fn a_message_that_is_not_an_object_is_reported_whole() {
         let reports =
-            ViewModelDataMessageApplier::default().apply(&payload, &mut lower_third_view_model());
+            ViewModelDataMessageApplier::default().apply(b"7", &mut lower_third_view_model());
         assert_eq!(reports.len(), 1);
-        assert!(reports[0].contains("not a map"), "{reports:?}");
+        assert!(reports[0].contains("not an object"), "{reports:?}");
+    }
+
+    #[test]
+    fn entries_apply_in_the_order_the_object_names_them() {
+        let entries = entries_of_a_data_message(br#"{"z":1,"a":2,"m":3}"#).unwrap();
+        let paths: Vec<&str> = entries.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["z", "a", "m"]);
     }
 }

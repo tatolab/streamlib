@@ -22,24 +22,27 @@ the node. Python runs at start and stop, never per frame.
 
 from __future__ import annotations
 
-import dataclasses
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
 from tatolab.stream import (
-    Channels,
-    Image,
-    Input,
-    Output,
-    Records,
+    Audio,
+    Description,
+    InputPin,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
-    from_config,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
 
 from . import _native
+from .page_message import PageMessage
 
 VIDEO_OUTPUT_PORT = "video"
 EVENTS_OUTPUT_PORT = "events"
@@ -48,29 +51,6 @@ DATA_INPUT_PORT = "data"
 VIDEO_INPUT_PORTS = ("video_in_0", "video_in_1", "video_in_2", "video_in_3")
 AUDIO_INPUT_PORTS = ("audio_in_0", "audio_in_1", "audio_in_2", "audio_in_3")
 PAINTED_PAGE_TEXTURE_FORMAT = "rgba8_unorm"
-
-
-@dataclasses.dataclass
-class BrowserSourceConfig:
-    """What a `BrowserSource` is configured with."""
-
-    url: Annotated[
-        str, "The page to render: an http(s), file or data URL, or a file path inside the project."
-    ] = "about:blank"
-    width: Annotated[int, "The page's width in pixels, and each frame's."] = 1920
-    height: Annotated[int, "The page's height in pixels, and each frame's."] = 1080
-    frame_rate: Annotated[
-        int, "The most frames a second CEF paints, 1 to 60; a still page paints none."
-    ] = 60
-    transparent_background: Annotated[
-        bool,
-        "Paint the page over transparency, so it composites as an overlay; "
-        "otherwise over opaque white.",
-    ] = True
-    audio_sample_rate: Annotated[int, "The rate the page's audio is published at."] = 48_000
-    output_pool_rotation_depth: Annotated[
-        int, "How many painted frames the output pool rotates before reusing a free slot."
-    ] = 4
 
 
 def page_url_of(url_or_project_path: str) -> str:
@@ -90,74 +70,138 @@ def page_url_of(url_or_project_path: str) -> str:
 @node.meta(
     description="Renders a web page offscreen with Chromium and publishes its frames, audio and events",
 )
-@node.process(execution="manual")
+@node(execution="manual")
 class BrowserSource:
-    """A web page, published as RGBA Image frames, Channels blocks and Records."""
+    """A web page, published as RGBA pictures, audio and the objects it publishes.
 
-    def __init__(self, config: BrowserSourceConfig) -> None:
-        self._config = dataclasses.replace(config, url=page_url_of(config.url))
+    Each setting is read at start, where the page opens, so a change opens it again.
+    """
+
+    url: Annotated[
+        str,
+        SettingOnly(),
+        Description(
+            "The page to render: an http(s), file or data URL, or a file path inside the project."
+        ),
+    ] = "about:blank"
+    width: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The page's width in pixels, and each frame's.")
+    ] = 1920
+    height: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The page's height in pixels, and each frame's.")
+    ] = 1080
+    frame_rate: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1, maximum=60),
+        Description("The most frames a second CEF paints; a still page paints none."),
+    ] = 60
+    transparent_background: Annotated[
+        bool,
+        SettingOnly(),
+        Description(
+            "Paint the page over transparency, so it composites as an overlay; "
+            "otherwise over opaque white."
+        ),
+    ] = True
+    audio_sample_rate: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("The rate the page's audio is published at."),
+    ] = 48_000
+    output_pool_rotation_depth: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1),
+        Description("How many painted frames the output pool rotates before reusing a free slot."),
+    ] = 4
+    data: InputPin[
+        Annotated[
+            PageMessage,
+            StreamDelivery("ordered"),
+            Description("Each message is dispatched to the page as a `tatolab:data` event"),
+        ]
+    ]
+    video_in_0: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description('A video the page takes as `window.tatolab.inputTrack("video_in_0")`'),
+        ]
+    ]
+    video_in_1: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description('A video the page takes as `window.tatolab.inputTrack("video_in_1")`'),
+        ]
+    ]
+    video_in_2: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description('A video the page takes as `window.tatolab.inputTrack("video_in_2")`'),
+        ]
+    ]
+    video_in_3: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description('A video the page takes as `window.tatolab.inputTrack("video_in_3")`'),
+        ]
+    ]
+    audio_in_0: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            Description('Audio the page takes as `window.tatolab.inputTrack("audio_in_0")`'),
+        ]
+    ]
+    audio_in_1: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            Description('Audio the page takes as `window.tatolab.inputTrack("audio_in_1")`'),
+        ]
+    ]
+    audio_in_2: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            Description('Audio the page takes as `window.tatolab.inputTrack("audio_in_2")`'),
+        ]
+    ]
+    audio_in_3: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            Description('Audio the page takes as `window.tatolab.inputTrack("audio_in_3")`'),
+        ]
+    ]
+    video: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(PAINTED_PAGE_TEXTURE_FORMAT),
+            Description("The painted page, in sRGB"),
+        ]
+    ]
+    audio: OutputPin[
+        Annotated[
+            Audio,
+            Description("The page's audio, as 32-bit float samples; a silent page publishes none"),
+        ]
+    ]
+    events: OutputPin[
+        Annotated[
+            PageMessage,
+            Description("One message per `window.tatolab.publish(object)` call"),
+        ]
+    ]
+
+    def __init__(self) -> None:
+        self._page_url = page_url_of(self.url)
         self._rendering: "_native.BrowserPageRendering | None" = None
-
-    data = Input(
-        Records,
-        delivery="ordered",
-        description="One map per message, dispatched to the page as `tatolab:data`",
-    )
-    video_in_0 = Input(
-        Image,
-        delivery="newest",
-        description='A video the page takes as `window.tatolab.inputTrack("video_in_0")`',
-    )
-    video_in_1 = Input(
-        Image,
-        delivery="newest",
-        description='A video the page takes as `window.tatolab.inputTrack("video_in_1")`',
-    )
-    video_in_2 = Input(
-        Image,
-        delivery="newest",
-        description='A video the page takes as `window.tatolab.inputTrack("video_in_2")`',
-    )
-    video_in_3 = Input(
-        Image,
-        delivery="newest",
-        description='A video the page takes as `window.tatolab.inputTrack("video_in_3")`',
-    )
-    audio_in_0 = Input(
-        Channels,
-        delivery="ordered",
-        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_0")`',
-    )
-    audio_in_1 = Input(
-        Channels,
-        delivery="ordered",
-        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_1")`',
-    )
-    audio_in_2 = Input(
-        Channels,
-        delivery="ordered",
-        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_2")`',
-    )
-    audio_in_3 = Input(
-        Channels,
-        delivery="ordered",
-        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_3")`',
-    )
-    video = Output(
-        Image,
-        formats=(PAINTED_PAGE_TEXTURE_FORMAT,),
-        description="The painted page, in sRGB",
-    )
-    audio = Output(
-        Channels,
-        rate=from_config("audio_sample_rate"),
-        dtype="f32",
-        description="The page's audio; a silent page publishes none",
-    )
-    events = Output(
-        Records,
-        description="One map per `window.tatolab.publish(object)` call",
-    )
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         wired_video_input_ports = [
@@ -170,7 +214,6 @@ class BrowserSource:
             output_ports=[VIDEO_OUTPUT_PORT, EVENTS_OUTPUT_PORT, AUDIO_OUTPUT_PORT],
             input_ports=[DATA_INPUT_PORT, *wired_video_input_ports, *wired_audio_input_ports],
         )
-        config = self._config
         self._rendering = _native.BrowserPageRendering(
             module_host_table,
             VIDEO_OUTPUT_PORT,
@@ -179,17 +222,17 @@ class BrowserSource:
             DATA_INPUT_PORT,
             wired_video_input_ports,
             wired_audio_input_ports,
-            config.url,
-            config.width,
-            config.height,
-            config.frame_rate,
-            config.transparent_background,
-            config.audio_sample_rate,
-            config.output_pool_rotation_depth,
+            self._page_url,
+            self.width,
+            self.height,
+            self.frame_rate,
+            self.transparent_background,
+            self.audio_sample_rate,
+            self.output_pool_rotation_depth,
         )
         log.info(
-            f"BrowserSource: rendering {config.url} at {config.width}x{config.height}, "
-            f"up to {config.frame_rate} fps, audio at {config.audio_sample_rate} Hz, "
+            f"BrowserSource: rendering {self._page_url} at {self.width}x{self.height}, "
+            f"up to {self.frame_rate} fps, audio at {self.audio_sample_rate} Hz, "
             f"inputs {wired_video_input_ports + wired_audio_input_ports}"
         )
 
