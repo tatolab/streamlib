@@ -38,6 +38,7 @@ from tatolab.runtime._function_node_compilation import (
 )
 from tatolab.runtime._function_node_pool import (
     FunctionNodePool,
+    take_the_carries_a_running_pool_is_handed,
     the_node_class_the_function_node_pool_runs_as,
 )
 from tatolab.runtime._function_node_run_as_a_standalone_node import (
@@ -88,6 +89,7 @@ class HelperProcessLifecycle:
     ) -> None:
         self._bridge = bridge
         self._node_class = node_class
+        self._runs_the_function_node_pool = False
         self._runtime_id = runtime_id
         self._node_run_id = node_run_id
         self._link_data_access = link_data_access
@@ -272,6 +274,7 @@ class HelperProcessLifecycle:
         try:
             configuration = command.get("config")
             if self._node_class is FunctionNodePool:
+                self._runs_the_function_node_pool = True
                 self._node_class = the_node_class_the_function_node_pool_runs_as(
                     configuration or {}, self._link_data_access
                 )
@@ -841,7 +844,12 @@ class HelperProcessLifecycle:
             )
             return
         try:
-            apply_configuration(self._hosted.instance, command.get("config"))
+            if self._runs_the_function_node_pool:
+                take_the_carries_a_running_pool_is_handed(
+                    type(self._hosted.instance), command.get("config") or {}, self._link_data_access
+                )
+            else:
+                apply_configuration(self._hosted.instance, command.get("config"))
         except Exception as configuration_failure:
             self._bridge.send({"rpc": "error", "error": str(configuration_failure)})
             return
