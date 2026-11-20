@@ -43,8 +43,7 @@ pub struct ListPinTypesToolResult {
 }
 
 /// One named type a module declares with `@named_pin_type`, which a pin typed with it carries
-/// as the bytes its class packs and links only to a pin of the same name or an input of any
-/// type.
+/// as the bytes its class packs and links only to a pin of the same name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NamedPinTypeListed {
