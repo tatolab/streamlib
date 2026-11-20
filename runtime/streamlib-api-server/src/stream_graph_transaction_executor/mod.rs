@@ -65,6 +65,7 @@ pub(crate) use fragments_a_changed_module_defines::the_refresh_of_each_fragment_
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
+mod pin_group_gaps_closed;
 use live_application_and_reversal::{StreamATransactionEdits, the_open_batch_of};
 mod ports_of_the_node_a_refusal_names;
 mod request_application;

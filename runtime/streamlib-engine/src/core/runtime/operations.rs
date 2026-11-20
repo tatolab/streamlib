@@ -297,6 +297,13 @@ pub trait RuntimeOperations: Send + Sync {
         node_type: &str,
     ) -> Option<crate::core::GraphNodePorts>;
 
+    /// The pin groups a node of type `node_type` repeats, as this stream resolves the type; none
+    /// for a type it does not resolve.
+    fn the_pin_groups_a_node_type_declares(
+        &self,
+        node_type: &str,
+    ) -> Vec<crate::core::descriptors::PinGroupDescriptor>;
+
     /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
     /// or on its member `member` when one is named, and held on the graph, with `None` taking it
     /// off, when the input does not take it, as this stream resolves the type: among them a value
