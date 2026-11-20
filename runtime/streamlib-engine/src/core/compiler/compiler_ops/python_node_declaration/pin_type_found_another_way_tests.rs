@@ -236,3 +236,139 @@ fn a_function_node_passing_its_input_on_takes_any_type_and_hands_on_the_type_lin
         })
     );
 }
+
+/// Hold Frame as bare `@node` describes `def HoldFrame[Frame: Texture](frame: Frame | None =
+/// None, refresh: bool = False, *, previous: State[HeldFrame]) -> Stateful[Frame | None,
+/// HeldFrame]`: `frame` takes a Texture as a Value, and `result` follows it, both handed on
+/// unread.
+fn a_described_hold_frame() -> serde_json::Value {
+    serde_json::json!({
+        "import_path": "core_nodes.logic:HoldFrame",
+        "short_name": "HoldFrame",
+        "description": "Freeze a picture: hold the first frame until refresh takes a newer one.",
+        "kind": "function",
+        "language": "python",
+        "state_fields": ["frame"],
+        "runs_as_python": false,
+        "execution": {"mode": "reactive"},
+        "scheduling_priority": "normal",
+        "paced_by_real_time": false,
+        "config_schema": {"type": "object", "additionalProperties": false},
+        "input_ports": [
+            {
+                "name": "frame",
+                "description": "",
+                "family": {"family": "image"},
+                "pin_declaration": {
+                    "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
+                    "flow": "value",
+                    "may_be_unset": true,
+                },
+                "pin_default": null,
+            },
+            {
+                "name": "refresh",
+                "description": "",
+                "family": {"family": "channels"},
+                "pin_declaration": {
+                    "pin_type": {"kind": "is", "pin_type": {"type": "boolean"}},
+                    "flow": "value",
+                },
+                "pin_default": false,
+            },
+        ],
+        "output_ports": [
+            {
+                "name": "result",
+                "description": "",
+                "family": {"family": "image", "family_follows_input_port": "frame"},
+                "pin_declaration": {
+                    "pin_type": {"kind": "same_as_input", "input_port_name": "frame"},
+                    "flow": "value",
+                },
+            },
+        ],
+        "function_signature": {
+            "inputs": [
+                {
+                    "parameter": "frame",
+                    "port": "frame",
+                    "value_type": "unread_message",
+                    "optional": true,
+                    "default": null,
+                },
+                {
+                    "parameter": "refresh",
+                    "port": "refresh",
+                    "value_type": "bool",
+                    "pin_type": {"type": "boolean"},
+                    "optional": false,
+                    "default": false,
+                },
+            ],
+            "outputs": [
+                {"port": "result", "field": null, "value_type": "unread_message", "may_hand_out_nothing": true},
+            ],
+            "time_parameter": null,
+            "state_parameter": "previous",
+            "state_record_class": "core_nodes.logic:HeldFrame",
+            "config_parameter": null,
+        },
+    })
+}
+
+#[test]
+fn hold_frame_takes_a_texture_as_a_value_and_refuses_a_number_linked_into_it() {
+    use crate::core::descriptors::{
+        PinFlow, PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinType, pin_link_verdict,
+    };
+    let requested = NodeClassImportPath::new("core_nodes.logic:HoldFrame")
+        .expect("the test path names a class");
+    let declaration =
+        PythonNodeDeclaration::read_from_described_node_type(&a_described_hold_frame(), &requested)
+            .expect("a type parameter bound to Texture reads");
+
+    let frame = declaration
+        .descriptor
+        .inputs
+        .iter()
+        .find(|port| port.name == "frame")
+        .expect("Hold Frame takes a frame");
+    let declared = frame.declared_pin().expect("its frame states its type");
+    let texture = PinType::Texture {
+        pixel_formats: Vec::new(),
+    };
+    assert_eq!(
+        declared.pin_type,
+        DeclaredPinType::Is {
+            pin_type: texture.clone()
+        }
+    );
+    assert_eq!(declared.flow, PinFlow::Value);
+
+    let number = PinType::Float { exact_size: None };
+    let output = PinLinkEnd {
+        node_name: "level",
+        port_name: "result",
+        member_name: None,
+        pin_type: &number,
+        meaning: None,
+    };
+    let verdict = pin_link_verdict(
+        output,
+        PinLinkInputEnd {
+            end: PinLinkEnd {
+                node_name: "hold_frame",
+                port_name: "frame",
+                pin_type: &texture,
+                ..output
+            },
+            input_mode: frame.input_mode,
+        },
+        &[],
+    );
+    assert!(
+        matches!(verdict.outcome, PinLinkOutcome::Refused(_)),
+        "a number links into Hold Frame's frame: {verdict:?}"
+    );
+}

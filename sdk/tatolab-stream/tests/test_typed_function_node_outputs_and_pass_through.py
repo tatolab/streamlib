@@ -13,6 +13,7 @@ from typing import Annotated, Any, NamedTuple
 import pytest
 
 from tatolab.stream import (
+    Audio,
     Color,
     Description,
     FormerlyNamed,
@@ -21,7 +22,6 @@ from tatolab.stream import (
     PinMeaning,
     State,
     Stateful,
-    Audio,
     Tensor,
     Texture,
     Trigger,
@@ -216,12 +216,24 @@ def PictureOrArray[Carried: (Texture, Tensor)](value: Carried) -> Carried:
     return value
 
 
+@node
+def HoldArray[Carried: Tensor](array: Carried) -> Carried:
+    return array
+
+
 def test_a_type_parameter_constrained_to_types_only_a_pin_carries_takes_each_as_a_value() -> None:
     value = inputs(PictureOrArray)["value"]
     assert value["pin_declaration"] == {
         "pin_type": {"kind": "one_of", "pin_types": [{"type": "texture"}, {"type": "tensor"}]},
         "flow": "value",
     }
+    assert value["family"] == {
+        "family": "image",
+        "also_takes_families": ["array", "channels", "packets", "records"],
+    }, "an input of two families reads every family"
+    array = inputs(HoldArray)["array"]
+    assert array["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "tensor"}}
+    assert array["family"] == {"family": "array"}
 
 
 def HoldsAPictureDirectly(frame: Texture | None = None) -> float:
@@ -237,13 +249,38 @@ def test_a_parameter_typed_texture_directly_is_refused_naming_the_type_parameter
         refusal = refusal_of(function)
         assert refusal.finding_code == "pin_type_not_read_yet", function
         assert refusal.pin == "frame"
-        assert "through a type parameter bound to it" in str(refusal)
-        assert f"`def {function.__name__}[Carried: Texture](frame: Carried, ...) -> Carried`" in str(
-            refusal
+        assert str(refusal) == (
+            f"`{function.__name__}`'s input `frame` is typed `Texture`, a Texture, which holds no "
+            f"stored value, so a function under bare `@node` takes it only through a type "
+            f"parameter bound to it, whose value its body hands on unread. To fix: "
+            f"`def {function.__name__}[Carried: Texture](frame: Carried, ...) -> Carried`, keep "
+            f"this node on `@node.function`, or declare a class node with "
+            f"`frame: InputPin[Texture]`."
         )
 
 
+def MakesAPicture(level: float = 0.0) -> Texture:
+    raise NotImplementedError
+
+
+def test_an_output_typed_texture_directly_is_refused_naming_the_input_it_would_hand_on() -> None:
+    refusal = refusal_of(MakesAPicture)
+    assert refusal.finding_code == "pin_type_not_read_yet"
+    assert refusal.pin == "result"
+    assert str(refusal) == (
+        "`MakesAPicture`'s output `result` is typed `Texture`, a Texture, which holds no stored "
+        "value, so a function's output carries it only as the type linked into the input it "
+        "hands on. To fix: type that input and this output by one type parameter bound to it, "
+        "`[Carried: Texture]`, keep this node on `@node.function`, or declare a class node with "
+        "`result: OutputPin[Texture]`."
+    )
+
+
 def HoldsAudio[Carried: Audio](samples: Carried) -> Carried:
+    return samples
+
+
+def HoldsAudioOrANumber[Carried: (float, Audio)](samples: Carried) -> Carried:
     return samples
 
 
@@ -251,13 +288,42 @@ def HoldsATrigger[Carried: Trigger](fired: Carried) -> Carried:
     return fired
 
 
-def test_a_bound_of_a_type_that_flows_as_no_value_is_refused() -> None:
-    for function, pin in ((HoldsAudio, "samples"), (HoldsATrigger, "fired")):
-        refusal = refusal_of(function)
-        assert refusal.finding_code == "pin_flow_not_taken", function
-        assert refusal.pin == pin
-        assert "reads the newest message on each input" in str(refusal)
-        assert "InputPin[" in str(refusal)
+@pytest.mark.parametrize(
+    ("function", "pin", "carried", "words"),
+    [
+        (
+            HoldsAudio,
+            "samples",
+            "Audio",
+            "`HoldsAudio`'s input `samples` is typed by a type parameter bound to `Audio`, an "
+            "Audio, which flows only as a stream",
+        ),
+        (
+            HoldsAudioOrANumber,
+            "samples",
+            "Audio",
+            "`HoldsAudioOrANumber`'s input `samples` is typed by a type parameter constrained to "
+            "`Audio`, an Audio, which flows only as a stream",
+        ),
+        (
+            HoldsATrigger,
+            "fired",
+            "Trigger",
+            "`HoldsATrigger`'s input `fired` is typed by a type parameter bound to `Trigger`, a "
+            "Trigger, which flows only as a trigger",
+        ),
+    ],
+)
+def test_a_bound_of_a_type_that_flows_as_no_value_is_refused(
+    function: Any, pin: str, carried: str, words: str
+) -> None:
+    refusal = refusal_of(function)
+    assert refusal.finding_code == "pin_flow_not_taken"
+    assert refusal.pin == pin
+    assert str(refusal) == (
+        f"{words}, and a function reads the newest message on each input, so it would drop the "
+        f"rest. To fix: declare a class node with `{pin}: InputPin[{carried}]`."
+    )
 
 
 @node
