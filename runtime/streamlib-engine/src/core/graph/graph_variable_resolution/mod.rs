@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use streamlib_node_schema::{NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references};
 
 use crate::core::descriptors::NodeClassImportPath;
+use crate::core::graph::PortInfo;
 use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
@@ -26,10 +27,8 @@ use crate::core::graph::legacy_config_of_a_node::{
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphNodeComponentsOnTheWire, GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
-    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
-    redraw_a_node_over_its_pins,
+    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, redraw_a_node_over_its_pins,
 };
-use crate::core::graph::PortInfo;
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, the_settings_of_a_get_variable_offering,
     the_settings_of_a_graph_variable_node, the_value_port_of_a_graph_variable_node,
@@ -226,7 +225,9 @@ impl GraphVariablesAsDrawn {
             );
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
             let settings_declared = match what_the_get_reads {
-                Some(reads) => the_settings_of_a_get_variable_offering(&reads.variables_it_may_read),
+                Some(reads) => {
+                    the_settings_of_a_get_variable_offering(&reads.variables_it_may_read)
+                }
                 None => the_settings_of_a_graph_variable_node(&variable_node.node_type)
                     .unwrap_or(&[])
                     .to_vec(),

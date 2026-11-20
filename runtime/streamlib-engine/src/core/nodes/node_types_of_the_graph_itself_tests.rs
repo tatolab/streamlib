@@ -5,7 +5,9 @@ use crate::core::descriptors::{DeclaredPinType, NodeInputMode, PinType, PortDesc
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
 };
-use crate::core::graph::graph_variable_resolution::{GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE};
+use crate::core::graph::graph_variable_resolution::{
+    GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE,
+};
 
 use super::{GRAPH_NODE_TYPE_CATEGORY, the_node_types_of_the_graph_itself};
 
@@ -67,7 +69,10 @@ fn a_set_variable_takes_any_type_on_value_and_a_get_variable_gives_any_type_on_v
     assert_eq!(
         get.outputs
             .iter()
-            .map(|output| (output.name.as_str(), output.pin_declaration.as_ref().map(|pin| &pin.pin_type)))
+            .map(|output| (
+                output.name.as_str(),
+                output.pin_declaration.as_ref().map(|pin| &pin.pin_type)
+            ))
             .collect::<Vec<_>>(),
         [("value", Some(&DeclaredPinType::Any))]
     );

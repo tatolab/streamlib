@@ -249,9 +249,9 @@ pub mod sdk {
         pub use crate::core::nodes::{
             __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
             DynamicNodeConstructorFn, EmptyConfig, GRAPH_NODE_TYPE_CATEGORY, GeneratedNode,
-            InstalledModuleOfANodeType,
-            ManualNode, NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec, NodeState,
-            NodeStateComponent, NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
+            InstalledModuleOfANodeType, ManualNode, NODE_REGISTRY, NodeInstance,
+            NodeInstanceFactory, NodeSpec, NodeState, NodeStateComponent,
+            NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
             OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
             OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ReactiveNode,
             VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, the_node_types_of_the_graph_itself, traits,

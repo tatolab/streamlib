@@ -7,9 +7,9 @@
 use std::sync::LazyLock;
 
 use crate::core::descriptors::{
-    DeclaredPinType, NodeDescriptor, NodeInputMode,
-    NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
-    PortFamily, PortFamilyDeclaration, SettingReadTime,
+    DeclaredPinType, NodeDescriptor, NodeInputMode, NodeValueLifetime, PinAnnotations,
+    PinDeclaration, PinFlow, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    SettingReadTime,
 };
 use crate::core::error::Result;
 use crate::core::graph::graph_interface_resolution::{

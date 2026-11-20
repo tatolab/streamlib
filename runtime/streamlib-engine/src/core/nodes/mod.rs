@@ -18,10 +18,10 @@ mod node_spec;
 mod node_type_ports_described_on_the_wire;
 #[cfg(test)]
 mod node_type_ports_described_on_the_wire_tests;
-mod node_types_one_stream_resolves;
 mod node_types_of_the_graph_itself;
 #[cfg(test)]
 mod node_types_of_the_graph_itself_tests;
+mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;
 mod placed_stream_node_type;
 mod project_view_node;
@@ -55,10 +55,10 @@ pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
 };
 pub use node_spec::NodeSpec;
+pub use node_type_ports_described_on_the_wire::NodeTypePortsDescribedOnTheWire;
 pub use node_types_of_the_graph_itself::{
     GRAPH_NODE_TYPE_CATEGORY, the_node_types_of_the_graph_itself,
 };
-pub use node_type_ports_described_on_the_wire::NodeTypePortsDescribedOnTheWire;
 pub(crate) use node_types_one_stream_resolves::{
     HowANodeOfADescribedTypeRuns, is_a_natively_compiled_node_type,
 };

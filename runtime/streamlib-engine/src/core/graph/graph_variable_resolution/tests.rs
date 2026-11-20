@@ -887,7 +887,8 @@ fn a_gets_variable_renders_as_a_menu_of_the_variables_it_may_read_and_its_value_
             .find(|node| node.name == name)
             .unwrap_or_else(|| panic!("`{name}` renders"))
     };
-    let pin_type_of = |port: &GraphNodePortOnTheWire| port.pin.as_ref().map(|pin| pin.pin_type.clone());
+    let pin_type_of =
+        |port: &GraphNodePortOnTheWire| port.pin.as_ref().map(|pin| pin.pin_type.clone());
     let get = node_named("get-level");
     assert_eq!(
         pin_type_of(&get.ports.inputs[0]),
@@ -909,7 +910,11 @@ fn a_gets_variable_renders_as_a_menu_of_the_variables_it_may_read_and_its_value_
         .iter()
         .find(|input| input.name == "value")
         .expect("a setter renders its `value`");
-    assert_eq!(pin_type_of(set_value), None, "a setter's `value` takes any type");
+    assert_eq!(
+        pin_type_of(set_value),
+        None,
+        "a setter's `value` takes any type"
+    );
 }
 
 #[test]
@@ -947,5 +952,9 @@ fn a_get_whose_setter_holds_a_node_renders_its_value_of_any_type() {
         .find(|node| node.name == "get-connection")
         .expect("the get renders");
     assert_eq!(get.ports.outputs[0].name, "value");
-    assert!(get.ports.outputs[0].pin.is_none(), "{:?}", get.ports.outputs);
+    assert!(
+        get.ports.outputs[0].pin.is_none(),
+        "{:?}",
+        get.ports.outputs
+    );
 }
