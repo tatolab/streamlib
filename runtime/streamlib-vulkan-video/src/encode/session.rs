@@ -37,7 +37,7 @@ impl SimpleEncoder {
         unsafe {
             config.validate()?;
 
-            tracing::info!(
+            tracing::debug!(
                 width = config.width,
                 height = config.height,
                 codec = ?self.codec_flag,
@@ -166,7 +166,7 @@ impl SimpleEncoder {
                 0
             };
 
-            tracing::info!(
+            tracing::debug!(
                 codec = ?self.codec_flag,
                 max_quality_levels = encode_caps.max_quality_levels,
                 requested_quality = config.quality_level,
@@ -248,12 +248,7 @@ impl SimpleEncoder {
             };
             let video_session_arc =
                 crate::VulkanVideoSession::new(self.ctx.codec_device(), &session_descriptor)
-                    .map_err(|refusal| match refusal {
-                        VideoError::VideoSessionLimitReached { .. } => refusal,
-                        refusal => {
-                            VideoError::BitstreamError(format!("encoder session: {refusal}"))
-                        }
-                    })?;
+                    .map_err(encoder_session_creation_refusal)?;
             let video_session = video_session_arc.handle();
 
             // --- Determine H.265 CTB size from capabilities ---
@@ -619,5 +614,15 @@ impl SimpleEncoder {
         };
         VulkanVideoBitstreamBuffer::new(self.ctx.codec_device(), &descriptor)
             .map_err(|e| VideoError::BitstreamError(format!("encoder bitstream: {e}")))
+    }
+}
+
+/// The encoder's refusal for a video session `VulkanVideoSession::new`
+/// refused: the session limit passes through as itself, so a caller can wait
+/// for a session to free, and any other refusal names the encoder session.
+pub(super) fn encoder_session_creation_refusal(refusal: VideoError) -> VideoError {
+    match refusal {
+        VideoError::VideoSessionLimitReached { .. } => refusal,
+        refusal => VideoError::BitstreamError(format!("encoder session: {refusal}")),
     }
 }

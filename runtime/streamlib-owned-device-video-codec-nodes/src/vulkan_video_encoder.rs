@@ -84,7 +84,7 @@ impl VulkanVideoEncoder {
 
     /// Encode `frame` and publish its access units on `encoded_video`. A
     /// frame its producer recycled before the check-out is skipped; a frame
-    /// arriving after a failed mint is discarded.
+    /// arriving while no session is minted is discarded.
     pub fn encode_and_publish(
         &mut self,
         frame: &ImageFrameReadByTheEncoder,
@@ -98,7 +98,7 @@ impl VulkanVideoEncoder {
         let encoded = match outcome {
             VideoFrameEncodeOutcome::Encoded(encoded) => encoded,
             VideoFrameEncodeOutcome::NotCheckedOut
-            | VideoFrameEncodeOutcome::DiscardedAfterAFailedMint => return Ok(()),
+            | VideoFrameEncodeOutcome::DiscardedWithoutASession => return Ok(()),
         };
         self.next_frame_must_be_a_sync_point = false;
         if encoded.minted_a_session {

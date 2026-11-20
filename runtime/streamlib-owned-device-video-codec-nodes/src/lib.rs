@@ -38,10 +38,12 @@ mod video_encode_host_session_of_the_node_tests;
 mod video_encode_host_tests;
 #[cfg(target_os = "linux")]
 pub mod video_encode_on_a_device;
-#[cfg(target_os = "linux")]
-mod video_encode_session_limit_wait;
 #[cfg(all(test, target_os = "linux"))]
-mod video_encode_session_limit_wait_tests;
+mod video_encode_on_a_device_tests;
+#[cfg(target_os = "linux")]
+mod video_encode_session_mint_gate;
+#[cfg(all(test, target_os = "linux"))]
+mod video_encode_session_mint_gate_tests;
 pub mod video_encoder_settings;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
