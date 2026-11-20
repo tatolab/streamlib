@@ -147,6 +147,39 @@ impl VulkanComputeKernelInner {
         )
     }
 
+    /// [`Self::record`] with bindings staged apart from the kernel's own, into
+    /// batch descriptor set `batch_descriptor_set`.
+    pub(super) fn record_staged_into_batch_descriptor_set(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        batch_descriptor_set: usize,
+        staged: &PendingState,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        let descriptor_set = *self
+            .batch_descriptor_sets
+            .get(batch_descriptor_set)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "Compute kernel '{}': batch descriptor set {batch_descriptor_set} is past \
+                     the {} it holds",
+                    self.label,
+                    self.batch_descriptor_sets.len()
+                ))
+            })?;
+        self.refuse_bindings_left_unset(staged)?;
+        self.record_inner(
+            command_buffer,
+            descriptor_set,
+            staged,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        )
+    }
+
     fn drain_pending(&self) -> PendingState {
         std::mem::take(&mut *self.pending.lock())
     }

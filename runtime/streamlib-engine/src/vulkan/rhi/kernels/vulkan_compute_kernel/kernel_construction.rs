@@ -17,12 +17,12 @@ use crate::vulkan::rhi::kernels::vulkan_kernel_samplers::{
 };
 
 use super::pipeline_creation::{
-    allocate_descriptor_set, create_compute_pipeline_with_cache, create_descriptor_pool,
+    allocate_descriptor_sets, create_compute_pipeline_with_cache, create_descriptor_pool,
     create_descriptor_set_layout, create_dispatch_slots, create_pipeline_layout,
     create_shader_module,
 };
 use super::spirv_validation::validate_against_spirv;
-use super::{PendingState, VulkanComputeKernelInner};
+use super::{PendingState, RECORDING_DESCRIPTOR_SETS, VulkanComputeKernelInner};
 
 impl VulkanComputeKernelInner {
     /// Create a new compute kernel from a SPIR-V shader and a binding declaration.
@@ -210,20 +210,26 @@ impl VulkanComputeKernelInner {
             }
         };
 
-        let record_descriptor_set =
-            match allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout) {
-                Ok(s) => s,
-                Err(e) => {
-                    unsafe {
-                        device.destroy_descriptor_pool(descriptor_pool, None);
-                        device.destroy_pipeline(pipeline, None);
-                        device.destroy_pipeline_layout(pipeline_layout, None);
-                        device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                        device.destroy_shader_module(shader_module, None);
-                    }
-                    return Err(e);
+        // One set for `record`, then one per batched recording in flight.
+        let recording_descriptor_sets = match allocate_descriptor_sets::<RECORDING_DESCRIPTOR_SETS>(
+            device,
+            descriptor_pool,
+            descriptor_set_layout,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                unsafe {
+                    device.destroy_descriptor_pool(descriptor_pool, None);
+                    device.destroy_pipeline(pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
                 }
-            };
+                return Err(e);
+            }
+        };
+
+        let [record_descriptor_set, batch_descriptor_sets @ ..] = recording_descriptor_sets;
 
         let dispatch_slots = match create_dispatch_slots(
             device,
@@ -256,6 +262,7 @@ impl VulkanComputeKernelInner {
             descriptor_set_layout,
             descriptor_pool,
             record_descriptor_set,
+            batch_descriptor_sets,
             shader_module,
             dispatch_slots: dispatch_slots.into_iter().map(Mutex::new).collect(),
             next_dispatch_slot: AtomicUsize::new(0),
