@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, ClassVar, Literal, Union
 
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
@@ -46,6 +46,9 @@ class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
     """
 
     __slots__ = ("_attributes_by_name", "_timestamp_ns")
+
+    pin_type: ClassVar[Literal["tensor"]] = "tensor"
+    """The pin type an Array frame is the read of."""
 
     def __init__(
         self, attributes: "Mapping[str, ArrayFrameAttribute]", timestamp_ns: int

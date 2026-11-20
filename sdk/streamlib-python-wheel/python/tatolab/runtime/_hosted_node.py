@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import traceback
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from tatolab.stream import (
     NodeLinkDataAccess,
@@ -20,9 +20,14 @@ from tatolab.runtime._engine import (
     open_runtime_context_full_access_for_helper_process,
 )
 from tatolab.runtime._node_hosting import (
+    class_node_members_of,
+    construct_class_node_from_its_fields_and_pins,
     construct_node_instance,
 )
 from tatolab.runtime._parent_process_bridge import ParentProcessBridge
+
+if TYPE_CHECKING:
+    from tatolab.runtime._class_node_fields import ClassNodeFields
 
 
 def wire_link_data_access(
@@ -126,10 +131,13 @@ class HostedNode:
         node_instance: Any,
         full_access_context: RuntimeContextFullAccess,
         limited_access_context: Any,
+        fields: "Optional[ClassNodeFields]" = None,
     ) -> None:
         self.instance = node_instance
         self.full_access_context = full_access_context
         self.limited_access_context = limited_access_context
+        self.fields = fields
+        """The fields of a class under bare `@node`, which follow their values; `None` for any other node."""
         self._declared_hooks = {
             hook for hook in self.LIFECYCLE_HOOKS if hasattr(node_instance, hook)
         }
@@ -181,11 +189,14 @@ def construct_hosted_node(
     runtime_id: str,
     node_run_id: str,
     bridge: ParentProcessBridge,
+    stored_input_values: "Optional[dict[str, Any]]" = None,
 ) -> HostedNode:
     """Build the user's object and the two contexts its hooks receive.
 
     The bridge's escalate round trip is what the GPU surface crosses to the
-    parent on — without it, `ctx.gpu_limited_access` refuses by name.
+    parent on — without it, `ctx.gpu_limited_access` refuses by name. A class
+    under bare `@node` is built from `stored_input_values`, each field holding
+    its value and each pin bound before its `__init__()` runs.
     """
     full_access_context = open_runtime_context_full_access_for_helper_process(
         configuration or {},
@@ -195,10 +206,40 @@ def construct_hosted_node(
         bridge.request_from_parent,
         bridge.release_to_parent_without_waiting,
     )
+    limited_access_context = limited_access_view_of_runtime_context_for_helper_process(
+        full_access_context
+    )
+    members = class_node_members_of(node_class)
+    if members is None:
+        return HostedNode(
+            construct_node_instance(node_class, configuration, link_data_access),
+            full_access_context,
+            limited_access_context,
+        )
+    # Imported only for a class node: it reads the class node surface of a `tatolab-stream`
+    # new enough to declare one.
+    from tatolab.runtime._class_node_fields import ClassNodeFields
+
+    fields = ClassNodeFields(
+        members,
+        link_data_access=link_data_access,
+        inputs=full_access_context.inputs,
+        node_id=node_run_id,
+        stored_input_values=stored_input_values,
+    )
     return HostedNode(
-        construct_node_instance(node_class, configuration, link_data_access),
+        construct_class_node_from_its_fields_and_pins(
+            node_class,
+            members,
+            fields,
+            link_data_access=link_data_access,
+            inputs=full_access_context.inputs,
+            outputs=full_access_context.outputs,
+            node_id=node_run_id,
+        ),
         full_access_context,
-        limited_access_view_of_runtime_context_for_helper_process(full_access_context),
+        limited_access_context,
+        fields,
     )
 
 

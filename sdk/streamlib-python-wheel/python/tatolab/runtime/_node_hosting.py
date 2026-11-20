@@ -10,14 +10,70 @@ App code never calls anything here.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from tatolab.stream._node_config_schema import (
     with_each_node_reference_field_as_a_node_reference,
 )
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
-__all__ = ["apply_configuration", "construct_node_instance"]
+if TYPE_CHECKING:
+    from tatolab.stream._class_node_declaration import ClassNodeMember
+    from tatolab.stream._node_context_protocols import (
+        LinkInputDataReader,
+        LinkOutputDataWriter,
+        NodeLinkDataAccess,
+    )
+
+    from tatolab.runtime._class_node_fields import ClassNodeFields
+
+__all__ = [
+    "apply_configuration",
+    "class_node_members_of",
+    "construct_class_node_from_its_fields_and_pins",
+    "construct_node_instance",
+]
+
+
+def class_node_members_of(node_class: type) -> "Optional[tuple[ClassNodeMember, ...]]":
+    """The field or pin behind each port of `node_class` when it is a class under bare `@node`; `None` for any other node.
+
+    Read through the `tatolab-stream` of the project's venv, which may predate class nodes
+    built from their fields and pins; a node declared by one that does is never such a class.
+    """
+    try:
+        from tatolab.stream._class_node_construction import class_node_members
+    except ImportError:
+        return None
+    return class_node_members(node_class)
+
+
+def construct_class_node_from_its_fields_and_pins(
+    node_class: type,
+    members: "tuple[ClassNodeMember, ...]",
+    fields: "ClassNodeFields",
+    *,
+    link_data_access: "NodeLinkDataAccess",
+    inputs: "LinkInputDataReader",
+    outputs: "LinkOutputDataWriter",
+    node_id: str,
+) -> Any:
+    """Build a class under bare `@node`: every field holding the value `fields` builds it with, every pin bound, then `__init__()`."""
+    from tatolab.stream._class_node_construction import construct_class_node
+
+    from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
+
+    return construct_class_node(
+        node_class,
+        field_values=fields.values_to_build_with(),
+        pins=bind_the_pins_of_a_class_node(
+            members,
+            link_data_access=link_data_access,
+            inputs=inputs,
+            outputs=outputs,
+            node_id=node_id,
+        ),
+    )
 
 
 def construct_node_instance(

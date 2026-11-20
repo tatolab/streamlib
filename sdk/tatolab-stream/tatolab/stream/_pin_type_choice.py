@@ -84,6 +84,13 @@ class PinTypeChoice:
             )
         self.chosen = chosen
 
+    @classmethod
+    def of_the_chosen_type(cls, chosen: PinType) -> PinTypeChoice:
+        """The choice of `chosen`, the type as the runtime stores it, as a setting's stored value holds it."""
+        choice = cls.__new__(cls)
+        choice.chosen = chosen
+        return choice
+
     def __eq__(self, other: object) -> bool:
         return isinstance(other, PinTypeChoice) and other.chosen == self.chosen
 

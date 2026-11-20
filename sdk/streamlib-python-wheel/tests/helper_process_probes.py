@@ -5,9 +5,9 @@
 import json
 import struct
 import time
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
-from tatolab.stream import Channels, Image, Input, Output, Packets, node
+from tatolab.stream import Channels, Color, Image, Input, Output, Packets, SettingOnly, node
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
@@ -359,3 +359,21 @@ class NotReadyUntilToldOtherwiseProbe:
             ctx.report_not_ready("the image asset `poster.png` is missing")
         else:
             ctx.report_ready()
+
+
+WHAT_THE_FIELDS_PROBE_SAW: "list[tuple[str, float, Any, int]]" = []
+
+
+@node(execution="continuous", interval_ms=5)
+class FieldsProbe:
+    """Records, at `__init__` and at each `process()`, what its fields hold."""
+
+    gain: float = 1.0
+    tint: Color = Color(0.0, 0.0, 0.0)
+    width: Annotated[int, SettingOnly()] = 4
+
+    def __init__(self) -> None:
+        WHAT_THE_FIELDS_PROBE_SAW.append(("init", self.gain, self.tint, self.width))
+
+    def process(self, ctx) -> None:
+        WHAT_THE_FIELDS_PROBE_SAW.append(("process", self.gain, self.tint, self.width))
