@@ -127,7 +127,7 @@ pub(crate) fn the_verdict_of_a_link_between_declared_ports(
             port_name: &port.name,
             member_name: None,
             pin_type,
-            meaning: port.meaning.as_deref(),
+            meaning: port.meaning(),
         }
     }
     Some(pin_link_verdict(
@@ -159,7 +159,7 @@ impl<'end> TypedEnd<'end> {
             pin_type,
             meaning: match self.member {
                 Some(member) => member.meaning.as_deref(),
-                None => self.port.meaning.as_deref(),
+                None => self.port.meaning(),
             },
         }
     }

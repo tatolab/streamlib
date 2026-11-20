@@ -628,6 +628,7 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             family: Some(port.family.clone()),
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
+            annotations: port.annotations.0.clone(),
             value_read: None,
         }
     }

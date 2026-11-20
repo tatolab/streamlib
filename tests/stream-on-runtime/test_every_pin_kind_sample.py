@@ -5,7 +5,8 @@
 from the copy the runtime unit carries, played, saved and opened again.
 
 `examples/every-pin-kind` holds typed function and shader nodes, a Graph Input of a family, one
-whose `pin_type` setting chooses Float, one node not yet typed that holds a setting, a node type
+whose `pin_type` setting chooses Float, one choosing Integer that names a dial, as an input
+promoted from `Caption`'s `lines` does, one node not yet typed that holds a setting, a node type
 whose inputs each name the control the Studio draws, and two nodes whose Texture pins state
 different formats, which `connect` links through a `TextureFormatConvert`. Its `SweepPosition`
 states that it converts the sample's own `Sweep` to a Float, so a link from a `Sweep` into a
@@ -71,6 +72,14 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
 
 #: The Graph Input whose `pin_type` setting chooses Float, linked into `warmth`'s `base`.
 GRAPH_INPUT_CHOOSING_A_TYPE = "warmth_base"
+
+#: The Graph Input linked into `caption`'s `lines`, saved with the annotations of that input,
+#: and the annotations `graph` serves on its `value` input.
+GRAPH_INPUT_NAMING_A_CONTROL = "caption_lines"
+ANNOTATIONS_OF_THE_GRAPH_INPUT_NAMING_A_CONTROL = {
+    "range": {"minimum": 1.0, "maximum": 8.0},
+    "control": "dial",
+}
 
 #: The control each input of `Caption` names, which the Studio draws in place of its type's
 #: default. The stream places one `Caption` that nothing reads, so its interpreter describes the
@@ -412,6 +421,11 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
     choosing = node_named(graph, GRAPH_INPUT_CHOOSING_A_TYPE)
     assert choosing["components"]["graph_interface"]["pin_type"] == {"type": "float"}, choosing
     assert input_port_named(choosing, "pin_type")["value"] == {"type": "float"}, choosing
+    naming_a_control = node_named(graph, GRAPH_INPUT_NAMING_A_CONTROL)
+    assert (
+        input_port_named(naming_a_control, "value").get("annotations")
+        == ANNOTATIONS_OF_THE_GRAPH_INPUT_NAMING_A_CONTROL
+    ), naming_a_control
     base = input_port_named(node_named(graph, "warmth"), "base")
     assert base.get("value_comes_from") == "wire", base
     (caption,) = local_api.call_tool(

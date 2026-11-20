@@ -152,3 +152,55 @@ fn a_change_of_the_type_a_running_graph_input_chooses_rebuilds_it() {
     assert_eq!(the_typed_value_read(&mut reader, &integer), json!(3));
     stream.stop().expect("the stream ends");
 }
+
+/// A `GraphInput` choosing a Float, saved with a `control` and a `range`, renders them as the
+/// annotations of its `value` input in `graph`; a saved set of an annotation its type does not
+/// take is refused naming it, and the Input keeps the annotations it had.
+///
+/// Mental-revert: without `graph` rendering a port's annotations, the `value` input renders
+/// none and Perform cannot draw the dial.
+#[test]
+#[serial]
+fn a_graph_input_renders_the_annotations_it_saves_on_its_value_input_and_refuses_one_its_type_does_not_take()
+ {
+    let project_directory = a_project_on_disk();
+    let async_runtime = an_async_runtime();
+    let lines = Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    load_the_graph_inputs(
+        &stream,
+        vec![a_graph_input_in_a_document(
+            lines,
+            "lines",
+            json!({
+                "port": "lines", "pin_type": { "type": "float" }, "value": 2,
+                "range": [1, 8], "control": "dial",
+            }),
+        )],
+    );
+    let annotations = json!({ "range": { "minimum": 1.0, "maximum": 8.0 }, "control": "dial" });
+    let the_value_input_rendered = || {
+        let rendered = the_rendered_node(&stream, lines);
+        rendered["ports"]["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|input| input["name"] == VALUE)
+            .cloned()
+            .unwrap_or_else(|| panic!("`value` renders: {rendered}"))
+    };
+
+    assert_eq!(the_value_input_rendered()["annotations"], annotations);
+    let refusal = the_refusal_of_a_saved_input(
+        &stream,
+        &async_runtime,
+        lines,
+        "pin_type",
+        json!({ "type": "boolean" }),
+    );
+    assert!(
+        refusal.contains("states `range`") && refusal.contains("a Boolean pin does not take"),
+        "{refusal}"
+    );
+    assert_eq!(the_value_input_rendered()["annotations"], annotations);
+}

@@ -90,6 +90,16 @@
         "node": "01ccd74d-f7e1-4fa5-a400-5c42ad278f19",
         "port": "base"
       }
+    },
+    {
+      "source": {
+        "node": "e3a91c5f-62d8-4b7e-9f14-8c0b5d2a7e63",
+        "port": "value"
+      },
+      "target": {
+        "node": "c4f7a2d0-5b1e-4c3a-9f86-2e7d1b0a9c53",
+        "port": "lines"
+      }
     }
   ],
   "nodes": [
@@ -130,6 +140,23 @@
         "value": 0.1
       },
       "name": "warmth_base",
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "e3a91c5f-62d8-4b7e-9f14-8c0b5d2a7e63",
+      "input_values": {
+        "control": "dial",
+        "pin_type": {
+          "type": "integer"
+        },
+        "port": "caption_lines",
+        "range": [
+          1.0,
+          8.0
+        ],
+        "value": 2
+      },
+      "name": "caption_lines",
       "type": "tatolab.stream:GraphInput"
     },
     {

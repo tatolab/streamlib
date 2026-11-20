@@ -39,7 +39,9 @@ fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin
     let descriptor = the_node_type_of_a_graph_input().expect("the GraphInput type builds");
     assert_eq!(
         the_setting_names(&descriptor),
-        ["port", "pin_type", "family", "range", "lifetime"]
+        [
+            "port", "pin_type", "family", "range", "step", "unit", "meaning", "control", "lifetime"
+        ]
     );
     assert_eq!(
         the_declared_type_of(&descriptor, "pin_type"),

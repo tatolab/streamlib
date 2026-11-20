@@ -56,7 +56,9 @@ class GraphInput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     A stream's top-level Input of a type that holds a value, or of the Array, Channels or
     Records family, runs, and carries the value a client sets with `set_node_input_value`
     naming the Input and no node, kept as its `lifetime` says, else its saved `value`; a
-    fragment's Input carries what the graph that adds the fragment wires into it.
+    fragment's Input carries what the graph that adds the fragment wires into it. Its
+    `range`, `step`, `unit`, `meaning` and `control` are the annotations of its `value`, each
+    one the chosen `pin_type` takes, such as `control="dial"` on a Float.
     """
 
     type: ClassVar[str] = "tatolab.stream:GraphInput"
@@ -79,6 +81,29 @@ class GraphInput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
         list[float] | None,
         SettingOnly(),
         Description("`[lowest, highest]`, the span a control moves the Input's number in"),
+    ] = None
+    step: Annotated[
+        float | None,
+        SettingOnly(),
+        Description("The step a control moves the Input's number by"),
+    ] = None
+    unit: Annotated[
+        str | None,
+        SettingOnly(),
+        Description("The unit the Input's number is in, such as `Hz`"),
+    ] = None
+    meaning: Annotated[
+        str | None,
+        SettingOnly(),
+        Description("What the Input's value stands for, such as `frequency`"),
+    ] = None
+    control: Annotated[
+        str | None,
+        SettingOnly(),
+        Description(
+            "The control that sets the Input's value, such as `dial`: one of the Studio's, or "
+            "a module's qualified name"
+        ),
     ] = None
     lifetime: Annotated[
         Literal["kept", "reset"],

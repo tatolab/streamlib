@@ -13,9 +13,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::descriptors::{
-    NodeClassImportPath, NodeValueLifetime, PinNumberRange, PinType, PortFamily,
-};
+use crate::core::descriptors::{NodeClassImportPath, NodeValueLifetime, PinType, PortFamily};
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, the_ports_of_a_graph_document_node,
 };
@@ -26,7 +24,7 @@ use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
 use crate::core::graph::{
-    GraphNodePorts, InputNumberRange, PortInfo, cast_exposed_name_to_url_safe,
+    GraphNodePorts, PortAnnotations, PortInfo, cast_exposed_name_to_url_safe,
     the_refusal_of_a_link_into_a_setting, the_values_port_facts_read,
 };
 use crate::core::json_schema::{
@@ -44,6 +42,7 @@ pub(crate) use what_a_value_port_carries::{
     what_the_value_port_of_an_interface_node_carries,
 };
 
+use graph_input_annotations::the_annotations_a_graph_input_config_states;
 use interface_node_config::{
     WhatAnInterfaceNodeDeclares, refuse_a_config_key_the_interface_node_does_not_take,
     what_an_interface_nodes_settings_declare,
@@ -66,6 +65,22 @@ pub const GRAPH_INTERFACE_PIN_TYPE_SETTING: &str = "pin_type";
 /// The config key of a top-level `GraphInput` holding `[lowest, highest]`, the span a control
 /// moves its number in.
 pub const GRAPH_INPUT_RANGE_CONFIG_KEY: &str = "range";
+
+/// The setting of a top-level `GraphInput` holding the step a control moves its number by, an
+/// annotation of its `value` input.
+pub const GRAPH_INPUT_STEP_SETTING: &str = "step";
+
+/// The setting of a top-level `GraphInput` holding the unit its number is in, such as `Hz`, an
+/// annotation of its `value` input.
+pub const GRAPH_INPUT_UNIT_SETTING: &str = "unit";
+
+/// The setting of a top-level `GraphInput` holding what its value stands for, such as
+/// `frequency`, an annotation of its `value` input.
+pub const GRAPH_INPUT_MEANING_SETTING: &str = "meaning";
+
+/// The setting of a top-level `GraphInput` naming the control that sets its value, such as
+/// `dial`, an annotation of its `value` input.
+pub const GRAPH_INPUT_CONTROL_SETTING: &str = "control";
 
 /// The config key of a top-level `GraphInput` naming how long a value set live on its `value`
 /// input lasts.
@@ -346,29 +361,12 @@ pub(crate) fn render_the_saved_value_of_a_graph_input_as_its_default(
     }
 }
 
-/// The range a `GraphInput`'s `config` declares a number of its `value` takes, as
-/// `[lowest, highest]`; `None` when it declares none.
-fn the_range_a_graph_input_config_declares(
-    config: Option<&serde_json::Value>,
-) -> Option<PinNumberRange> {
-    match config?
-        .get(GRAPH_INPUT_RANGE_CONFIG_KEY)?
-        .as_array()?
-        .as_slice()
-    {
-        [lowest, highest] => Some(PinNumberRange {
-            minimum: lowest.as_f64(),
-            maximum: highest.as_f64(),
-        }),
-        _ => None,
-    }
-}
-
 /// Resolve the `value` ports among `ports`, of a `GraphInput` whose settings are `settings`,
 /// against what those settings declare of them, as
 /// [`what_the_value_port_of_an_interface_node_carries`] reads it; and on its `value` input, the
-/// range a number takes and the lifetime of a value set live. Settings it refuses give both the
-/// family the `value` ports declare and no pin type, so each settings resolve them alike.
+/// annotations its settings state, among them the range a number takes, and the lifetime of a
+/// value set live. Settings it refuses give both the family the `value` ports declare and no pin
+/// type, so each settings resolve them alike.
 pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
     ports: &mut GraphNodePorts,
     settings: Option<&serde_json::Value>,
@@ -390,7 +388,7 @@ pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
         .iter_mut()
         .find(|port| port.name == GRAPH_INTERFACE_VALUE_PORT_NAME)
     {
-        value.range = the_range_a_graph_input_config_declares(settings).map(InputNumberRange);
+        value.annotations = PortAnnotations(the_annotations_a_graph_input_config_states(settings));
         value.lifetime =
             the_value_lifetime_a_graph_input_config_declares(settings).unwrap_or_default();
     }
@@ -919,6 +917,7 @@ fn cast_or_as_written(name: &str) -> String {
         .unwrap_or_else(|_| name.to_string())
 }
 
+mod graph_input_annotations;
 mod graph_interface_port;
 mod interface_node_config;
 mod what_a_value_port_carries;

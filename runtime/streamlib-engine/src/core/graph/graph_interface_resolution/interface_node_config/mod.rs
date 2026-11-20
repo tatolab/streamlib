@@ -4,12 +4,14 @@
 //! What an interface node's settings declare: the port it names, the pin type it chooses, the
 //! family it names, and the settings it takes at its level.
 
+use super::graph_input_annotations::refuse_an_annotation_the_chosen_type_does_not_take;
 use super::{
-    GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_VALUE_FORMER_NAME,
-    GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PIN_TYPE_SETTING,
-    GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
-    GraphInterfaceLevel, a_top_level_graph_input_runs,
-    an_interface_node_states_what_its_value_port_carries,
+    GRAPH_INPUT_CONTROL_SETTING, GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_MEANING_SETTING,
+    GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_STEP_SETTING, GRAPH_INPUT_UNIT_SETTING,
+    GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+    GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, GraphInterfaceLevel,
+    a_top_level_graph_input_runs, an_interface_node_states_what_its_value_port_carries,
     the_value_lifetime_a_graph_input_config_declares,
     what_the_value_port_of_an_interface_node_carries,
 };
@@ -81,10 +83,31 @@ pub(super) fn what_an_interface_nodes_settings_declare(
     })
 }
 
+/// The settings a top-level `GraphInput` a client writes takes besides those every interface
+/// node takes: its `value` (saved as `default` before it was an input), the annotations of its
+/// `value` and its `lifetime`.
+const THE_SETTINGS_ONLY_A_GRAPH_INPUT_A_CLIENT_WRITES_TAKES: [&str; 8] = [
+    GRAPH_INTERFACE_VALUE_PORT_NAME,
+    GRAPH_INPUT_VALUE_FORMER_NAME,
+    GRAPH_INPUT_RANGE_CONFIG_KEY,
+    GRAPH_INPUT_STEP_SETTING,
+    GRAPH_INPUT_UNIT_SETTING,
+    GRAPH_INPUT_MEANING_SETTING,
+    GRAPH_INPUT_CONTROL_SETTING,
+    GRAPH_INPUT_LIFETIME_CONFIG_KEY,
+];
+
+/// The settings every interface node takes.
+const THE_SETTINGS_EVERY_INTERFACE_NODE_TAKES: [&str; 3] = [
+    GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_PIN_TYPE_SETTING,
+    GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+];
+
 /// Refuse a setting `node` does not take at `level` with `family` and `pin_type`, and on a
 /// top-level `GraphInput` a client writes, a `value` (saved as `default` before it was an input),
-/// `range` or `lifetime` its type or family does not take.
-/// A top-level `GraphInput` whose family is not resolved yet takes all three, checked once a
+/// an annotation of its `value` or a `lifetime` its type or family does not take.
+/// A top-level `GraphInput` whose family is not resolved yet takes them all, checked once a
 /// link resolves it.
 pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
     node: &GraphSnapshotNode,
@@ -96,22 +119,13 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
     let may_run_as_a_source_node = kind == "GraphInput"
         && level == GraphInterfaceLevel::TheStreamsTopLevel
         && (family.is_none() || a_top_level_graph_input_runs(family, pin_type));
-    let keys_it_takes: &[&str] = if may_run_as_a_source_node {
-        &[
-            GRAPH_INTERFACE_PORT_CONFIG_KEY,
-            GRAPH_INTERFACE_PIN_TYPE_SETTING,
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-            GRAPH_INTERFACE_VALUE_PORT_NAME,
-            GRAPH_INPUT_VALUE_FORMER_NAME,
-            GRAPH_INPUT_RANGE_CONFIG_KEY,
-            GRAPH_INPUT_LIFETIME_CONFIG_KEY,
-        ]
+    let keys_it_takes: Vec<&str> = if may_run_as_a_source_node {
+        THE_SETTINGS_EVERY_INTERFACE_NODE_TAKES
+            .into_iter()
+            .chain(THE_SETTINGS_ONLY_A_GRAPH_INPUT_A_CLIENT_WRITES_TAKES)
+            .collect()
     } else {
-        &[
-            GRAPH_INTERFACE_PORT_CONFIG_KEY,
-            GRAPH_INTERFACE_PIN_TYPE_SETTING,
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-        ]
+        THE_SETTINGS_EVERY_INTERFACE_NODE_TAKES.to_vec()
     };
     if let Some(unread_key) = node
         .input_values
@@ -119,13 +133,7 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
         .find(|key| !keys_it_takes.contains(&key.as_str()))
     {
         let a_key_a_client_writes = kind == "GraphInput"
-            && [
-                GRAPH_INTERFACE_VALUE_PORT_NAME,
-                GRAPH_INPUT_VALUE_FORMER_NAME,
-                GRAPH_INPUT_RANGE_CONFIG_KEY,
-                GRAPH_INPUT_LIFETIME_CONFIG_KEY,
-            ]
-            .contains(&unread_key.as_str());
+            && THE_SETTINGS_ONLY_A_GRAPH_INPUT_A_CLIENT_WRITES_TAKES.contains(&unread_key.as_str());
         if a_key_a_client_writes && level == GraphInterfaceLevel::TheStreamsTopLevel {
             let what_it_carries = match (pin_type, family) {
                 (Some(pin_type), _) => pin_type.to_string(),
@@ -135,7 +143,7 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
             return Err(Error::GraphError(format!(
                 "`GraphInput` node `{}` carries {what_it_carries}, which a client does not \
                  write, and holds `{unread_key}`: a stream's top-level Input takes a \
-                 `{GRAPH_INTERFACE_VALUE_PORT_NAME}`, a `{GRAPH_INPUT_RANGE_CONFIG_KEY}` and a \
+                 `{GRAPH_INTERFACE_VALUE_PORT_NAME}`, the annotations of it and a \
                  `{GRAPH_INPUT_LIFETIME_CONFIG_KEY}` only of a type or family a client writes: a \
                  type that holds a value, or array, channels or records. To fix: choose such a \
                  type, or clear `{unread_key}`",
@@ -158,6 +166,9 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
                 .collect::<Vec<_>>()
                 .join(", ")
         )));
+    }
+    if may_run_as_a_source_node {
+        refuse_an_annotation_the_chosen_type_does_not_take(node, pin_type)?;
     }
     if let Some(family) = family
         && may_run_as_a_source_node

@@ -102,8 +102,8 @@ pub use edges::{
 };
 pub(crate) use nodes::the_refusal_of_a_link_into_a_setting;
 pub use nodes::{
-    GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, InputNumberRange, NodeRunId,
-    PinTypeAsDeclared, PortInfo,
+    GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PinTypeAsDeclared,
+    PortAnnotations, PortInfo,
 };
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{

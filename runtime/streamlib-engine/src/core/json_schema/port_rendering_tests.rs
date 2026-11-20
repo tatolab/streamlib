@@ -81,8 +81,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
             crate::core::descriptors::PortFamily::Image,
         ),
         input_mode: None,
-        range: None,
-        meaning: None,
+        annotations: Default::default(),
     };
     let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
@@ -122,8 +121,7 @@ fn a_node_whose_output_is(
                 ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
             },
             input_mode: None,
-            range: None,
-            meaning: None,
+            annotations: Default::default(),
         }],
     )
 }
@@ -303,8 +301,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
             crate::core::descriptors::PortFamily::Image,
         ),
         input_mode: None,
-        range: None,
-        meaning: None,
+        annotations: Default::default(),
     };
     let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
     assert_carries_no_type_key(&json);
@@ -394,8 +391,7 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
             crate::core::descriptors::PortFamily::Image,
         ),
         input_mode: None,
-        range: None,
-        meaning: None,
+        annotations: Default::default(),
     };
     let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
@@ -443,8 +439,7 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
             crate::core::descriptors::PortFamily::Image,
         ),
         input_mode: None,
-        range: None,
-        meaning: None,
+        annotations: Default::default(),
     };
     let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
@@ -480,8 +475,7 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
             crate::core::descriptors::PortFamily::Image,
         ),
         input_mode: None,
-        range: None,
-        meaning: None,
+        annotations: Default::default(),
     };
     let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
@@ -520,8 +514,7 @@ fn a_node_declaring_the_sentinel(
                 crate::core::descriptors::PortFamily::Image,
             ),
             input_mode: None,
-            range: None,
-            meaning: None,
+            annotations: Default::default(),
         }],
         Vec::new(),
     );

@@ -239,8 +239,7 @@ mod tests {
             may_be_unset: false,
             family,
             input_mode: None,
-            range: None,
-            meaning: None,
+            annotations: Default::default(),
         }
     }
 

@@ -167,47 +167,6 @@ export type NamedPinTypeImportPath = string;
 export type PinFlow = "value" | "stream" | "trigger";
 
 /**
- * The name of a built-in pin type: the `type` tag of its pin type.
- */
-export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
-
-/**
- * An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
- */
-export type PinAnnotationName = "range" | "step" | "unit" | "meaning" | "control" | "frame_rate" | "sample_rate" | "sample_type" | "residency" | "project_asset";
-
-/**
- * The pin type a port declares, or how it is found.
- */
-export type DeclaredPinType = {
-  /**
-   * The type.
-   */
-  pin_type: PinType;
-  kind: "is";
-} | {
-  /**
-   * The types it takes.
-   */
-  pin_types: Array<PinType>;
-  kind: "one_of";
-} | {
-  kind: "any";
-} | {
-  /**
-   * The input whose type it takes.
-   */
-  input_port_name: string;
-  kind: "same_as_input";
-} | {
-  /**
-   * The input that chooses its type.
-   */
-  input_name: string;
-  kind: "set_by_input";
-};
-
-/**
  * What a pin states besides its type. None of it decides a link.
  */
 export interface PinAnnotations {
@@ -317,6 +276,47 @@ export interface PinProjectAssetAnnotation {
    */
   media?: Array<ProjectAssetMedia>;
 }
+
+/**
+ * The name of a built-in pin type: the `type` tag of its pin type.
+ */
+export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
+
+/**
+ * An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
+ */
+export type PinAnnotationName = "range" | "step" | "unit" | "meaning" | "control" | "frame_rate" | "sample_rate" | "sample_type" | "residency" | "project_asset";
+
+/**
+ * The pin type a port declares, or how it is found.
+ */
+export type DeclaredPinType = {
+  /**
+   * The type.
+   */
+  pin_type: PinType;
+  kind: "is";
+} | {
+  /**
+   * The types it takes.
+   */
+  pin_types: Array<PinType>;
+  kind: "one_of";
+} | {
+  kind: "any";
+} | {
+  /**
+   * The input whose type it takes.
+   */
+  input_port_name: string;
+  kind: "same_as_input";
+} | {
+  /**
+   * The input that chooses its type.
+   */
+  input_name: string;
+  kind: "set_by_input";
+};
 
 /**
  * A Boolean's stored value: a JSON boolean.

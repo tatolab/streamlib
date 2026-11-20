@@ -593,11 +593,11 @@ fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none(
             .clone()
     };
     assert_eq!(value_input(&node).family.family, PortFamily::Array);
-    assert!(value_input(&node).range.is_some());
+    assert!(value_input(&node).range().is_some());
 
     node.set_config(serde_json::json!({ "port": "fader" }));
     assert_eq!(value_input(&node).family.family, PortFamily::Records);
-    assert_eq!(value_input(&node).range, None);
+    assert_eq!(value_input(&node).range(), None);
 
     node.set_config(serde_json::json!({ "port": "fader", "family": "channels" }));
     assert_eq!(value_input(&node).family.family, PortFamily::Channels);

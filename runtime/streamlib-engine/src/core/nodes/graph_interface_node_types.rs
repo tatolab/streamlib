@@ -13,8 +13,9 @@ use crate::core::descriptors::{
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_RANGE_CONFIG_KEY,
-    GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+    GRAPH_INPUT_CONTROL_SETTING, GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_MEANING_SETTING,
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_STEP_SETTING,
+    GRAPH_INPUT_UNIT_SETTING, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
     GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
 };
@@ -28,7 +29,8 @@ static THE_SETTINGS_OF_A_GRAPH_OUTPUT: LazyLock<Vec<PortDescriptor>> =
     LazyLock::new(|| the_settings_of(the_node_type_of_a_graph_output()));
 
 /// The settings a `GraphInput` takes, as its type declares them: `port`, `pin_type`, `family`,
-/// `range` and `lifetime`.
+/// the annotations of its `value` (`range`, `step`, `unit`, `meaning` and `control`) and
+/// `lifetime`.
 pub(crate) fn the_settings_of_a_graph_input() -> &'static [PortDescriptor] {
     &THE_SETTINGS_OF_A_GRAPH_INPUT
 }
@@ -59,8 +61,9 @@ pub(crate) fn the_family_a_graph_interface_value_port_declares() -> PortFamilyDe
     family
 }
 
-/// The descriptor of the `GraphInput` node type: its settings `port`, `pin_type`, `family`,
-/// `range` and `lifetime`, each read at setup; its `value` input, a setting read each run that
+/// The descriptor of the `GraphInput` node type: its settings `port`, `pin_type`, `family`, the
+/// annotations of its `value` (`range`, `step`, `unit`, `meaning` and `control`) and `lifetime`,
+/// each read at setup; its `value` input, a setting read each run that
 /// holds what a client sets, whose former name is `default`; and its `value` output, carrying
 /// that value as a value, which keeps its last message for a reader that connects later. Both
 /// `value` ports are of the type `pin_type` chooses, and of the family `family` names while it
@@ -81,6 +84,35 @@ pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
             PinType::ListOf {
                 element_type: Box::new(PinType::Float { exact_size: None }),
             },
+            true,
+            None,
+        ),
+        setting(
+            GRAPH_INPUT_STEP_SETTING,
+            "The step a control moves the Input's number by.",
+            PinType::Float { exact_size: None },
+            true,
+            None,
+        ),
+        setting(
+            GRAPH_INPUT_UNIT_SETTING,
+            "The unit the Input's number is in, such as `Hz`.",
+            PinType::String {},
+            true,
+            None,
+        ),
+        setting(
+            GRAPH_INPUT_MEANING_SETTING,
+            "What the Input's value stands for, such as `frequency`.",
+            PinType::String {},
+            true,
+            None,
+        ),
+        setting(
+            GRAPH_INPUT_CONTROL_SETTING,
+            "The control that sets the Input's value, such as `dial`: one of the Studio's, or a \
+             module's qualified name.",
+            PinType::String {},
             true,
             None,
         ),

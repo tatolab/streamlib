@@ -141,9 +141,9 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             port,
             value,
         )?;
-        return match port.range {
+        return match port.range() {
             Some(range) => refuse_a_value_holding_a_number_outside_the_range(
-                node.name, &port.name, value, range.0,
+                node.name, &port.name, value, range,
             ),
             None => Ok(()),
         };
