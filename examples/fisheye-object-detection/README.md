@@ -27,7 +27,7 @@ real thing.
 ## The model this example teaches
 
 **A Tatolab stream is a graph asset in a project.** `streams/main.graph.json`
-holds the stream's nodes, their config and the links between them; `tatolab dev`
+holds the stream's nodes, their fields and the links between them; `tatolab dev`
 loads it into this machine's runtime, `tatolabd`. `CameraSource` comes from the
 `tatolab-camera` module. `SyntheticFisheyeLens` and
 `UndistortingObjectDetector` are this project's own nodes, in `nodes/`, and each
@@ -229,9 +229,9 @@ Then watch two ports in Tato Studio's viewer: `syntheticfisheyelens`'s
 `fisheye_frame_to_downstream` is the barrelled camera frame, and
 `undistortingobjectdetector`'s `annotated_frame_to_downstream` the rectified one
 with its detections outlined. The detections themselves ride
-`detections_to_downstream`, a Records port carrying `detection_count` and
-`detections` — each a class, a confidence and a box in frame pixels — stamped
-with the frame's own timestamp. Point the camera at something COCO knows (a person, a chair, a bottle, a
+`detections_to_downstream`, a List of `DetectedObject` bundles — each a class, a
+confidence and a box in frame pixels — so another node reads any one of them by
+member. Point the camera at something COCO knows (a person, a chair, a bottle, a
 laptop) and the boxes appear; a webcam aimed at a blank wall detects nothing
 and says so, once a second, in the log.
 
@@ -312,9 +312,10 @@ The nodes are `camerasource`, `syntheticfisheyelens` and
 
 ## Knobs
 
-Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
-Studio's inspector or with the runtime's `set_node_config` MCP tool, which
-records the edit in the project's history and applies it to the running stream.
+Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Studio's inspector, which records the edit in the project's history and applies it to the
+running stream. The lens's coefficients and the confidence threshold are read on every frame; the
+detector's coefficients and weights are settings, so changing one rebuilds the detector.
 
 | Knob | Node | Effect |
 | --- | --- | --- |
