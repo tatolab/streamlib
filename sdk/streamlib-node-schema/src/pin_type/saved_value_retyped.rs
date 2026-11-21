@@ -178,7 +178,7 @@ fn cast_by_the_one_that_fits(
 ) -> SavedValueRetyped {
     use WhyASavedValueTakesTheDefault as Why;
     let conversion = only.node_type.clone();
-    let Some(saved_value_cast) = only.saved_value_cast else {
+    let Some(saved_value_cast) = &only.saved_value_cast else {
         if taken_as_it_is {
             return SavedValueRetyped::TakenAsItIs;
         }
@@ -186,7 +186,7 @@ fn cast_by_the_one_that_fits(
             conversion,
         ));
     };
-    let cast = match (saved_value_cast.cast)(value, into) {
+    let cast = match saved_value_cast.cast(value, into) {
         Ok(cast) => cast,
         Err(why) => {
             return SavedValueRetyped::TakesTheDefault(Why::TheConversionRefusedTheValue {

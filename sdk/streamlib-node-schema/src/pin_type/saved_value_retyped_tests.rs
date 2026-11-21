@@ -43,9 +43,10 @@ fn a_conversion(
     }
 }
 
-const NUMBER_CAST: PinConversionSavedValueCast = PinConversionSavedValueCast {
-    cast: the_number_cast,
-};
+/// The cast the built-in number conversions supply.
+fn number_cast() -> PinConversionSavedValueCast {
+    PinConversionSavedValueCast::new(the_number_cast)
+}
 
 #[test]
 fn a_float_cast_into_an_integer_is_truncated_toward_zero() {
@@ -110,13 +111,13 @@ fn a_value_no_number_is_not_cast() {
 #[test]
 fn the_one_conversion_whose_types_are_the_two_casts_the_saved_value() {
     let conversions = [
-        a_conversion("FloatToInteger", float(), integer(), Some(NUMBER_CAST)),
-        a_conversion("IntegerToFloat", integer(), float(), Some(NUMBER_CAST)),
+        a_conversion("FloatToInteger", float(), integer(), Some(number_cast())),
+        a_conversion("IntegerToFloat", integer(), float(), Some(number_cast())),
         a_conversion(
             "IntegerToBoolean",
             integer(),
             PinType::Boolean {},
-            Some(NUMBER_CAST),
+            Some(number_cast()),
         ),
     ];
     assert_eq!(
@@ -145,8 +146,8 @@ fn the_one_conversion_whose_types_are_the_two_casts_the_saved_value() {
 #[test]
 fn more_than_one_fitting_conversion_casts_nothing_and_names_each() {
     let conversions = [
-        a_conversion("SweepPosition", a_sweep(), float(), Some(NUMBER_CAST)),
-        a_conversion("SweepWidth", a_sweep(), float(), Some(NUMBER_CAST)),
+        a_conversion("SweepPosition", a_sweep(), float(), Some(number_cast())),
+        a_conversion("SweepWidth", a_sweep(), float(), Some(number_cast())),
     ];
     let SavedValueRetyped::TakesTheDefault(why) =
         the_saved_value_retyped(&json!({}), &a_sweep(), &float(), None, &conversions)
@@ -200,7 +201,7 @@ fn a_cast_the_new_type_does_not_take_gives_way_to_the_default() {
         "FloatToString",
         float(),
         PinType::String {},
-        Some(NUMBER_CAST),
+        Some(number_cast()),
     )];
     let SavedValueRetyped::TakesTheDefault(why) = the_saved_value_retyped(
         &json!(0.1),
@@ -273,7 +274,7 @@ fn a_cast_into_a_range_holding_no_whole_number_gives_way_to_the_default() {
         "FloatToInteger",
         float(),
         integer(),
-        Some(NUMBER_CAST),
+        Some(number_cast()),
     )];
     let SavedValueRetyped::TakesTheDefault(why) = the_saved_value_retyped(
         &json!(0.5),

@@ -919,3 +919,56 @@ def test_importing_the_bootstrap_leaves_the_import_path_alone():
     assert importing.returncode == 0, importing.stderr
 
 
+
+
+# ---- cast a saved value ---------------------------------------------------------
+
+#: The `every-pin-kind` sample's own nodes, among them its conversion `LevelAsPercent`.
+EVERY_PIN_KIND_SAMPLES_NODES = (
+    Path(__file__).resolve().parents[3] / "examples" / "every-pin-kind" / "nodes"
+)
+
+
+def cast_document(cast: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """The one JSON document a cast prints on stdout, failing with its stderr if there is not
+    one."""
+    assert cast.returncode == 0, cast.stderr
+    try:
+        return json.loads(cast.stdout)
+    except json.JSONDecodeError as not_one_document:
+        pytest.fail(
+            f"stdout is not one JSON document ({not_one_document}):\n{cast.stdout}\n"
+            f"stderr:\n{cast.stderr}"
+        )
+
+
+def test_the_samples_own_conversion_casts_a_saved_value_out_of_stream(tmp_path: Path):
+    """The `every-pin-kind` sample's `LevelAsPercent` casts a saved 0.1 into the String `10%`,
+    its body run once with no stream started.
+
+    Mental-revert: answering the saved value as it is prints `0.1`, which no String takes.
+    """
+    shutil.copytree(EVERY_PIN_KIND_SAMPLES_NODES, tmp_path / "nodes")
+
+    cast = run_the_bootstrap(
+        tmp_path,
+        node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
+        "nodes.level_as_percent:LevelAsPercent",
+        json.dumps({"input": "level", "value": 0.1}),
+    )
+
+    assert cast_document(cast) == {"cast": "10%"}, cast.stderr
+
+
+def test_a_cast_by_a_module_that_will_not_import_names_why(tmp_path: Path):
+    cast = run_the_bootstrap(
+        tmp_path,
+        node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
+        "no_such_module:LevelAsPercent",
+        json.dumps({"input": "level", "value": 0.1}),
+    )
+
+    document = cast_document(cast)
+    assert set(document) == {"not_cast_because"}, document
+    assert "`no_such_module:LevelAsPercent` did not load" in document["not_cast_because"]
+    assert "No module named 'no_such_module'" in document["not_cast_because"]

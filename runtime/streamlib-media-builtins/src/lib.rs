@@ -99,20 +99,26 @@ pub fn register_media_builtin_node_types() {
 pub fn register_the_conversion_node_types() {
     use pin_type_conversion::number_conversions::{
         BooleanToFloat, BooleanToInteger, FloatToBoolean, FloatToInteger, IntegerToBoolean,
-        IntegerToFloat, THE_NUMBER_CAST,
+        IntegerToFloat, the_number_cast_of_a_saved_value,
     };
+    let the_number_cast = the_number_cast_of_a_saved_value();
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<FloatToInteger::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<IntegerToFloat::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<BooleanToInteger::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<IntegerToBoolean::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<BooleanToFloat::Node>(
+        the_number_cast.clone(),
+    );
     NODE_REGISTRY
-        .register_a_conversion_casting_a_saved_value::<FloatToInteger::Node>(THE_NUMBER_CAST);
-    NODE_REGISTRY
-        .register_a_conversion_casting_a_saved_value::<IntegerToFloat::Node>(THE_NUMBER_CAST);
-    NODE_REGISTRY
-        .register_a_conversion_casting_a_saved_value::<BooleanToInteger::Node>(THE_NUMBER_CAST);
-    NODE_REGISTRY
-        .register_a_conversion_casting_a_saved_value::<IntegerToBoolean::Node>(THE_NUMBER_CAST);
-    NODE_REGISTRY
-        .register_a_conversion_casting_a_saved_value::<BooleanToFloat::Node>(THE_NUMBER_CAST);
-    NODE_REGISTRY
-        .register_a_conversion_casting_a_saved_value::<FloatToBoolean::Node>(THE_NUMBER_CAST);
+        .register_a_conversion_casting_a_saved_value::<FloatToBoolean::Node>(the_number_cast);
     NODE_REGISTRY.register::<pin_type_conversion::AudioToTensor::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::TensorToAudio::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::ChannelsToRecords::Node>();

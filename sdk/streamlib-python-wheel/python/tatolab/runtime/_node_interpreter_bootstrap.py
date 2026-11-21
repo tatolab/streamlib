@@ -23,7 +23,8 @@ OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 12)
 
 DESCRIBE_ARGUMENT = "--describe"
 DESCRIBE_INSTALLED_MODULES_ARGUMENT = "--describe-installed-modules"
-DESCRIBE_ARGUMENTS = (DESCRIBE_ARGUMENT, DESCRIBE_INSTALLED_MODULES_ARGUMENT)
+CAST_A_SAVED_VALUE_ARGUMENT = "--cast-a-saved-value"
+DESCRIBE_ARGUMENTS = (DESCRIBE_ARGUMENT, DESCRIBE_INSTALLED_MODULES_ARGUMENT, CAST_A_SAVED_VALUE_ARGUMENT)
 
 #: The entry-point group an installed distribution declares its node classes in,
 #: each entry's value a `module:qualname` import path.
@@ -157,6 +158,10 @@ from tatolab.runtime._parent_process_bridge import (
     HelperProcessProtocolError as HelperProcessProtocolError,
     ParentProcessBridge as ParentProcessBridge,
     _PendingEscalateResponse as _PendingEscalateResponse,
+)
+from tatolab.runtime._function_node_saved_value_cast import (
+    SavedValueNotCast as SavedValueNotCast,
+    the_saved_value_a_function_node_casts as the_saved_value_a_function_node_casts,
 )
 from tatolab.runtime._node_class_description import (
     DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE as DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE,
@@ -315,6 +320,48 @@ def describe_installed_modules_onto_stdout() -> int:
     return 0
 
 
+def cast_a_saved_value_onto_stdout(import_path: str, request: str) -> int:
+    """Print one JSON document of the saved value the conversion `import_path` names casts; 0.
+
+    `request` is `{"input": <the conversion's wired input>, "value": <the saved value>}`.
+    Wire contract with the engine: stdout carries exactly `{"cast": <the value cast>}`, or
+    `{"not_cast_because": <why, in words>}` when the conversion's body gives no cast out of
+    stream, its module does not import, or it raised.
+    """
+    described_document_fd = _reserve_stdout_for_the_described_document()
+    asked = json.loads(request)
+    cast_document: "dict[str, Any]"
+    try:
+        conversion = load_node_class(import_path)
+    except Exception as failure:
+        traceback.print_exc()
+        cast_document = {
+            "not_cast_because": f"`{import_path}` did not load: {_in_one_line(failure)}"
+        }
+    else:
+        try:
+            cast_document = {
+                "cast": the_saved_value_a_function_node_casts(
+                    conversion, import_path, asked["input"], asked["value"]
+                )
+            }
+        except SavedValueNotCast as not_cast:
+            cast_document = {"not_cast_because": str(not_cast)}
+        except Exception as failure:
+            traceback.print_exc()
+            cast_document = {
+                "not_cast_because": f"`{import_path}` gave no cast: {_in_one_line(failure)}"
+            }
+    with os.fdopen(described_document_fd, "w", encoding="utf-8") as cast_document_output:
+        cast_document_output.write(json.dumps(cast_document, allow_nan=False) + "\n")
+    return 0
+
+
+def _in_one_line(failure: BaseException) -> str:
+    """`failure`'s type and message, as the last line of its traceback reads."""
+    return "".join(traceback.format_exception_only(type(failure), failure)).strip()
+
+
 def _required_environment(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -384,10 +431,20 @@ def main(arguments: "list[str]") -> int:
             traceback.print_exc()
             describe_exit_status = 1
         _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
+    if arguments[:1] == [CAST_A_SAVED_VALUE_ARGUMENT] and len(arguments) == 3:
+        _end_the_describe_once_its_parent_closes_stdin()
+        log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
+        try:
+            cast_exit_status = cast_a_saved_value_onto_stdout(arguments[1], arguments[2])
+        except BaseException:
+            traceback.print_exc()
+            cast_exit_status = 1
+        _end_the_describe_without_finalizing_the_interpreter(cast_exit_status)
     if arguments:
         _write_a_bootstrap_fatal_to_raw_stderr(
             f"a node interpreter takes no arguments, `{DESCRIBE_ARGUMENT}` and "
-            f"import paths, or `{DESCRIBE_INSTALLED_MODULES_ARGUMENT}` alone; it was given "
+            f"import paths, `{DESCRIBE_INSTALLED_MODULES_ARGUMENT}` alone, or "
+            f"`{CAST_A_SAVED_VALUE_ARGUMENT}`, an import path and a request; it was given "
             f"{arguments!r}"
         )
         return 1

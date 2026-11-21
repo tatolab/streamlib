@@ -20,9 +20,9 @@ const INTEGER: PinType = PinType::Integer { exact_size: None };
 const FLOAT: PinType = PinType::Float { exact_size: None };
 
 /// The cast each number conversion supplies, the one [`the_number_cast`] makes.
-pub const THE_NUMBER_CAST: PinConversionSavedValueCast = PinConversionSavedValueCast {
-    cast: the_number_cast,
-};
+pub fn the_number_cast_of_a_saved_value() -> PinConversionSavedValueCast {
+    PinConversionSavedValueCast::new(the_number_cast)
+}
 
 /// The message, `payload_descriptor` and `payload`, of a value of `from`, as the message of that
 /// value cast into `into`, starting at the sample it starts at; or why it is not cast.

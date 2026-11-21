@@ -22,8 +22,9 @@ pub struct PinConversion {
     /// follows a setting; `None` when its output gives `output_pin_type` whatever it holds.
     pub output_picked_for_the_input: Option<PinConversionOutputPick>,
     /// The function that casts one saved value its input takes into the value its output gives,
-    /// with no stream started; `None` when it converts only inside a started stream, as a
-    /// module's conversion, a node body, does.
+    /// with no stream started: a host function, or one run of a module's function node out of
+    /// stream; `None` when it converts only inside a started stream, as a module's node class or
+    /// shader does.
     pub saved_value_cast: Option<PinConversionSavedValueCast>,
 }
 
@@ -82,12 +83,41 @@ impl PartialEq for PinConversionOutputPick {
     }
 }
 
+/// What a conversion casts one saved value with, with no stream started: a function of the
+/// host's, or one run of a module's own conversion out of stream.
+type SavedValueCastFunction =
+    dyn Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, String> + Send + Sync;
+
 /// The function a conversion supplies that casts one saved value with no stream started.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PinConversionSavedValueCast {
-    /// For a value the conversion's input takes and the type of the value to give, its output's
-    /// type or a size of it, the value cast; why not, in words, when it cannot be.
-    pub cast: fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, String>,
+    cast: std::sync::Arc<SavedValueCastFunction>,
+}
+
+impl PinConversionSavedValueCast {
+    /// The cast `cast` makes: for a value the conversion's input takes and the type of the value
+    /// to give, its output's type or a size of it, the value cast; why not, in words, when it
+    /// cannot be.
+    pub fn new(
+        cast: impl Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            cast: std::sync::Arc::new(cast),
+        }
+    }
+
+    /// `value`, a value the conversion's input takes, cast into a value of `into`; why not, in
+    /// words, when it cannot be.
+    pub fn cast(
+        &self,
+        value: &serde_json::Value,
+        into: &PinType,
+    ) -> Result<serde_json::Value, String> {
+        (self.cast)(value, into)
+    }
 }
 
 impl std::fmt::Debug for PinConversionSavedValueCast {
@@ -96,10 +126,10 @@ impl std::fmt::Debug for PinConversionSavedValueCast {
     }
 }
 
-// `fn_addr_eq` compares addresses, so one function may compare unequal across codegen units.
+// Two casts are one when they share one function, as a clone of one does.
 impl PartialEq for PinConversionSavedValueCast {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::fn_addr_eq(self.cast, other.cast)
+        std::sync::Arc::ptr_eq(&self.cast, &other.cast)
     }
 }
 

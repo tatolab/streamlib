@@ -284,3 +284,64 @@ fn two_streams_describing_one_class_each_resolve_their_own() {
         "the stream's node catalog leaves out the class it described"
     );
 }
+
+/// The conversion `path` states as `node_types` offers it.
+fn the_conversion_of(node_types: &NodeTypesOneStreamResolves, path: &str) -> PinConversion {
+    node_types
+        .pin_conversions()
+        .iter()
+        .find(|conversion| conversion.node_type == class_import_path(path))
+        .cloned()
+        .unwrap_or_else(|| panic!("`{path}` states a conversion"))
+}
+
+/// A function node's conversion casts a saved value with the cast the stream gives each, which
+/// names it and its input, and a node class's converts only inside a started stream.
+///
+/// Mental-revert: giving every described conversion the cast runs a node class's body out of
+/// stream; giving none leaves the function node's saved value to the default.
+#[test]
+fn a_function_node_conversion_casts_a_saved_value_and_a_node_class_conversion_does_not() {
+    let node_types = NodeTypesOneStreamResolves::new();
+    node_types.cast_a_saved_value_through_each_function_node_conversion_by(|conversion| {
+        let named = format!("{} on {}", conversion.node_type, conversion.input_port_name);
+        PinConversionSavedValueCast::new(move |value, _into| {
+            Ok(serde_json::json!(format!("{value} by {named}")))
+        })
+    });
+    let function_node = "node_types_one_stream_resolves_tests.project:ConvertsByItsBody";
+    let node_class = "node_types_one_stream_resolves_tests.project:ConvertsInAStream";
+    node_types
+        .register_a_type_described_in_this_streams_node_interpreter(
+            a_described_conversion(function_node),
+            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                node_once_promoted_to_its_own_process: a_constructor_refusing_with(
+                    "a function node conversion",
+                ),
+            },
+        )
+        .expect("a function node may state a conversion");
+    node_types
+        .register_a_type_described_in_this_streams_node_interpreter(
+            a_described_conversion(node_class),
+            HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(a_constructor_refusing_with(
+                "a node class conversion",
+            )),
+        )
+        .expect("a node class may state a conversion");
+
+    let cast = the_conversion_of(&node_types, function_node)
+        .saved_value_cast
+        .expect("a function node conversion casts a saved value");
+    assert_eq!(
+        cast.cast(
+            &serde_json::json!(1),
+            &crate::core::descriptors::PinType::String {}
+        ),
+        Ok(serde_json::json!(format!("1 by {function_node} on video")))
+    );
+    assert_eq!(
+        the_conversion_of(&node_types, node_class).saved_value_cast,
+        None
+    );
+}

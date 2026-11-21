@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A `GraphInput` whose type a `transact` changes: a saved value is cast into the new type by the
-//! one conversion that fits, held within the Input's range, or gives way to the new type's
+//! one conversion that fits, a module's function node by its body run once out of stream, held
+//! within the Input's range, or gives way to the new type's
 //! default saying why, and one undo puts back both; a cleared value stays cleared, so a change of
 //! type that clears it first takes; a type a client does not write is refused for that reason;
 //! and a type the port it is linked into does not take is refused naming that port.
@@ -405,9 +406,8 @@ fn a_projects_float_to_string_conversion(
         .expect("the stream resolves the project's node type");
 }
 
-/// A retype that only a conversion a project's Python node declares reaches saves no value: a
-/// module's conversion is a node body, which converts only inside a started stream, and the
-/// answer names it.
+/// A retype that only a conversion a project's Python node declares reaches saves no value when
+/// the stream has no way to run its body out of stream, and the answer names it.
 ///
 /// Mental-revert: treating the module's conversion as the built-in number cast casts 0.1 into a
 /// value no String takes.
@@ -443,6 +443,133 @@ async fn a_retype_only_a_modules_conversion_reaches_gives_way_to_the_default_nam
         answered["default_because"]
             .as_str()
             .is_some_and(|why| why.contains("only inside a started stream")),
+        "{retyped}"
+    );
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id).1,
+        Value::Null
+    );
+}
+
+/// The stream `stream_id` casting a saved value through each function node conversion it
+/// describes from now on with `cast`, standing in for its body's one run out of stream.
+fn a_function_node_conversions_body_standing_in_as(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    stream_id: &str,
+    cast: fn(&Value) -> std::result::Result<Value, String>,
+) {
+    engine
+        .engine
+        .loaded_stream_of_the_id(stream_id)
+        .expect("the stream is loaded")
+        .node_types_this_stream_resolves()
+        .cast_a_saved_value_through_each_function_node_conversion_for_a_test(move |_conversion| {
+            streamlib::sdk::descriptors::PinConversionSavedValueCast::new(move |value, _into| {
+                cast(value)
+            })
+        });
+}
+
+/// A Float `GraphInput` saving 0.1 that chooses a String, which only a project's function node
+/// conversion reaches, saves the value its body gives, which the answer names; one undo puts
+/// back both.
+///
+/// Mental-revert: leaving a module's conversion with no cast of its own saves no value.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retype_only_a_function_node_conversion_reaches_saves_what_its_body_gives() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    a_function_node_conversions_body_standing_in_as(&engine, &stream_id, |value| {
+        Ok(json!(format!(
+            "{}%",
+            (value.as_f64().unwrap_or_default() * 100.0).round()
+        )))
+    });
+    a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsPercent");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "string" })
+        )]),
+    )
+    .await
+    .expect("the retype casts the saved value");
+    assert_eq!(
+        retyped["saved_values_retyped"],
+        json!([{ "stream": stream_id, "node": WARMTH_BASE_NODE_UUID, "value_before": 0.1,
+                 "value": "10%", "cast_by": "nodes.format:LevelAsPercent" }]),
+        "{retyped}"
+    );
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id),
+        (json!("10%"), json!("10%"), json!({ "type": "string" }))
+    );
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the retype undoes");
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id),
+        (json!(0.1), json!(0.1), json!({ "type": "float" })),
+        "one undo puts back both the type and the value"
+    );
+}
+
+/// A function node conversion whose body does not run out of stream saves no value, and the
+/// answer names the conversion and why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_function_node_conversion_that_cannot_run_out_of_stream_gives_way_to_the_default_saying_why()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    a_function_node_conversions_body_standing_in_as(&engine, &stream_id, |_value| {
+        Err(
+            "`nodes.format:LevelAsPercent` takes the stream's time as `now`, which no stream \
+             gives out of stream"
+                .to_owned(),
+        )
+    });
+    a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsPercent");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "string" })
+        )]),
+    )
+    .await
+    .expect("the retype is taken");
+    let answered = &retyped["saved_values_retyped"][0];
+    assert_eq!(
+        answered["conversions_that_fit"],
+        json!(["nodes.format:LevelAsPercent"]),
+        "{retyped}"
+    );
+    assert!(
+        answered["default_because"].as_str().is_some_and(|why| why
+            .starts_with("`nodes.format:LevelAsPercent` did not cast it:")
+            && why.contains("takes the stream's time")),
         "{retyped}"
     );
     assert_eq!(
