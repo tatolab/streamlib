@@ -246,7 +246,7 @@ pub fn an_input_takes_a_wire(
     mode.is_none_or(|mode| {
         !mode.is_a_setting()
             || !(mode.is_a_setting_read_each_run()
-                || crate::is_a_node_type_of_the_graph_itself(node_type.as_str())
+                || node_type.is_a_node_type_of_the_graph_itself()
                 || pin_type.is_some_and(|pin_type| !pin_type.takes_a_wire()))
     })
 }

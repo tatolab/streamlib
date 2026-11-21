@@ -20,7 +20,9 @@ use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
-use crate::core::graph::input_values::the_settings_rendered_reading_the_values_held;
+use crate::core::graph::input_values::{
+    TakesAWireRendered, the_settings_rendered_reading_the_values_held,
+};
 use crate::core::graph::legacy_config_of_a_node::{
     LegacyConfigOfANodeType, config_of_a_node_as_drawn,
 };
@@ -31,7 +33,7 @@ use crate::core::json_schema::{
 };
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself,
-    the_settings_of_a_get_variable_offering, the_settings_of_a_graph_variable_node,
+    the_settings_of_a_get_variable_offering, the_settings_of_a_node_type_of_the_graph_itself,
     the_value_port_of_a_graph_variable_node,
 };
 use crate::core::{Error, Result};
@@ -229,14 +231,14 @@ impl GraphVariablesAsDrawn {
                 Some(reads) => {
                     the_settings_of_a_get_variable_offering(&reads.variables_it_may_read)
                 }
-                None => the_settings_of_a_graph_variable_node(&variable_node.node_type)
+                None => the_settings_of_a_node_type_of_the_graph_itself(&variable_node.node_type)
                     .unwrap_or(&[])
                     .to_vec(),
             };
             let settings = the_settings_rendered_reading_the_values_held(
                 &settings_declared,
                 &variable_node.input_values,
-                Some(&variable_node.node_type),
+                TakesAWireRendered::ByTheRuleOnANodeOf(&variable_node.node_type),
             )
             .into_iter();
             let values =
@@ -407,23 +409,20 @@ impl GraphSnapshot {
             });
         }
 
-        let mut type_of_each_node_by_cast: HashMap<String, &str> = HashMap::new();
+        let mut node_by_cast: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
             let cast = cast_of(&node.name)?;
-            if type_of_each_node_by_cast
-                .insert(cast.clone(), node.node_type.as_str())
-                .is_some()
-            {
+            if node_by_cast.insert(cast.clone(), node).is_some() {
                 return Err(Error::NodeNameTaken {
                     name: node.name.clone(),
                     cast,
                 });
             }
         }
-        let is_a_get =
-            |cast: &str| type_of_each_node_by_cast.get(cast) == Some(&GET_VARIABLE_NODE_TYPE);
-        let is_a_set =
-            |cast: &str| type_of_each_node_by_cast.get(cast) == Some(&SET_VARIABLE_NODE_TYPE);
+        let type_of_the_node_by_cast =
+            |cast: &str| node_by_cast.get(cast).map(|node| node.node_type.as_str());
+        let is_a_get = |cast: &str| type_of_the_node_by_cast(cast) == Some(GET_VARIABLE_NODE_TYPE);
+        let is_a_set = |cast: &str| type_of_the_node_by_cast(cast) == Some(SET_VARIABLE_NODE_TYPE);
         let variable_node_casts: HashSet<String> = variable_nodes
             .iter()
             .map(|node| cast_of(&node.name))
@@ -535,10 +534,12 @@ impl GraphSnapshot {
                     link.source.node
                 )));
             }
-            if is_a_get(&target_cast) {
+            if let Some(get_node) = node_by_cast.get(&target_cast)
+                && is_a_get(&target_cast)
+            {
                 refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
-                    GET_VARIABLE_NODE_TYPE,
-                    &link.target.node,
+                    &get_node.node_type,
+                    &get_node.name,
                     &link.target.port,
                 )?;
                 return Err(Error::GraphError(format!(
@@ -720,8 +721,8 @@ fn value_one_setter_holds(
     for link in &graph.links {
         if cast_of(&link.target.node)? == setter_cast {
             refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
-                setter.node_type.as_str(),
-                &link.target.node,
+                &setter.node_type,
+                &setter.name,
                 &link.target.port,
             )?;
             refuse_a_variable_port_other_than_value(&link.target, "a link enters")?;

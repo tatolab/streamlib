@@ -70,6 +70,12 @@ impl NodeClassImportPath {
         self.0 == GRAPH_INPUT_NODE_TYPE
     }
 
+    /// Whether this is a node type the graph resolves itself, which no node code runs:
+    /// `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`.
+    pub fn is_a_node_type_of_the_graph_itself(&self) -> bool {
+        is_a_node_type_of_the_graph_itself(&self.0)
+    }
+
     /// The import path of `GraphOutput`.
     pub fn graph_output() -> Self {
         Self(GRAPH_OUTPUT_NODE_TYPE.to_owned())

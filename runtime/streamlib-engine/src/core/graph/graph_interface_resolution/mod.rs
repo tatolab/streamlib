@@ -18,7 +18,8 @@ use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, the_ports_of_a_graph_document_node,
 };
 use crate::core::graph::input_values::{
-    the_read_of_an_input_a_link_feeds, the_settings_rendered_reading_the_values_held,
+    TakesAWireRendered, the_read_of_an_input_a_link_feeds,
+    the_settings_rendered_reading_the_values_held,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
@@ -34,6 +35,7 @@ use crate::core::json_schema::{
 };
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself,
+    the_settings_of_a_node_type_of_the_graph_itself,
 };
 use crate::core::{Error, Result};
 use streamlib_node_schema::output_port_family_resolved_against_config;
@@ -290,17 +292,15 @@ impl GraphInterfaceNodeAsDrawn {
     /// The settings the interface node takes, as its type declares them, each reading the value
     /// the node holds, else the default it declares.
     fn its_settings_rendered(&self) -> Vec<GraphNodePortOnTheWire> {
+        let Some(settings) = the_settings_of_a_node_type_of_the_graph_itself(&self.node.node_type)
+        else {
+            // An interface node is a `GraphInput` or a `GraphOutput`, each declaring settings.
+            return Vec::new();
+        };
         the_settings_rendered_reading_the_values_held(
-            match self.declared_port.direction {
-                GraphInterfacePortDirection::Input => {
-                    crate::core::nodes::the_settings_of_a_graph_input()
-                }
-                GraphInterfacePortDirection::Output => {
-                    crate::core::nodes::the_settings_of_a_graph_output()
-                }
-            },
+            settings,
             &self.node.input_values,
-            Some(&self.node.node_type),
+            TakesAWireRendered::ByTheRuleOnANodeOf(&self.node.node_type),
         )
     }
 }
@@ -436,10 +436,10 @@ impl GraphSnapshot {
         let mut family_of_each_interface_node_by_cast: HashMap<String, Option<PortFamily>> =
             HashMap::new();
         let mut running_graph_input_casts = std::collections::HashSet::new();
-        let mut node_name_by_cast: HashMap<String, &str> = HashMap::new();
+        let mut node_by_cast: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
             let cast = cast_of(&node.name)?;
-            if node_name_by_cast.insert(cast.clone(), &node.name).is_some() {
+            if node_by_cast.insert(cast.clone(), node).is_some() {
                 return Err(Error::NodeNameTaken {
                     name: node.name.clone(),
                     cast,
@@ -502,9 +502,12 @@ impl GraphSnapshot {
                     runtime_links.push(link.clone());
                     continue;
                 }
+                let graph_input_cast = cast_of(&link.target.node)?;
                 return Err(the_refusal_of_a_link_into_a_setting(
                     &link.target.port,
-                    &link.target.node,
+                    node_by_cast
+                        .get(&graph_input_cast)
+                        .map_or(&link.target.node, |graph_input| &graph_input.name),
                 ));
             }
             if source_direction.is_some() && target_direction.is_some() {
@@ -519,10 +522,12 @@ impl GraphSnapshot {
             } else {
                 (&link.target, &link.source)
             };
-            if target_direction.is_some() {
+            if target_direction == Some(&GraphInterfacePortDirection::Output)
+                && let Some(graph_output) = node_by_cast.get(&cast_of(&link.target.node)?)
+            {
                 refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
-                    GRAPH_OUTPUT_NODE_TYPE,
-                    &link.target.node,
+                    &graph_output.node_type,
+                    &graph_output.name,
                     &link.target.port,
                 )?;
             }

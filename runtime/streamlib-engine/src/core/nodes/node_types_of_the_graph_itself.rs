@@ -13,7 +13,7 @@ use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
 };
 use crate::core::graph::{
-    PortInfo, cast_exposed_name_to_url_safe, the_refusal_of_a_link_into_a_setting,
+    PortInfo, cast_exposed_name_to_url_safe, refuse_a_link_into_a_port_taking_no_wire,
 };
 
 use super::graph_interface_node_types::{
@@ -60,26 +60,34 @@ pub(super) fn node_type_of_the_graph_itself(
     .with_category(GRAPH_NODE_TYPE_CATEGORY))
 }
 
-/// Refuse a link into `input` of node `node`, a node of `node_type`, which the graph resolves
-/// itself, when `input` is one of the settings its type declares, which take no wire by the one
-/// rule; any other port passes.
+/// The settings a node of `node_type` takes when it is a node type the graph resolves itself,
+/// as its type declares them, each but a `GraphInput`'s `value`; `None` for any other type.
+pub(crate) fn the_settings_of_a_node_type_of_the_graph_itself(
+    node_type: &NodeClassImportPath,
+) -> Option<&'static [PortDescriptor]> {
+    match node_type.as_str() {
+        GRAPH_INPUT_NODE_TYPE => Some(the_settings_of_a_graph_input()),
+        GRAPH_OUTPUT_NODE_TYPE => Some(the_settings_of_a_graph_output()),
+        _ => the_settings_of_a_graph_variable_node(node_type),
+    }
+}
+
+/// Refuse a link into `input` of the node `node_name` of `node_type`, a node type the graph
+/// resolves itself, when `input` names one of the settings its type declares, which take no
+/// wire by the one rule. Any other port passes, as does every port of a node of any other type,
+/// which declares no such settings.
 pub(crate) fn refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
-    node_type: &str,
-    node: &str,
+    node_type: &NodeClassImportPath,
+    node_name: &str,
     input: &str,
 ) -> Result<()> {
-    let node_type = NodeClassImportPath::new(node_type)
-        .map_err(|refusal| Error::Configuration(refusal.to_string()))?;
-    let settings: &[PortDescriptor] = match node_type.as_str() {
-        GRAPH_INPUT_NODE_TYPE => the_settings_of_a_graph_input(),
-        GRAPH_OUTPUT_NODE_TYPE => the_settings_of_a_graph_output(),
-        _ => the_settings_of_a_graph_variable_node(&node_type).unwrap_or_default(),
+    let Some(settings) = the_settings_of_a_node_type_of_the_graph_itself(node_type) else {
+        return Ok(());
     };
     let input_cast = cast_exposed_name_to_url_safe(input)?;
-    match settings.iter().find(|setting| setting.name == input_cast) {
-        Some(setting) if !PortInfo::from(setting).takes_a_wire_on_a_node_of(&node_type) => {
-            Err(the_refusal_of_a_link_into_a_setting(input, node))
-        }
-        _ => Ok(()),
-    }
+    let setting = settings
+        .iter()
+        .find(|setting| setting.name == input_cast)
+        .map(PortInfo::from);
+    refuse_a_link_into_a_port_taking_no_wire(setting.as_ref(), node_type, node_name)
 }

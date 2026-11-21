@@ -329,22 +329,37 @@ pub(crate) fn the_read_of_an_unfed_input(
     }
 }
 
+/// Whether `graph` says of a setting a node type the runtime owns declares that a link may end
+/// at it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TakesAWireRendered<'node_type> {
+    /// As the one rule answers for a setting of a node of this type, which is how `connect`
+    /// judges a link into it.
+    ByTheRuleOnANodeOf(&'node_type NodeClassImportPath),
+    /// Left out: `connect` judges a link into it by no setting's rule, as it judges one into a
+    /// placed stream, by the Inputs its stream declares.
+    LeftOut,
+}
+
 /// Each of `settings`, the settings a node type the runtime owns declares, as `graph` renders it
 /// on a node holding `input_values`: reading the value the node holds, else the default the
-/// setting declares, and, on a node of `node_type_saying_what_takes_a_wire`, whether a link may
-/// end at it.
+/// setting declares, and saying whether a link may end at it as `takes_a_wire` says.
 pub(crate) fn the_settings_rendered_reading_the_values_held(
     settings: &[PortDescriptor],
     input_values: &Map<String, Value>,
-    node_type_saying_what_takes_a_wire: Option<&NodeClassImportPath>,
+    takes_a_wire: TakesAWireRendered<'_>,
 ) -> Vec<GraphNodePortOnTheWire> {
     settings
         .iter()
         .map(|setting| {
             let setting_info = PortInfo::from(setting);
             let mut rendered = GraphNodePortOnTheWire::from(&setting_info);
-            rendered.takes_a_wire = node_type_saying_what_takes_a_wire
-                .map(|node_type| setting_info.takes_a_wire_on_a_node_of(node_type));
+            rendered.takes_a_wire = match takes_a_wire {
+                TakesAWireRendered::ByTheRuleOnANodeOf(node_type) => {
+                    Some(setting_info.takes_a_wire_on_a_node_of(node_type))
+                }
+                TakesAWireRendered::LeftOut => None,
+            };
             let read = input_values
                 .get(&setting.name)
                 .filter(|held| !held.is_null())

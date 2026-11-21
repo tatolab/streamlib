@@ -112,11 +112,12 @@ const GAIN_SET_VARIABLE_NODE_UUID: &str = "72727272-7272-4272-8272-727272727272"
 const GAIN_GET_VARIABLE_NODE_UUID: &str = "73737373-7373-4373-8373-737373737373";
 
 /// `graph` renders a setting of a top-level `GraphOutput`, `SetVariable` and `GetVariable` as
-/// taking no wire, and a link into one of those settings is refused as taking no wire, naming the setting, as one into a setting of a
-/// `GraphInput` is.
+/// taking no wire, and a link into one of those settings is refused as taking no wire, naming
+/// the setting and the node, as one into a setting of a `GraphInput` is.
 ///
 /// Mental-revert: rendering the settings of a node the graph resolves itself without the rule
-/// leaves out `takes_a_wire`; refusing a link into one by its port alone answers `refused`.
+/// leaves out `takes_a_wire`; refusing a link into one by its port alone answers `refused`;
+/// naming the node as the link wrote it puts its UUID in the runtime's words.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_taking_no_wire() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -160,10 +161,10 @@ async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_
         );
     }
 
-    for (node, setting) in [
-        (LEVEL_GRAPH_OUTPUT_NODE_UUID, "port"),
-        (GAIN_SET_VARIABLE_NODE_UUID, "variable"),
-        (GAIN_GET_VARIABLE_NODE_UUID, "variable"),
+    for (node, node_name, setting) in [
+        (LEVEL_GRAPH_OUTPUT_NODE_UUID, "level-out", "port"),
+        (GAIN_SET_VARIABLE_NODE_UUID, "gain-set", "variable"),
+        (GAIN_GET_VARIABLE_NODE_UUID, "gain-get", "variable"),
     ] {
         let refusal = engine
             .the_answer_or_the_refusal_of(
@@ -187,7 +188,17 @@ async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_
             Some(setting),
             "{refusal:?}"
         );
-        assert_eq!(refusal.refused_node.as_deref(), Some(node), "{refusal:?}");
+        assert_eq!(
+            refusal.refused_node.as_deref(),
+            Some(node),
+            "the node as the caller named it: {refusal:?}"
+        );
+        assert!(
+            refusal
+                .runtime_words
+                .contains(&format!("input `{setting}` of `{node_name}`")),
+            "the runtime's words name the node by its name, as at an inner level: {refusal:?}"
+        );
     }
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }

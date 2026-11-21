@@ -19,7 +19,9 @@ use crate::core::graph::{
     Graph, NodeRunId, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
 };
 use crate::core::json_schema::ConfigNodeReferenceEdgeOnTheWire;
-use crate::core::nodes::{NodeTypesOneStreamResolves, the_settings_of_a_graph_variable_node};
+use crate::core::nodes::{
+    NodeTypesOneStreamResolves, the_settings_of_a_node_type_of_the_graph_itself,
+};
 use crate::core::{Error, Result};
 
 /// The keys of `node_type` that hold a node reference: each input of a `NodeReference` it
@@ -29,7 +31,7 @@ pub(crate) fn config_keys_of_a_node_type_holding_a_node_reference(
     node_types: &NodeTypesOneStreamResolves,
     node_type: &NodeClassImportPath,
 ) -> Vec<ConfigKeyHoldingANodeReference> {
-    if let Some(settings) = the_settings_of_a_graph_variable_node(node_type) {
+    if let Some(settings) = the_settings_of_a_node_type_of_the_graph_itself(node_type) {
         return inputs_holding_a_node_reference(settings);
     }
     let Some(descriptor) = node_types.descriptor(node_type) else {
