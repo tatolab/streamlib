@@ -39,6 +39,7 @@ impl RhiBlitter for NoOpBlitter {
 use super::surfaces_and_their_stores::surface_store::SurfaceStore;
 use super::texture_pools_and_rings::lease_aware_pool_slot_ring::LeaseAwarePoolMintedFrameGenerations;
 use super::texture_pools_and_rings::shared_pool_entry_freeing::LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES;
+use super::texture_pools_and_rings::slots_outliving_their_producers::SlotsOutlivingTheirProducers;
 use super::texture_pools_and_rings::texture_pool::{
     PooledTextureHandle, TexturePool, TexturePoolDescriptor,
 };
@@ -152,6 +153,11 @@ pub struct GpuContext {
     /// The loaded stream this view serves, which every shared pool entry it
     /// acquires is attributed to. `None` on the engine's own context.
     loaded_stream_this_view_serves: Option<crate::core::runtime::LoadedStreamTag>,
+    /// The node output pool slots of this view's torn-down helpers that a
+    /// reader still held when its helper went, each kept registered until
+    /// nothing holds it. Each stream's view keeps its own: a slot is released
+    /// through its stream's surface store.
+    slots_outliving_their_producers: Arc<SlotsOutlivingTheirProducers>,
     /// GPU blitter for efficient buffer-to-buffer copies with texture caching.
     blitter: Arc<dyn RhiBlitter>,
     /// Same-process texture cache — maps surface_id to a registration
@@ -325,6 +331,7 @@ impl GpuContext {
             engines_own_surface_store,
             pipeline_cache_directory_of_its_stream: None,
             loaded_stream_this_view_serves: None,
+            slots_outliving_their_producers: Arc::default(),
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
@@ -374,6 +381,21 @@ impl GpuContext {
 
     pub fn limited_access(&self) -> GpuContextLimitedAccess {
         GpuContextLimitedAccess::new(self.clone())
+    }
+
+    /// The node output pool slots of this view's torn-down helpers that a
+    /// reader still holds.
+    pub(crate) fn slots_outliving_their_producers(&self) -> &SlotsOutlivingTheirProducers {
+        &self.slots_outliving_their_producers
+    }
+
+    /// Release every node output pool slot this view's torn-down helpers left
+    /// to their readers, held or not: called as the stream stops, once every
+    /// node — each reader among them — is gone, and before its surface store
+    /// closes, which each release goes through.
+    pub(crate) fn release_every_slot_outliving_its_producer(&self) {
+        self.slots_outliving_their_producers
+            .release_every_slot(&self.limited_access());
     }
 
     /// Wait for the GPU device to become idle. On Vulkan backends this calls
@@ -516,6 +538,7 @@ impl GpuContext {
                 pipeline_cache_directory_of_the_stream,
             )),
             loaded_stream_this_view_serves: Some(loaded_stream),
+            slots_outliving_their_producers: Arc::default(),
             ..self.clone()
         }
     }
