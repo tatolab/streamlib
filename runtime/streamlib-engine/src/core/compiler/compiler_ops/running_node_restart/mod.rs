@@ -58,11 +58,12 @@ impl RunningNodesALiveEditRestarts {
 /// is not restarted.
 ///
 /// A link into it from a function node island it evaluates itself is restarted with it, the
-/// island fed to it again as it sets up, and so is a channel from a function node promoted out of
-/// the islands. Refused by name, changing nothing, for a function or shader node, which reads no
-/// setting at setup, and for a node one of whose other links joins a function node: a link out
-/// of it into an island another node evaluates, whose place in that island is read once, when
-/// that node starts.
+/// island fed to it again as it sets up, and so is a channel into it from a function node the
+/// pool or a helper of its own evaluates. Refused by name, changing nothing, for a function or
+/// shader node, which reads no setting at setup, and for a node one of whose other links joins a
+/// function node otherwise: a link out of it into an island another node evaluates, whose place
+/// in that island is read once, when that node starts, or into a function node run in a process
+/// of its own.
 pub(crate) fn the_running_nodes_a_rebuild_restarts(
     graph: &Graph,
     nodes_to_rebuild: &[NodeRunId],
@@ -144,19 +145,20 @@ pub(crate) fn the_running_nodes_a_rebuild_restarts(
 }
 
 /// Whether link `link_id`, which joins a function node, is wired again with its reader `reader_id`
-/// when `restarted` restarts: an island `restarted` evaluates itself, or a channel from a
-/// function node promoted out of the islands.
+/// when `restarted` restarts: `restarted` reads it, as an island it evaluates itself or as a
+/// channel from a function node the pool or a helper of its own evaluates.
 fn is_rewired_with_the_node_it_feeds(
     graph: &Graph,
     link_id: &LinkUniqueId,
     reader_id: &NodeRunId,
     restarted: &NodeRunId,
 ) -> bool {
-    match how_a_link_is_wired(graph, link_id) {
-        Ok(HowALinkIsWired::ThroughAChannel) => true,
-        Ok(HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead) => reader_id == restarted,
-        _ => false,
-    }
+    reader_id == restarted
+        && matches!(
+            how_a_link_is_wired(graph, link_id),
+            Ok(HowALinkIsWired::ThroughAChannel
+                | HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead)
+        )
 }
 
 /// Close the channel of each link of the nodes a live edit restarts the way it was wired before

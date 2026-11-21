@@ -64,9 +64,9 @@ def test_each_value_the_pool_works_out_into_a_setting_rebuilds_its_class_once_wi
     the class is rebuilt once with each new value; setting the same `gain`
     again rebuilds nothing.
 
-    Fail-without-fix: the pool writing every value it works out rebuilds the
-    class at each of the pool's runs; reading the carry without rebuilding
-    leaves the class built with 0.5.
+    Fail-without-fix: reading the carry without rebuilding leaves the class
+    built with 0.5, and a rebuild with anything but the value carried reports
+    the wrong level.
     """
     tatolabd = start_tatolabd_running_stream(
         typed_level_into_a_setting_a_python_class_reads_at_setup

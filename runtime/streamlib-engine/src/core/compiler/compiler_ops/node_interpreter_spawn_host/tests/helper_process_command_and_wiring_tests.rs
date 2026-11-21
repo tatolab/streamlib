@@ -39,6 +39,48 @@ fn a_promoted_function_nodes_own_helper_reports_how_it_ran_it() {
     assert_eq!(how_its_own_helper_ran_it.ran_compiled(), Some(false));
 }
 
+/// A promoted function node whose output feeds a setting read at setup tells its helper to
+/// evaluate it as it sets up; one feeding none does not.
+///
+/// Mental-revert: leaving the flag off the setup command builds the setting's node with its own
+/// value, the helper first evaluating the node at its first run.
+#[test]
+fn a_promoted_function_node_feeding_a_setting_tells_its_helper_to_evaluate_it_at_setup() {
+    for evaluated_at_setup in [true, false] {
+        let import_path =
+            crate::core::descriptors::NodeClassImportPath::new("my_app.ops:counter").unwrap();
+        let mut node = GraphNode::new(import_path.clone(), None, "counter", None, vec![], vec![]);
+        node.insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
+            process_execution: ProcessExecution::Continuous { interval_ms: 10 },
+            evaluated_at_setup,
+            how_its_own_helper_ran_it: Arc::default(),
+        });
+        let host = spawn_host_for_a_function_node_promoted_to_its_own_process(
+            "my_app.ops:counter",
+            &NodeDescriptor::new(
+                crate::core::descriptors::NodeClassShortName::new("counter").unwrap(),
+                import_path,
+                "a test double",
+            ),
+            &node,
+            &stream_environment_for_test(),
+            Path::new(LEND_DIRECTORY_FOR_TEST),
+            the_stream_a_test_helper_belongs_to(),
+        )
+        .unwrap();
+
+        let setup_command = host.the_setup_command_to_its_helper(
+            serde_json::json!({}),
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        );
+        assert_eq!(
+            setup_command["function_node_evaluated_at_setup"],
+            serde_json::json!(evaluated_at_setup)
+        );
+    }
+}
+
 /// The child is told to run its loop in the mode the envelope carries, and
 /// this host reports `Manual` for its own thread whatever the class
 /// declared, so the envelope has to carry the child's own mode.
