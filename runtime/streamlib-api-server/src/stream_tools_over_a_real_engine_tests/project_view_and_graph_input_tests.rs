@@ -194,6 +194,92 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
     assert_eq!(project.the_graph_document_of("main"), document_before);
 }
 
+/// A view node renders each setting its manifest declares as an input before its ports, taking
+/// no wire and reading its config: `bpm` and `label` typed, as their schemas state a type
+/// exactly, and `curve`, free-form, of no pin type. The config `graph` serves keeps its keys, an
+/// untyped setting is still checked against its schema, and the graph document on disk is
+/// unchanged by the load.
+///
+/// Mental-revert: rendering the view node's declared ports alone leaves `bpm` out of its inputs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_view_node_renders_its_manifest_settings_as_inputs_reading_its_config() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    register_the_stream_tools_test_source_once();
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"].as_array_mut().unwrap().push(json!({
+        "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
+        "config": { "bpm": 128, "curve": { "ease": "in" } },
+    }));
+    let project = ProjectWithGraphDocuments::holding(graph);
+    a_view_folder_in(
+        project.path(),
+        "deck",
+        &json!({
+            "contract": "1.1", "title": "Deck", "entry": "index.html", "placement": "node",
+            "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" } }],
+            "settings": { "type": "object", "properties": {
+                "bpm": { "type": "number", "default": 120, "description": "Beats a minute." },
+                "label": { "type": "string", "default": "Deck A" },
+                "curve": { "type": "object", "default": { "ease": "out" } },
+            } },
+        }),
+    );
+    let document_before = project.the_graph_document_of("main");
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+
+    let answered = engine
+        .the_answer_or_the_refusal_of("graph", json!({ "stream": stream_id }))
+        .await
+        .expect("the graph is answered");
+    let deck = the_node_named(&answered, "deck");
+    let input_names: Vec<&str> = deck["ports"]["inputs"]
+        .as_array()
+        .expect("inputs")
+        .iter()
+        .map(|input| input["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(input_names, ["bpm", "label", "curve", "waveform"], "{deck}");
+    let bpm = super::input_value_set_tests::the_input_named(&deck, "bpm");
+    assert_eq!(bpm["pin_type"], json!({ "type": "float" }), "{bpm}");
+    assert_eq!(bpm["takes_a_wire"], false, "{bpm}");
+    assert_eq!(bpm["description"], "Beats a minute.", "{bpm}");
+    assert_eq!(bpm["value"], 128, "{bpm}");
+    assert_eq!(bpm["value_comes_from"], "saved", "{bpm}");
+    let label = super::input_value_set_tests::the_input_named(&deck, "label");
+    assert_eq!(label["pin_type"], json!({ "type": "string" }), "{label}");
+    assert_eq!(label["value"], "Deck A", "{label}");
+    assert_eq!(label["value_comes_from"], "default", "{label}");
+    let curve = super::input_value_set_tests::the_input_named(&deck, "curve");
+    assert!(curve.get("pin_type").is_none(), "{curve}");
+    assert_eq!(curve["takes_a_wire"], false, "{curve}");
+    assert_eq!(curve["value"], json!({ "ease": "in" }), "{curve}");
+    assert_eq!(
+        deck["config"],
+        json!({ "bpm": 128, "curve": { "ease": "in" } }),
+        "{deck}"
+    );
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": project.stream_asset_of("main"), "node": DECK_NODE_UUID,
+                    "input": "curve", "value": 5 }),
+        )
+        .await
+        .expect_err("`curve` takes only an object, as its schema states");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::InputValueNotValid
+    );
+    assert!(
+        refusal.runtime_words.contains("config schema")
+            && refusal.runtime_words.contains("not of type \"object\""),
+        "{}",
+        refusal.runtime_words
+    );
+}
+
 /// A native reader of Records on its input `cue`, which does nothing with them.
 #[streamlib::sdk::node(
     execution = manual,
