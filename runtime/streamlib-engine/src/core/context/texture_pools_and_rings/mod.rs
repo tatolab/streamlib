@@ -11,6 +11,7 @@ pub(crate) mod node_output_surface_pool;
 pub(super) mod one_off_acquisitions_counted_for_one_native_node;
 pub(crate) mod one_off_acquisitions_held_for_one_node;
 pub(crate) mod shared_pool_entry_freeing;
+pub(crate) mod slots_outliving_their_producers;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
 pub(super) mod texture_ring;

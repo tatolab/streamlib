@@ -317,7 +317,7 @@ fn a_node_output_pool_never_rewrites_a_frame_a_consumer_holds() {
     );
     let slot_keys: Vec<String> = registry
         .node_output_pools()
-        .drain_slots()
+        .drain_at_the_helpers_teardown_with_nothing_held(sandbox.host_inner())
         .into_iter()
         .map(|released_slot| {
             let pool_slot_key = released_slot.pool_slot_key.clone();
@@ -349,7 +349,7 @@ fn a_reused_node_output_slot_skips_the_escalate_gate_and_growth_enters_it() {
 
     use uuid::Uuid;
 
-    use super::super::release_node_output_pool_slot;
+    use super::super::release_everything_a_torn_down_helper_held;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::pool_slot_key_of_surface_id;
 
@@ -400,9 +400,7 @@ fn a_reused_node_output_slot_skips_the_escalate_gate_and_growth_enters_it() {
         pool_slot_key_of_surface_id(&first_frame)
     );
 
-    for released_slot in registry.node_output_pools().drain_slots() {
-        release_node_output_pool_slot(&sandbox, released_slot);
-    }
+    release_everything_a_torn_down_helper_held(&sandbox, &registry);
     let refusal = next_frame(2).expect_err("a hand-off after teardown is refused");
     assert!(refusal.contains("torn down"), "got: {refusal}");
 }
@@ -419,7 +417,7 @@ fn a_reused_node_output_slot_skips_the_escalate_gate_and_growth_enters_it() {
 fn a_resolved_texture_registration_holds_its_node_output_slot_until_dropped() {
     use uuid::Uuid;
 
-    use super::super::release_node_output_pool_slot;
+    use super::super::release_everything_a_torn_down_helper_held;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::pool_slot_key_of_surface_id;
 
@@ -463,9 +461,121 @@ fn a_resolved_texture_registration_holds_its_node_output_slot_until_dropped() {
         "a released slot returns to the rotation: {published_once_released:?}"
     );
 
-    for released_slot in registry.node_output_pools().drain_slots() {
-        release_node_output_pool_slot(&sandbox, released_slot);
-    }
+    release_everything_a_torn_down_helper_held(&sandbox, &registry);
+}
+
+/// A frame a reader still holds as its producer's helper is torn down — the
+/// last frame a node downstream binds into each draw until the rebuilt
+/// producer sends another — stays registered, so it still resolves; the first
+/// hand-off in the stream after the reader lets go releases it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
+fn a_frame_held_across_its_producers_teardown_resolves_until_its_reader_lets_go() {
+    use uuid::Uuid;
+
+    use super::super::release_everything_a_torn_down_helper_held;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let torn_down_helper = EscalateHandleRegistry::new();
+    let rebuilt_helper = EscalateHandleRegistry::new();
+    let pool_key = format!("held-across-teardown-test-{}", Uuid::new_v4().simple());
+    let resolve = |frame: &str| {
+        sandbox
+            .resolve_texture_registration_by_surface_id(frame, None, 64, 32)
+            .map(drop)
+    };
+    let producers_awaiting_their_readers = || {
+        sandbox
+            .host_inner()
+            .slots_outliving_their_producers()
+            .producers_awaiting_their_readers()
+    };
+
+    let held_frame =
+        next_node_output_frame_over_the_escalate_op(&sandbox, &torn_down_helper, &pool_key, 1)
+            .expect("the pool hands out a frame");
+    let held_registration = sandbox
+        .resolve_texture_registration_by_surface_id(&held_frame, None, 64, 32)
+        .expect("the published frame resolves");
+
+    release_everything_a_torn_down_helper_held(&sandbox, &torn_down_helper);
+    resolve(&held_frame).expect("a held frame resolves after its producer's teardown");
+    assert_eq!(producers_awaiting_their_readers(), 1);
+
+    next_node_output_frame_over_the_escalate_op(&sandbox, &rebuilt_helper, &pool_key, 1)
+        .expect("the rebuilt helper's pool hands out a frame");
+    assert_eq!(producers_awaiting_their_readers(), 1);
+    resolve(&held_frame).expect("a frame still held stays registered across a hand-off");
+
+    drop(held_registration);
+    next_node_output_frame_over_the_escalate_op(&sandbox, &rebuilt_helper, &pool_key, 1)
+        .expect("the rebuilt helper's pool hands out a frame");
+    assert_eq!(producers_awaiting_their_readers(), 0);
+    assert!(
+        resolve(&held_frame).is_err(),
+        "a frame nothing holds stayed registered after its producer's teardown"
+    );
+
+    release_everything_a_torn_down_helper_held(&sandbox, &rebuilt_helper);
+}
+
+/// A frame still held as its stream stops is released with the stream, held
+/// or not: every reader is gone with its node.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
+fn a_frame_held_across_its_producers_teardown_is_released_as_its_stream_stops() {
+    use uuid::Uuid;
+
+    use super::super::release_everything_a_torn_down_helper_held;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let pool_key = format!("held-across-stop-test-{}", Uuid::new_v4().simple());
+    let held_frame = next_node_output_frame_over_the_escalate_op(&sandbox, &registry, &pool_key, 1)
+        .expect("the pool hands out a frame");
+    let held_claim = sandbox
+        .claim_surface_against_producer_reuse(&held_frame)
+        .expect("a current frame is claimable");
+
+    release_everything_a_torn_down_helper_held(&sandbox, &registry);
+    let host = sandbox.host_inner();
+    assert_eq!(
+        host.slots_outliving_their_producers()
+            .producers_awaiting_their_readers(),
+        1
+    );
+
+    host.release_every_slot_outliving_its_producer();
+    assert_eq!(
+        host.slots_outliving_their_producers()
+            .producers_awaiting_their_readers(),
+        0
+    );
+    assert!(
+        sandbox
+            .resolve_texture_registration_by_surface_id(&held_frame, None, 64, 32)
+            .is_err(),
+        "a stopped stream's frame stayed registered"
+    );
+    drop(held_claim);
 }
 
 /// A native consumer's claim on a node output frame holds its slot until the
@@ -480,7 +590,7 @@ fn a_resolved_texture_registration_holds_its_node_output_slot_until_dropped() {
 fn a_claim_holds_its_node_output_frame_until_dropped_and_a_retired_frame_is_refused() {
     use uuid::Uuid;
 
-    use super::super::release_node_output_pool_slot;
+    use super::super::release_everything_a_torn_down_helper_held;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::pool_slot_key_of_surface_id;
 
@@ -523,9 +633,7 @@ fn a_claim_holds_its_node_output_frame_until_dropped_and_a_retired_frame_is_refu
         "got: {refusal}"
     );
 
-    for released_slot in registry.node_output_pools().drain_slots() {
-        release_node_output_pool_slot(&sandbox, released_slot);
-    }
+    release_everything_a_torn_down_helper_held(&sandbox, &registry);
 }
 
 /// A slot allocated while the helper's teardown drained its pools is handed
@@ -583,7 +691,11 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
         .expect("the allocation is registered");
 
     let mut pools = registry.node_output_pools();
-    assert!(pools.drain_slots().is_empty());
+    assert!(
+        pools
+            .drain_at_the_helpers_teardown_with_nothing_held(sandbox.host_inner())
+            .is_empty()
+    );
     let handed_off = pools.hand_off_a_fresh_slot(
         sandbox.host_inner(),
         "pool-torn-down-mid-allocation",
