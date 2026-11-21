@@ -11,7 +11,7 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
 };
 use crate::core::compiler::compiler_ops::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{
-    NodeClassImportPath, NodeKind, PinConversion, PinConversionSavedValueCast,
+    FunctionNodeLanguage, NodeClassImportPath, NodeKind, PinConversion, PinConversionSavedValueCast,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
@@ -307,13 +307,14 @@ impl NodeTypesOneStreamResolves {
 
     /// Cast a saved value through each conversion a function node type this stream describes
     /// from now on states with the cast `cast_of` gives for it, standing in for its body's run
-    /// out of stream, for a test in another crate.
+    /// out of stream in place of the one the stream's interpreter gives, for a test in another
+    /// crate.
     #[cfg(any(test, feature = "test-support"))]
     pub fn cast_a_saved_value_through_each_function_node_conversion_for_a_test(
         &self,
         cast_of: impl Fn(&PinConversion) -> PinConversionSavedValueCast + Send + Sync + 'static,
     ) {
-        self.cast_a_saved_value_through_each_function_node_conversion_by(cast_of);
+        *self.saved_value_cast_of_a_function_node_conversion.write() = Some(Arc::new(cast_of));
     }
 
     /// Register `descriptor`, which `installed_module` declares and this stream's interpreter
@@ -345,9 +346,37 @@ impl NodeTypesOneStreamResolves {
             .get_or_insert_with(|| Arc::new(cast_of));
     }
 
+    /// The cast of a saved value through `conversion`, which a function node type whose body is
+    /// in `language` states: a Python body's run out of stream as
+    /// [`Self::cast_a_saved_value_through_each_function_node_conversion_by`] gives it; one that
+    /// does not run, saying why, for a Rust body, and for any body while the stream gives no
+    /// such run.
+    fn the_saved_value_cast_of_a_function_node(
+        &self,
+        conversion: &PinConversion,
+        language: FunctionNodeLanguage,
+    ) -> PinConversionSavedValueCast {
+        match (
+            language,
+            self.saved_value_cast_of_a_function_node_conversion
+                .read()
+                .as_ref(),
+        ) {
+            (FunctionNodeLanguage::Rust, _) => PinConversionSavedValueCast::that_does_not_run(
+                "its body is Rust, which runs only through its evaluate entry inside a started \
+                 stream"
+                    .to_owned(),
+            ),
+            (FunctionNodeLanguage::Python, Some(cast_of)) => cast_of(conversion),
+            (FunctionNodeLanguage::Python, None) => PinConversionSavedValueCast::that_does_not_run(
+                "this stream has no interpreter to run its body in out of stream".to_owned(),
+            ),
+        }
+    }
+
     /// Register `descriptor`, which this stream's interpreter described, its nodes run as
     /// `how_its_nodes_run`, with the conversion it states: a function node's casting a saved
-    /// value as [`Self::cast_a_saved_value_through_each_function_node_conversion_by`] says.
+    /// value as [`Self::the_saved_value_cast_of_a_function_node`] gives it.
     pub(crate) fn register_a_type_described_in_this_streams_node_interpreter(
         &self,
         descriptor: NodeDescriptor,
@@ -357,18 +386,11 @@ impl NodeTypesOneStreamResolves {
             descriptor,
             mut conversion,
         } = the_node_type_as_registered(descriptor)?;
-        if let (
-            Some(conversion),
-            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds { .. },
-            Some(cast_of),
-        ) = (
-            conversion.as_mut(),
-            &how_its_nodes_run,
-            self.saved_value_cast_of_a_function_node_conversion
-                .read()
-                .as_ref(),
-        ) {
-            conversion.saved_value_cast = Some(cast_of(conversion));
+        if let (Some(conversion), NodeKind::Function { language }) =
+            (conversion.as_mut(), descriptor.node_kind)
+        {
+            conversion.saved_value_cast =
+                Some(self.the_saved_value_cast_of_a_function_node(conversion, language));
         }
         let node_type = descriptor.node_class_import_path.clone();
         if self.is_a_natively_compiled_node_type(&node_type) {

@@ -27,6 +27,9 @@ pub(super) struct WhatTheTransactionHasStaged<'repository> {
     pub(super) node_by_label: HashMap<String, Uuid>,
     pub(super) what_the_answer_names_of_each_added_node:
         HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
+    /// What became of each saved value the transaction retypes, worked out before any lock.
+    pub(super) saved_value_retypes_worked_out_before_the_edit:
+        &'repository SavedValueRetypesWorkedOutBeforeTheEdit,
 }
 
 /// Whether [`StreamGraphTransactionExecutor::apply_one_request`] checks a value it sets on an

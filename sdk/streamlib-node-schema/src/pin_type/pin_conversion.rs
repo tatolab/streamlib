@@ -85,8 +85,19 @@ impl PartialEq for PinConversionOutputPick {
 
 /// What a conversion casts one saved value with, with no stream started: a function of the
 /// host's, or one run of a module's own conversion out of stream.
-type SavedValueCastFunction =
-    dyn Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, String> + Send + Sync;
+type SavedValueCastFunction = dyn Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, SavedValueNotCast>
+    + Send
+    + Sync;
+
+/// Why a conversion's cast gives no value for a saved value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SavedValueNotCast {
+    /// What casts it did not run with no stream started, in words: the stream cannot run the
+    /// conversion's body out of stream, or its run failed.
+    DidNotRun(String),
+    /// It ran and refused the value, in words.
+    RefusedTheValue(String),
+}
 
 /// The function a conversion supplies that casts one saved value with no stream started.
 #[derive(Clone)]
@@ -96,10 +107,9 @@ pub struct PinConversionSavedValueCast {
 
 impl PinConversionSavedValueCast {
     /// The cast `cast` makes: for a value the conversion's input takes and the type of the value
-    /// to give, its output's type or a size of it, the value cast; why not, in words, when it
-    /// cannot be.
+    /// to give, its output's type or a size of it, the value cast; why not when it gives none.
     pub fn new(
-        cast: impl Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, String>
+        cast: impl Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, SavedValueNotCast>
         + Send
         + Sync
         + 'static,
@@ -109,13 +119,19 @@ impl PinConversionSavedValueCast {
         }
     }
 
-    /// `value`, a value the conversion's input takes, cast into a value of `into`; why not, in
-    /// words, when it cannot be.
+    /// A cast that never runs, for a conversion the stream cannot run out of stream: why, in
+    /// words.
+    pub fn that_does_not_run(why: String) -> Self {
+        Self::new(move |_value, _into| Err(SavedValueNotCast::DidNotRun(why.clone())))
+    }
+
+    /// `value`, a value the conversion's input takes, cast into a value of `into`; why not when
+    /// it gives none.
     pub fn cast(
         &self,
         value: &serde_json::Value,
         into: &PinType,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, SavedValueNotCast> {
         (self.cast)(value, into)
     }
 }

@@ -5,10 +5,14 @@
 
 When a Graph Input is retyped, the runtime casts its saved value through the one conversion
 between the two types. A module's `@node` or `@node.function` conversion computes its output
-from its one input alone, so its body is run once here, in the stream's own interpreter, as its
-reader runs it, its input holding the saved value. Its one output, in the stored JSON form a pin of its type holds, is the
-cast. A body that takes the stream's time or keeps state gives no one value out of stream, and
-is refused saying so.
+from its one input alone, so its body is run once here, in the stream's own interpreter, its
+input holding the saved value, and its one output, in the stored JSON form a pin of its type
+holds, is the cast.
+
+The cast runs the conversion's Python body, called the way `FunctionNodeBodyRunAsPython`
+calls it, even where the stream runs that body compiled with Numba; and it runs with the
+conversion's default config, since no node of it is placed yet. A body that takes the stream's
+time or keeps state gives no one value out of stream, and is refused saying so.
 """
 
 from __future__ import annotations
@@ -28,7 +32,24 @@ from tatolab.runtime._function_node_carried_values import (
 from tatolab.runtime._function_node_preparation import function_node_run_as_python_in_its_reader
 from tatolab.runtime._function_node_stored_values import STORED_VALUE_RECORD_KEY, STORED_VALUE_TYPES
 
-__all__ = ["SavedValueNotCast", "the_saved_value_a_function_node_casts"]
+__all__ = [
+    "SAVED_VALUE_CAST_REQUEST_INPUT_KEY",
+    "SAVED_VALUE_CAST_REQUEST_VALUE_KEY",
+    "SAVED_VALUE_CAST_DOCUMENT_CAST_KEY",
+    "SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY",
+    "SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY",
+    "SavedValueNotCast",
+    "SavedValueCastDidNotRun",
+    "the_saved_value_a_function_node_casts",
+]
+
+# The keys of the request the engine passes a cast and of the document the cast prints back;
+# the engine's `SavedValueCastRequest` and `SavedValueCastDocument` name the same fields.
+SAVED_VALUE_CAST_REQUEST_INPUT_KEY = "input"
+SAVED_VALUE_CAST_REQUEST_VALUE_KEY = "value"
+SAVED_VALUE_CAST_DOCUMENT_CAST_KEY = "cast"
+SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY = "not_cast_because"
+SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY = "not_run_because"
 
 # The stream time a body is called at out of stream; never read, since a body that takes the
 # stream's time is refused.
@@ -36,7 +57,14 @@ _NO_STREAM_TIME = 0
 
 
 class SavedValueNotCast(Exception):
-    """Why a function node conversion gives no cast of a saved value out of stream."""
+    """Why a function node conversion's body, run out of stream, gives no cast of a saved
+    value: its input does not take it, or its body raised or gave no value a Graph Input
+    saves."""
+
+
+class SavedValueCastDidNotRun(SavedValueNotCast):
+    """Why a function node conversion's body cannot run out of stream at all, whatever the
+    value."""
 
 
 def the_saved_value_a_function_node_casts(
@@ -46,37 +74,37 @@ def the_saved_value_a_function_node_casts(
     input is `input_port`: its body called once with the value on that input, its output in
     stored JSON form.
 
-    Refused as `SavedValueNotCast`, saying why, when the conversion is no Python function node,
-    takes the stream's time or keeps state, the value is not one its input takes, or its body
-    raises or gives no value a Graph Input saves.
+    Refused as `SavedValueCastDidNotRun`, saying why, when the conversion is no Python function
+    node, takes the stream's time or keeps state; as `SavedValueNotCast` when the value is not
+    one its input takes, or its body raises or gives no value a Graph Input saves.
     """
     if isinstance(function_node, RustFunctionNode):
-        raise SavedValueNotCast(
+        raise SavedValueCastDidNotRun(
             f"`{import_path}`'s body is Rust, which runs only through its evaluate entry inside "
             f"a started stream"
         )
     if not isinstance(function_node, FunctionNode):
-        raise SavedValueNotCast(
+        raise SavedValueCastDidNotRun(
             f"`{import_path}` is no function node, so its body runs only inside a started stream"
         )
     try:
         run_as_python = function_node_run_as_python_in_its_reader(function_node, import_path, "")
     except FunctionNodeDoesNotCompile as not_run:
-        raise SavedValueNotCast(str(not_run)) from not_run
+        raise SavedValueCastDidNotRun(str(not_run)) from not_run
     signature = run_as_python.function_signature
     if signature["time_parameter"] is not None:
-        raise SavedValueNotCast(
+        raise SavedValueCastDidNotRun(
             f"`{import_path}` takes the stream's time as `{signature['time_parameter']}`, which "
             f"no stream gives out of stream"
         )
     if run_as_python.is_stateful:
-        raise SavedValueNotCast(
+        raise SavedValueCastDidNotRun(
             f"`{import_path}` keeps state between calls, so one call out of stream does not give "
             f"what it gives in a stream"
         )
     [the_input] = signature["inputs"]
     if the_input["port"] != input_port:
-        raise SavedValueNotCast(f"`{import_path}` has no input `{input_port}`")
+        raise SavedValueCastDidNotRun(f"`{import_path}` has no input `{input_port}`")
     try:
         carried = pin_value_carried(
             the_input["value_type"],
@@ -99,7 +127,9 @@ def the_saved_value_a_function_node_casts(
     return _the_stored_value_of_an_output(the_output, answered, import_path)
 
 
-def _the_stored_value_of_an_output(the_output: "dict[str, Any]", answered: Any, import_path: str) -> Any:
+def _the_stored_value_of_an_output(
+    the_output: "dict[str, Any]", answered: Any, import_path: str
+) -> Any:
     """`answered`, what the body gave on `the_output` as its island carries it, in stored JSON
     form."""
     value_type = the_output["value_type"]

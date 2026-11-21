@@ -6,6 +6,10 @@
 It states that it converts, so a Graph Input saving a Float that is retyped to a String saves
 the text this body gives for its value: 0.1 becomes `10%`. Its body computes from its input
 alone, so the runtime runs it once to cast a saved value, with no stream started.
+
+That cast runs this Python body, even where the stream runs it compiled with Numba, and with
+the conversion's default config, since no node of it is placed when the Graph Input is
+retyped.
 """
 
 from __future__ import annotations

@@ -919,8 +919,6 @@ def test_importing_the_bootstrap_leaves_the_import_path_alone():
     assert importing.returncode == 0, importing.stderr
 
 
-
-
 # ---- cast a saved value ---------------------------------------------------------
 
 #: The `every-pin-kind` sample's own nodes, among them its conversion `LevelAsPercent`.
@@ -954,10 +952,17 @@ def test_the_samples_own_conversion_casts_a_saved_value_out_of_stream(tmp_path: 
         tmp_path,
         node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
         "nodes.level_as_percent:LevelAsPercent",
-        json.dumps({"input": "level", "value": 0.1}),
+        json.dumps(
+            {
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_INPUT_KEY: "level",
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_VALUE_KEY: 0.1,
+            }
+        ),
     )
 
-    assert cast_document(cast) == {"cast": "10%"}, cast.stderr
+    assert cast_document(cast) == {
+        node_interpreter_bootstrap.SAVED_VALUE_CAST_DOCUMENT_CAST_KEY: "10%"
+    }, cast.stderr
 
 
 def test_a_cast_by_a_module_that_will_not_import_names_why(tmp_path: Path):
@@ -965,10 +970,16 @@ def test_a_cast_by_a_module_that_will_not_import_names_why(tmp_path: Path):
         tmp_path,
         node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
         "no_such_module:LevelAsPercent",
-        json.dumps({"input": "level", "value": 0.1}),
+        json.dumps(
+            {
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_INPUT_KEY: "level",
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_VALUE_KEY: 0.1,
+            }
+        ),
     )
 
     document = cast_document(cast)
-    assert set(document) == {"not_cast_because"}, document
-    assert "`no_such_module:LevelAsPercent` did not load" in document["not_cast_because"]
-    assert "No module named 'no_such_module'" in document["not_cast_because"]
+    not_run_because = node_interpreter_bootstrap.SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY
+    assert set(document) == {not_run_because}, document
+    assert "`no_such_module:LevelAsPercent` did not load" in document[not_run_because]
+    assert "No module named 'no_such_module'" in document[not_run_because]

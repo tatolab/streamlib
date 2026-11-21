@@ -11,6 +11,7 @@
 use super::*;
 
 use super::input_value_set_tests::{InputValueTestNode, register_the_input_value_test_node_once};
+use streamlib::sdk::descriptors::SavedValueNotCast;
 
 const WARMTH_BASE_NODE_UUID: &str = "7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c";
 const WARMTH_NODE_UUID: &str = "8d8d8d8d-8d8d-4d8d-8d8d-8d8d8d8d8d8d";
@@ -407,7 +408,8 @@ fn a_projects_float_to_string_conversion(
 }
 
 /// A retype that only a conversion a project's Python node declares reaches saves no value when
-/// the stream has no way to run its body out of stream, and the answer names it.
+/// its body does not run out of stream, and the answer names it and why: the stream's
+/// interpreter, which the cast runs, is the test's, which prints no cast document.
 ///
 /// Mental-revert: treating the module's conversion as the built-in number cast casts 0.1 into a
 /// value no String takes.
@@ -442,7 +444,10 @@ async fn a_retype_only_a_modules_conversion_reaches_gives_way_to_the_default_nam
     assert!(
         answered["default_because"]
             .as_str()
-            .is_some_and(|why| why.contains("only inside a started stream")),
+            .is_some_and(|why| why.starts_with(
+                "`nodes.format:LevelAsText` cannot cast it with no stream started: its body did \
+                 not run out of stream:"
+            ) && why.contains("printed no cast document")),
         "{retyped}"
     );
     assert_eq!(
@@ -456,7 +461,7 @@ async fn a_retype_only_a_modules_conversion_reaches_gives_way_to_the_default_nam
 fn a_function_node_conversions_body_standing_in_as(
     engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
     stream_id: &str,
-    cast: fn(&Value) -> std::result::Result<Value, String>,
+    cast: fn(&Value) -> std::result::Result<Value, SavedValueNotCast>,
 ) {
     engine
         .engine
@@ -541,11 +546,11 @@ async fn a_function_node_conversion_that_cannot_run_out_of_stream_gives_way_to_t
     );
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     a_function_node_conversions_body_standing_in_as(&engine, &stream_id, |_value| {
-        Err(
+        Err(SavedValueNotCast::DidNotRun(
             "`nodes.format:LevelAsPercent` takes the stream's time as `now`, which no stream \
              gives out of stream"
                 .to_owned(),
-        )
+        ))
     });
     a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsPercent");
     let stream = project.stream_asset_of("main");
@@ -568,7 +573,7 @@ async fn a_function_node_conversion_that_cannot_run_out_of_stream_gives_way_to_t
     );
     assert!(
         answered["default_because"].as_str().is_some_and(|why| why
-            .starts_with("`nodes.format:LevelAsPercent` did not cast it:")
+            .starts_with("`nodes.format:LevelAsPercent` cannot cast it with no stream started:")
             && why.contains("takes the stream's time")),
         "{retyped}"
     );

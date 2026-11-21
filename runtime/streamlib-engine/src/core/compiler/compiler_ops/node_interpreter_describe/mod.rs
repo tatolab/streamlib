@@ -9,9 +9,6 @@ use std::time::Duration;
 use super::function_node_pool::{
     FUNCTION_NODE_POOL_INTERVAL_MS, FUNCTION_NODE_POOL_NODE_TYPE, the_function_node_pool_descriptor,
 };
-use super::node_interpreter_saved_value_cast::{
-    WhereAConversionRunsOutOfStream, the_saved_value_cast_of_a_function_node_conversion,
-};
 use super::node_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
 use super::node_interpreter_spawn_host::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, LoadedStreamAHelperProcessBelongsTo,
@@ -72,9 +69,11 @@ const PER_NODE_ENVIRONMENT_VARIABLES: [&str; 9] = [
 
 const DESCRIBE_STANDARD_ERROR_LOG_LABEL: &str = "node-interpreter-describe";
 
-/// Why every type a describe the host interrupted was asked for is refused.
-const DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL: &str =
-    "the runtime's host interrupted the describe";
+/// Why a run out of stream named `run_name` that the host interrupted is refused: every type
+/// a describe was asked for, or the cast a cast was asked for.
+fn interrupted_by_the_host_refusal(run_name: &str) -> String {
+    format!("the runtime's host interrupted the {run_name}")
+}
 
 /// How much of a describe's standard output is kept; the rest is read and
 /// dropped, so the describe never blocks on a full pipe.
@@ -287,20 +286,6 @@ fn register_the_described_node_type(
                 &lend_directory,
                 &the_stream_its_helpers_belong_to,
             )?;
-            let where_its_conversion_runs_out_of_stream = WhereAConversionRunsOutOfStream {
-                stream_environment: stream_environment.clone(),
-                lend_directory: Arc::clone(&lend_directory),
-                the_stream_it_belongs_to: the_stream_its_helpers_belong_to.clone(),
-            };
-            node_types_of_the_stream.cast_a_saved_value_through_each_function_node_conversion_by(
-                move |conversion| {
-                    the_saved_value_cast_of_a_function_node_conversion(
-                        conversion.node_type.clone(),
-                        conversion.input_port_name.clone(),
-                        where_its_conversion_runs_out_of_stream.clone(),
-                    )
-                },
-            );
             return register(
                 descriptor,
                 HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
@@ -392,7 +377,7 @@ pub(crate) fn describe_node_types_in_a_node_interpreter_within(
     };
     let interpreter = stream_environment.interpreter.display();
     let (describe_document, quoted_standard_error): (NodeInterpreterDescribeDocument, String) =
-        run_a_describe_reading_its_document(
+        run_the_node_interpreter_out_of_stream_reading_its_document(
             || node_interpreter_describe_command(import_paths, stream_environment, lend_directory),
             stream_environment,
             describe_bound,
@@ -464,51 +449,50 @@ pub(crate) fn describe_node_types_in_a_node_interpreter_within(
 /// What one out-of-stream run of the stream's node interpreter does, in the words its refusals
 /// name it by.
 pub(crate) struct NodeInterpreterRunOutOfStream {
-    /// What it was doing when it was killed, after "still".
-    pub(crate) doing: &'static str,
-    /// The run, after "blocks its".
-    pub(crate) run: &'static str,
-    /// The one document it prints.
-    pub(crate) document: &'static str,
+    /// What the run is doing while it runs, such as "describing them".
+    pub(crate) activity: &'static str,
+    /// The run's own name, such as "describe".
+    pub(crate) run_name: &'static str,
+    /// The name of the one document it prints, such as "describe document".
+    pub(crate) document_name: &'static str,
 }
 
 /// A describe, in the words its refusals name it by.
 const A_DESCRIBE: NodeInterpreterRunOutOfStream = NodeInterpreterRunOutOfStream {
-    doing: "describing them",
-    run: "describe",
-    document: "describe document",
+    activity: "describing them",
+    run_name: "describe",
+    document_name: "describe document",
 };
 
-/// Start the run `describe_command` builds, bounded by `describe_bound`
-/// and cut short by the stream's shutdown or the host's interrupt, and read
-/// the document it printed, every failure refused through `refuse`, naming the
-/// run as `what_runs` does.
-pub(crate) fn run_a_describe_reading_its_document<Document: serde::de::DeserializeOwned>(
-    describe_command: impl FnOnce() -> Result<Command>,
+/// Start the run of the stream's node interpreter out of stream that `run_command` builds,
+/// bounded by `run_bound` and cut short by the stream's shutdown or the host's interrupt, and
+/// read the document it printed, every failure refused through `refuse`, naming the run as
+/// `what_runs` does.
+pub(crate) fn run_the_node_interpreter_out_of_stream_reading_its_document<
+    Document: serde::de::DeserializeOwned,
+>(
+    run_command: impl FnOnce() -> Result<Command>,
     stream_environment: &StreamEnvironment,
-    describe_bound: Duration,
-    the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
+    run_bound: Duration,
+    the_stream_the_run_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
-    refuse_every_requested_type: &dyn Fn(String) -> Error,
+    refuse: &dyn Fn(String) -> Error,
     what_runs: &NodeInterpreterRunOutOfStream,
 ) -> Result<(Document, String)> {
     let NodeInterpreterRunOutOfStream {
-        doing,
-        run,
-        document,
+        activity,
+        run_name,
+        document_name,
     } = what_runs;
     let interpreter = stream_environment.interpreter.display();
     if is_interrupted_by_the_host() {
-        return Err(refuse_every_requested_type(
-            DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL.to_string(),
-        ));
+        return Err(refuse(interrupted_by_the_host_refusal(run_name)));
     }
 
-    let mut command =
-        describe_command().map_err(|refusal| refuse_every_requested_type(refusal.to_string()))?;
+    let mut command = run_command().map_err(|refusal| refuse(refusal.to_string()))?;
     let mut child =
         spawn_outside_every_iceoryx2_listener_bind(&mut command).map_err(|spawn_failure| {
-            refuse_every_requested_type(format!(
+            refuse(format!(
                 "the stream's interpreter `{interpreter}` could not be started in `{}`: \
                  {spawn_failure}",
                 stream_environment.project_directory.display()
@@ -517,11 +501,11 @@ pub(crate) fn run_a_describe_reading_its_document<Document: serde::de::Deseriali
     // `pre_exec` made the describe the leader of a group whose id is its pid.
     if !crate::core::runtime::register_a_helper_process_group(
         child.id() as i32,
-        the_stream_the_describe_belongs_to.stream_tag,
+        the_stream_the_run_belongs_to.stream_tag,
     ) {
         tracing::warn!(
-            "the describe's process group could not be registered, so a third interrupt will not \
-             kill it; the describe still ends itself when the app exits"
+            "the {run_name}'s process group could not be registered, so a third interrupt will \
+             not kill it; the {run_name} still ends itself when the app exits"
         );
     }
     let standard_output_head = child.stdout.take().map(|standard_output| {
@@ -539,9 +523,9 @@ pub(crate) fn run_a_describe_reading_its_document<Document: serde::de::Deseriali
 
     let describe_exit = wait_for_a_stream_interpreter_to_exit(
         &child,
-        describe_bound,
+        run_bound,
         &|| {
-            the_stream_the_describe_belongs_to
+            the_stream_the_run_belongs_to
                 .shutdown_escalation
                 .is_requested()
         },
@@ -550,7 +534,8 @@ pub(crate) fn run_a_describe_reading_its_document<Document: serde::de::Deseriali
     // Killed whether or not the leader already exited: nothing a describe
     // starts outlives it, and a descendant left holding its standard streams
     // would hold the readers open.
-    let exit_status = kill_the_process_group_and_reap_its_leader(&mut child, "the describe");
+    let exit_status =
+        kill_the_process_group_and_reap_its_leader(&mut child, &format!("the {run_name}"));
     let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(
         &standard_error_tail
             .map(|tail| {
@@ -562,23 +547,24 @@ pub(crate) fn run_a_describe_reading_its_document<Document: serde::de::Deseriali
     match describe_exit {
         StreamInterpreterExitAwaited::Exited => {}
         StreamInterpreterExitAwaited::BoundElapsed => {
-            return Err(refuse_every_requested_type(format!(
-                "the stream's interpreter `{interpreter}` did not finish {doing} within {}s and \
+            return Err(refuse(format!(
+                "the stream's interpreter `{interpreter}` did not finish {activity} within {}s and \
                  was killed. Work a module does at import time runs here — a module that blocks \
-                 at import blocks its {run}. {quoted_standard_error}",
-                describe_bound.as_secs_f64()
+                 at import blocks its {run_name}. {quoted_standard_error}",
+                run_bound.as_secs_f64()
             )));
         }
         StreamInterpreterExitAwaited::ItsStreamsShutdownRequested => {
-            return Err(refuse_every_requested_type(format!(
+            return Err(refuse(format!(
                 "the stream's shutdown began while its interpreter `{interpreter}` was still \
-                 {doing}, and it was killed. {quoted_standard_error}"
+                 {activity}, and it was killed. {quoted_standard_error}"
             )));
         }
         StreamInterpreterExitAwaited::InterruptedByTheHost => {
-            return Err(refuse_every_requested_type(format!(
-                "{DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL}: the stream's interpreter \
-                 `{interpreter}` was killed. {quoted_standard_error}"
+            return Err(refuse(format!(
+                "{}: the stream's interpreter `{interpreter}` was killed. \
+                 {quoted_standard_error}",
+                interrupted_by_the_host_refusal(run_name)
             )));
         }
     }
@@ -592,17 +578,17 @@ pub(crate) fn run_a_describe_reading_its_document<Document: serde::de::Deseriali
         .map(|exit_status| exit_status.to_string())
         .unwrap_or_else(|| "an exit status that could not be collected".to_string());
     if standard_output_bytes.is_empty() {
-        return Err(refuse_every_requested_type(format!(
-            "the stream's interpreter `{interpreter}` printed no {document} and exited with \
+        return Err(refuse(format!(
+            "the stream's interpreter `{interpreter}` printed no {document_name} and exited with \
              {exit_status_rendered}. {quoted_standard_error}"
         )));
     }
     let describe_document = match serde_json::from_slice::<Document>(&standard_output_bytes) {
         Ok(describe_document) => describe_document,
         Err(not_a_describe_document) => {
-            return Err(refuse_every_requested_type(format!(
+            return Err(refuse(format!(
                 "the stream's interpreter `{interpreter}` exited with {exit_status_rendered}, and \
-                 its standard output is not a {document} ({not_a_describe_document}); it began \
+                 its standard output is not a {document_name} ({not_a_describe_document}); it began \
                  {}. What a `sitecustomize`, `usercustomize` or `.pth` hook in the stream's \
                  environment prints lands ahead of the document. {quoted_standard_error}",
                 standard_output_head_as_a_refusal_quotes_it(&standard_output_bytes)
@@ -621,7 +607,7 @@ pub(crate) fn describe_the_node_types_installed_modules_declare_within(
 ) -> Result<NodeTypesTheInstalledModulesDeclare> {
     let refuse_the_installed_modules = |refusal: String| Error::Runtime(refusal);
     let (describe_document, _): (NodeInterpreterDescribeDocument, String) =
-        run_a_describe_reading_its_document(
+        run_the_node_interpreter_out_of_stream_reading_its_document(
             || {
                 node_interpreter_describe_installed_modules_command(
                     stream_environment,

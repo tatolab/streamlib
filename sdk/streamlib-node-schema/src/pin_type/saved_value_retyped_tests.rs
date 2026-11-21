@@ -45,7 +45,9 @@ fn a_conversion(
 
 /// The cast the built-in number conversions supply.
 fn number_cast() -> PinConversionSavedValueCast {
-    PinConversionSavedValueCast::new(the_number_cast)
+    PinConversionSavedValueCast::new(|value, into| {
+        the_number_cast(value, into).map_err(SavedValueNotCast::RefusedTheValue)
+    })
 }
 
 #[test]
@@ -324,5 +326,68 @@ fn a_value_the_new_type_takes_is_kept_when_the_one_fitting_conversion_has_no_cas
             &conversions
         ),
         SavedValueRetyped::TakenAsItIs
+    );
+}
+
+/// A value the new type takes as it is is kept when the one fitting conversion's cast gives
+/// none, whether it refused the value or did not run, as when it has no cast.
+///
+/// Mental-revert: giving way to the default whenever the cast gives no value clears a value the
+/// new type takes.
+#[test]
+fn a_value_the_new_type_takes_is_kept_when_the_one_fitting_conversions_cast_gives_none() {
+    let menu = PinType::Menu {
+        option_names: vec!["warm".to_owned()],
+    };
+    for not_cast in [
+        SavedValueNotCast::RefusedTheValue("it takes no Menu".to_owned()),
+        SavedValueNotCast::DidNotRun("the stream has no interpreter".to_owned()),
+    ] {
+        let conversions = [a_conversion(
+            "MenuAsText",
+            menu.clone(),
+            PinType::String {},
+            Some(PinConversionSavedValueCast::new(move |_value, _into| {
+                Err(not_cast.clone())
+            })),
+        )];
+        assert_eq!(
+            the_saved_value_retyped(
+                &json!("warm"),
+                &menu,
+                &PinType::String {},
+                None,
+                &conversions
+            ),
+            SavedValueRetyped::TakenAsItIs
+        );
+    }
+}
+
+/// A cast that did not run gives way to the default naming the conversion and why, apart from
+/// one that refused the value.
+#[test]
+fn a_cast_that_did_not_run_gives_way_to_the_default_saying_why() {
+    let conversions = [a_conversion(
+        "LevelAsPercent",
+        float(),
+        PinType::String {},
+        Some(PinConversionSavedValueCast::that_does_not_run(
+            "this stream cannot run its body out of stream".to_owned(),
+        )),
+    )];
+    let SavedValueRetyped::TakesTheDefault(why) = the_saved_value_retyped(
+        &json!(0.1),
+        &float(),
+        &PinType::String {},
+        None,
+        &conversions,
+    ) else {
+        panic!("a cast that did not run casts nothing");
+    };
+    assert_eq!(
+        why.to_string(),
+        "`tatolab.stream:LevelAsPercent` cannot cast it with no stream started: this stream \
+         cannot run its body out of stream, and the new type does not take the value as it is"
     );
 }

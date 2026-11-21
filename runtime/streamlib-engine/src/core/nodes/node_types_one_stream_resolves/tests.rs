@@ -295,25 +295,25 @@ fn the_conversion_of(node_types: &NodeTypesOneStreamResolves, path: &str) -> Pin
         .unwrap_or_else(|| panic!("`{path}` states a conversion"))
 }
 
-/// A function node's conversion casts a saved value with the cast the stream gives each, which
-/// names it and its input, and a node class's converts only inside a started stream.
-///
-/// Mental-revert: giving every described conversion the cast runs a node class's body out of
-/// stream; giving none leaves the function node's saved value to the default.
-#[test]
-fn a_function_node_conversion_casts_a_saved_value_and_a_node_class_conversion_does_not() {
-    let node_types = NodeTypesOneStreamResolves::new();
-    node_types.cast_a_saved_value_through_each_function_node_conversion_by(|conversion| {
-        let named = format!("{} on {}", conversion.node_type, conversion.input_port_name);
-        PinConversionSavedValueCast::new(move |value, _into| {
-            Ok(serde_json::json!(format!("{value} by {named}")))
-        })
-    });
-    let function_node = "node_types_one_stream_resolves_tests.project:ConvertsByItsBody";
-    let node_class = "node_types_one_stream_resolves_tests.project:ConvertsInAStream";
+/// `a_described_conversion(path)` declared as a function node whose body is in `language`.
+fn a_described_function_node_conversion(
+    path: &str,
+    language: FunctionNodeLanguage,
+) -> NodeDescriptor {
+    let mut descriptor = a_described_conversion(path);
+    descriptor.node_kind = NodeKind::Function { language };
+    descriptor
+}
+
+/// Register `descriptor` into `node_types` as a type whose nodes run inside the read of each
+/// node they feed.
+fn register_run_inside_the_read_of_each_node_it_feeds(
+    node_types: &NodeTypesOneStreamResolves,
+    descriptor: NodeDescriptor,
+) {
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(
-            a_described_conversion(function_node),
+            descriptor,
             HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
                 node_once_promoted_to_its_own_process: a_constructor_refusing_with(
                     "a function node conversion",
@@ -321,6 +321,48 @@ fn a_function_node_conversion_casts_a_saved_value_and_a_node_class_conversion_do
             },
         )
         .expect("a function node may state a conversion");
+}
+
+/// Why `cast`, expected not to run, did not.
+fn why_it_does_not_run(cast: Option<PinConversionSavedValueCast>) -> String {
+    match cast
+        .expect("a function node conversion has a cast of its own")
+        .cast(
+            &serde_json::json!(1),
+            &crate::core::descriptors::PinType::String {},
+        ) {
+        Err(crate::core::descriptors::SavedValueNotCast::DidNotRun(why)) => why,
+        other => panic!("expected a cast that does not run, got {other:?}"),
+    }
+}
+
+/// A Python function node's conversion casts a saved value with the cast the stream gives
+/// each, which names it and its input; a Rust function node's does not run out of stream, and
+/// a node class's converts only inside a started stream.
+///
+/// Mental-revert: giving every described conversion the cast runs a node class's or a Rust
+/// body out of stream; giving none leaves the Python function node's saved value to the
+/// default.
+#[test]
+fn a_python_function_node_conversion_casts_a_saved_value_and_no_other_conversion_does() {
+    let node_types = NodeTypesOneStreamResolves::new();
+    node_types.cast_a_saved_value_through_each_function_node_conversion_by(|conversion| {
+        let named = format!("{} on {}", conversion.node_type, conversion.input_port_name);
+        PinConversionSavedValueCast::new(move |value, _into| {
+            Ok(serde_json::json!(format!("{value} by {named}")))
+        })
+    });
+    let python_body = "node_types_one_stream_resolves_tests.project:ConvertsByItsBody";
+    let rust_body = "node_types_one_stream_resolves_tests.project:ConvertsByItsRustBody";
+    let node_class = "node_types_one_stream_resolves_tests.project:ConvertsInAStream";
+    register_run_inside_the_read_of_each_node_it_feeds(
+        &node_types,
+        a_described_function_node_conversion(python_body, FunctionNodeLanguage::Python),
+    );
+    register_run_inside_the_read_of_each_node_it_feeds(
+        &node_types,
+        a_described_function_node_conversion(rust_body, FunctionNodeLanguage::Rust),
+    );
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(
             a_described_conversion(node_class),
@@ -330,18 +372,41 @@ fn a_function_node_conversion_casts_a_saved_value_and_a_node_class_conversion_do
         )
         .expect("a node class may state a conversion");
 
-    let cast = the_conversion_of(&node_types, function_node)
+    let cast = the_conversion_of(&node_types, python_body)
         .saved_value_cast
-        .expect("a function node conversion casts a saved value");
+        .expect("a Python function node conversion casts a saved value");
     assert_eq!(
         cast.cast(
             &serde_json::json!(1),
             &crate::core::descriptors::PinType::String {}
         ),
-        Ok(serde_json::json!(format!("1 by {function_node} on video")))
+        Ok(serde_json::json!(format!("1 by {python_body} on video")))
+    );
+    assert!(
+        why_it_does_not_run(the_conversion_of(&node_types, rust_body).saved_value_cast)
+            .contains("its body is Rust"),
     );
     assert_eq!(
         the_conversion_of(&node_types, node_class).saved_value_cast,
         None
+    );
+}
+
+/// A Python function node's conversion in a stream that gives no run out of stream says so
+/// rather than running only inside a started stream.
+///
+/// Mental-revert: leaving it with no cast of its own gives the reason a node class's gives.
+#[test]
+fn a_python_function_node_conversion_with_no_run_out_of_stream_says_the_stream_has_none() {
+    let node_types = NodeTypesOneStreamResolves::new();
+    let python_body = "node_types_one_stream_resolves_tests.project:ConvertsByItsBody";
+    register_run_inside_the_read_of_each_node_it_feeds(
+        &node_types,
+        a_described_function_node_conversion(python_body, FunctionNodeLanguage::Python),
+    );
+
+    assert!(
+        why_it_does_not_run(the_conversion_of(&node_types, python_body).saved_value_cast)
+            .contains("this stream has no interpreter to run its body in out of stream"),
     );
 }

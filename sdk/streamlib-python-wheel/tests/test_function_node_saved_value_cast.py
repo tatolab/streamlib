@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from tatolab.runtime._function_node_saved_value_cast import (
+    SavedValueCastDidNotRun,
     SavedValueNotCast,
     the_saved_value_a_function_node_casts,
 )
@@ -98,32 +99,36 @@ def test_a_value_of_parts_is_given_in_stored_form():
 
 
 def test_a_body_that_raises_is_refused_naming_what_it_raised():
-    with pytest.raises(SavedValueNotCast, match=r"LevelChecked`'s body raised ValueError: a level is at most 1"):
+    with pytest.raises(
+        SavedValueNotCast, match=r"LevelChecked`'s body raised ValueError: a level is at most 1"
+    ) as refused:
         cast(LevelChecked, "level", 2.0)
+    assert not isinstance(refused.value, SavedValueCastDidNotRun)
 
 
 def test_a_value_its_input_does_not_take_is_refused():
-    with pytest.raises(SavedValueNotCast, match="input `text`"):
+    with pytest.raises(SavedValueNotCast, match="input `text`") as refused:
         cast(TextAsAFlag, "text", 3)
+    assert not isinstance(refused.value, SavedValueCastDidNotRun)
 
 
 def test_a_body_taking_the_stream_time_is_refused_saying_so():
-    with pytest.raises(SavedValueNotCast, match="takes the stream's time as `now`"):
+    with pytest.raises(SavedValueCastDidNotRun, match="takes the stream's time as `now`"):
         cast(LevelAtTheTime, "level", 1.0)
 
 
 def test_a_body_keeping_state_is_refused_saying_so():
-    with pytest.raises(SavedValueNotCast, match="keeps state between calls"):
+    with pytest.raises(SavedValueCastDidNotRun, match="keeps state between calls"):
         cast(LevelCounted, "level", 1.0)
 
 
 def test_an_input_the_conversion_does_not_have_is_refused():
-    with pytest.raises(SavedValueNotCast, match="has no input `volume`"):
+    with pytest.raises(SavedValueCastDidNotRun, match="has no input `volume`"):
         cast(LevelAsPercent, "volume", 1.0)
 
 
 def test_a_node_class_conversion_is_refused_since_its_body_runs_only_in_a_stream():
-    with pytest.raises(SavedValueNotCast, match="is no function node"):
+    with pytest.raises(SavedValueCastDidNotRun, match="is no function node"):
         cast(LevelInAStream, "level", 1.0)
 
 

@@ -11,7 +11,10 @@ use serde_json::Value;
 
 use super::pin_link_verdict::takes_as_it_is;
 use super::stored_value_check::{a_whole_json_number, integer_bounds, the_whole_number_of};
-use super::{FloatSize, IntegerSize, PinConversion, PinNumberRange, PinType, PinValueNotTaken};
+use super::{
+    FloatSize, IntegerSize, PinConversion, PinNumberRange, PinType, PinValueNotTaken,
+    SavedValueNotCast,
+};
 use crate::NodeClassImportPath;
 
 /// What becomes of a saved value of one type when its pin takes another.
@@ -40,6 +43,14 @@ pub enum WhyASavedValueTakesTheDefault {
     /// The one conversion that fits converts only inside a started stream, and the new type
     /// does not take the value as it is.
     TheConversionRunsOnlyInAStartedStream(NodeClassImportPath),
+    /// What casts through the one conversion that fits did not run with no stream started, and
+    /// the new type does not take the value as it is.
+    TheConversionDidNotRunOutOfStream {
+        /// The conversion's node type.
+        conversion: NodeClassImportPath,
+        /// Why, in words.
+        why: String,
+    },
     /// The one conversion that fits refused the value, in its own words.
     TheConversionRefusedTheValue {
         /// The conversion's node type.
@@ -72,6 +83,7 @@ impl WhyASavedValueTakesTheDefault {
             Self::NoConversionFits => &[],
             Self::MoreThanOneConversionFits(conversions) => conversions,
             Self::TheConversionRunsOnlyInAStartedStream(conversion)
+            | Self::TheConversionDidNotRunOutOfStream { conversion, .. }
             | Self::TheConversionRefusedTheValue { conversion, .. }
             | Self::TheCastIsNotTaken { conversion, .. }
             | Self::NoWholeNumberIsWithinTheRange { conversion, .. } => {
@@ -101,6 +113,11 @@ impl fmt::Display for WhyASavedValueTakesTheDefault {
                 formatter,
                 "`{conversion}` converts between the two types only inside a started stream, so \
                  it cannot cast a saved value, and the new type does not take the value as it is"
+            ),
+            Self::TheConversionDidNotRunOutOfStream { conversion, why } => write!(
+                formatter,
+                "`{conversion}` cannot cast it with no stream started: {why}, and the new type \
+                 does not take the value as it is"
             ),
             Self::TheConversionRefusedTheValue { conversion, why } => {
                 write!(formatter, "`{conversion}` did not cast it: {why}")
@@ -168,7 +185,8 @@ pub fn the_saved_value_retyped(
 }
 
 /// What becomes of `value` cast into `into` within `range` by `only`, the one conversion that
-/// fits: with no cast of its own, it is kept when `taken_as_it_is`, as when none fits.
+/// fits: with no cast of its own, or a cast that gives no value, it is kept when
+/// `taken_as_it_is`, as when none fits.
 fn cast_by_the_one_that_fits(
     value: &Value,
     into: &PinType,
@@ -188,7 +206,14 @@ fn cast_by_the_one_that_fits(
     };
     let cast = match saved_value_cast.cast(value, into) {
         Ok(cast) => cast,
-        Err(why) => {
+        Err(_) if taken_as_it_is => return SavedValueRetyped::TakenAsItIs,
+        Err(SavedValueNotCast::DidNotRun(why)) => {
+            return SavedValueRetyped::TakesTheDefault(Why::TheConversionDidNotRunOutOfStream {
+                conversion,
+                why,
+            });
+        }
+        Err(SavedValueNotCast::RefusedTheValue(why)) => {
             return SavedValueRetyped::TakesTheDefault(Why::TheConversionRefusedTheValue {
                 conversion,
                 why,

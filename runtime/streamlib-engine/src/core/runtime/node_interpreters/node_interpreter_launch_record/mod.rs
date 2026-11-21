@@ -11,6 +11,9 @@ use crate::core::compiler::compiler_ops::node_interpreter_describe::{
     describe_the_node_types_installed_modules_declare_within,
     register_the_node_types_installed_modules_declare,
 };
+use crate::core::compiler::compiler_ops::node_interpreter_saved_value_cast::{
+    WhereAConversionRunsOutOfStream, the_saved_value_cast_of_a_function_node_conversion,
+};
 use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
@@ -25,7 +28,7 @@ pub(crate) struct NodeInterpreterLaunchRecordOfOneStream {
     stream_environment: Option<StreamEnvironment>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
     the_stream_its_helpers_belong_to: LoadedStreamAHelperProcessBelongsTo,
-    describes_interrupted_by_the_host: AtomicBool,
+    describes_interrupted_by_the_host: Arc<AtomicBool>,
 }
 
 impl NodeInterpreterLaunchRecordOfOneStream {
@@ -42,7 +45,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             stream_environment,
             node_types_this_stream_resolves,
             the_stream_its_helpers_belong_to,
-            describes_interrupted_by_the_host: AtomicBool::new(false),
+            describes_interrupted_by_the_host: Arc::new(AtomicBool::new(false)),
         };
         launch_record.resolve_the_views_the_streams_project_brings_as_they_are_on_disk();
         launch_record
@@ -148,6 +151,10 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         else {
             return;
         };
+        self.cast_saved_values_through_each_python_function_node_conversion_in(
+            stream_environment,
+            lend_directory,
+        );
         let described = describe_the_node_types_installed_modules_declare_within(
             stream_environment,
             lend_directory,
@@ -181,6 +188,30 @@ impl NodeInterpreterLaunchRecordOfOneStream {
                 RuntimeEvent::RuntimeDidRegisterNodeType { node_type },
             );
         }
+    }
+
+    /// Cast a saved value through each Python function node conversion this stream registers
+    /// by running its body once in `stream_environment`'s interpreter, which the host's
+    /// interrupt kills as it kills a describe.
+    fn cast_saved_values_through_each_python_function_node_conversion_in(
+        &self,
+        stream_environment: &StreamEnvironment,
+        lend_directory: &Path,
+    ) {
+        let where_a_conversion_runs_out_of_stream = WhereAConversionRunsOutOfStream {
+            stream_environment: stream_environment.clone(),
+            lend_directory: Arc::new(lend_directory.to_path_buf()),
+            the_stream_it_belongs_to: self.the_stream_its_helpers_belong_to.clone(),
+            interrupted_by_the_host: Arc::clone(&self.describes_interrupted_by_the_host),
+        };
+        self.node_types_this_stream_resolves
+            .cast_a_saved_value_through_each_function_node_conversion_by(move |conversion| {
+                the_saved_value_cast_of_a_function_node_conversion(
+                    conversion.node_type.clone(),
+                    conversion.input_port_name.clone(),
+                    where_a_conversion_runs_out_of_stream.clone(),
+                )
+            });
     }
 
     fn describe_and_register(
@@ -222,6 +253,10 @@ impl NodeInterpreterLaunchRecordOfOneStream {
                     .to_string(),
             });
         };
+        self.cast_saved_values_through_each_python_function_node_conversion_in(
+            stream_environment,
+            lend_directory,
+        );
         for node_types_of_one_import_folder in
             node_types_grouped_by_the_import_folder_holding_their_code(node_types)
         {

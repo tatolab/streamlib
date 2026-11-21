@@ -24,7 +24,11 @@ OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 12)
 DESCRIBE_ARGUMENT = "--describe"
 DESCRIBE_INSTALLED_MODULES_ARGUMENT = "--describe-installed-modules"
 CAST_A_SAVED_VALUE_ARGUMENT = "--cast-a-saved-value"
-DESCRIBE_ARGUMENTS = (DESCRIBE_ARGUMENT, DESCRIBE_INSTALLED_MODULES_ARGUMENT, CAST_A_SAVED_VALUE_ARGUMENT)
+DESCRIBE_ARGUMENTS = (
+    DESCRIBE_ARGUMENT,
+    DESCRIBE_INSTALLED_MODULES_ARGUMENT,
+    CAST_A_SAVED_VALUE_ARGUMENT,
+)
 
 #: The entry-point group an installed distribution declares its node classes in,
 #: each entry's value a `module:qualname` import path.
@@ -160,6 +164,12 @@ from tatolab.runtime._parent_process_bridge import (
     _PendingEscalateResponse as _PendingEscalateResponse,
 )
 from tatolab.runtime._function_node_saved_value_cast import (
+    SAVED_VALUE_CAST_DOCUMENT_CAST_KEY,
+    SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY,
+    SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY,
+    SAVED_VALUE_CAST_REQUEST_INPUT_KEY,
+    SAVED_VALUE_CAST_REQUEST_VALUE_KEY,
+    SavedValueCastDidNotRun,
     SavedValueNotCast as SavedValueNotCast,
     the_saved_value_a_function_node_casts as the_saved_value_a_function_node_casts,
 )
@@ -324,9 +334,10 @@ def cast_a_saved_value_onto_stdout(import_path: str, request: str) -> int:
     """Print one JSON document of the saved value the conversion `import_path` names casts; 0.
 
     `request` is `{"input": <the conversion's wired input>, "value": <the saved value>}`.
-    Wire contract with the engine: stdout carries exactly `{"cast": <the value cast>}`, or
-    `{"not_cast_because": <why, in words>}` when the conversion's body gives no cast out of
-    stream, its module does not import, or it raised.
+    Wire contract with the engine: stdout carries exactly `{"cast": <the value cast>}`;
+    `{"not_cast_because": <why, in words>}` when the body ran and gave no cast of the value;
+    or `{"not_run_because": <why, in words>}` when the body cannot run out of stream or its
+    module does not import. The keys are the `SAVED_VALUE_CAST_*_KEY` constants.
     """
     described_document_fd = _reserve_stdout_for_the_described_document()
     asked = json.loads(request)
@@ -336,21 +347,30 @@ def cast_a_saved_value_onto_stdout(import_path: str, request: str) -> int:
     except Exception as failure:
         traceback.print_exc()
         cast_document = {
-            "not_cast_because": f"`{import_path}` did not load: {_in_one_line(failure)}"
+            SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY: (
+                f"`{import_path}` did not load: {_in_one_line(failure)}"
+            )
         }
     else:
         try:
             cast_document = {
-                "cast": the_saved_value_a_function_node_casts(
-                    conversion, import_path, asked["input"], asked["value"]
+                SAVED_VALUE_CAST_DOCUMENT_CAST_KEY: the_saved_value_a_function_node_casts(
+                    conversion,
+                    import_path,
+                    asked[SAVED_VALUE_CAST_REQUEST_INPUT_KEY],
+                    asked[SAVED_VALUE_CAST_REQUEST_VALUE_KEY],
                 )
             }
+        except SavedValueCastDidNotRun as not_run:
+            cast_document = {SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY: str(not_run)}
         except SavedValueNotCast as not_cast:
-            cast_document = {"not_cast_because": str(not_cast)}
+            cast_document = {SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY: str(not_cast)}
         except Exception as failure:
             traceback.print_exc()
             cast_document = {
-                "not_cast_because": f"`{import_path}` gave no cast: {_in_one_line(failure)}"
+                SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY: (
+                    f"`{import_path}` gave no cast: {_in_one_line(failure)}"
+                )
             }
     with os.fdopen(described_document_fd, "w", encoding="utf-8") as cast_document_output:
         cast_document_output.write(json.dumps(cast_document, allow_nan=False) + "\n")

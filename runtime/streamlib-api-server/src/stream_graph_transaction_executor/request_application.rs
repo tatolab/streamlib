@@ -18,6 +18,7 @@ impl StreamGraphTransactionExecutor<'_> {
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
         stream_locations: &HashMap<String, StreamLocation>,
         project_repository_held: Option<&mut ProjectRepository>,
+        saved_value_retypes_worked_out_before_the_edit: &SavedValueRetypesWorkedOutBeforeTheEdit,
     ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
         let actions_as_sent: Vec<ProjectAction> = requests_and_the_stream_id_each_names
             .iter()
@@ -107,6 +108,7 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository: project_repository_held.as_deref(),
             node_by_label: HashMap::new(),
             what_the_answer_names_of_each_added_node: HashMap::new(),
+            saved_value_retypes_worked_out_before_the_edit,
         };
         self.refuse_a_value_an_input_does_not_take_before_any_is_applied(
             &requests_and_the_stream_id_each_names,
@@ -329,6 +331,7 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository,
             node_by_label,
             what_the_answer_names_of_each_added_node,
+            ..
         } = staged;
         let project_repository = *project_repository;
         let label = match &request {
