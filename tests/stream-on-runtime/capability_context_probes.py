@@ -17,16 +17,15 @@ import json
 import os
 import threading
 import traceback
-from typing import Annotated
 
 from engine_media_clock import engine_media_clock_now_ns
+from json_messages import JsonMessagesInOrder, json_bytes, json_read
 from tatolab.stream import (
     EncodedVideo,
     InputPin,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    StreamDelivery,
     log,
     node,
 )
@@ -47,19 +46,6 @@ def _report(probe_body) -> None:
     except BaseException:  # noqa: BLE001 — re-raised by the asserting test
         observation = {"failure": traceback.format_exc()}
     log.info(RESULT_MARKER + json.dumps({"pid": os.getpid(), **observation}))
-
-
-#: An input that takes every bag in order. Each bag is one JSON object, carried
-#: as the bytes of a plain byte stream.
-BagsInOrder = Annotated[EncodedVideo, StreamDelivery("ordered")]
-
-
-def _bag_bytes(bag: dict) -> bytes:
-    return json.dumps(bag).encode()
-
-
-def _bag_of(unit) -> dict:
-    return json.loads(bytes(unit.payload))
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +131,7 @@ class ExplicitlyStampedSource:
     bags_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.bags_to_downstream.write(_bag_bytes({"value": 1}), timestamp_ns=EXPLICIT_TIMESTAMP_NS)
+        self.bags_to_downstream.write(json_bytes({"value": 1}), timestamp_ns=EXPLICIT_TIMESTAMP_NS)
 
 
 @node(execution="continuous", interval_ms=1)
@@ -153,12 +139,12 @@ class DefaultStampedSource:
     bags_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.bags_to_downstream.write(_bag_bytes({"value": 1}))
+        self.bags_to_downstream.write(json_bytes({"value": 1}))
 
 
 @node
 class TimestampCollectingSink:
-    bags_from_upstream: InputPin[BagsInOrder]
+    bags_from_upstream: InputPin[JsonMessagesInOrder]
 
     def __init__(self) -> None:
         self._reported = False
@@ -169,7 +155,7 @@ class TimestampCollectingSink:
         read = self.bags_from_upstream.read_message()
         if read is not None:
             self._reported = True
-            bag = _bag_of(read.payload)
+            bag = json_read(read.payload)
             _report(lambda: {"message": bag, "timestamp_ns": read.timestamp_ns})
 
 
@@ -214,7 +200,7 @@ class WorkerThreadSource:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def produce_from_worker_thread() -> None:
             while not self._stop.is_set():
-                self.bags_to_downstream.write(_bag_bytes({"origin": "worker-thread"}))
+                self.bags_to_downstream.write(json_bytes({"origin": "worker-thread"}))
                 self._stop.wait(0.01)
 
         self._worker = threading.Thread(target=produce_from_worker_thread, daemon=True)
@@ -228,7 +214,7 @@ class WorkerThreadSource:
 
 @node
 class WorkerThreadBagSink:
-    bags_from_upstream: InputPin[BagsInOrder]
+    bags_from_upstream: InputPin[JsonMessagesInOrder]
 
     def __init__(self) -> None:
         self._reported = False
@@ -239,7 +225,7 @@ class WorkerThreadBagSink:
         unit = self.bags_from_upstream.read()
         if unit is not None:
             self._reported = True
-            bag = _bag_of(unit)
+            bag = json_read(unit)
             _report(lambda: {"message": bag})
 
 

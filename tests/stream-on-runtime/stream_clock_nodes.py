@@ -6,17 +6,9 @@
 import json
 import os
 import tempfile
-from typing import Annotated
 
-from tatolab.stream import (
-    EncodedVideo,
-    InputPin,
-    OutputPin,
-    StreamDelivery,
-    log,
-    monotonic_now_ns,
-    node,
-)
+from json_messages import JsonMessagesInOrder, json_bytes, json_read
+from tatolab.stream import EncodedVideo, InputPin, OutputPin, log, monotonic_now_ns, node
 
 #: Messages the reporter reads before it reports the first and the last of them.
 MESSAGES_BETWEEN_THE_FIRST_AND_THE_LAST_REPORTED = 40
@@ -24,21 +16,6 @@ MESSAGES_BETWEEN_THE_FIRST_AND_THE_LAST_REPORTED = 40
 
 def report(marker_name: str, payload: "dict[str, object]") -> None:
     log.info(f"MARKER:{marker_name} " + json.dumps(payload))
-
-
-#: An input that takes every message in order. Each message is one JSON object,
-#: carried as the bytes of a plain byte stream.
-JsonMessagesInOrder = Annotated[EncodedVideo, StreamDelivery("ordered")]
-
-
-def json_bytes(written: "dict[str, object]") -> bytes:
-    """The bytes a JSON message is written as."""
-    return json.dumps(written).encode()
-
-
-def json_written(message) -> "dict":
-    """The JSON object a message read off a `JsonMessagesInOrder` input carries."""
-    return json.loads(bytes(message.payload.payload))
 
 
 @node(execution="continuous", interval_ms=10)
@@ -75,7 +52,7 @@ class StreamTimeStampReporterSink:
         message = self.stream_times_from_upstream.read_message()
         if message is None or self.reported:
             return
-        written = json_written(message)
+        written = json_read(message.payload)
         seen = {
             "stamp_ns": message.timestamp_ns,
             "written_stream_time_ns": written["stream_time_ns"],
@@ -210,7 +187,7 @@ class SlowStepRelay:
         held_until_ns = monotonic_now_ns() + SLOW_RELAY_HOLD_MS * 1_000_000
         while monotonic_now_ns() < held_until_ns:
             pass
-        relayed = json_written(message)
+        relayed = json_read(message.payload)
         relayed["stamp_the_relay_read_ns"] = message.timestamp_ns
         relayed["relay_stream_time_ns"] = ctx.time
         self.step_times_to_downstream.write(json_bytes(relayed))
@@ -229,7 +206,7 @@ class StepTimeReporterSink:
         message = self.step_times_from_upstream.read_message()
         if message is None:
             return
-        relayed = json_written(message)
+        relayed = json_read(message.payload)
         self.seen.append(
             {
                 "step_index": relayed["step_index"],
@@ -284,7 +261,7 @@ class RealTimePacedReporterSink:
         message = self.real_time_writes_from_upstream.read_message()
         if message is None or len(self.seen) >= REAL_TIME_PACED_MESSAGES_REPORTED:
             return
-        written = json_written(message)
+        written = json_read(message.payload)
         self.seen.append(
             {
                 "stamp_ns": message.timestamp_ns,
@@ -337,7 +314,7 @@ class RelayWhoseFirstHelperDiesMidStep:
         message = self.step_indices_from_upstream.read_message()
         if message is None:
             return
-        relayed = json_written(message)
+        relayed = json_read(message.payload)
         flag = _flag_marking_that_a_helper_of_this_stream_died()
         if relayed["step_index"] == STEP_THE_RELAY_HELPER_DIES_IN and not os.path.exists(flag):
             with open(flag, "w"):
@@ -359,7 +336,7 @@ class LastStepReporterSink:
         message = self.step_indices_from_upstream.read_message()
         if message is None:
             return
-        step_index = json_written(message)["step_index"]
+        step_index = json_read(message.payload)["step_index"]
         self.step_indices_seen.append(step_index)
         if self.step_indices_seen.count(STEPPED_STREAM_STEPS - 1) == 2:
             if os.path.exists(_flag_marking_that_a_helper_of_this_stream_died()):
