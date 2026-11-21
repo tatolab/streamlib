@@ -66,7 +66,7 @@ pub enum PinLinkOutcome {
 /// Two differing types the verdict lets connect, each variant stating what the input reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FreePinConversion {
-    /// Boolean, Integer and Float among themselves; a Float read as an Integer rounds half away.
+    /// Boolean, Integer and Float among themselves; a Float read as an Integer truncates toward zero.
     BetweenNumbers,
     /// A Vector into one of another size, its components to be dropped or padded with 0.
     BetweenVectors,

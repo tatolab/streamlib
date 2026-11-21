@@ -187,8 +187,8 @@ class FloatToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
 
 class FloatToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     """Casts each Float on `value` into an Integer on `cast`, truncated toward zero and
-    held to the range an Integer holds: 2.9 becomes 2 and -2.9 becomes -2. A link from a
-    Float into an Integer rounds half away from zero instead.
+    held to the range an Integer holds: 2.9 becomes 2 and -2.9 becomes -2, as a link
+    from a Float into an Integer reads it.
 
     Inputs:
         `value` (ordered): The Floats to cast.

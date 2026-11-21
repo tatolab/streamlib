@@ -99,7 +99,7 @@ macro_rules! cast_each_message {
     conversion = true,
     description = "Casts each Float on `value` into an Integer on `cast`, truncated toward \
                    zero and held to the range an Integer holds: 2.9 becomes 2 and -2.9 becomes \
-                   -2. A link from a Float into an Integer rounds half away from zero instead."
+                   -2, as a link from a Float into an Integer reads it."
 )]
 pub struct FloatToInteger;
 
