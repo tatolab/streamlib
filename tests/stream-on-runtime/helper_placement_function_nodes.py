@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from tatolab.stream import State, Stateful, Time, UnreadMessage, node
+from tatolab.stream import State, Stateful, Time, node
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class LfoPhase:
     started: bool = False
 
 
-@node.function
+@node
 def Lfo(  # noqa: N802
     rate_hz: float = 1.0, *, now: Time, previous: State[LfoPhase]
 ) -> Stateful[float, LfoPhase]:
@@ -50,7 +50,7 @@ def Clamp(x: float, low: float = 0.0, high: float = 1.0) -> float:  # noqa: N802
     return min(max(x, low), high)
 
 
-@node.function
-def Gate(value: UnreadMessage, open: bool = True) -> UnreadMessage | None:  # noqa: N802, A002
+@node
+def Gate[PinValue](value: PinValue, open: bool = True) -> PinValue | None:  # noqa: N802, A002
     """`value` handed on unread while `open`, else nothing, of any family."""
     return value if open else None

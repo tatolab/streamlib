@@ -33,23 +33,23 @@ RAISING_NODES_SOURCE = f'''\
 
 import time
 
-from tatolab.stream import Output, Records, RuntimeContextLimitedAccess, node
+from tatolab.stream import OutputPin, RuntimeContextLimitedAccess, Trigger, node
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class RaisesForItsFirstSeconds:
     """Raises on every call for {RAISES_FOR_SECONDS} s after its first."""
 
-    nothing_to_downstream = Output(Records)
+    nothing_to_downstream: OutputPin[Trigger]
 
     def __init__(self) -> None:
-        self.first_call_at = None
+        self._first_call_at = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         now = time.monotonic()
-        if self.first_call_at is None:
-            self.first_call_at = now
-        if now - self.first_call_at < {RAISES_FOR_SECONDS}:
+        if self._first_call_at is None:
+            self._first_call_at = now
+        if now - self._first_call_at < {RAISES_FOR_SECONDS}:
             raise RuntimeError("broke on purpose")
 '''
 

@@ -15,6 +15,7 @@ from helper_process_test_support import (
     drive_lifecycle_on_a_thread,
     engine_shaped_link_wiring,
     frame_index_payload,
+    the_pin_upstream_of_a_pass_through_probe,
 )
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
@@ -57,7 +58,7 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
 
 
 def test_a_port_lookup_casts_its_argument_to_the_declared_name():
-    """`@node.process` declares each port under its cast name, so every lookup casts
+    """`@node` declares each port under its cast name, so every lookup casts
     too: `Video` and `VIDEO` reach the port declared as `video`.
     """
     link_data_access = _engine.open_node_link_data_access_for_helper_process()
@@ -376,10 +377,11 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
 
     # A message published before the child's subscriber is up is dropped by
     # the channel, so publish until one comes back.
+    upstream_pin = the_pin_upstream_of_a_pass_through_probe(upstream)
     deadline = time.monotonic() + 10.0
     forwarded = None
     while forwarded is None and time.monotonic() < deadline:
-        upstream.write_to_output_port("frames_to_downstream", frame_index_payload(7))
+        upstream_pin.write(frame_index_payload(7))
         time.sleep(0.05)
         if downstream.any_input_port_has_data():
             forwarded = downstream.read_from_input_port("frames_from_upstream")
@@ -891,8 +893,9 @@ def test_a_helper_slower_than_its_upstream_forwards_the_burst(stand_in_parent):
     )
     # Faster than the probe processes, so its input never runs dry during the
     # burst and the loop never reaches its idle branch.
+    upstream_pin = the_pin_upstream_of_a_pass_through_probe(upstream)
     for index in range(80):
-        upstream.write_to_output_port("frames_to_downstream", frame_index_payload(index))
+        upstream_pin.write(frame_index_payload(index))
         time.sleep(0.001)
 
     forwarded = 0
