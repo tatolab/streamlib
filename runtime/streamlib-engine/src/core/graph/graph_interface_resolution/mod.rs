@@ -433,14 +433,17 @@ impl GraphSnapshot {
             });
         }
 
-        let mut direction_of_each_interface_node_by_cast = HashMap::new();
+        let mut each_interface_node_with_its_direction_by_cast: HashMap<
+            String,
+            (GraphInterfacePortDirection, &GraphSnapshotNode),
+        > = HashMap::new();
         let mut family_of_each_interface_node_by_cast: HashMap<String, Option<PortFamily>> =
             HashMap::new();
         let mut running_graph_input_casts = std::collections::HashSet::new();
-        let mut node_by_cast: HashMap<String, &GraphSnapshotNode> = HashMap::new();
+        let mut node_name_by_cast: HashMap<String, &str> = HashMap::new();
         for node in &self.nodes {
             let cast = cast_of(&node.name)?;
-            if node_by_cast.insert(cast.clone(), node).is_some() {
+            if node_name_by_cast.insert(cast.clone(), &node.name).is_some() {
                 return Err(Error::NodeNameTaken {
                     name: node.name.clone(),
                     cast,
@@ -471,7 +474,7 @@ impl GraphSnapshot {
                 running_graph_input_casts.insert(cast.clone());
             }
             family_of_each_interface_node_by_cast.insert(cast.clone(), family);
-            direction_of_each_interface_node_by_cast.insert(cast, direction);
+            each_interface_node_with_its_direction_by_cast.insert(cast, (direction, node));
         }
 
         let mut runtime_links = Vec::new();
@@ -479,10 +482,12 @@ impl GraphSnapshot {
         let mut linked_ports_by_interface_node_cast: HashMap<String, Vec<LinkPortRefOutput>> =
             HashMap::new();
         for (link_position, link) in self.links.iter().enumerate() {
-            let source_direction =
-                direction_of_each_interface_node_by_cast.get(&cast_of(&link.source.node)?);
-            let target_direction =
-                direction_of_each_interface_node_by_cast.get(&cast_of(&link.target.node)?);
+            let source_direction = each_interface_node_with_its_direction_by_cast
+                .get(&cast_of(&link.source.node)?)
+                .map(|(direction, _)| direction);
+            let target_interface_node =
+                each_interface_node_with_its_direction_by_cast.get(&cast_of(&link.target.node)?);
+            let target_direction = target_interface_node.map(|(direction, _)| direction);
             if source_direction.is_none() && target_direction.is_none() {
                 runtime_links.push(link.clone());
                 continue;
@@ -503,12 +508,9 @@ impl GraphSnapshot {
                     runtime_links.push(link.clone());
                     continue;
                 }
-                let graph_input_cast = cast_of(&link.target.node)?;
                 return Err(the_refusal_of_a_link_into_a_setting(
                     &link.target.port,
-                    node_by_cast
-                        .get(&graph_input_cast)
-                        .map_or(&link.target.node, |graph_input| &graph_input.name),
+                    &link.target.node,
                 ));
             }
             if source_direction.is_some() && target_direction.is_some() {
@@ -523,8 +525,7 @@ impl GraphSnapshot {
             } else {
                 (&link.target, &link.source)
             };
-            if target_direction == Some(&GraphInterfacePortDirection::Output)
-                && let Some(graph_output) = node_by_cast.get(&cast_of(&link.target.node)?)
+            if let Some((GraphInterfacePortDirection::Output, graph_output)) = target_interface_node
             {
                 refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
                     &graph_output.node_type,
@@ -554,7 +555,9 @@ impl GraphSnapshot {
         let mut interface_node_by_port_cast: HashMap<(String, bool), String> = HashMap::new();
         for (node_position, node) in self.nodes.iter().enumerate() {
             let node_cast = cast_of(&node.name)?;
-            let Some(&direction) = direction_of_each_interface_node_by_cast.get(&node_cast) else {
+            let Some(&(direction, _)) =
+                each_interface_node_with_its_direction_by_cast.get(&node_cast)
+            else {
                 runtime_nodes.push(node.clone());
                 continue;
             };

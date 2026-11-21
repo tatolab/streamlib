@@ -116,8 +116,7 @@ const GAIN_GET_VARIABLE_NODE_UUID: &str = "73737373-7373-4373-8373-737373737373"
 /// the setting and the node, as one into a setting of a `GraphInput` is.
 ///
 /// Mental-revert: rendering the settings of a node the graph resolves itself without the rule
-/// leaves out `takes_a_wire`; refusing a link into one by its port alone answers `refused`;
-/// naming the node as the link wrote it puts its UUID in the runtime's words.
+/// leaves out `takes_a_wire`; refusing a link into one by its port alone answers `refused`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_taking_no_wire() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -197,7 +196,7 @@ async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_
             refusal
                 .runtime_words
                 .contains(&format!("input `{setting}` of `{node_name}`")),
-            "the runtime's words name the node by its name, as at an inner level: {refusal:?}"
+            "the runtime's words name the setting and its node: {refusal:?}"
         );
     }
     assert_eq!(project.the_graph_document_of("main"), saved_before);

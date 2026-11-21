@@ -534,8 +534,9 @@ impl GraphSnapshot {
                     link.source.node
                 )));
             }
-            if let Some(get_node) = node_by_cast.get(&target_cast)
-                && is_a_get(&target_cast)
+            if let Some(get_node) = node_by_cast
+                .get(&target_cast)
+                .filter(|_| is_a_get(&target_cast))
             {
                 refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
                     &get_node.node_type,

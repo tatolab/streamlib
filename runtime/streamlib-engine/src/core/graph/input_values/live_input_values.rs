@@ -336,6 +336,9 @@ pub(crate) enum TakesAWireRendered<'node_type> {
     /// As the one rule answers for a setting of a node of this type, which is how `connect`
     /// judges a link into it.
     ByTheRuleOnANodeOf(&'node_type NodeClassImportPath),
+    /// `false`: each is a config field a node type not yet typed describes as a setting, which
+    /// is no port, so `connect` takes no link into it, as a view node's settings are.
+    NoneOfThemTakesOne,
     /// Left out: `connect` judges a link into it by no setting's rule, as it judges one into a
     /// placed stream, by the Inputs its stream declares.
     LeftOut,
@@ -358,6 +361,7 @@ pub(crate) fn the_settings_rendered_reading_the_values_held(
                 TakesAWireRendered::ByTheRuleOnANodeOf(node_type) => {
                     Some(setting_info.takes_a_wire_on_a_node_of(node_type))
                 }
+                TakesAWireRendered::NoneOfThemTakesOne => Some(false),
                 TakesAWireRendered::LeftOut => None,
             };
             let read = input_values
