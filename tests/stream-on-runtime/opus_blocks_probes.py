@@ -21,14 +21,17 @@ no microphone for the same reason the window-stage fixtures do not.
 import json
 import math
 import struct
+from typing import Annotated
 
 import numpy
 from tatolab.stream import (
-    Channels,
-    Input,
-    Output,
-    Packets,
+    Audio,
+    EncodedAudio,
+    EncodedCodecs,
+    InputPin,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     log,
     monotonic_now_ns,
     node,
@@ -66,10 +69,7 @@ ENCODED_PACKETS_REPORTED = 40
 # processes attaching at their own pace, and the cross-check needs the overlap.
 DECODED_BLOCKS_REPORTED = 24
 
-ENCODED_PORT = "encoded_audio_from_upstream"
-
-
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class StereoToneSource:
     """Publishes a stereo tone at a stated rate, for the encoder to frame.
 
@@ -78,7 +78,7 @@ class StereoToneSource:
     read as the codec's failure rather than this fixture's.
     """
 
-    audio = Output(Channels, rate=SOURCE_SAMPLE_RATE, dtype="f32")
+    audio: OutputPin[Audio]
 
     def __init__(self) -> None:
         self._frames_published = 0
@@ -100,14 +100,14 @@ class StereoToneSource:
         at = self._frames_published
         instants = (at + numpy.arange(SOURCE_FRAMES_PER_BLOCK)) / SOURCE_SAMPLE_RATE
         tone = numpy.sin(math.tau * TONE_HZ * instants).astype(numpy.float32)
-        ctx.outputs.write(
-            self.audio,
+        self.audio.write(
             numpy.ascontiguousarray(numpy.stack([tone] * SOURCE_CHANNELS)),
             # Derived from the samples before it rather than read fresh, so the
             # stamps describe one gapless stream even though the publishing
             # runs ahead of real time.
             timestamp_ns=anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE,
             start_sample=at,
+            sample_rate=SOURCE_SAMPLE_RATE,
         )
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
@@ -121,7 +121,7 @@ def opus_head_channels_and_pre_skip(hex_encoded_opus_head: str) -> tuple[int, in
     return opus_head[9], pre_skip
 
 
-@node.process
+@node
 class EncodedOpusMediaFrameProbe:
     """Reads the encoder's output as Opus packets and reports each one.
 
@@ -130,18 +130,20 @@ class EncodedOpusMediaFrameProbe:
     """
 
     def __init__(self) -> None:
-        self.packets_admitted = 0
+        self._packets_admitted = 0
 
-    encoded_audio_from_upstream = Input(Packets, delivery="ordered", requires_codec=("opus",))
+    encoded_audio_from_upstream: InputPin[
+        Annotated[EncodedAudio, StreamDelivery("ordered"), EncodedCodecs("opus")]
+    ]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.packets_admitted >= ENCODED_PACKETS_REPORTED:
+        if self._packets_admitted >= ENCODED_PACKETS_REPORTED:
             return
-        message = ctx.inputs.read_message(ENCODED_PORT)
+        message = self.encoded_audio_from_upstream.read_message()
         if message is None:
             return
-        opus_packet = bytes(memoryview(message.payload).cast("B"))
-        upstream_stream_facts = ctx.inputs.upstream_stream_facts(ENCODED_PORT)
+        opus_packet = bytes(memoryview(message.payload.payload).cast("B"))
+        upstream_stream_facts = self.encoded_audio_from_upstream.upstream_stream_facts()
         if not isinstance(upstream_stream_facts, PacketsStreamFacts):
             raise RuntimeError(
                 "the encoder's port carries no Packets stream facts beside a packet it published"
@@ -149,7 +151,7 @@ class EncodedOpusMediaFrameProbe:
         opus_head_channels, pre_skip = opus_head_channels_and_pre_skip(
             upstream_stream_facts.codec_configuration_hex
         )
-        self.packets_admitted += 1
+        self._packets_admitted += 1
         log.info(
             ENCODED_PACKET_MARKER
             + json.dumps(
@@ -167,11 +169,11 @@ class EncodedOpusMediaFrameProbe:
                 }
             )
         )
-        if self.packets_admitted == ENCODED_PACKETS_REPORTED:
+        if self._packets_admitted == ENCODED_PACKETS_REPORTED:
             log.info(ENCODED_PACKETS_COMPLETE_MARKER)
 
 
-@node.process
+@node
 class DecodedAudioBlockProbe:
     """Reports each decoded block's format, its length and its stamp.
 
@@ -180,17 +182,17 @@ class DecodedAudioBlockProbe:
     """
 
     def __init__(self) -> None:
-        self.blocks_admitted = 0
+        self._blocks_admitted = 0
 
-    audio_from_upstream = Input(Channels, delivery="ordered")
+    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.blocks_admitted >= DECODED_BLOCKS_REPORTED:
+        if self._blocks_admitted >= DECODED_BLOCKS_REPORTED:
             return
-        block = ctx.inputs.read(self.audio_from_upstream)
+        block = self.audio_from_upstream.read()
         if block is None:
             return
-        self.blocks_admitted += 1
+        self._blocks_admitted += 1
         log.info(
             DECODED_BLOCK_MARKER
             + json.dumps(
@@ -208,5 +210,5 @@ class DecodedAudioBlockProbe:
                 }
             )
         )
-        if self.blocks_admitted == DECODED_BLOCKS_REPORTED:
+        if self._blocks_admitted == DECODED_BLOCKS_REPORTED:
             log.info(DECODED_BLOCKS_COMPLETE_MARKER)

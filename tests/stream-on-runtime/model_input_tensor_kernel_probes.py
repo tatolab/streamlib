@@ -12,12 +12,11 @@ import json
 import os
 import sys
 import traceback
-from typing import Any, Callable, Tuple, TypedDict
+from typing import Annotated, Any, Callable, Tuple, TypedDict
 
 from tatolab.stream import (
     GpuSurfaceHandle,
-    Image,
-    Input,
+    InputPin,
     ModelInputTensorChannelOrder,
     ModelInputTensorDtype,
     ModelInputTensorFit,
@@ -25,6 +24,8 @@ from tatolab.stream import (
     ModelInputTensorLayout,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
     log,
     node,
 )
@@ -50,14 +51,14 @@ NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
 
 
 class FitCase(TypedDict):
-    fit: ModelInputTensorFit
-    width: "int | None"
-    height: "int | None"
-    pad_to_multiple_of: "int | None"
+    _fit: ModelInputTensorFit
+    _width: "int | None"
+    _height: "int | None"
+    _pad_to_multiple_of: "int | None"
     # The geometry worked out by hand for a 60x36 frame:
     # resized width, resized height, pad left, pad top.
-    expected_geometry: "list[int]"
-    expected_tensor_extent: "list[int]"
+    _expected_geometry: "list[int]"
+    _expected_tensor_extent: "list[int]"
 
 
 FIT_CASES: "dict[str, FitCase]" = {
@@ -209,29 +210,24 @@ def compare_with_the_torch_reference(
     }
 
 
-class ModelInputTensorMatrixProbeConfig(TypedDict, total=False):
-    fit_case_name: str
-    # The negative control: every kernel compiled with `WRONG_MEAN`, compared
-    # with a reference made with the right one.
-    compile_with_the_wrong_mean: bool
-
-
-@node.process
+@node
 class ModelInputTensorMatrixProbe:
     """Applies a kernel per layout x dtype of one fit to the first frame and
     reports each tensor's largest error against torch."""
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
-    def __init__(self, config: ModelInputTensorMatrixProbeConfig) -> None:
-        self.compiled_mean = (
-            WRONG_MEAN if config.get("compile_with_the_wrong_mean") else IMAGENET_MEAN
-        )
-        self.fit_case_name = config.get("fit_case_name", "letterbox")
-        self.reported = False
+    fit_case_name: str = "letterbox"
+    # The negative control: every kernel compiled with `WRONG_MEAN`, compared
+    # with a reference made with the right one.
+    compile_with_the_wrong_mean: bool = False
+
+    def __init__(self) -> None:
+        self._compiled_mean = WRONG_MEAN if self.compile_with_the_wrong_mean else IMAGENET_MEAN
+        self._reported = False
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.kernels = {
+        self._kernels = {
             case: ModelInputTensorKernel.compile(
                 ctx.gpu_full_access,
                 width=FIT_CASES[case[0]]["width"],
@@ -242,17 +238,17 @@ class ModelInputTensorMatrixProbe:
                 layout=case[1],
                 dtype=case[2],
                 scale=SCALE,
-                mean=self.compiled_mean,
+                mean=self._compiled_mean,
                 std=IMAGENET_STD,
             )
             for case in matrix_cases_for_fit(self.fit_case_name)
         }
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None or self.reported:
+        frame = self.video_from_upstream.read()
+        if frame is None or self._reported:
             return
-        self.reported = True
+        self._reported = True
         gpu = ctx.gpu_limited_access
 
         def apply_each() -> "dict[str, Any]":
@@ -273,7 +269,7 @@ class ModelInputTensorMatrixProbe:
                         IMAGENET_MEAN,
                         IMAGENET_STD,
                     )
-                    for case, kernel in self.kernels.items()
+                    for case, kernel in self._kernels.items()
                 }
             return {
                 "source_is_not_uniform": bool((source_rgba != source_rgba[0, 0]).any()),
@@ -283,24 +279,24 @@ class ModelInputTensorMatrixProbe:
         _report(apply_each)
 
 
-@node.process
+@node
 class NonRgbaSourceRefusalProbe:
     """Hands the kernel a `bgra32` pixel buffer and a tensor surface, and
     reports each refusal."""
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.kernel = ModelInputTensorKernel.compile(ctx.gpu_full_access, width=32, height=24)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None or self.reported:
+        frame = self.video_from_upstream.read()
+        if frame is None or self._reported:
             return
-        self.reported = True
+        self._reported = True
         gpu = ctx.gpu_limited_access
 
         def refusal_of(surface: GpuSurfaceHandle) -> str:
@@ -334,16 +330,16 @@ SECOND_FIT_CASE: FitCase = {
 }
 
 
-@node.process
+@node
 class PadBottomRightExtentChangeProbe:
     """Applies one `pad_bottom_right` kernel to the frame, then to a smaller
     RGBA pixel buffer written from numpy, then to the frame again — each
     tensor at its own source's extent, each compared with torch."""
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.kernel = ModelInputTensorKernel.compile(
@@ -356,10 +352,10 @@ class PadBottomRightExtentChangeProbe:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None or self.reported:
+        frame = self.video_from_upstream.read()
+        if frame is None or self._reported:
             return
-        self.reported = True
+        self._reported = True
         gpu = ctx.gpu_limited_access
 
         def compare(surface: GpuSurfaceHandle, source_rgba, fit_case: FitCase) -> "dict[str, Any]":

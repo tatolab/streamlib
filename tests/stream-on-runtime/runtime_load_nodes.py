@@ -1,26 +1,36 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The `@node.process` classes `test_stream_graph_load_on_tatolabd.py` names in a graph by type alone.
+"""The `@node` classes `test_stream_graph_load_on_tatolabd.py` names in a graph by type alone.
 
 Nothing in the test process imports this module: `tatolabd` describes it in a
 node interpreter, so a graph naming `runtime_load_nodes:LoadedFrameRelay`
 proves a node type registers from its description alone.
 """
 
-from tatolab.stream import Image, Input, Output, RuntimeContextLimitedAccess, node
+from typing import Annotated
+
+from tatolab.stream import (
+    InputPin,
+    OutputPin,
+    RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
+    node,
+)
 
 
-@node.process
+@node
 class LoadedFrameRelay:
     """Passes each frame it reads downstream unchanged."""
 
-    video_from_upstream = Input(Image, delivery="newest")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
-    video_to_downstream = Output(Image)
+    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is not None:
-            ctx.outputs.write(self.video_to_downstream, frame)
+            self.video_to_downstream.write(frame)
 

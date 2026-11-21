@@ -1,37 +1,33 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The Image reader `test_graph_variables.py` reads a variable with, twice."""
+"""The Texture reader `test_graph_variables.py` reads a variable with, twice."""
 
-import dataclasses
 import json
 import os
+from typing import Annotated
 
-from tatolab.stream import Image, Input, log, node
+from tatolab.stream import InputPin, StreamDelivery, Texture, log, node
 
 READ_MARKER_PREFIX = "MARKER:GRAPH_VARIABLE_READ_"
 
 
-@dataclasses.dataclass
-class ImageVariableReaderConfig:
+@node
+class ImageVariableReader:
+    """Reports the first Texture frame it reads, under a marker named for `reader`."""
+
+    image_from_the_variable: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+
     reader: str = "reader"
 
-
-@node.process
-class ImageVariableReader:
-    """Reports the first Image frame it reads, under a marker named for `reader`."""
-
-    image_from_the_variable = Input(Image, delivery="ordered")
-
-    def __init__(self, config: ImageVariableReaderConfig) -> None:
-        self.reader = config.reader
-        self.reported = False
+    def __init__(self) -> None:
+        self._reported = False
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.image_from_the_variable)
-        if frame is None or self.reported:
+        frame = self.image_from_the_variable.read()
+        if frame is None or self._reported:
             return
-        self.reported = True
+        self._reported = True
         log.info(
             f"{READ_MARKER_PREFIX}{self.reader.upper()} "
             + json.dumps(

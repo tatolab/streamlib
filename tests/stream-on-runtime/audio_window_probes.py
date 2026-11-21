@@ -16,16 +16,17 @@ rather than one the machine happens to have.
 
 import json
 import math
-from typing import Optional
+from typing import Annotated, Optional
 
 import numpy
 from tatolab.stream import (
+    Audio,
     AudioWindowContract,
-    Channels,
     ChannelsBlock,
-    Input,
-    Output,
+    InputPin,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     log,
     monotonic_now_ns,
     node,
@@ -66,65 +67,69 @@ def _reading(block: ChannelsBlock) -> dict:
     }
 
 
-@node.process
+@node
 class ExactWindowProbe:
     """Reports the shape and stamp of the first few windows it is handed."""
 
     def __init__(self) -> None:
-        self.readings = []
+        self._readings = []
 
-    audio_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=AudioWindowContract(
-            sample_rate=16_000,
-            channels=1,
-            dtype="f32",
-            window_size=512,
-            hop=512,
-        ),
-    )
+    audio_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            AudioWindowContract(
+                sample_rate=16_000,
+                channels=1,
+                dtype="f32",
+                window_size=512,
+                hop=512,
+            ),
+        ]
+    ]
 
     def process(self, ctx) -> None:
         # Drained past the report so the probe measures the stage rather than
         # its own backlog draining away as counted drops.
-        block = ctx.inputs.read(self.audio_from_upstream)
-        if block is None or len(self.readings) >= WINDOWS_REPORTED:
+        block = self.audio_from_upstream.read()
+        if block is None or len(self._readings) >= WINDOWS_REPORTED:
             return
-        self.readings.append(_reading(block))
-        if len(self.readings) == WINDOWS_REPORTED:
-            log.info(CONTIGUOUS_RESULT_MARKER + json.dumps(self.readings))
+        self._readings.append(_reading(block))
+        if len(self._readings) == WINDOWS_REPORTED:
+            log.info(CONTIGUOUS_RESULT_MARKER + json.dumps(self._readings))
 
 
-@node.process
+@node
 class RollingWindowProbe:
     """A hop below the window: consecutive windows overlap by the difference."""
 
     def __init__(self) -> None:
-        self.readings = []
+        self._readings = []
 
-    audio_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=AudioWindowContract(
-            sample_rate=16_000,
-            channels=1,
-            dtype="f32",
-            window_size=512,
-            hop=160,
-        ),
-    )
+    audio_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            AudioWindowContract(
+                sample_rate=16_000,
+                channels=1,
+                dtype="f32",
+                window_size=512,
+                hop=160,
+            ),
+        ]
+    ]
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read(self.audio_from_upstream)
-        if block is None or len(self.readings) >= WINDOWS_REPORTED:
+        block = self.audio_from_upstream.read()
+        if block is None or len(self._readings) >= WINDOWS_REPORTED:
             return
-        self.readings.append(_reading(block))
-        if len(self.readings) == WINDOWS_REPORTED:
-            log.info(ROLLING_RESULT_MARKER + json.dumps(self.readings))
+        self._readings.append(_reading(block))
+        if len(self._readings) == WINDOWS_REPORTED:
+            log.info(ROLLING_RESULT_MARKER + json.dumps(self._readings))
 
 
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class StereoToneSource:
     """Publishes a stereo tone at a stated rate, so a consumer's channel count
     is the test's own fact rather than the machine's.
@@ -134,7 +139,7 @@ class StereoToneSource:
     read as the stage's failure rather than this fixture's.
     """
 
-    audio = Output(Channels, rate=SOURCE_SAMPLE_RATE, dtype="f32")
+    audio: OutputPin[Audio]
 
     def __init__(self) -> None:
         self._frames_published = 0
@@ -156,67 +161,71 @@ class StereoToneSource:
         at = self._frames_published
         instants = (at + numpy.arange(SOURCE_FRAMES_PER_BLOCK)) / SOURCE_SAMPLE_RATE
         tone = numpy.sin(math.tau * 440.0 * instants).astype(numpy.float32)
-        ctx.outputs.write(
-            self.audio,
+        self.audio.write(
             numpy.ascontiguousarray(numpy.stack([tone] * SOURCE_CHANNELS)),
             # Derived from the samples before it rather than read fresh, so the
             # stamps describe one gapless stream even though the publishing
             # runs ahead of real time.
             timestamp_ns=anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE,
             start_sample=at,
+            sample_rate=SOURCE_SAMPLE_RATE,
         )
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
 
-@node.process
+@node
 class SourceFollowingWindowProbe:
     """Declares no channel count, so its windows carry the source's own."""
 
     def __init__(self) -> None:
-        self.readings = []
+        self._readings = []
 
-    audio_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=AudioWindowContract(
-            sample_rate=SOURCE_SAMPLE_RATE,
-            dtype="f32",
-            window_size=WINDOW_SIZE,
-        ),
-    )
+    audio_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            AudioWindowContract(
+                sample_rate=SOURCE_SAMPLE_RATE,
+                dtype="f32",
+                window_size=WINDOW_SIZE,
+            ),
+        ]
+    ]
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read(self.audio_from_upstream)
-        if block is None or len(self.readings) >= WINDOWS_REPORTED:
+        block = self.audio_from_upstream.read()
+        if block is None or len(self._readings) >= WINDOWS_REPORTED:
             return
-        self.readings.append(_reading(block))
-        if len(self.readings) == WINDOWS_REPORTED:
-            log.info(SOURCE_FOLLOWING_RESULT_MARKER + json.dumps(self.readings))
+        self._readings.append(_reading(block))
+        if len(self._readings) == WINDOWS_REPORTED:
+            log.info(SOURCE_FOLLOWING_RESULT_MARKER + json.dumps(self._readings))
 
 
-@node.process
+@node
 class DeclaredMonoWindowProbe:
     """The same source through a contract that does state a count: proof the
     declared path still converts while the one beside it follows."""
 
     def __init__(self) -> None:
-        self.readings = []
+        self._readings = []
 
-    audio_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=AudioWindowContract(
-            sample_rate=SOURCE_SAMPLE_RATE,
-            dtype="f32",
-            window_size=WINDOW_SIZE,
-            channels=1,
-        ),
-    )
+    audio_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            AudioWindowContract(
+                sample_rate=SOURCE_SAMPLE_RATE,
+                dtype="f32",
+                window_size=WINDOW_SIZE,
+                channels=1,
+            ),
+        ]
+    ]
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read(self.audio_from_upstream)
-        if block is None or len(self.readings) >= WINDOWS_REPORTED:
+        block = self.audio_from_upstream.read()
+        if block is None or len(self._readings) >= WINDOWS_REPORTED:
             return
-        self.readings.append(_reading(block))
-        if len(self.readings) == WINDOWS_REPORTED:
-            log.info(DECLARED_MONO_RESULT_MARKER + json.dumps(self.readings))
+        self._readings.append(_reading(block))
+        if len(self._readings) == WINDOWS_REPORTED:
+            log.info(DECLARED_MONO_RESULT_MARKER + json.dumps(self._readings))

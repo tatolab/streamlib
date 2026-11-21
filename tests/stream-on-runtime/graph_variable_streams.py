@@ -21,7 +21,7 @@ def a_test_pattern_held_in_a_variable_and_read_twice(stream_builder: StreamBuild
     for reader in ("front", "back"):
         getter = stream_builder.add(GetVariable, input_values={"variable": "pattern"})
         image_reader = stream_builder.add(
-            ImageVariableReader, name=reader, config={"reader": reader}
+            ImageVariableReader, name=reader, input_values={"reader": reader}
         )
         stream_builder.connect(
             getter.output("value"), image_reader.input("image_from_the_variable")
