@@ -12,15 +12,20 @@ frame it was handed: it publishes the inverted picture from a texture ring of
 its own.
 """
 
+from typing import Annotated
+
 import numpy
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -29,12 +34,20 @@ INVERTED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 INVERTED_FRAME_TEXTURE_USAGE = ["texture_binding"]
 
 
-@node.process
+@node
 class InvertingEffect:
     """Reads each camera frame on the CPU and publishes its colour-inverted twin."""
 
-    video_from_upstream = Input(Image, delivery="newest")
-    video_to_downstream = Output(Image)
+    video_from_upstream: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
+    ]
+    video_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(INVERTED_FRAME_TEXTURE_FORMAT),
+            Description("The same frames, colour-inverted"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.inverted_frame_texture_ring = NodeOutputTextureRing(
@@ -42,7 +55,7 @@ class InvertingEffect:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        camera_frame = ctx.inputs.read(self.video_from_upstream)
+        camera_frame = self.video_from_upstream.read()
         if camera_frame is None:
             return
 
@@ -66,8 +79,7 @@ class InvertingEffect:
         # The capture stamp is what consumers order by, and a `VirtualCameraSink`
         # sets the device's colorimetry from the frame's colour, so the two
         # cameras present the same picture under the same time and colour.
-        ctx.outputs.write(
-            self.video_to_downstream,
+        self.video_to_downstream.write(
             ImageFrameToWrite.of_texture(inverted_texture, camera_frame.colour),
             timestamp_ns=camera_frame.timestamp_ns,
         )

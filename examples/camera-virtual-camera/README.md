@@ -67,7 +67,7 @@ both doors would list the same camera twice.
 
 **The effect publishes its own textures.** `nodes/inverting_effect.py` reads
 the camera's pixels through a read-only `numpy.from_dlpack(frame, device="cpu")`
-view of the `ImageFrame` its `Input(Image)` port hands it, and writes their inversion straight into a slot of its own
+view of the `ImageFrame` its `InputPin[Texture]` hands it, and writes their inversion straight into a slot of its own
 `NodeOutputTextureRing`, in one pass on the host. It never edits the frame
 it was handed: the passthrough sink is reading that same engine-owned surface.
 Whenever a producer's output feeds more than one consumer, an effect between
@@ -87,7 +87,7 @@ whatever the effect costs. An effect that stays on the GPU does not pay that —
 ## One host, many looks
 
 `nodes/shader_effect.py` is an effect written once. It takes a Slang function
-as config, and the function *is* the look: the effect wraps it in a compute
+as its `effect_slang` setting, and the function *is* the look: the effect wraps it in a compute
 kernel at `setup()` and runs it over every frame on the GPU, so the pixels
 never leave it. Three looks ship in `nodes/looks/` to start from:
 `grayscale.slang`, `vignette.slang` and `pixelate.slang`.
