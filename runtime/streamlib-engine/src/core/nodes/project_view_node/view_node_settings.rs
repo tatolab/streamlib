@@ -12,7 +12,9 @@ use crate::core::descriptors::{
     NodeDescriptor, NodeInputMode, PinDeclaration, PortDescriptor, PortFamily,
     PortFamilyDeclaration, SettingReadTime,
 };
-use crate::core::graph::input_values::the_settings_rendered_reading_the_values_held;
+use crate::core::graph::input_values::{
+    TakesAWireRendered, the_settings_rendered_reading_the_values_held,
+};
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigFieldDescribedAsASetting, the_config_fields_described_as_settings,
 };
@@ -79,12 +81,11 @@ pub(crate) fn render_the_settings_of_each_view_node_into(
             .and_then(serde_json::Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let rendered = the_settings_rendered_reading_the_values_held(&settings, &config_held)
-            .into_iter()
-            .map(|mut rendered| {
-                rendered.takes_a_wire = Some(false);
-                rendered
-            });
+        let rendered = the_settings_rendered_reading_the_values_held(
+            &settings,
+            &config_held,
+            TakesAWireRendered::NoneOfThemTakesOne,
+        );
         node.ports.inputs.splice(0..0, rendered);
     }
 }
