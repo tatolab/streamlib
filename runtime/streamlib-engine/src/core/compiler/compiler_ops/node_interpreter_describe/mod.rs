@@ -535,7 +535,7 @@ pub(crate) fn run_the_node_interpreter_out_of_stream_reading_its_document<
     // starts outlives it, and a descendant left holding its standard streams
     // would hold the readers open.
     let exit_status =
-        kill_the_process_group_and_reap_its_leader(&mut child, &format!("the {run_name}"));
+        kill_the_process_group_and_reap_its_leader(&mut child, format!("the {run_name}"));
     let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(
         &standard_error_tail
             .map(|tail| {

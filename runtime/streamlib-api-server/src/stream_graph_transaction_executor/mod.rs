@@ -563,16 +563,19 @@ impl StreamGraphTransactionExecutor<'_> {
             ));
         }
         let applied = self.apply_the_requests(
-            requests
-                .into_iter()
-                .zip(stream_id_of_each_request.iter().cloned())
-                .collect(),
+            request_application::TheRequestsOfATransaction {
+                requests_and_the_stream_id_each_names: requests
+                    .into_iter()
+                    .zip(stream_id_of_each_request.iter().cloned())
+                    .collect(),
+                saved_value_retypes_worked_out_before_the_edit:
+                    &saved_value_retypes_worked_out_before_the_edit,
+            },
             mode,
             author,
             idempotency_key,
             stream_locations,
             project_repository_held.as_deref_mut(),
-            &saved_value_retypes_worked_out_before_the_edit,
         )?;
         if let Some(project_repository_held) = project_repository_held {
             let edited_project_directory =

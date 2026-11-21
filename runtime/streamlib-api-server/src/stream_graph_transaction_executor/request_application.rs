@@ -7,19 +7,30 @@ use super::live_application_and_reversal::{
 use super::*;
 use streamlib::sdk::graph::input_values::InputValueToSetLive;
 
+/// The requests of one transaction, each with the stream id it names, and what becomes of each
+/// saved value they retype, worked out before the transaction took any lock.
+pub(super) struct TheRequestsOfATransaction<'worked_out> {
+    pub(super) requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)>,
+    pub(super) saved_value_retypes_worked_out_before_the_edit:
+        &'worked_out SavedValueRetypesWorkedOutBeforeTheEdit,
+}
+
 impl StreamGraphTransactionExecutor<'_> {
     /// Apply each request, to the loaded stream it names, as one transaction by `author`, to the
     /// project `project_repository_held` holds when the transaction is committed.
     pub(super) fn apply_the_requests(
         &self,
-        requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)>,
+        requests: TheRequestsOfATransaction<'_>,
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
         stream_locations: &HashMap<String, StreamLocation>,
         project_repository_held: Option<&mut ProjectRepository>,
-        saved_value_retypes_worked_out_before_the_edit: &SavedValueRetypesWorkedOutBeforeTheEdit,
     ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
+        let TheRequestsOfATransaction {
+            requests_and_the_stream_id_each_names,
+            saved_value_retypes_worked_out_before_the_edit,
+        } = requests;
         let actions_as_sent: Vec<ProjectAction> = requests_and_the_stream_id_each_names
             .iter()
             .map(|(request, _)| ProjectAction::StreamGraph(request.clone()))
