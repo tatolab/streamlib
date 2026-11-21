@@ -616,3 +616,97 @@ fn a_carry_into_a_pool_the_commit_adds_hands_nothing_to_a_running_helper() {
 
     assert_eq!(handed, None);
 }
+
+/// Make input `in1` of `reader` a Float setting read at setup.
+fn make_in1_a_setting_read_at_setup(graph: &mut Graph, reader: &NodeRunId) {
+    use crate::core::descriptors::{NodeInputMode, PinFlow, PinType, ResolvedPin, SettingReadTime};
+    let in1 = graph
+        .traversal_mut()
+        .v(reader)
+        .first_mut()
+        .unwrap()
+        .ports
+        .inputs
+        .iter_mut()
+        .find(|port| port.name == "in1")
+        .expect("the mock reader has an input `in1`");
+    in1.pin = Some(ResolvedPin {
+        pin_type: PinType::Float { exact_size: None },
+        flow: PinFlow::Value,
+    });
+    in1.input_mode = Some(NodeInputMode::SettingOnly {
+        read: SettingReadTime::AtSetup,
+    });
+}
+
+/// An island into a setting its reader reads at setup is carried through the pool, though the
+/// reader evaluates islands into its other inputs itself, as no read of the reader takes a
+/// setting: its carry is written as the pool sets up, and the half out of the pool is a channel,
+/// which the engine reads into the setting. The same island into an input the reader reads is
+/// left to the reader.
+///
+/// Mental-revert: judging a link by its reader alone leaves the island into the setting to a
+/// reader that never reads it, and the setting never takes the island's value.
+#[test]
+fn an_island_into_a_setting_read_at_setup_is_carried_through_the_pool_written_at_its_setup() {
+    let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
+    let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+    let reading_a_setting = a_helper_reader_before_its_setup(&mut graph);
+    make_in1_a_setting_read_at_setup(&mut graph, &reading_a_setting);
+    let reading_each_run = a_helper_reader_before_its_setup(&mut graph);
+    let into_the_setting = link(&mut graph, (&lfo, "result"), (&reading_a_setting, "in1"));
+    let into_a_read = link(&mut graph, (&lfo, "result"), (&reading_each_run, "in1"));
+    let mut nodes_to_add = vec![lfo, reading_a_setting.clone(), reading_each_run];
+    let mut links_to_add = vec![into_the_setting.clone(), into_a_read.clone()];
+
+    carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+        &mut graph,
+        &mut nodes_to_add,
+        &mut links_to_add,
+    )
+    .unwrap();
+
+    assert_eq!(
+        the_links_a_link_is_wired_as(&graph, &into_a_read),
+        vec![into_a_read.clone()],
+        "a reader reading its input evaluates the island itself"
+    );
+    assert_eq!(
+        how_a_link_is_wired(&graph, &into_a_read).unwrap(),
+        HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead
+    );
+    let carried = the_links_carried_through_the_function_node_pool_of(&graph);
+    let [carried] = carried.as_slice() else {
+        panic!("one link is carried through the pool");
+    };
+    assert_eq!(carried.carried_link_id, into_the_setting);
+    let out_of_the_pool = carried.out_of_the_function_node_pool;
+    assert_eq!(
+        out_of_the_pool.to_port().to_string(),
+        InputLinkPortRef::new(&reading_a_setting, "in1").to_string()
+    );
+    assert_eq!(
+        how_a_link_is_wired(&graph, &out_of_the_pool.id).unwrap(),
+        HowALinkIsWired::ThroughAChannel,
+        "the half out of the pool is a channel, read by the engine into the setting"
+    );
+    let pool = the_function_node_pool_of(&graph).unwrap();
+    let carries = graph
+        .traversal()
+        .v(&pool)
+        .first()
+        .unwrap()
+        .config
+        .clone()
+        .unwrap()["carries"]
+        .clone();
+    assert_eq!(
+        carries,
+        serde_json::json!([{
+            "input_port": "island_0",
+            "output_port": "island_0_output",
+            "family": "channels",
+            "written_at_setup": true,
+        }])
+    );
+}

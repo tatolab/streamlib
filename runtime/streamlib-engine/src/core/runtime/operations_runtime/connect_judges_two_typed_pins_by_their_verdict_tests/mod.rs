@@ -15,10 +15,10 @@ use super::connect_on_a_test_thread::{
 use super::{ALinkConnected, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
-    FreePinConversion, NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName,
-    NodeDescriptor, NodeInputMode, NodeKind, OutputPortDeclaredNames, PinDeclaration, PinFlow,
-    PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    SettingReadTime, TexturePixelFormat,
+    FreePinConversion, FunctionNodeLanguage, NamedPinTypeImportPath, NodeClassImportPath,
+    NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, OutputPortDeclaredNames,
+    PinDeclaration, PinFlow, PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor, PortFamily,
+    PortFamilyDeclaration, SettingReadTime, TexturePixelFormat,
 };
 use crate::core::graph::{
     InputLinkPortRef, NodeRunId, OutputLinkPortRef,
@@ -38,6 +38,7 @@ mod texture_formats_tests;
 const FLOAT_SOURCE: &str = "VerdictCheckFloatSource";
 const FLOAT_STREAM_SOURCE: &str = "VerdictCheckFloatStreamSource";
 const FLOAT_SHADER_SOURCE: &str = "VerdictCheckFloatShaderSource";
+const FLOAT_FUNCTION_SOURCE: &str = "VerdictCheckFloatFunctionSource";
 const NUMBER_SINK: &str = "VerdictCheckNumberSink";
 const CELSIUS_SOURCE: &str = "VerdictCheckCelsiusSource";
 const FAHRENHEIT_SINK: &str = "VerdictCheckFahrenheitSink";
@@ -171,6 +172,15 @@ fn register_the_verdict_fixture_node_types() {
         );
         shader_source.node_kind = NodeKind::Shader;
         register(shader_source);
+        let mut function_source = a_node_type(
+            class_path(FLOAT_FUNCTION_SOURCE),
+            Vec::new(),
+            vec![a_typed_port("value", float())],
+        );
+        function_source.node_kind = NodeKind::Function {
+            language: FunctionNodeLanguage::Python,
+        };
+        register(function_source);
         register(a_node_type(
             class_path(NUMBER_SINK),
             vec![
@@ -504,46 +514,26 @@ fn a_value_wire_into_a_setting_connects_and_a_stream_into_it_is_refused() {
     assert_eq!(the_links_in(&compiler), 1);
 }
 
-/// A Value wire from a shader node into a setting read at setup is refused in the verdict's
-/// words, naming both nodes: the shader's value is worked out inside the read of each node it
-/// feeds, and no run reads the setting. Into an input read each run, the same output connects.
+/// A Value wire from a function or shader node into a setting read at setup connects, as one
+/// from a node of any other kind does: the engine reads what it computes into the setting.
 ///
-/// Mental-revert: without the refusal of a link from a function or shader node into a setting,
-/// the wire connects.
+/// Mental-revert: refusing a link from a function or shader node into a setting refuses both
+/// wires.
 #[test]
-fn a_value_wire_from_a_shader_node_into_a_setting_is_refused_naming_both_nodes() {
+fn a_value_wire_from_a_function_or_shader_node_into_a_setting_connects() {
     register_the_verdict_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
-    let shader = a_node_of(&compiler, class_path(FLOAT_SHADER_SOURCE));
-    let sink = a_node_of(&compiler, class_path(NUMBER_SINK));
-
-    let refusal = the_verdicts_refusal(
+    for source_type in [FLOAT_FUNCTION_SOURCE, FLOAT_SHADER_SOURCE] {
+        let source = a_node_of(&compiler, class_path(source_type));
+        let sink = a_node_of(&compiler, class_path(NUMBER_SINK));
         connect_on_this_thread(
             &compiler,
-            OutputLinkPortRef::new(shader.clone(), "value"),
-            InputLinkPortRef::new(sink.clone(), "gain"),
+            OutputLinkPortRef::new(source, "value"),
+            InputLinkPortRef::new(sink, "gain"),
         )
-        .expect_err("a shader node's value feeds no setting read at setup"),
-    );
-    assert_eq!(
-        refusal,
-        PinLinkRefusal::ComputedValueIntoASetting {
-            output_node_name: FLOAT_SHADER_SOURCE.to_lowercase(),
-            output_node_kind: NodeKind::Shader,
-            node_name: NUMBER_SINK.to_lowercase(),
-            input_name: "gain".to_owned(),
-        }
-    );
-    assert!(refusal.to_string().contains("shader"), "{refusal}");
-    assert_eq!(the_links_in(&compiler), 0);
-
-    connect_on_this_thread(
-        &compiler,
-        OutputLinkPortRef::new(shader, "value"),
-        InputLinkPortRef::new(sink, "count"),
-    )
-    .expect("a shader node's value feeds an input read each run");
-    assert_eq!(the_links_in(&compiler), 1);
+        .unwrap_or_else(|refusal| panic!("a {source_type} feeds a setting: {refusal}"));
+    }
+    assert_eq!(the_links_in(&compiler), 2);
 }
 
 /// A link a built-in conversion bridges is refused by the engine's own connect, which never

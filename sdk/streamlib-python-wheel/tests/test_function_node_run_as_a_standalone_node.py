@@ -400,6 +400,60 @@ def test_the_pool_hands_on_every_part_of_a_control_message_its_island_answers():
     assert destination.read_from_input_port("read") is None, "each message is handed on once"
 
 
+def test_the_pool_writes_an_island_carried_into_a_setting_as_it_sets_up_and_no_other():
+    """The engine builds a reader whose setting an island feeds once the pool has set up, so the
+    pool writes that island's value at its setup; an island into any other input waits for the
+    pool's first `process`.
+
+    Fail-without-fix: the pool writes nothing at its setup, and the reader is built with the
+    setting's own value.
+    """
+    from tatolab.runtime._function_node_pool import the_node_class_the_function_node_pool_runs_as
+
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    pool_class = the_node_class_the_function_node_pool_runs_as(
+        {
+            "carries": [
+                {
+                    "input_port": "island_0",
+                    "output_port": "island_0_output",
+                    "family": "channels",
+                    "written_at_setup": True,
+                },
+                {"input_port": "island_1", "output_port": "island_1_output", "family": "channels"},
+            ]
+        },
+        data_plane,
+    )
+    pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)
+    destinations = {}
+    for carry_number in (0, 1):
+        destination = _engine.open_node_link_data_access_for_helper_process()
+        link_id = f"L-out-of-the-pool-at-setup-{carry_number}"
+        node_interpreter_bootstrap.wire_link_data_access(
+            destination, {"inputs": [_wiring_of_one_link_end("input", "read", link_id)]}
+        )
+        node_interpreter_bootstrap.wire_link_data_access(
+            data_plane,
+            {"outputs": [_wiring_of_one_link_end("output", f"island_{carry_number}_output", link_id)]},
+        )
+        destinations[carry_number] = destination
+    island = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["island_0", "island_1"])
+    island.write_block("island_0", "d", [[0.5]], sample_rate=0)
+    island.write_block("island_1", "d", [[0.25]], sample_rate=0)
+
+    pool.setup(_ContextOfOneProcess())
+
+    payload = destinations[0].read_from_input_port("read")
+    assert payload is not None, "the island into a setting is written at setup"
+    assert bytes(payload) == struct.pack("<d", 0.5)
+    assert destinations[1].read_from_input_port("read") is None, "the other waits for `process`"
+    pool.process(_ContextOfOneProcess())
+    payload = destinations[1].read_from_input_port("read")
+    assert payload is not None
+    assert bytes(payload) == struct.pack("<d", 0.25)
+
+
 def test_a_running_pool_takes_a_new_carry_and_hands_its_island_on_without_a_restart():
     from tatolab.runtime._function_node_pool import (
         take_the_carries_a_running_pool_is_handed,

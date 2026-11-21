@@ -151,11 +151,8 @@ pub(crate) fn refuse_a_link_feeding_an_island_into_the_app_process(
     if !runs_each_of_its_nodes_in_the_app_process(
         graph.node_types_this_stream_resolves(),
         reader.node_type(),
-    ) || the_function_node_pool_evaluates_an_island_from_into(
-        graph,
-        from.node_run_id(),
-        reader_id,
-    ) {
+    ) || the_function_node_pool_evaluates_an_island_from_into(graph, from.node_run_id(), to)
+    {
         return Ok(());
     }
     Err(the_refusal_of_an_island_fed_into_the_app_process(

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use streamlib::sdk::descriptors::{NodeKind, PinLinkEndNamed, PinLinkRefusal, PinType};
+use streamlib::sdk::descriptors::{PinLinkEndNamed, PinLinkRefusal, PinType};
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -153,16 +153,6 @@ fn an_engine_error_reads_back_with_its_code_and_the_input_it_names() {
                 input_name: "radius".to_owned(),
             })),
             ControlOperationRefusalCode::InputTakesNoWire,
-            Some("radius".to_owned()),
-        ),
-        (
-            Error::PinLinkRefused(Box::new(PinLinkRefusal::ComputedValueIntoASetting {
-                output_node_name: "noise".to_owned(),
-                output_node_kind: NodeKind::Shader,
-                node_name: "blur".to_owned(),
-                input_name: "radius".to_owned(),
-            })),
-            ControlOperationRefusalCode::LinkFromAFunctionNodeIntoASetting,
             Some("radius".to_owned()),
         ),
         (
