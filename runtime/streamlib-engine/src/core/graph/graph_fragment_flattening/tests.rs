@@ -722,3 +722,40 @@ fn a_placed_stream_renders_its_stream_setting_as_an_input_reading_the_asset_it_p
         "the config `graph` serves keeps its keys"
     );
 }
+
+/// `look` as a placed stream whose own `GraphInput` declares its Input as `input_port`.
+fn a_placed_look_whose_input_is_named(input_port: &str) -> serde_json::Value {
+    let mut graph = a_camera_through_look_holding_soft_into_a_display();
+    graph["nodes"][1]["type"] = serde_json::json!(STREAM_FRAGMENT_NODE_TYPE);
+    graph["nodes"][1]["config"] =
+        serde_json::json!({"stream": {"asset": "0b8f6f2e-9a51-4d3c-8f0e-2f6b4c1d7a10"}});
+    graph["nodes"][1]["fragment"]["nodes"][0]["config"]["port"] = serde_json::json!(input_port);
+    graph["links"][0]["target"]["port"] = serde_json::json!(input_port);
+    graph
+}
+
+/// Mental-revert: without the refusal the placed stream flattens, and a link into its Input
+/// `stream` also marks its `stream` setting as fed by that link.
+#[test]
+fn a_placed_stream_whose_input_is_named_like_its_stream_setting_is_refused_naming_both() {
+    for input_port in ["stream", "Stream"] {
+        let refusal = flattened(a_placed_look_whose_input_is_named(input_port))
+            .expect_err("an Input named like the placed stream's setting is refused")
+            .to_string();
+        for named in [
+            "placed stream `look`".to_string(),
+            format!("the Input `{input_port}`"),
+            "Graph Input `source`".to_string(),
+            "own setting `stream`".to_string(),
+        ] {
+            assert!(refusal.contains(&named), "{named} in {refusal}");
+        }
+    }
+}
+
+#[test]
+fn a_generated_fragment_may_name_its_input_stream() {
+    let mut graph = a_placed_look_whose_input_is_named("stream");
+    graph["nodes"][1]["type"] = serde_json::json!("looks.generators:look");
+    flattened(graph).expect("only a placed stream has a `stream` setting to collide with");
+}
