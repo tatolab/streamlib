@@ -5,23 +5,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::RegisteredHandle;
+use super::node_output_pool_slots_kept_until_unheld::NodeOutputPoolSlotsKeptUntilUnheld;
 use crate::core::context::texture_pools_and_rings::gpu_pool_claim_table::{
     GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool,
 };
 use crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::{
-    LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
+    LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
 };
 use crate::core::context::texture_pools_and_rings::node_output_surface_pool::{
     NodeOutputSurfacePool, NodeOutputSurfacePoolHandOff, NodeOutputSurfacePoolRefusedFreshSlot,
     OutputFramesKeptByTheOutputLinksOfOneNode,
 };
 use crate::core::context::{
-    GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore, TextureRegistration,
-    gpu_pool_claim_table_row_for_a_shared_slot,
+    GpuContext, SurfaceStore, TextureRegistration, gpu_pool_claim_table_row_for_a_shared_slot,
 };
 use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
-use streamlib_ipc_types::{GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest};
+use streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NodeOutputTextureDescriptor {
@@ -49,6 +49,10 @@ pub(crate) struct NodeOutputPoolSlot {
 }
 
 impl NodeOutputPoolSlot {
+    pub(super) fn registered_handle(&self) -> &RegisteredHandle {
+        &self.registered_handle
+    }
+
     /// The claim table row other interpreters claim this slot's frames in.
     pub(crate) fn claim_table_row(&self) -> Option<&GpuPoolClaimTableRowLease> {
         self.gpu_pool_claim_table_row.as_ref()
@@ -111,9 +115,8 @@ pub(crate) struct NodeOutputPoolsOfOneHelper {
     /// across a descriptor change so a replaced pool's rows stay retired.
     claim_tables_by_pool_key: HashMap<String, GpuPoolClaimTablesOfOnePool>,
     /// Slots of pools a descriptor change replaced, kept until nothing holds
-    /// them: releasing a held slot would hand its resource back to its
-    /// allocator, and another acquire could rewrite it under its reader.
-    retiring_slots: Vec<LeaseAwarePoolSlot<NodeOutputPoolSlot>>,
+    /// them.
+    retiring_slots: NodeOutputPoolSlotsKeptUntilUnheld,
     /// Set by the helper's teardown drain: nothing drains the pools again, so
     /// a slot handed in after it would never be released.
     drained_at_the_helpers_teardown: bool,
@@ -220,8 +223,9 @@ impl NodeOutputPoolsOfOneHelper {
             .and_then(SurfaceStore::check_out_lease_registry);
         let minted_frame_generations = host.lease_aware_pool_minted_frame_generations();
         self.replace_the_pool_if_its_descriptor_changed(pool_key, descriptor);
-        let released_slots =
-            self.release_retiring_slots_nobody_holds(check_out_leases, minted_frame_generations);
+        let released_slots = self
+            .retiring_slots
+            .take_each_slot_nobody_holds(check_out_leases, minted_frame_generations);
         let kept_by_the_output_links = self
             .output_frames_kept_by_its_output_links
             .kept_by_every_output_link();
@@ -323,7 +327,7 @@ impl NodeOutputPoolsOfOneHelper {
             && existing_descriptor != descriptor
             && let Some((_, replaced_pool)) = self.pools_by_key.remove(pool_key)
         {
-            self.retiring_slots.extend(replaced_pool.into_slots());
+            self.retiring_slots.keep(replaced_pool.into_slots());
         }
     }
 
@@ -344,74 +348,38 @@ impl NodeOutputPoolsOfOneHelper {
         pool
     }
 
-    /// Every retiring slot nobody holds any longer, with every frame it
-    /// published retired first — under the lease hand-off guard, so a checkout
-    /// of one of its ids lands strictly before the test (and keeps the slot) or
-    /// strictly after the retire (and is refused as recycled).
-    fn release_retiring_slots_nobody_holds(
+    /// Every slot of every pool, retiring ones included, for the helper's
+    /// teardown: each one nobody holds, owed its release now, and the ones a
+    /// reader still holds, kept until it lets go. Every hand-off after it is
+    /// refused.
+    pub(crate) fn drain_at_the_helpers_teardown(
         &mut self,
-        check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
-        minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
-    ) -> Vec<ReleasedNodeOutputPoolSlot> {
-        if self.retiring_slots.is_empty() {
-            return Vec::new();
-        }
-        let mut lease_hand_off =
-            match check_out_leases.map(|leases| leases.hold_for_pool_slot_hand_off()) {
-                None => None,
-                Some(Some(hand_off)) => Some(hand_off),
-                // An unreadable lease table proves no slot free; keep them all.
-                Some(None) => return Vec::new(),
-            };
-        let mut minted_frame_generations_held = minted_frame_generations.held_for_a_hand_off();
-        let (unheld_slots, still_held_slots): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut self.retiring_slots)
-                .into_iter()
-                .partition(|slot| {
-                    !slot.resource().is_held_in_this_process()
-                        && lease_hand_off.as_ref().is_none_or(|hand_off| {
-                            !hand_off.is_checked_out_by_any_holder(slot.pool_slot_key())
-                        })
-                        && slot.resource().gpu_pool_claim_table_row().is_none_or(
-                            |claim_table_row| {
-                                claim_table_row
-                                    .row()
-                                    .retire_for_a_rehand(slot.published_frame_generation())
-                                    == GpuPoolSlotRehandTest::RetiredForTheRehand
-                            },
-                        )
-                });
-        self.retiring_slots = still_held_slots;
-        for slot in &unheld_slots {
-            let generation_past_every_published_frame = slot.published_frame_generation() + 1;
-            if let Some(hand_off) = lease_hand_off.as_mut() {
-                hand_off.publish_frame_generation(
-                    slot.pool_slot_key(),
-                    generation_past_every_published_frame,
-                );
-            }
-            minted_frame_generations_held.retire_every_published_frame_of_slot(
-                slot.pool_slot_key(),
-                generation_past_every_published_frame,
-            );
-        }
-        unheld_slots.into_iter().map(released_slot).collect()
-    }
-
-    /// Every slot of every pool, retiring ones included, for teardown; every
-    /// hand-off after it is refused.
-    pub(crate) fn drain_slots(&mut self) -> Vec<ReleasedNodeOutputPoolSlot> {
+        host: &GpuContext,
+    ) -> (
+        Vec<ReleasedNodeOutputPoolSlot>,
+        NodeOutputPoolSlotsKeptUntilUnheld,
+    ) {
         self.drained_at_the_helpers_teardown = true;
-        self.pools_by_key
-            .drain()
-            .flat_map(|(_, (_, pool))| pool.into_slots())
-            .chain(std::mem::take(&mut self.retiring_slots))
-            .map(released_slot)
-            .collect()
+        let mut slots_of_the_helper = std::mem::take(&mut self.retiring_slots);
+        slots_of_the_helper.keep(
+            self.pools_by_key
+                .drain()
+                .flat_map(|(_, (_, pool))| pool.into_slots()),
+        );
+        let surface_store = host.surface_store();
+        let unheld_slots = slots_of_the_helper.take_each_slot_nobody_holds(
+            surface_store
+                .as_ref()
+                .and_then(SurfaceStore::check_out_lease_registry),
+            host.lease_aware_pool_minted_frame_generations(),
+        );
+        (unheld_slots, slots_of_the_helper)
     }
 }
 
-fn released_slot(slot: LeaseAwarePoolSlot<NodeOutputPoolSlot>) -> ReleasedNodeOutputPoolSlot {
+pub(super) fn released_slot(
+    slot: LeaseAwarePoolSlot<NodeOutputPoolSlot>,
+) -> ReleasedNodeOutputPoolSlot {
     ReleasedNodeOutputPoolSlot {
         pool_slot_key: slot.pool_slot_key().to_string(),
         registered_handle: slot.into_resource().registered_handle,

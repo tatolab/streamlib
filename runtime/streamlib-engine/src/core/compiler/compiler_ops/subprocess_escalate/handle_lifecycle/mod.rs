@@ -4,6 +4,7 @@
 //! What the parent holds on a helper process's behalf, and the release every
 //! acquire owes — by explicit `release_handle` or at bridge teardown.
 
+mod node_output_pool_slots_kept_until_unheld;
 mod node_output_pools_of_one_helper;
 mod one_off_acquisition_count_reservation;
 #[cfg(test)]
@@ -437,12 +438,25 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
         removed_handle.flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
         release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }
-    let node_output_pool_slots_drained_at_teardown = registry.node_output_pools().drain_slots();
-    for released_slot in node_output_pool_slots_drained_at_teardown {
+    let (unheld_node_output_pool_slots, node_output_pool_slots_a_reader_holds) = registry
+        .node_output_pools()
+        .drain_at_the_helpers_teardown(sandbox.host_inner());
+    for released_slot in unheld_node_output_pool_slots {
         released_slot
             .registered_handle
             .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
         release_node_output_pool_slot(sandbox, released_slot);
+    }
+    // A node downstream may bind the last frame it read into each draw until
+    // a new one comes, from the node's rebuilt helper or none; taking that
+    // frame's registration now would fail every draw after this teardown.
+    if !node_output_pool_slots_a_reader_holds.is_empty() {
+        node_output_pool_slots_a_reader_holds
+            .flag_each_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
+        sandbox
+            .host_inner()
+            .slots_outliving_their_producers()
+            .keep_until_their_readers_let_go(Box::new(node_output_pool_slots_a_reader_holds));
     }
     for acceleration_structure_id in registry.take_acceleration_structures_built_for_the_helper() {
         release_acceleration_structure(sandbox, &acceleration_structure_id);
