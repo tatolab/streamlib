@@ -1,7 +1,7 @@
 {
   "script": "author_a_python_node",
   "task": {
-    "statement": "In the project of the one stream the runtime holds, create the node file nodes/tremolo.py from the template and read it; write into it a function node Tremolo whose `level` input has no default, check the project's code for that file and read the refusal's code and place; write it again with `level` defaulting to 1.0, check it once more and read that it passes; then place the node on the stream.",
+    "statement": "In the project of the one stream the runtime holds, create the node file nodes/tremolo.py from the template, read it, check the project's code for it as created and read that it passes; write into it a function node Tremolo whose `level` input has no default, check the project's code for that file and read the refusal's code and place; write it again with `level` defaulting to 1.0, check it once more and read that it passes; then place the node on the stream.",
     "givens": {
       "node_file_path": "nodes/tremolo.py",
       "node_source_with_a_mistake": "from tatolab.stream import node\n\n\n@node\ndef Tremolo(level: float, depth: float = 0.5) -> float:\n    \"\"\"`level` dipped by `depth`.\"\"\"\n    return level * (1.0 - depth)\n",
@@ -65,6 +65,42 @@
           "at": "/path",
           "equals": {
             "$given": "node_file_path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "checked_as_created",
+      "tool": "check_project_code",
+      "arguments": {
+        "project_directory": {
+          "$read": {
+            "step": "streams",
+            "pointer": "/streams/0/location/project_directory"
+          }
+        },
+        "paths": [
+          {
+            "$given": "node_file_path"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "at": "/verdict",
+          "equals": "passed"
+        },
+        {
+          "at": "/findings",
+          "has_length": 0
+        },
+        {
+          "at": "/files_checked/0/content_sha256",
+          "equals": {
+            "$read": {
+              "step": "read",
+              "pointer": "/content_sha256"
+            }
           }
         }
       ]
