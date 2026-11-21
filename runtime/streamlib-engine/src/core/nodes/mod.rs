@@ -69,7 +69,8 @@ pub(crate) use placed_stream_node_type::the_settings_of_a_placed_stream;
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 pub(crate) use project_view_node::{
     is_the_input_of_an_output_a_panel_writes,
-    refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes, the_names_listed,
+    refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes,
+    render_the_settings_of_each_view_node_into, the_names_listed,
     the_refusal_of_a_value_an_output_does_not_carry,
     the_saved_values_without_any_on_an_output_a_panel_writes,
 };
