@@ -17,6 +17,7 @@ from helper_process_test_support import (
     drive_lifecycle_on_a_thread,
     engine_shaped_link_wiring,
     frame_index_payload,
+    the_pin_upstream_of_a_pass_through_probe,
 )
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
@@ -786,7 +787,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         # The helper is parked on its listener by now, so the message arrives
         # by waking the wait.
         time.sleep(0.2)
-        upstream.write_to_output_port("frames_to_downstream", frame_index_payload(3))
+        the_pin_upstream_of_a_pass_through_probe(upstream).write(frame_index_payload(3))
         deadline = time.monotonic() + 5.0
         forwarded = None
         while forwarded is None and time.monotonic() < deadline:
