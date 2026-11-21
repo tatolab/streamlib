@@ -14,14 +14,17 @@ from typing import Annotated
 
 from tatolab.stream import (
     Channels,
+    EncodedVideo,
     Input,
+    InputPin,
     Output,
-    Packets,
+    OutputPin,
     Records,
     SettingOnly,
     State,
     Stateful,
-    UnreadMessage,
+    StreamDelivery,
+    Trigger,
     log,
     node,
 )
@@ -47,45 +50,50 @@ def report(marker_name: str, payload: "dict[str, object] | None" = None) -> None
     log.info(f"MARKER:{marker_name}" + ("" if payload is None else " " + json.dumps(payload)))
 
 
-@dataclasses.dataclass
-class ReportsItsOwnProcessSourceConfig:
-    label: str = "unlabelled"
+@dataclasses.dataclass(frozen=True)
+class ProducedIn:
+    """The pid a message was produced in."""
+
+    produced_in_pid: int
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ReportsItsOwnProcessSource:
     """Stamps every message with the pid it was produced in."""
 
-    def __init__(self, config: ReportsItsOwnProcessSourceConfig) -> None:
-        self.label = config.label
-        self.announced = False
+    label: str = "unlabelled"
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[ProducedIn]
+
+    def __init__(self) -> None:
+        self._announced = False
 
     def process(self, ctx) -> None:
-        if not self.announced:
+        if not self._announced:
             report("SOURCE_PID", {"label": self.label, "pid": os.getpid()})
-            self.announced = True
-        ctx.outputs.write(self.frames_to_downstream, {"produced_in_pid": os.getpid()})
+            self._announced = True
+        self.frames_to_downstream.write(ProducedIn(produced_in_pid=os.getpid()))
 
 
-@node.process
+@node
 class ReportsUpstreamProcessSink:
     """Announces the pid a message was produced in, alongside its own."""
 
-    def __init__(self) -> None:
-        self.messages_seen = 0
+    frames_from_upstream: InputPin[Annotated[ProducedIn, StreamDelivery("newest")]]
 
-    frames_from_upstream = Input(Records, delivery="newest")
+    def __init__(self) -> None:
+        self._messages_seen = 0
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read(self.frames_from_upstream)
-        if payload is None:
+        produced_in = self.frames_from_upstream.read()
+        if produced_in is None:
             return
-        self.messages_seen += 1
-        if self.messages_seen % 10 == 1:
-            upstream_pid = payload["produced_in_pid"]
-            report("SINK_PID", {"sink_pid": os.getpid(), "upstream_pid": upstream_pid})
+        self._messages_seen += 1
+        if self._messages_seen % 10 == 1:
+            report(
+                "SINK_PID",
+                {"sink_pid": os.getpid(), "upstream_pid": produced_in.produced_in_pid},
+            )
 
 
 @node.process
@@ -106,21 +114,21 @@ class ReportsItsOwnProcessRecordsSink:
         ctx.inputs.read("records_from_upstream")
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class WritesRawMessagePayloadSource:
     """Writes `RAW_MESSAGE_PAYLOAD_BYTES` every tick, after reporting once what
     handing `write` a dict raised."""
 
-    def __init__(self) -> None:
-        self.reported_the_dict_write = False
+    raw_messages_to_downstream: OutputPin[EncodedVideo]
 
-    raw_messages_to_downstream = Output(Packets)
+    def __init__(self) -> None:
+        self._reported_the_dict_write = False
 
     def process(self, ctx) -> None:
-        if not self.reported_the_dict_write:
-            self.reported_the_dict_write = True
+        if not self._reported_the_dict_write:
+            self._reported_the_dict_write = True
             try:
-                ctx.outputs.write("raw_messages_to_downstream", {"not": "bytes"})
+                self.raw_messages_to_downstream.write({"not": "bytes"})
             except Exception as refusal:  # noqa: BLE001 — the refusal is the observation
                 refusal_type, refusal_text = type(refusal).__name__, str(refusal)
             else:
@@ -133,53 +141,53 @@ class WritesRawMessagePayloadSource:
                     "refusal_text": refusal_text,
                 },
             )
-        ctx.outputs.write("raw_messages_to_downstream", RAW_MESSAGE_PAYLOAD_BYTES)
+        self.raw_messages_to_downstream.write(RAW_MESSAGE_PAYLOAD_BYTES)
 
 
-@node.process
+@node
 class ReportsTheRawMessagePayloadItReadSink:
     """Reports the first payload it reads, as hex, with its type and its own pid."""
 
-    def __init__(self) -> None:
-        self.reported = False
+    raw_messages_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]]
 
-    raw_messages_from_upstream = Input(Packets, delivery="ordered")
+    def __init__(self) -> None:
+        self._reported = False
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("raw_messages_from_upstream")
-        if payload is None or self.reported:
+        unit = self.raw_messages_from_upstream.read()
+        if unit is None or self._reported:
             return
-        self.reported = True
+        self._reported = True
         report(
             "RAW_MESSAGE_PAYLOAD_READ",
             {
                 "sink_pid": os.getpid(),
-                "payload_type": type(payload).__name__,
-                "payload_hex": bytes(payload).hex(),
+                "payload_type": type(unit.payload).__name__,
+                "payload_hex": bytes(unit.payload).hex(),
             },
         )
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class DiesAbruptlyProbe:
     """Takes its own process down mid-run, the way a segfaulting native call
     inside a user callback would."""
 
-    def __init__(self) -> None:
-        self.frames_before_dying = 3
+    frames_to_downstream: OutputPin[Trigger]
 
-    frames_to_downstream = Output(Records)
+    def __init__(self) -> None:
+        self._frames_before_dying = 3
 
     def process(self, ctx) -> None:
-        self.frames_before_dying -= 1
-        if self.frames_before_dying <= 0:
+        self._frames_before_dying -= 1
+        if self._frames_before_dying <= 0:
             report("ABOUT_TO_DIE", {"pid": os.getpid()})
             # Not an exception: the point is a process that stops existing
             # without unwinding, which is what a segfaulting native call does.
             os._exit(1)
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class SleepsThroughItsOwnShutdownProbe:
     """Parks in `process()` far past the ladder's one-second budget.
 
@@ -187,7 +195,7 @@ class SleepsThroughItsOwnShutdownProbe:
     `teardown()` still run — which is what the markers below are for.
     """
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]
 
     def process(self, ctx) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
@@ -201,7 +209,7 @@ class SleepsThroughItsOwnShutdownProbe:
         report("SLEEPER_TORE_DOWN")
 
 
-@node.process(execution="continuous", interval_ms=50)
+@node(execution="continuous", interval_ms=50)
 class ForksAWorkerThatOutlivesItProbe:
     """Starts a worker of its own the way `os.system("sleep 60 &")` does.
 
@@ -209,24 +217,24 @@ class ForksAWorkerThatOutlivesItProbe:
     pid is announced so a test can go looking for it after `tatolabd` is gone.
     """
 
-    def __init__(self) -> None:
-        self.worker_pid = None
+    frames_to_downstream: OutputPin[Trigger]
 
-    frames_to_downstream = Output(Records)
+    def __init__(self) -> None:
+        self._worker_pid = None
 
     def process(self, ctx) -> None:
-        if self.worker_pid is None:
-            self.worker_pid = os.fork()
-            if self.worker_pid == 0:
+        if self._worker_pid is None:
+            self._worker_pid = os.fork()
+            if self._worker_pid == 0:
                 time.sleep(120)
                 os._exit(0)
-            report("WORKER_PID", {"worker_pid": self.worker_pid, "helper_pid": os.getpid()})
+            report("WORKER_PID", {"worker_pid": self._worker_pid, "helper_pid": os.getpid()})
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class SleepsThroughItsOwnSetupProbe:
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]
 
     def setup(self, ctx) -> None:
         report("ASLEEP_IN_SETUP", {"pid": os.getpid()})
@@ -242,37 +250,29 @@ class SleepsThroughItsOwnSetupProbe:
 FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING = 20
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ReportsTheFunctionNodeValuesItReadSink:
     """Reads the value a function node island feeds `brightness`, and reports
     the values of its first reads with its own pid."""
 
-    def __init__(self) -> None:
-        self.values_read: "list[float]" = []
-        self.sample_rates_read: "set[int]" = set()
-        self.reported_its_start = False
+    brightness: float | None = None
 
-    brightness = Input(Channels, delivery="newest")
+    def __init__(self) -> None:
+        self._values_read: "list[float]" = []
+
+    def setup(self, ctx) -> None:
+        report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
 
     def process(self, ctx) -> None:
-        if not self.reported_its_start:
-            self.reported_its_start = True
-            report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
-        if len(self.values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+        if len(self._values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
             return
-        block = ctx.inputs.read(self.brightness)
-        if block is None:
+        if self.brightness is None:
             return
-        self.sample_rates_read.add(block.sample_rate)
-        self.values_read.append(float(numpy.from_dlpack(block)[0][0]))
-        if len(self.values_read) == FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+        self._values_read.append(self.brightness)
+        if len(self._values_read) == FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
             report(
                 "FUNCTION_NODE_VALUES_READ",
-                {
-                    "sink_pid": os.getpid(),
-                    "values": self.values_read,
-                    "sample_rates": sorted(self.sample_rates_read),
-                },
+                {"sink_pid": os.getpid(), "values": self._values_read},
             )
 
 
@@ -355,7 +355,7 @@ class ReportsEachBatchOfPinValuesItReadSink(ReportsEachBatchOfFunctionNodeValues
     brightness = Input(Channels, delivery="newest", default=0.25)
 
 
-@node.function
+@node
 def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
     """Never returns: a compiled call no thread can pre-empt, which only the watchdog ends."""
     climbing = start
@@ -369,7 +369,7 @@ class CallsCountedSoFar:
     calls: float = 0.0
 
 
-@node.function
+@node
 def CountsItsOwnCalls(  # noqa: N802
     step: float = 1.0, *, previous: State[CallsCountedSoFar]
 ) -> Stateful[float, CallsCountedSoFar]:
@@ -428,26 +428,25 @@ def HoldsItsConfiguredLevelCountingItsCalls(  # noqa: N802
 COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES = 20.0
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty:
     """Reports the first count it reads with its own pid, and takes its own
     helper down once a count that started at one reaches twenty. A count it
     first reads above one was carried over, so it reads on without dying."""
 
-    def __init__(self) -> None:
-        self.first_count_read: "float | None" = None
+    count: float | None = None
 
-    count = Input(Channels, delivery="newest")
+    def __init__(self) -> None:
+        self._first_count_read: "float | None" = None
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read(self.count)
-        if block is None:
+        if self.count is None:
             return
-        count_read = float(numpy.from_dlpack(block)[0][0])
-        if self.first_count_read is None:
-            self.first_count_read = count_read
+        count_read = self.count
+        if self._first_count_read is None:
+            self._first_count_read = count_read
             report("FIRST_COUNT_READ", {"pid": os.getpid(), "count": count_read})
-        if self.first_count_read <= 1.0 and count_read >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES:
+        if self._first_count_read <= 1.0 and count_read >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES:
             report("FRESH_COUNT_SINK_ABOUT_TO_DIE", {"pid": os.getpid(), "count": count_read})
             os._exit(1)
 
@@ -459,32 +458,31 @@ STEPPED_LFO_STEP_MS = 100
 STEPPED_LFO_STEPS_REPORTED = 12
 
 
-@node.process(execution="continuous", interval_ms=STEPPED_LFO_STEP_MS)
+@node(execution="continuous", interval_ms=STEPPED_LFO_STEP_MS)
 class ReportsTheLfoValueOfEachStepSink:
     """Reads the value an `Lfo` island evaluates to at each step, and reports
     the first `STEPPED_LFO_STEPS_REPORTED` with their step indices."""
 
-    def __init__(self) -> None:
-        self.value_read_at_each_step: "dict[int, float]" = {}
+    wave: float | None = None
 
-    wave = Input(Channels, delivery="newest")
+    def __init__(self) -> None:
+        self._value_read_at_each_step: "dict[int, float]" = {}
 
     def process(self, ctx) -> None:
         step_index = ctx.stream_clock.step_index
-        if step_index in self.value_read_at_each_step:
+        if step_index in self._value_read_at_each_step:
             return
-        if len(self.value_read_at_each_step) >= STEPPED_LFO_STEPS_REPORTED:
+        if len(self._value_read_at_each_step) >= STEPPED_LFO_STEPS_REPORTED:
             return
-        block = ctx.inputs.read(self.wave)
-        if block is None:
+        if self.wave is None:
             return
-        self.value_read_at_each_step[step_index] = float(numpy.from_dlpack(block)[0][0])
-        if len(self.value_read_at_each_step) == STEPPED_LFO_STEPS_REPORTED:
+        self._value_read_at_each_step[step_index] = self.wave
+        if len(self._value_read_at_each_step) == STEPPED_LFO_STEPS_REPORTED:
             report(
                 "STEPPED_LFO_VALUES_READ",
                 {
                     "pid": os.getpid(),
-                    "steps": [[step, value] for step, value in sorted(self.value_read_at_each_step.items())],
+                    "steps": [[step, value] for step, value in sorted(self._value_read_at_each_step.items())],
                 },
             )
 
@@ -517,46 +515,53 @@ class ReportsTheCountsItReadInOrderSink:
 RECORDS_READS_BEFORE_REPORTING = 10
 
 
-@node.function
-def LabelsTheLevel(level: float = 0.75) -> dict:  # noqa: N802
-    """Names the level it is handed: a body taking a number and giving a `dict`, which runs as Python."""
-    return {"label": "high" if level > 0.5 else "low", "spelled": f"{level:.2f}"}
+@dataclasses.dataclass(frozen=True)
+class LevelLabel:
+    """A level named, and spelled to two places."""
+
+    label: str
+    spelled: str
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node
+def LabelsTheLevel(level: float = 0.75) -> LevelLabel:  # noqa: N802
+    """Names the level it is handed: a body formatting a string, which runs as Python."""
+    return LevelLabel(label="high" if level > 0.5 else "low", spelled=f"{level:.2f}")
+
+
+@node(execution="continuous", interval_ms=10)
 class ReportsTheRecordsItReadSink:
-    """Reads the record a function node island feeds `label`, and reports its
-    first records with its own pid."""
+    """Reads the bundle a function node island feeds `label`, and reports its
+    first bundles, as records, with its own pid."""
+
+    label: LevelLabel | None = None
 
     def __init__(self) -> None:
-        self.records_read: "list[dict]" = []
-        self.reported_its_start = False
-
-    label = Input(Records, delivery="newest")
+        self._records_read: "list[dict]" = []
+        self._reported_its_start = False
 
     def process(self, ctx) -> None:
-        if not self.reported_its_start:
-            self.reported_its_start = True
+        if not self._reported_its_start:
+            self._reported_its_start = True
             report("RECORDS_SINK_STARTED", {"pid": os.getpid()})
-        if len(self.records_read) >= RECORDS_READS_BEFORE_REPORTING:
+        if len(self._records_read) >= RECORDS_READS_BEFORE_REPORTING:
             return
-        record = ctx.inputs.read(self.label)
-        if record is None:
+        if self.label is None:
             return
-        self.records_read.append(record)
-        if len(self.records_read) == RECORDS_READS_BEFORE_REPORTING:
-            report("RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})
+        self._records_read.append(dataclasses.asdict(self.label))
+        if len(self._records_read) == RECORDS_READS_BEFORE_REPORTING:
+            report("RECORDS_READ", {"sink_pid": os.getpid(), "records": self._records_read})
 
 
-@node.function
+@node
 def CrashesItsHelper(start: float = 1.0) -> float:  # noqa: N802
     """Reads address zero, which no compiled body can do, so it runs as Python and takes its helper down with SIGSEGV."""
     ctypes.string_at(0)
     return start
 
 
-@node.function
-def GateThatCrashesItsHelperOnCue(value: UnreadMessage, crash: bool = False) -> UnreadMessage:  # noqa: N802
+@node
+def GateThatCrashesItsHelperOnCue[PinValue](value: PinValue, crash: bool = False) -> PinValue:  # noqa: N802
     """`value` handed on unread, as an open `Gate` hands it; while `crash` is set, it reads address
     zero and takes its helper down with SIGSEGV, which no compiled body can do, so it runs as Python."""
     if crash:
@@ -589,18 +594,25 @@ class ReportsTheLevelRecordsItReadSink:
             report("LEVEL_RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})
 
 
-@node.process(execution="continuous", interval_ms=10)
+@dataclasses.dataclass(frozen=True)
+class Count:
+    """A count, from 1."""
+
+    count: int
+
+
+@node(execution="continuous", interval_ms=10)
 class CountsEachTickRecordsSource:
-    """Writes `{"count": n}` every tick, counting from 1."""
+    """Writes a `Count` every tick, counting from 1."""
+
+    counts_to_downstream: OutputPin[Count]
 
     def __init__(self) -> None:
-        self.count = 0
-
-    counts_to_downstream = Output(Records)
+        self._count = 0
 
     def process(self, ctx) -> None:
-        self.count += 1
-        ctx.outputs.write(self.counts_to_downstream, {"count": self.count})
+        self._count += 1
+        self.counts_to_downstream.write(Count(count=self._count))
 
 
 @node.process(execution="continuous", interval_ms=10)
@@ -626,37 +638,37 @@ class CountsEachTickAsALevelSource:
 GATED_READS_PER_REPORTED_BATCH = 50
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ReportsEachBatchOfGatedCountsItReadSink:
     """Reads the counts a `Gate` hands on, and reports each batch of reads with
     its own pid and when the batch started: the counts it read, and how many
     reads found nothing."""
 
-    def __init__(self) -> None:
-        self.counts_in_this_batch: "list[int]" = []
-        self.reads_in_this_batch = 0
-        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+    gated_counts: InputPin[Annotated[Count, StreamDelivery("newest")]]
 
-    gated_counts = Input(Records, delivery="newest")
+    def __init__(self) -> None:
+        self._counts_in_this_batch: "list[int]" = []
+        self._reads_in_this_batch = 0
+        self._this_batch_started_at_monotonic_ns = time.monotonic_ns()
 
     def process(self, ctx) -> None:
-        if self.reads_in_this_batch == 0:
-            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
-        record = ctx.inputs.read(self.gated_counts)
-        self.reads_in_this_batch += 1
-        if record is not None:
-            self.counts_in_this_batch.append(int(record["count"]))
-        if self.reads_in_this_batch == GATED_READS_PER_REPORTED_BATCH:
+        if self._reads_in_this_batch == 0:
+            self._this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        count = self.gated_counts.read()
+        self._reads_in_this_batch += 1
+        if count is not None:
+            self._counts_in_this_batch.append(count.count)
+        if self._reads_in_this_batch == GATED_READS_PER_REPORTED_BATCH:
             report(
                 "GATED_COUNT_BATCH_READ",
                 {
                     "sink_pid": os.getpid(),
-                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
-                    "counts": self.counts_in_this_batch,
+                    "started_at_monotonic_ns": self._this_batch_started_at_monotonic_ns,
+                    "counts": self._counts_in_this_batch,
                 },
             )
-            self.counts_in_this_batch = []
-            self.reads_in_this_batch = 0
+            self._counts_in_this_batch = []
+            self._reads_in_this_batch = 0
 
 
 @node.process(execution="manual")
@@ -683,7 +695,7 @@ def _sleep_past_the_pools_frame_interval() -> None:
     time.sleep(SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS)
 
 
-@node.function
+@node
 def SleepsPastThePoolsFrameInterval(level: float = 0.5) -> float:  # noqa: N802
     """Gives `level` after a sleep longer than the pool's frame interval: a body calling a plain Python function, which runs as Python.
 
@@ -707,7 +719,7 @@ def _count_this_call_and_hang_once_this_process_has_returned_enough() -> None:
         time.sleep(1.0)
 
 
-@node.function
+@node
 def HangsAfterItsFirstCalls(level: float = 0.25) -> float:  # noqa: N802
     """Gives `level` for its first calls in a process, then never returns: a body calling a plain Python function, which runs as Python.
 
