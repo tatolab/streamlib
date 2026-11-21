@@ -40,6 +40,10 @@ use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
 };
 
+mod view_node_settings;
+
+pub(crate) use view_node_settings::render_the_settings_of_each_view_node_into;
+
 /// How a link into a view node's input delivers: the node itself reads nothing, a panel reads
 /// the port linked into it through a viewer, so the link never holds its writer back.
 const VIEW_NODE_INPUT_DELIVERY_PROFILE: &str = "newest";

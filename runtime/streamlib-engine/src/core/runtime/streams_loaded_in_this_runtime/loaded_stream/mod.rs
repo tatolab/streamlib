@@ -537,10 +537,15 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// This stream's graph as `graph` answers it: its running graph, or, while its graph
-    /// document holds edits the running graph did not take, the document's graph over it.
+    /// document holds edits the running graph did not take, the document's graph over it; each
+    /// view node with the settings its view's manifest declares among its inputs.
     pub fn the_graph_as_answered(&self) -> Result<serde_json::Value> {
         let mut graph_response = self.the_running_graph_rendered();
         self.render_the_document_over_the_live_graph_while_edits_are_not_live(&mut graph_response);
+        crate::core::nodes::render_the_settings_of_each_view_node_into(
+            &mut graph_response.nodes,
+            &self.node_types_this_stream_resolves,
+        );
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
     }
