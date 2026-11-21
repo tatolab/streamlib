@@ -41,7 +41,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
-    GraphTransactionRebuiltNode, GraphTransactionToolResult,
+    GraphTransactionRebuiltNode, GraphTransactionSavedValueRetyped, GraphTransactionToolResult,
 };
 use uuid::Uuid;
 
@@ -61,6 +61,7 @@ pub(crate) use graph_request_refusals::{
     the_level_holds_both_ends_by_uuid,
 };
 mod fragments_a_changed_module_defines;
+mod graph_input_retype_carrying_its_saved_value;
 pub(crate) use fragments_a_changed_module_defines::the_refresh_of_each_fragment_a_changed_module_defines;
 mod input_value_sets;
 mod input_values_set_live;
@@ -277,6 +278,7 @@ struct OneGraphRequestApplied {
     overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
     links_made_unjudged: Vec<(StreamGraphDocumentLink, String)>,
     links_made_unjudged_as_kept: Vec<ProjectTransactionLinkMadeUnjudged>,
+    saved_value_retyped: Option<GraphTransactionSavedValueRetyped>,
 }
 
 /// One operation made on a running stream, and the value set live on the input it set that it

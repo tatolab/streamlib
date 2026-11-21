@@ -42,7 +42,7 @@ pub(crate) fn is_an_annotation_setting_of_a_graph_input(setting: &str) -> bool {
 
 /// The range a `GraphInput`'s `config` declares a number of its `value` takes, as
 /// `[lowest, highest]`; `None` when it declares none.
-fn the_range_a_graph_input_config_declares(
+pub fn the_range_a_graph_input_config_declares(
     config: Option<&serde_json::Value>,
 ) -> Option<PinNumberRange> {
     match config?

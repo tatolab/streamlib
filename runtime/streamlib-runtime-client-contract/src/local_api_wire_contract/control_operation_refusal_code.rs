@@ -51,7 +51,8 @@ pub enum ControlOperationRefusalCode {
     /// only when both ends are UUID-named nodes the edited level holds.
     LinkNeedsAModuleConversion,
     /// The link sent ends at an input that takes no link: a setting read each run, a setting of
-    /// a type no message carries, or a setting of a `GraphInput`; `refused_field` names it.
+    /// a type no message carries, or a setting of a `GraphInput`, `GraphOutput`, `SetVariable`
+    /// or `GetVariable`; `refused_field` names it.
     InputTakesNoWire,
     /// The link sent carries a Stream or a Trigger into a setting read at setup, which takes a
     /// Value wire only, since each change of what it carries rebuilds the setting's node;

@@ -45,11 +45,10 @@ pub(crate) use __generated_private::{
 pub use empty_config::EmptyConfig;
 pub(crate) use graph_interface_node_types::{
     the_family_a_graph_interface_value_port_declares, the_node_type_of_a_graph_input,
-    the_settings_of_a_graph_input, the_settings_of_a_graph_output,
+    the_settings_of_a_graph_input,
 };
 pub(crate) use graph_variable_node_types::{
-    the_settings_of_a_get_variable_offering, the_settings_of_a_graph_variable_node,
-    the_value_port_of_a_graph_variable_node,
+    the_settings_of_a_get_variable_offering, the_value_port_of_a_graph_variable_node,
 };
 pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
@@ -58,6 +57,10 @@ pub use node_spec::NodeSpec;
 pub use node_type_ports_described_on_the_wire::NodeTypePortsDescribedOnTheWire;
 pub use node_types_of_the_graph_itself::{
     GRAPH_NODE_TYPE_CATEGORY, the_node_types_of_the_graph_itself,
+};
+pub(crate) use node_types_of_the_graph_itself::{
+    refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself,
+    the_settings_of_a_node_type_of_the_graph_itself,
 };
 pub(crate) use node_types_one_stream_resolves::{
     HowANodeOfADescribedTypeRuns, is_a_natively_compiled_node_type,

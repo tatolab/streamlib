@@ -69,6 +69,7 @@ fn a_conversion_is_its_one_wired_input_and_its_one_output_beside_any_settings() 
             output_port_name: "texture".to_owned(),
             output_pin_type: texture(),
             output_picked_for_the_input: None,
+            saved_value_cast: None,
         }))
     );
 }
@@ -130,6 +131,7 @@ fn only_a_built_in_conversion_may_be_inserted() {
         output_port_name: "out".to_owned(),
         output_pin_type: texture(),
         output_picked_for_the_input: None,
+        saved_value_cast: None,
     };
     assert!(conversion(NodeClassImportPath::of_built_in_node("TensorToTexture")).may_be_inserted());
     assert!(

@@ -14,6 +14,7 @@ mod pin_link_verdict;
 mod pin_type_in_words;
 mod pin_type_validation;
 mod pin_type_variants;
+mod saved_value_retyped;
 mod stored_pin_values;
 mod stored_value_check;
 mod value_json_schema;
@@ -24,6 +25,7 @@ pub use built_in_pin_types::{
 };
 pub use pin_conversion::{
     PinConversion, PinConversionOutputPick, PinConversionOutputPicked, PinConversionRefusal,
+    PinConversionSavedValueCast,
 };
 pub use pin_declaration::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PinDeclaration, PinFlow, PinNumberRange,
@@ -36,6 +38,10 @@ pub use pin_link_verdict::{
 pub use pin_type_variants::{
     BundleMember, FloatSize, IntegerSize, NamedPinTypeImportPath, PinType, ProjectAssetMedia,
     TexturePixelFormat, VectorComponentCount,
+};
+pub use saved_value_retyped::{
+    SavedValueRetyped, WhyASavedValueTakesTheDefault, the_integer_a_float_is_cast_to,
+    the_number_cast, the_saved_value_retyped, the_value_held_within_the_range,
 };
 pub use stored_pin_values::{
     AssetPinValue, BooleanPinValue, BundlePinValue, ColorPinValue, FloatPinValue, IntegerPinValue,
@@ -52,6 +58,8 @@ mod pin_flows_tests;
 mod pin_link_verdict_tests;
 #[cfg(test)]
 mod pin_type_validation_tests;
+#[cfg(test)]
+mod saved_value_retyped_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

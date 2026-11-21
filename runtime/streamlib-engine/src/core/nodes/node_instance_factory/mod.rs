@@ -9,7 +9,9 @@ use parking_lot::RwLock;
 use crate::core::NodeDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{NodeClassImportPath, NodeKind};
-use crate::core::descriptors::{PinConversion, PinConversionOutputPick, PortDescriptor};
+use crate::core::descriptors::{
+    PinConversion, PinConversionOutputPick, PinConversionSavedValueCast, PortDescriptor,
+};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{GraphNode, GraphNodePorts, is_in_exposed_name_cast_form};
@@ -282,7 +284,29 @@ impl NodeInstanceFactory {
         P::Config: Config,
     {
         warn_of_a_failed_registration_of::<P>(
-            self.register_host_compiled_node_type_picking::<P>(Some(pick)),
+            self.register_host_compiled_node_type_supplying::<P>(WhatAConversionSupplies {
+                pick: Some(pick),
+                saved_value_cast: None,
+            }),
+        );
+    }
+
+    /// Register `P`, a node type stating a conversion, with `saved_value_cast`, the function that
+    /// casts one saved value its input takes into the value its output gives with no stream
+    /// started, as a retype of a saved value reads it; log rather than return a registration
+    /// that fails, or a `P` stating no conversion.
+    pub fn register_a_conversion_casting_a_saved_value<P>(
+        &self,
+        saved_value_cast: PinConversionSavedValueCast,
+    ) where
+        P: GeneratedNode + 'static,
+        P::Config: Config,
+    {
+        warn_of_a_failed_registration_of::<P>(
+            self.register_host_compiled_node_type_supplying::<P>(WhatAConversionSupplies {
+                pick: None,
+                saved_value_cast: Some(saved_value_cast),
+            }),
         );
     }
 
@@ -294,15 +318,15 @@ impl NodeInstanceFactory {
         P: GeneratedNode + 'static,
         P::Config: Config,
     {
-        self.register_host_compiled_node_type_picking::<P>(None)
+        self.register_host_compiled_node_type_supplying::<P>(WhatAConversionSupplies::default())
     }
 
     /// Register `P` as [`Self::register_host_compiled_node_type`] does, the conversion it states
-    /// picking its output's setting with `pick` when one is given; one given to a `P` stating no
-    /// conversion is refused.
-    fn register_host_compiled_node_type_picking<P>(
+    /// carrying the functions `supplied` gives; any given to a `P` stating no conversion is
+    /// refused.
+    fn register_host_compiled_node_type_supplying<P>(
         &self,
-        pick: Option<PinConversionOutputPick>,
+        supplied: WhatAConversionSupplies,
     ) -> Result<NodeClassImportPath>
     where
         P: GeneratedNode + 'static,
@@ -336,32 +360,32 @@ impl NodeInstanceFactory {
                 constructor,
                 config_taken_check,
             },
-            pick,
+            supplied,
         )?;
         Ok(node_class_import_path)
     }
 
     /// Register `registration` under `descriptor`'s import path, refusing a
-    /// path already claimed, the conversion it states picking its output's setting with `pick`.
+    /// path already claimed, the conversion it states carrying the functions `supplied` gives.
     fn register_with_constructor(
         &self,
         descriptor: NodeDescriptor,
         registration: HostCompiledRustTypeRegistration,
-        pick: Option<PinConversionOutputPick>,
+        supplied: WhatAConversionSupplies,
     ) -> Result<()> {
         let NodeTypeAsRegistered {
             descriptor,
             mut conversion,
         } = the_node_type_as_registered(descriptor)?;
-        if let Some(pick) = pick {
+        if supplied.pick.is_some() || supplied.saved_value_cast.is_some() {
             let Some(conversion) = conversion.as_mut() else {
                 return Err(Error::Configuration(format!(
-                    "`{}` is given a function picking its conversion's setting, and states no \
-                     conversion",
+                    "`{}` is given a function of its conversion, and states no conversion",
                     descriptor.node_class_import_path
                 )));
             };
-            conversion.output_picked_for_the_input = Some(pick);
+            conversion.output_picked_for_the_input = supplied.pick;
+            conversion.saved_value_cast = supplied.saved_value_cast;
         }
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
@@ -440,7 +464,7 @@ impl NodeInstanceFactory {
                 constructor,
                 config_taken_check: Box::new(|_, _, _| Ok(())),
             },
-            None,
+            WhatAConversionSupplies::default(),
         )
     }
 
@@ -459,7 +483,10 @@ impl NodeInstanceFactory {
                 constructor,
                 config_taken_check: Box::new(|_, _, _| Ok(())),
             },
-            Some(pick),
+            WhatAConversionSupplies {
+                pick: Some(pick),
+                saved_value_cast: None,
+            },
         )
     }
 
@@ -607,6 +634,15 @@ impl NodeInstanceFactory {
         stored.push(conversion);
         *conversions = in_node_type_order(stored);
     }
+}
+
+/// The functions a host-compiled conversion is registered with beside its descriptor.
+#[derive(Default)]
+struct WhatAConversionSupplies {
+    /// Picks the setting its output follows for the input it feeds.
+    pick: Option<PinConversionOutputPick>,
+    /// Casts one saved value with no stream started.
+    saved_value_cast: Option<PinConversionSavedValueCast>,
 }
 
 /// `conversions` sorted by the node type stating each, as every list of them is kept.

@@ -66,7 +66,8 @@ pub enum PinLinkOutcome {
 /// Two differing types the verdict lets connect, each variant stating what the input reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FreePinConversion {
-    /// Boolean, Integer and Float among themselves; a Float read as an Integer rounds half away.
+    /// Boolean, Integer and Float among themselves; a Float read as an Integer truncates toward
+    /// zero.
     BetweenNumbers,
     /// A Vector into one of another size, its components to be dropped or padded with 0.
     BetweenVectors,
@@ -569,6 +570,13 @@ impl DirectPinLink {
             warnings: Vec::new(),
         }
     }
+}
+
+/// Whether a value of `output` is a value of `input` with nothing converted: a link between them
+/// connects as it is, or both are numbers of one type, whatever size each states.
+pub(super) fn takes_as_it_is(output: &PinType, input: &PinType) -> bool {
+    (output.is_a_number() && output.built_in_name() == input.built_in_name())
+        || direct_link_between(output, input).is_some_and(|direct| direct.free_conversion.is_none())
 }
 
 /// How an output of `output` connects to an input of `input` with nothing between them.
