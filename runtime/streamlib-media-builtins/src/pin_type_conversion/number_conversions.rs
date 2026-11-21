@@ -44,11 +44,16 @@ pub fn the_message_cast(
     pack_pin_value(into, &the_number_cast(&value, into)?, start_sample)
 }
 
-/// Read each message on `$input` of `$node`, a value of `$from`, and write it cast into `$into`
-/// on `$output`; a message not cast is logged and skipped.
+/// The input each number conversion reads.
+const INPUT_PORT: &str = "value";
+/// The output each number conversion writes.
+const OUTPUT_PORT: &str = "cast";
+
+/// Read each message on [`INPUT_PORT`] of `$node`, of the conversion `$name`, a value of `$from`,
+/// and write it cast into `$into` on [`OUTPUT_PORT`]; a message not cast is logged and skipped.
 macro_rules! cast_each_message {
-    ($node:expr, $name:literal, $input:literal, $from:expr, $output:literal, $into:expr) => {{
-        while let Some(message) = $node.inputs.read_raw($input)? {
+    ($node:expr, $name:ident, $from:expr, $into:expr) => {{
+        while let Some(message) = $node.inputs.read_raw(INPUT_PORT)? {
             match the_message_cast(
                 &$from,
                 &$into,
@@ -56,14 +61,17 @@ macro_rules! cast_each_message {
                 message.payload.bytes(),
             ) {
                 Ok(cast) => $node.outputs.write_bytes_described_by(
-                    $output,
+                    OUTPUT_PORT,
                     &cast.payload,
                     message.timestamp_ns,
                     message.group_boundary,
                     cast.payload_descriptor,
                 )?,
                 Err(refusal) => {
-                    tracing::warn!(%refusal, concat!($name, " wrote nothing for a message"))
+                    tracing::warn!(
+                        %refusal,
+                        concat!(stringify!($name), " wrote nothing for a message")
+                    )
                 }
             }
         }
@@ -97,7 +105,7 @@ pub struct FloatToInteger;
 
 impl ReactiveNode for FloatToInteger::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, "FloatToInteger", "value", FLOAT, "cast", INTEGER)
+        cast_each_message!(self, FloatToInteger, FLOAT, INTEGER)
     }
 }
 
@@ -126,7 +134,7 @@ pub struct IntegerToFloat;
 
 impl ReactiveNode for IntegerToFloat::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, "IntegerToFloat", "value", INTEGER, "cast", FLOAT)
+        cast_each_message!(self, IntegerToFloat, INTEGER, FLOAT)
     }
 }
 
@@ -155,7 +163,7 @@ pub struct BooleanToInteger;
 
 impl ReactiveNode for BooleanToInteger::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, "BooleanToInteger", "value", BOOLEAN, "cast", INTEGER)
+        cast_each_message!(self, BooleanToInteger, BOOLEAN, INTEGER)
     }
 }
 
@@ -184,7 +192,7 @@ pub struct IntegerToBoolean;
 
 impl ReactiveNode for IntegerToBoolean::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, "IntegerToBoolean", "value", INTEGER, "cast", BOOLEAN)
+        cast_each_message!(self, IntegerToBoolean, INTEGER, BOOLEAN)
     }
 }
 
@@ -213,7 +221,7 @@ pub struct BooleanToFloat;
 
 impl ReactiveNode for BooleanToFloat::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, "BooleanToFloat", "value", BOOLEAN, "cast", FLOAT)
+        cast_each_message!(self, BooleanToFloat, BOOLEAN, FLOAT)
     }
 }
 
@@ -242,6 +250,6 @@ pub struct FloatToBoolean;
 
 impl ReactiveNode for FloatToBoolean::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, "FloatToBoolean", "value", FLOAT, "cast", BOOLEAN)
+        cast_each_message!(self, FloatToBoolean, FLOAT, BOOLEAN)
     }
 }

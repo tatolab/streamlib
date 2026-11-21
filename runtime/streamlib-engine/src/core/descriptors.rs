@@ -25,7 +25,8 @@ pub use streamlib_node_schema::pin_type::{
     PinNumberRange, PinProjectAssetAnnotation, PinType, PinValueNotTaken, ProjectAssetMedia,
     ResolvedPin, SavedValueRetyped, SettingReadTime, TexturePixelFormat, VectorComponentCount,
     WhyASavedValueTakesTheDefault, an_input_takes_a_wire, built_in_pin_type, pin_link_verdict,
-    the_number_cast, the_saved_value_retyped, the_value_held_within_the_range,
+    the_integer_a_float_is_cast_to, the_number_cast, the_saved_value_retyped,
+    the_value_held_within_the_range,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

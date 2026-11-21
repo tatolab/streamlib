@@ -382,7 +382,8 @@ pub(super) fn the_link_overriding_the_input(
 }
 
 /// What node `node` of a running stream holds on its input `input`: its saved value, its pin
-/// value else its config field, and the value set live over it; so a set made on the running
+/// value else its config field else the input value it saves, as a `GraphInput` saves its
+/// `value`, which its config renders under `default`, and the value set live over it; so a set made on the running
 /// node is reversed to the saved value with the live one set live again.
 pub(super) struct ValueARunningInputHolds {
     pub(super) saved: Option<Value>,
@@ -412,6 +413,8 @@ pub(super) fn the_value_a_running_node_holds_on_the_input(
         saved: rendered_node["pins"]
             .get(input)
             .or_else(|| rendered_node["config"].get(input))
+            .filter(|held| !held.is_null())
+            .or_else(|| rendered_node["input_values"].get(input))
             .and_then(not_null),
         live: rendered_node["ports"]["inputs"]
             .as_array()

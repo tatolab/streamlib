@@ -120,7 +120,7 @@ fn the_one_conversion_whose_types_are_the_two_casts_the_saved_value() {
         ),
     ];
     assert_eq!(
-        the_saved_value_retyped(&json!(0.1), &float(), &integer(), &conversions),
+        the_saved_value_retyped(&json!(0.1), &float(), &integer(), None, &conversions),
         SavedValueRetyped::CastBy {
             conversion: NodeClassImportPath::of_built_in_node("FloatToInteger"),
             value: json!(0),
@@ -131,6 +131,7 @@ fn the_one_conversion_whose_types_are_the_two_casts_the_saved_value() {
             &json!(-7.5),
             &float(),
             &sized_integer(IntegerSize::Int8),
+            None,
             &conversions
         ),
         SavedValueRetyped::CastBy {
@@ -148,15 +149,15 @@ fn more_than_one_fitting_conversion_casts_nothing_and_names_each() {
         a_conversion("SweepWidth", a_sweep(), float(), Some(NUMBER_CAST)),
     ];
     let SavedValueRetyped::TakesTheDefault(why) =
-        the_saved_value_retyped(&json!({}), &a_sweep(), &float(), &conversions)
+        the_saved_value_retyped(&json!({}), &a_sweep(), &float(), None, &conversions)
     else {
         panic!("no conversion is picked");
     };
     assert_eq!(
         why.conversions_that_fit(),
         [
-            &NodeClassImportPath::of_built_in_node("SweepPosition"),
-            &NodeClassImportPath::of_built_in_node("SweepWidth"),
+            NodeClassImportPath::of_built_in_node("SweepPosition"),
+            NodeClassImportPath::of_built_in_node("SweepWidth"),
         ]
     );
     let why = why.to_string();
@@ -167,7 +168,7 @@ fn more_than_one_fitting_conversion_casts_nothing_and_names_each() {
 #[test]
 fn a_conversion_that_supplies_no_cast_gives_way_to_the_default_saying_so() {
     let conversions = [a_conversion("SweepPosition", a_sweep(), float(), None)];
-    let retyped = the_saved_value_retyped(&json!({}), &a_sweep(), &float(), &conversions);
+    let retyped = the_saved_value_retyped(&json!({}), &a_sweep(), &float(), None, &conversions);
     assert_eq!(
         retyped,
         SavedValueRetyped::TakesTheDefault(
@@ -184,11 +185,11 @@ fn with_no_conversion_a_value_the_new_type_takes_is_kept_and_any_other_gives_way
         option_names: vec!["warm".to_owned()],
     };
     assert_eq!(
-        the_saved_value_retyped(&json!("warm"), &menu, &PinType::String {}, &[]),
+        the_saved_value_retyped(&json!("warm"), &menu, &PinType::String {}, None, &[]),
         SavedValueRetyped::TakenAsItIs
     );
     assert_eq!(
-        the_saved_value_retyped(&json!(0.1), &float(), &PinType::String {}, &[]),
+        the_saved_value_retyped(&json!(0.1), &float(), &PinType::String {}, None, &[]),
         SavedValueRetyped::TakesTheDefault(WhyASavedValueTakesTheDefault::NoConversionFits)
     );
 }
@@ -201,9 +202,13 @@ fn a_cast_the_new_type_does_not_take_gives_way_to_the_default() {
         PinType::String {},
         Some(NUMBER_CAST),
     )];
-    let SavedValueRetyped::TakesTheDefault(why) =
-        the_saved_value_retyped(&json!(0.1), &float(), &PinType::String {}, &conversions)
-    else {
+    let SavedValueRetyped::TakesTheDefault(why) = the_saved_value_retyped(
+        &json!(0.1),
+        &float(),
+        &PinType::String {},
+        None,
+        &conversions,
+    ) else {
         panic!("the number cast gives no String");
     };
     assert!(
@@ -215,26 +220,108 @@ fn a_cast_the_new_type_does_not_take_gives_way_to_the_default() {
     );
 }
 
+fn a_range(minimum: f64, maximum: f64) -> PinNumberRange {
+    PinNumberRange {
+        minimum: Some(minimum),
+        maximum: Some(maximum),
+    }
+}
+
 #[test]
 fn a_number_is_held_within_the_range() {
+    let held =
+        |value, pin_type: &PinType, range| the_value_held_within_the_range(value, pin_type, &range);
     assert_eq!(
-        the_value_held_within_the_range(json!(5), &integer(), (0.5, 3.5)),
-        json!(3)
+        held(json!(5), &integer(), a_range(0.5, 3.5)),
+        Some(json!(3))
     );
     assert_eq!(
-        the_value_held_within_the_range(json!(-1), &integer(), (0.5, 3.5)),
-        json!(1)
+        held(json!(-1), &integer(), a_range(0.5, 3.5)),
+        Some(json!(1))
     );
     assert_eq!(
-        the_value_held_within_the_range(json!(2.0), &float(), (0.0, 1.0)),
-        json!(1.0)
+        held(json!(2.0), &float(), a_range(0.0, 1.0)),
+        Some(json!(1.0))
     );
     assert_eq!(
-        the_value_held_within_the_range(json!(0), &integer(), (0.0, 1.0)),
-        json!(0)
+        held(json!(0), &integer(), a_range(0.0, 1.0)),
+        Some(json!(0))
     );
     assert_eq!(
-        the_value_held_within_the_range(json!("a"), &PinType::String {}, (0.0, 1.0)),
-        json!("a")
+        held(
+            json!(9),
+            &integer(),
+            PinNumberRange {
+                minimum: None,
+                maximum: Some(4.0)
+            }
+        ),
+        Some(json!(4))
+    );
+    assert_eq!(
+        held(json!("a"), &PinType::String {}, a_range(0.0, 1.0)),
+        Some(json!("a"))
+    );
+    assert_eq!(held(json!(0), &integer(), a_range(0.2, 0.8)), None);
+}
+
+/// An Integer range holding no whole number gives no cast a place, so the value gives way to
+/// the default naming the range, rather than the retype being refused.
+#[test]
+fn a_cast_into_a_range_holding_no_whole_number_gives_way_to_the_default() {
+    let conversions = [a_conversion(
+        "FloatToInteger",
+        float(),
+        integer(),
+        Some(NUMBER_CAST),
+    )];
+    let SavedValueRetyped::TakesTheDefault(why) = the_saved_value_retyped(
+        &json!(0.5),
+        &float(),
+        &integer(),
+        Some(&a_range(0.2, 0.8)),
+        &conversions,
+    ) else {
+        panic!("no whole number is within the range");
+    };
+    assert!(
+        matches!(
+            why,
+            WhyASavedValueTakesTheDefault::NoWholeNumberIsWithinTheRange { .. }
+        ),
+        "{why:?}"
+    );
+    assert!(
+        why.to_string()
+            .contains("from 0.2 to 0.8 holds no whole number"),
+        "{why}"
+    );
+}
+
+/// The one fitting conversion supplies no cast, and the new type takes the value as it is: it
+/// is kept, as when no conversion fits.
+///
+/// Mental-revert: giving way to the default whenever the one fitting conversion has no cast
+/// clears a value the new type takes.
+#[test]
+fn a_value_the_new_type_takes_is_kept_when_the_one_fitting_conversion_has_no_cast() {
+    let menu = PinType::Menu {
+        option_names: vec!["warm".to_owned()],
+    };
+    let conversions = [a_conversion(
+        "MenuAsText",
+        menu.clone(),
+        PinType::String {},
+        None,
+    )];
+    assert_eq!(
+        the_saved_value_retyped(
+            &json!("warm"),
+            &menu,
+            &PinType::String {},
+            None,
+            &conversions
+        ),
+        SavedValueRetyped::TakenAsItIs
     );
 }

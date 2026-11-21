@@ -485,3 +485,54 @@ async fn a_retype_two_conversions_reach_gives_way_to_the_default_naming_both() {
     );
     assert!(answered.get("value").is_none(), "{retyped}");
 }
+
+/// A Float `GraphInput` saving 0.1 within `[0, 1]` that chooses a String is refused at the type,
+/// after its value is taken off, naming the `range` a String does not take; the graph document,
+/// the live graph and the project's history still hold the Float and 0.1, with no commit made.
+///
+/// Mental-revert: reading a running `GraphInput`'s saved value from its config alone, which
+/// renders it under `default`, reverses the value taken off to none, and draws it cleared.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retype_refused_partway_leaves_the_type_the_value_and_the_history_as_they_were() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({ "range": [0, 1] }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+    let document_before = project.the_graph_document_of("main");
+
+    let refusal = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "string" })
+        )]),
+    )
+    .await
+    .expect_err("a String holding a range is refused");
+    assert!(refusal.contains("`range`"), "{refusal}");
+
+    let live = the_node_named(&engine.the_live_graph_of(&stream_id), "warmth_base");
+    assert_eq!(live["input_values"]["value"], json!(0.1));
+    assert_eq!(
+        live["components"]["graph_interface"]["pin_type"],
+        json!({ "type": "float" })
+    );
+    let document_after = project.the_graph_document_of("main");
+    assert_eq!(document_after, document_before);
+    assert_eq!(document_after["nodes"][0]["config"]["value"], json!(0.1));
+    let undone = engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await;
+    assert!(
+        undone.is_err(),
+        "the refused retype made no commit: {undone:?}"
+    );
+}

@@ -22,7 +22,7 @@ fn integer() -> PinType {
 /// registry holds once the built-ins are registered.
 fn retyped_by_the_registry(value: Value, from: &PinType, into: &PinType) -> SavedValueRetyped {
     crate::register_media_builtin_node_types();
-    the_saved_value_retyped(&value, from, into, &NODE_REGISTRY.pin_conversions())
+    the_saved_value_retyped(&value, from, into, None, &NODE_REGISTRY.pin_conversions())
 }
 
 fn cast_by(conversion: &str, value: Value) -> SavedValueRetyped {

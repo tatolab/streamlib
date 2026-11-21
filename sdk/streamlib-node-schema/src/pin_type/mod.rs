@@ -40,8 +40,8 @@ pub use pin_type_variants::{
     TexturePixelFormat, VectorComponentCount,
 };
 pub use saved_value_retyped::{
-    SavedValueRetyped, WhyASavedValueTakesTheDefault, the_number_cast, the_saved_value_retyped,
-    the_value_held_within_the_range,
+    SavedValueRetyped, WhyASavedValueTakesTheDefault, the_integer_a_float_is_cast_to,
+    the_number_cast, the_saved_value_retyped, the_value_held_within_the_range,
 };
 pub use stored_pin_values::{
     AssetPinValue, BooleanPinValue, BundlePinValue, ColorPinValue, FloatPinValue, IntegerPinValue,

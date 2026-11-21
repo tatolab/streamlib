@@ -8,21 +8,22 @@
 //! gives way to the new type's default, which is no saved value, and the answer says why. One
 //! undo puts back both the type and the value.
 
-use streamlib::sdk::descriptors::{
-    PinType, SavedValueRetyped, the_saved_value_retyped, the_value_held_within_the_range,
-};
+use streamlib::sdk::descriptors::{PinType, SavedValueRetyped, the_saved_value_retyped};
 use streamlib::sdk::graph::graph_interface_resolution::{
-    GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_PIN_TYPE_SETTING,
+    GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_PIN_TYPE_SETTING,
+    the_range_a_graph_input_config_declares,
 };
 use streamlib_project_repository::{GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME};
 
 use super::*;
 
-/// The saved value a retype of a `GraphInput` carries: the input it is saved under, and what
-/// the answer names of it.
+/// The saved value a retype of a `GraphInput` carries: the stream asset and node the request
+/// names, the input the value is saved under, and what the answer names of it, among it the
+/// value it saves next.
 struct SavedValueARetypeCarries {
+    stream: Uuid,
+    node: String,
     held_under: String,
-    value: Option<Value>,
     answered: GraphTransactionSavedValueRetyped,
 }
 
@@ -37,24 +38,23 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_id: &str,
         staged: &mut WhatTheTransactionHasStaged<'_>,
     ) -> Result<Vec<OneGraphRequestApplied>, GraphRequestRefusal> {
-        let Some((carried, stream, node)) =
-            self.the_saved_value_a_retype_carries(&request, stream_id, staged)
+        let Some(carried) = self.the_saved_value_a_retype_carries(&request, stream_id, staged)
         else {
             return self
                 .apply_one_request(request, stream_id, staged, InputValueCheck::MadeOnApply)
                 .map(|applied| vec![applied]);
         };
         let set = |input: &str, value: Option<Value>| StreamGraphAction::SetNodeInputValue {
-            stream,
+            stream: carried.stream,
             level: Vec::new(),
-            node: node.clone(),
+            node: carried.node.clone(),
             input: input.to_owned(),
             member: None,
             value,
         };
         let mut sets = vec![set(&carried.held_under, None), request];
-        if let Some(value) = carried.value {
-            sets.push(set(GRAPH_INTERFACE_VALUE_PORT_NAME, Some(value)));
+        if let Some(value) = &carried.answered.value {
+            sets.push(set(GRAPH_INTERFACE_VALUE_PORT_NAME, Some(value.clone())));
         }
         let mut applied_by_the_retype: Vec<OneGraphRequestApplied> = Vec::with_capacity(sets.len());
         for one_set in sets {
@@ -76,16 +76,16 @@ impl StreamGraphTransactionExecutor<'_> {
         Ok(applied_by_the_retype)
     }
 
-    /// The saved value `request` carries into another type, with its stream and node as the
-    /// request names them: `None` unless it sets a `pin_type` other than the one held on a
-    /// top-level `GraphInput` the transaction has staged, which saves a value its new type is
-    /// not to keep as it is.
+    /// The saved value `request` carries into another type: `None` unless it sets a `pin_type`
+    /// other than the one held on a top-level `GraphInput` the transaction has staged, which
+    /// saves a value its new type is not to keep as it is, and the stream's conversions are read,
+    /// so a request whose carry cannot be worked out is applied as it is sent.
     fn the_saved_value_a_retype_carries(
         &self,
         request: &StreamGraphAction,
         stream_id: &str,
         staged: &WhatTheTransactionHasStaged<'_>,
-    ) -> Option<(SavedValueARetypeCarries, Uuid, String)> {
+    ) -> Option<SavedValueARetypeCarries> {
         let StreamGraphAction::SetNodeInputValue {
             stream,
             level,
@@ -142,7 +142,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let conversions = self
             .operations_on_the_loaded_streams
             .pin_conversions_of_the_stream_a_call_names(stream_id)
-            .unwrap_or_else(|_| Arc::from([]));
+            .ok()?;
         let answered = |value: Option<Value>| GraphTransactionSavedValueRetyped {
             stream: stream_id.to_owned(),
             node: node_uuid.to_string(),
@@ -152,49 +152,33 @@ impl StreamGraphTransactionExecutor<'_> {
             default_because: None,
             conversions_that_fit: Vec::new(),
         };
-        let carried = match the_saved_value_retyped(saved, &from, &into, &conversions) {
-            SavedValueRetyped::TakenAsItIs => return None,
-            SavedValueRetyped::CastBy { conversion, value } => {
-                let value = match the_range_held_on(&retyped.input_values) {
-                    Some(range) => the_value_held_within_the_range(value, &into, range),
-                    None => value,
-                };
-                SavedValueARetypeCarries {
-                    held_under: held_under.to_owned(),
-                    value: Some(value.clone()),
-                    answered: GraphTransactionSavedValueRetyped {
+        let range = the_range_a_graph_input_config_declares(Some(&Value::Object(
+            retyped.input_values.clone(),
+        )));
+        let answered =
+            match the_saved_value_retyped(saved, &from, &into, range.as_ref(), &conversions) {
+                SavedValueRetyped::TakenAsItIs => return None,
+                SavedValueRetyped::CastBy { conversion, value } => {
+                    GraphTransactionSavedValueRetyped {
                         cast_by: Some(conversion.to_string()),
                         ..answered(Some(value))
-                    },
+                    }
                 }
-            }
-            SavedValueRetyped::TakesTheDefault(why) => SavedValueARetypeCarries {
-                held_under: held_under.to_owned(),
-                value: None,
-                answered: GraphTransactionSavedValueRetyped {
+                SavedValueRetyped::TakesTheDefault(why) => GraphTransactionSavedValueRetyped {
                     default_because: Some(why.to_string()),
                     conversions_that_fit: why
                         .conversions_that_fit()
-                        .into_iter()
+                        .iter()
                         .map(ToString::to_string)
                         .collect(),
                     ..answered(None)
                 },
-            },
-        };
-        Some((carried, *stream, node.clone()))
-    }
-}
-
-/// The `[lowest, highest]` a `GraphInput` holding `input_values` declares under `range`; `None`
-/// when it declares none, or no two numbers.
-fn the_range_held_on(input_values: &Map<String, Value>) -> Option<(f64, f64)> {
-    match input_values
-        .get(GRAPH_INPUT_RANGE_CONFIG_KEY)?
-        .as_array()?
-        .as_slice()
-    {
-        [lowest, highest] => Some((lowest.as_f64()?, highest.as_f64()?)),
-        _ => None,
+            };
+        Some(SavedValueARetypeCarries {
+            stream: *stream,
+            node: node.clone(),
+            held_under: held_under.to_owned(),
+            answered,
+        })
     }
 }
