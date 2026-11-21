@@ -114,6 +114,7 @@ impl StreamGraphTransactionExecutor<'_> {
         )?;
 
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
+        let mut saved_values_retyped: Vec<GraphTransactionSavedValueRetyped> = Vec::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
         let mut why_each_link_was_made_unjudged = BTreeMap::new();
@@ -159,6 +160,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 made_live_once_the_documents_hold_them
                     .extend(applied.made_live_once_the_documents_hold_them);
                 overridden_by_links.extend(applied.overridden_by_a_link);
+                saved_values_retyped.extend(applied.saved_value_retyped);
                 if let Some(applied_live_now) = applied.applied_live {
                     applied_live.push((stream_id.clone(), applied_live_now));
                 }
@@ -242,6 +244,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 overridden_by_links,
                 why_each_link_was_made_unjudged,
                 nodes_rebuilt,
+                saved_values_retyped,
             },
         ))
     }
@@ -611,6 +614,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 overridden_by_a_link,
                 links_made_unjudged: Vec::new(),
                 links_made_unjudged_as_kept: Vec::new(),
+                saved_value_retyped: None,
             });
         }
 
@@ -727,6 +731,7 @@ impl StreamGraphTransactionExecutor<'_> {
             overridden_by_a_link,
             links_made_unjudged,
             links_made_unjudged_as_kept,
+            saved_value_retyped: None,
         })
     }
 

@@ -152,6 +152,34 @@ pub struct GraphTransactionRebuiltNode {
     pub node: String,
 }
 
+/// The saved value of a top-level `GraphInput` that a graph transaction carried into the pin
+/// type it chose for it: cast by the one conversion that fits the two types, or given up for the
+/// new type's default, which is no saved value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GraphTransactionSavedValueRetyped {
+    /// The stream the `GraphInput` is in, by stream id.
+    pub stream: String,
+    /// The `GraphInput`'s UUID.
+    pub node: String,
+    /// The value it saved under its former type.
+    pub value_before: serde_json::Value,
+    /// The value it saves under its new type, held within its `range`; absent when it gave way to
+    /// the new type's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    /// The node type of the conversion that cast it; absent when none did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cast_by: Option<String>,
+    /// Why it gave way to the new type's default; absent when it was cast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_because: Option<String>,
+    /// The node type of each conversion that fits the two types, when it gave way to the default
+    /// though one or more fit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversions_that_fit: Vec<String>,
+}
+
 /// The result of a graph tool: the transaction it applied, committed or live.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -184,4 +212,7 @@ pub struct GraphTransactionToolResult {
     /// Each input it set a value on that a link feeds, whose messages the node reads instead.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+    /// Each saved value of a `GraphInput` it carried into the pin type it chose for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved_values_retyped: Vec<GraphTransactionSavedValueRetyped>,
 }

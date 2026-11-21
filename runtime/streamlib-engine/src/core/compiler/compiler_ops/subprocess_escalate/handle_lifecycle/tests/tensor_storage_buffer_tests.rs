@@ -318,7 +318,7 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
 
     let slot_keys: Vec<String> = registry
         .node_output_pools()
-        .drain_slots()
+        .drain_at_the_helpers_teardown_with_nothing_held(sandbox.host_inner())
         .into_iter()
         .map(|released_slot| {
             let pool_slot_key = released_slot.pool_slot_key.clone();

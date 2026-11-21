@@ -152,7 +152,7 @@ def test_a_configuration_that_is_not_a_mapping_is_refused_before_construction():
 # Decoration is where a bad migration raises, so importing the fixture here is
 # what puts the migration in front of CI at all.
 MIGRATED_FIXTURES = [
-    ("helper_process_probes", "PassThroughProbe", "PassThroughProbeConfig"),
+    ("helper_process_probes", "ConfiguredByATypedDictProbe", "PassThroughProbeConfig"),
 ]
 
 

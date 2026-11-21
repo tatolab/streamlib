@@ -32,7 +32,9 @@ REVERB_WINDOW = AudioWindowContract(
 )
 
 
-dry_audio_from_upstream = Input(Channels, delivery="ordered", window=REVERB_WINDOW)
+dry_audio_from_upstream: InputPin[
+    Annotated[Audio, StreamDelivery("ordered"), REVERB_WINDOW, Description("...")]
+]
 ```
 
 On the way in, the engine mixes the capture device's stereo down to mono and
@@ -59,20 +61,20 @@ stages that run before anyone's `process()` does.
 ```
 
 That is the whole reason a delay-line algorithm can be a plain Python class
-here. `ReverbEffect` reads `ctx.inputs.read(self.dry_audio_from_upstream)`, takes
+here. `ReverbEffect` reads `self.dry_audio_from_upstream.read()`, takes
 `numpy.from_dlpack(block)[0]` and knows it has 128 mono samples
 at 48 kHz, always, on every machine — so its filter lengths are fixed once in
 `__init__` and there is no resampler, no rechunker and no format negotiation
 anywhere in `nodes/reverb_effect.py`. What it writes back is a `[1][128]`
-array on an `Output(Channels, rate=48_000, dtype="f32")`, with the dry block's
+array on an `OutputPin[Audio]`, naming 48 kHz on each write, with the dry block's
 own timestamp and `start_sample`, so the reverberated stream keeps the
 microphone's sample index.
 
 Three more things it teaches:
 
-- **A declared contract requires `delivery="ordered"`.** A reverb is an
+- **A declared contract requires `StreamDelivery("ordered")`.** A reverb is an
   accumulator: its output depends on every sample before it. `newest` skips
-  messages by design, and a skipped block is a hole in a delay line. `@node.process`
+  messages by design, and a skipped block is a hole in a delay line. `@node`
   refuses a contract on a `newest` port at import.
 - **The window size is the latency dial** — 128 samples is 2.67 ms at 48 kHz,
   and it is the only number here you would expect to tune. It also has a real
@@ -142,9 +144,9 @@ closed on a machine with no audio hardware attached. Set `microphonesource`'s
 
 ## Knobs
 
-Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
-Studio's inspector or with the runtime's `set_node_config` MCP tool, which
-records the edit in the project's history and applies it to the running stream.
+Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Studio's inspector, which records the edit in the project's history and applies it to the
+running stream. The four reverb dials are read on every window, so a change is heard at once.
 
 | Knob | Node | Effect |
 | --- | --- | --- |

@@ -23,7 +23,8 @@ use crate::core::graph::graph_interface_resolution::{
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::graph::input_values::{
-    the_read_of_an_input_a_link_feeds, the_settings_rendered_reading_the_values_held,
+    TakesAWireRendered, the_read_of_an_input_a_link_feeds,
+    the_settings_rendered_reading_the_values_held,
 };
 use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{
@@ -522,6 +523,7 @@ impl GraphFragmentAsDrawn {
                 the_settings_rendered_reading_the_values_held(
                     the_settings_of_a_placed_stream(),
                     &self.node.input_values,
+                    TakesAWireRendered::LeftOut,
                 ),
             );
         }

@@ -25,21 +25,23 @@ CHORD_MIX_WINDOW = AudioWindowContract(
 )
 
 
-root_voice_from_upstream = Input(Channels, delivery="ordered", window=CHORD_MIX_WINDOW)
+root_voice_from_upstream: InputPin[
+    Annotated[Audio, StreamDelivery("ordered"), CHORD_MIX_WINDOW, Description("...")]
+]
 ```
 
 so the engine resamples each voice to 48 kHz, averages the stereo one down to
 mono, and frames all three into exactly-512-sample blocks **before** `process()`
-runs. What the mixer reads with `ctx.inputs.read(port)` is
+runs. What the mixer reads with `self.root_voice_from_upstream.read()` is
 three windows of identical shape, and mixing them is one `+`. There is no
 resampler, no ring buffer and no format negotiation in this stream, because none
 of that is a node's job.
 
 Further things it teaches:
 
-- **A declared contract requires `delivery="ordered"`.** Order matters
+- **A declared contract requires `StreamDelivery("ordered")`.** Order matters
   for samples, and `newest` skips messages by design — an accumulator that needs
-  contiguous samples would flush on nearly every read. `@node.process` refuses the
+  contiguous samples would flush on nearly every read. `@node` refuses the
   pair at import.
 - **`SpeakerSink` matches its own device.** The mixer publishes 48 kHz mono; the
   speaker's input declares `match_device`, so the same stage converts the mix to
@@ -48,9 +50,8 @@ Further things it teaches:
 - **A block is a `[channel][sample]` array.** Each voice and the mixer write a
   C-contiguous numpy array, with the stream-wide index of its first sample as
   `start_sample`; a read hands back a `ChannelsBlock` that `numpy.from_dlpack`
-  views the same way. A voice's rate comes from its config, which its class
-  cannot state, so `Output(Channels, rate=from_config("sample_rate"))` and
-  `write_channels_block` name it per block. The mixer copies each window out of
+  views the same way. A voice's rate comes from its `sample_rate` setting, which its class
+  cannot state, so each `write` names it with `sample_rate=`. The mixer copies each window out of
   its block, because a read's borrow ends with the `process()` that made it and
   a window may wait several calls for its partners.
 - **Every timestamp is the machine's monotonic clock.** Each voice stamps a
@@ -129,9 +130,10 @@ lockstep.
 
 ## Knobs
 
-Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
-Studio's inspector or with the runtime's `set_node_config` MCP tool, which
-records the edit in the project's history and applies it to the running stream.
+Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Studio's inspector, which records the edit in the project's history and applies it to the
+running stream. A pitch, a peak or the mixer's gain is read as the stream plays; a voice's
+rate, channel count or block size is a setting, so changing one rebuilds that voice.
 
 | Knob | Node | Effect |
 | --- | --- | --- |

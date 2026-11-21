@@ -45,8 +45,9 @@ pub use exposed_name_cast::{
     is_in_exposed_name_cast_form,
 };
 pub use node_class_import_path::{
-    BUILT_IN_NODE_CLASS_MODULE, GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
-    IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR, NodeClassImportPath,
+    BUILT_IN_NODE_CLASS_MODULE, GET_VARIABLE_NODE_TYPE, GRAPH_INPUT_NODE_TYPE,
+    GRAPH_OUTPUT_NODE_TYPE, IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR, NodeClassImportPath,
+    SET_VARIABLE_NODE_TYPE, is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
 };
 pub use node_class_short_name::NodeClassShortName;
 pub use node_kind::{FunctionNodeLanguage, NodeKind};

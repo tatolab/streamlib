@@ -13,7 +13,9 @@ use crate::core::graph::graph_variable_resolution::{
     GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE,
 };
 
-use super::{GRAPH_NODE_TYPE_CATEGORY, the_node_types_of_the_graph_itself};
+use super::{
+    GRAPH_NODE_TYPE_CATEGORY, NodeTypePortsDescribedOnTheWire, the_node_types_of_the_graph_itself,
+};
 
 #[test]
 fn the_four_node_types_of_the_graph_itself_are_listed_under_the_graph_category() {
@@ -100,6 +102,42 @@ fn a_set_variable_takes_any_type_on_value_and_a_get_variable_gives_any_type_on_v
         Some(&DeclaredPinType::Is {
             pin_type: PinType::String {}
         })
+    );
+}
+
+/// Every setting of each node type of the graph itself is described as taking no wire, and
+/// every other input as taking one: the `value` of a `GraphOutput` and of a `SetVariable`.
+///
+/// Mental-revert: exempting a `GraphInput`'s settings alone describes the `GraphOutput`'s
+/// `port`, the `SetVariable`'s `variable` and the `GetVariable`'s `variable` as taking a wire.
+#[test]
+fn every_setting_of_a_node_type_of_the_graph_itself_is_described_as_taking_no_wire() {
+    let mut takes_a_wire_by_input = Vec::new();
+    for descriptor in the_node_types_of_the_graph_itself() {
+        let node_type = descriptor.node_class_import_path.as_str().to_owned();
+        for input in NodeTypePortsDescribedOnTheWire::of(&descriptor).inputs {
+            let is_a_setting = descriptor
+                .inputs
+                .iter()
+                .find(|declared| declared.name == input.port.name)
+                .and_then(|declared| declared.input_mode)
+                .is_some_and(NodeInputMode::is_a_setting);
+            assert_eq!(
+                input.takes_a_wire, !is_a_setting,
+                "`{}` of {node_type}",
+                input.port.name
+            );
+            if input.takes_a_wire {
+                takes_a_wire_by_input.push(format!("{node_type}.{}", input.port.name));
+            }
+        }
+    }
+    assert_eq!(
+        takes_a_wire_by_input,
+        [
+            format!("{GRAPH_OUTPUT_NODE_TYPE}.value"),
+            format!("{SET_VARIABLE_NODE_TYPE}.value"),
+        ]
     );
 }
 

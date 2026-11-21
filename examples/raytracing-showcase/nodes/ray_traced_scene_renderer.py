@@ -13,15 +13,19 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Sequence
-from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
     NodeOutputTextureRing,
-    Output,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -244,26 +248,24 @@ DECLARED_BINDINGS: dict[str, str | tuple[str, Sequence[str]]] = {
 MAX_RECURSION_DEPTH = 2
 
 
-@dataclass
-class RayTracedSceneRendererConfig:
-    """RayTracedSceneRenderer's settings: the extent of the frame it traces."""
-
-    width: int = 1280
-    height: int = 720
-
-
 @node.meta(description="The showcase scene with ray-traced shadows and a mirror floor")
-@node.process(execution="continuous", interval_ms=16)
+@node(execution="continuous", interval_ms=16)
 class RayTracedSceneRenderer:
     """Ray tracing on: hard shadows that track the light, and reflections."""
 
-    def __init__(self, config: RayTracedSceneRendererConfig) -> None:
-        self.frame_width = config.width
-        self.frame_height = config.height
-
-    ray_traced_frame_to_downstream = Output(
-        Image, description="The scene with ray-traced shadows and a mirror floor"
-    )
+    width: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The traced frame's width in pixels.")
+    ] = 1280
+    height: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The traced frame's height in pixels.")
+    ] = 720
+    ray_traced_frame_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The scene with ray-traced shadows and a mirror floor"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu_full_access = ctx.gpu_full_access
@@ -296,24 +298,23 @@ class RayTracedSceneRenderer:
         camera_azimuth, light_azimuth = orbit_azimuths_at(frame_time_ns)
 
         traced_frame_texture = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.frame_width, self.frame_height
+            ctx.gpu_limited_access, self.width, self.height
         )
         self.trace_kernel.trace(
             bindings={
                 SCENE_STRUCTURE_BINDING: self.scene_structure,
                 TRACED_FRAME_BINDING: traced_frame_texture,
             },
-            grid=(self.frame_width, self.frame_height, 1),
+            grid=(self.width, self.height, 1),
             push_constants=struct.pack(
                 SCENE_PUSH_CONSTANT_FORMAT,
                 camera_azimuth,
                 light_azimuth,
-                self.frame_width / self.frame_height,
+                self.width / self.height,
             ),
         )
 
-        ctx.outputs.write(
-            self.ray_traced_frame_to_downstream,
+        self.ray_traced_frame_to_downstream.write(
             ImageFrameToWrite.of_texture(traced_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR),
             timestamp_ns=frame_time_ns,
         )

@@ -303,6 +303,8 @@ fn hand_off_node_output_frame(
     descriptor: &NodeOutputSlotDescriptor,
 ) -> crate::core::error::Result<NodeOutputFramePublished> {
     let host = sandbox.host_inner();
+    host.slots_outliving_their_producers()
+        .release_each_slot_nobody_holds(sandbox);
     let (handed_off, slots_a_descriptor_change_released) = registry
         .node_output_pools()
         .hand_off_a_reusable_frame(host, &pool_key, rotation_depth as usize, descriptor);
