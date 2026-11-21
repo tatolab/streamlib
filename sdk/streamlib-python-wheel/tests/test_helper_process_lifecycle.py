@@ -46,7 +46,12 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
     )
 
     stand_in_parent.send(
-        {"cmd": "setup", "capability": "full", "config": {"tag": "probe"}, "ports": {}}
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {},
+            "ports": {"input_values": {"tag": "probe"}},
+        }
     )
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
@@ -59,19 +64,24 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
     assert not lifecycle_thread.is_alive()
 
 
-@node.function
+@node
 def doubles_its_level(level: float = 0.5) -> float:
     return level * 2.0
 
 
-@node.function
-def labels_its_level(level: float = 0.5) -> dict:
-    return {"label": "high" if level > 0.5 else "low"}
+@node
+def answers_whether_its_level_is_high_in_python(level: float = 0.5) -> float:
+    """Builds an object, which keeps its body from compiling, so it runs as Python."""
+    repr(object())
+    return 1.0 if level > 0.5 else 0.0
 
 
 @pytest.mark.parametrize(
     ("function_node", "node_id", "ran_compiled"),
-    [(doubles_its_level, "doubler-1", True), (labels_its_level, "labeller-1", False)],
+    [
+        (doubles_its_level, "doubler-1", True),
+        (answers_whether_its_level_is_high_in_python, "answerer-1", False),
+    ],
 )
 def test_a_promoted_function_nodes_ready_says_how_its_own_helper_runs_it(
     stand_in_parent, function_node, node_id, ran_compiled

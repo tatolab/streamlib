@@ -3,90 +3,108 @@
 
 
 import json
-import struct
 import time
 from typing import Annotated, Any, TypedDict
 
-from tatolab.stream import Channels, Color, Image, Input, Output, Packets, SettingOnly, node
+from tatolab.stream import (
+    Color,
+    EncodedVideo,
+    InputPin,
+    Output,
+    OutputPin,
+    Packets,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
+    node,
+)
+
+
+@node
+class PassThroughProbe:
+    """Copies every JSON record from its input to its output, tagged."""
+
+    tag: str = "untagged"
+
+    frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
+
+    frames_to_downstream: OutputPin[EncodedVideo]
+
+    def process(self, ctx) -> None:
+        payload = self.frames_from_upstream.read()
+        if payload is not None:
+            record = json.loads(bytes(payload))
+            self.frames_to_downstream.write(json.dumps({**record, "tag": self.tag}).encode())
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
-    """A TypedDict config, so a real helper run covers that kind too."""
+    """A TypedDict config, so construction from one is covered beside the typed probes."""
 
     tag: str
 
 
-@node.process
-class PassThroughProbe:
-    """Copies every JSON record from its input to its output, tagged."""
+@node.process(execution="manual")
+class ConfiguredByATypedDictProbe:
+    """A node declaring a TypedDict config, the form a config is constructed from."""
 
     def __init__(self, config: PassThroughProbeConfig) -> None:
         self.tag = config.get("tag", "untagged")
 
-    frames_from_upstream = Input(Packets, delivery="newest")
-
     frames_to_downstream = Output(Packets)
 
-    def process(self, ctx) -> None:
-        payload = ctx.inputs.read("frames_from_upstream")
-        if payload is not None:
-            record = json.loads(bytes(payload))
-            ctx.outputs.write(
-                "frames_to_downstream", json.dumps({**record, "tag": self.tag}).encode()
-            )
 
-
-@node.process(execution="continuous", interval_ms=60_000)
+@node(execution="continuous", interval_ms=60_000)
 class WritesOnceInSetupProbe:
     """Writes one record in `setup`, before any link reaches its output, and never again;
     its interval is long enough that it never runs again inside a test."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def setup(self, ctx) -> None:
-        ctx.outputs.write("frames_to_downstream", json.dumps({"written": "once"}).encode())
+        self.frames_to_downstream.write(json.dumps({"written": "once"}).encode())
 
 
 class OuterProbe:
 
-    @node.process(execution="manual")
+    @node(execution="manual")
     class InnerProbe:
-        frames_to_downstream = Output(Packets)
+        frames_to_downstream: OutputPin[EncodedVideo]
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class ImportsADmaBufOffLinuxProbe:
     """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def setup(self, ctx) -> None:
         ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class RefusesSetupProbe:
     """Raises out of `setup`, which the parent must hear about."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def setup(self, ctx) -> None:
         raise RuntimeError("this node cannot set itself up")
 
 
-@node.process
+@node
 class SlowPassThroughProbe:
     """Copies every message's payload to its output, slower than a burst arrives."""
 
-    frames_from_upstream = Input(Packets, delivery="newest")
+    frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("frames_from_upstream")
+        payload = self.frames_from_upstream.read()
         if payload is not None:
             time.sleep(0.005)
-            ctx.outputs.write("frames_to_downstream", payload)
+            self.frames_to_downstream.write(payload)
 
 
 # The hooks the interrupt probes below actually reached, in order. A test reads
@@ -95,19 +113,19 @@ class SlowPassThroughProbe:
 HOOKS_THE_INTERRUPT_PROBES_REACHED: list[str] = []
 
 
-@node.process(execution="continuous", interval_ms=0)
+@node(execution="continuous", interval_ms=0)
 class InterruptedInProcessProbe:
     """Takes a `KeyboardInterrupt` inside `process()`, the way the parent's
     shutdown ladder delivers one to a callback that outran its budget."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def __init__(self) -> None:
-        self.already_took_the_interrupt = False
+        self._already_took_the_interrupt = False
 
     def process(self, ctx) -> None:
-        if not self.already_took_the_interrupt:
-            self.already_took_the_interrupt = True
+        if not self._already_took_the_interrupt:
+            self._already_took_the_interrupt = True
             HOOKS_THE_INTERRUPT_PROBES_REACHED.append("process-interrupted")
             raise KeyboardInterrupt
         time.sleep(0.005)
@@ -119,22 +137,22 @@ class InterruptedInProcessProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class RaisesInStartProbe:
     """Sets up, then raises out of `start()`, which must fail its node."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def start(self, ctx) -> None:
         raise FileNotFoundError('could not read "lower_third.riv"')
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class InterruptedInSetupProbe:
     """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
     raises on its own, this one is still owed its `teardown()`."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def setup(self, ctx) -> None:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-interrupted")
@@ -144,11 +162,11 @@ class InterruptedInSetupProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class RaisesInSetupProbe:
     """A `setup()` that raises on its own, which keeps the no-teardown rule."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def setup(self, ctx) -> None:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-raised")
@@ -164,12 +182,12 @@ class RaisesInSetupProbe:
 WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []
 
 
-@node.process(execution="continuous", interval_ms=250)
+@node(execution="continuous", interval_ms=250)
 class ContinuousPacingProbe:
     """Records when each `process()` ran, so the interval the loop kept is
     measurable. The interval under test is the one the parent's `run` names."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx) -> None:
         WHEN_THE_PACING_PROBE_PROCESSED_NS.append(time.monotonic_ns())
@@ -180,19 +198,19 @@ class ContinuousPacingProbe:
 RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES = [True]
 
 
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class RaisesUntilToldNotToProbe:
     """Raises on every `process()` until a test clears
     `RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES`, then runs cleanly."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx) -> None:
         if RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0]:
             raise RuntimeError("broke on purpose")
 
 
-@node.function
+@node
 def builds_an_object_then_answers_its_level_raising_on_a_negative_one(level: float = 0.5) -> float:
     """Answers `level`, raising on a negative one; building an object keeps its
     body from compiling, so it runs as Python."""
@@ -202,15 +220,15 @@ def builds_an_object_then_answers_its_level_raising_on_a_negative_one(level: flo
     return level
 
 
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class ReadsTheIslandFeedingItsLevelProbe:
     """Reads its `level` input, which a function node island feeds, on every
     `process()`."""
 
-    level = Input(Channels, delivery="newest")
+    level: InputPin[float]
 
     def process(self, ctx) -> None:
-        ctx.inputs.read(self.level)
+        self.level.read()
 
 
 class ReconfigurableProbeConfig(TypedDict, total=False):
@@ -243,29 +261,29 @@ class TakesReconfigurationProbe:
         self.gain = config.get("gain", 1)
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class ReleasesAStructureInTeardownProbe:
     """Builds an acceleration structure in `setup` and lets go of it in
     `teardown`, so the structure's release is owed while teardown answers."""
 
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
     def setup(self, ctx) -> None:
-        self.structure = ctx.gpu_full_access.build_triangles_blas(
+        self._structure = ctx.gpu_full_access.build_triangles_blas(
             [0.0] * 9, [0, 1, 2], label="released-in-teardown"
         )
 
     def teardown(self, ctx) -> None:
-        self.structure = None
+        self._structure = None
 
 
-@node.function
+@node
 def hold_a_level(level: float = 0.75) -> float:
     return level
 
 
-@node.function
-def double_a_level(x: float) -> float:
+@node
+def double_a_level(x: float = 0.0) -> float:
     return 2.0 * x
 
 
@@ -274,17 +292,14 @@ def double_a_level(x: float) -> float:
 LEVELS_THE_ISLAND_READING_PROBE_READ: "list[float | None]" = []
 
 
-@node.process(execution="continuous", interval_ms=5)
+@node(execution="continuous", interval_ms=5)
 class IslandReadingProbe:
     """Records the control value each `process()` reads from `level`."""
 
-    level = Input(Channels, delivery="newest")
+    level: InputPin[float]
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("level")
-        LEVELS_THE_ISLAND_READING_PROBE_READ.append(
-            None if payload is None else struct.unpack("<d", bytes(payload))[0]
-        )
+        LEVELS_THE_ISLAND_READING_PROBE_READ.append(self.level.read())
 
 
 GAINS_THE_EXPOSED_GAIN_PROBE_TOOK: "list[float]" = []
@@ -330,13 +345,13 @@ class NotReadyInStartProbe:
 CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT: "list[Any]" = []
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class ReportedFromAnotherThreadProbe:
     """Keeps the context `start()` is handed in
     `CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT`, so a test reports
     the node not ready or ready from a thread of its own."""
 
-    video = Output(Image, formats=("rgba8_unorm",))
+    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
 
     def start(self, ctx) -> None:
         CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT.append(ctx)
@@ -346,12 +361,12 @@ NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY = [True]
 PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE = [0]
 
 
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class NotReadyUntilToldOtherwiseProbe:
     """Reports itself not ready from each `process()` until a test clears
     `NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY`, then ready."""
 
-    video = Output(Image, formats=("rgba8_unorm",))
+    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
 
     def process(self, ctx) -> None:
         PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE[0] += 1
