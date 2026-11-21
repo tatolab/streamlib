@@ -35,38 +35,38 @@ import json
 import os
 
 from tatolab.stream import (
-    Output,
-    Records,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    Trigger,
     log,
     node,
 )
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ExitsSoonAfterEveryStart:
     """Ends its own process on its tenth callback."""
 
     def __init__(self) -> None:
-        self.callbacks = 0
+        self._callbacks = 0
 
-    nothing_to_downstream = Output(Records)
+    nothing_to_downstream: OutputPin[Trigger]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         log.info("MARKER:EXITING_PROBE_STARTED " + json.dumps({"pid": os.getpid()}))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.callbacks += 1
-        if self.callbacks == 10:
+        self._callbacks += 1
+        if self._callbacks == 10:
             os._exit(17)
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class KeepsRunning:
     """Does nothing, for as long as the stream runs."""
 
-    nothing_to_downstream = Output(Records)
+    nothing_to_downstream: OutputPin[Trigger]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         pass
