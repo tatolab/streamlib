@@ -32,9 +32,9 @@ class PassThroughProbe:
     frames_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx) -> None:
-        payload = self.frames_from_upstream.read()
-        if payload is not None:
-            record = json.loads(bytes(payload))
+        unit = self.frames_from_upstream.read()
+        if unit is not None:
+            record = json.loads(bytes(unit.payload))
             self.frames_to_downstream.write(json.dumps({**record, "tag": self.tag}).encode())
 
 
@@ -101,10 +101,12 @@ class SlowPassThroughProbe:
     frames_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx) -> None:
-        payload = self.frames_from_upstream.read()
-        if payload is not None:
+        unit = self.frames_from_upstream.read()
+        if unit is not None:
             time.sleep(0.005)
-            self.frames_to_downstream.write(payload)
+            self.frames_to_downstream.write(
+                bytes(unit.payload), unit.pts, starts_group=unit.starts_group
+            )
 
 
 # The hooks the interrupt probes below actually reached, in order. A test reads
