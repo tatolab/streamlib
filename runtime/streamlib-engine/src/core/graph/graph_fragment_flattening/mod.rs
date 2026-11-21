@@ -513,6 +513,7 @@ impl GraphFragmentAsDrawn {
                 the_settings_rendered_reading_the_values_held(
                     the_settings_of_a_placed_stream(),
                     &self.node.input_values,
+                    None,
                 ),
             );
         }

@@ -5,7 +5,9 @@
 //! refuses is refused with `link_pin_types_do_not_connect`, and a link into a setting with
 //! `input_takes_no_wire`, each in the runtime's words and before anything is applied.
 
-use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
+use super::input_value_set_tests::{
+    MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer, the_input_named,
+};
 use super::*;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
@@ -102,6 +104,92 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
         "the node as the caller named it: {refusal:?}"
     );
     assert!(refusal.runtime_words.contains("`volume`"), "{refusal:?}");
+}
+
+/// The UUIDs of a top-level `GraphOutput`, `SetVariable` and `GetVariable` beside the mixer.
+const LEVEL_GRAPH_OUTPUT_NODE_UUID: &str = "71717171-7171-4171-8171-717171717171";
+const GAIN_SET_VARIABLE_NODE_UUID: &str = "72727272-7272-4272-8272-727272727272";
+const GAIN_GET_VARIABLE_NODE_UUID: &str = "73737373-7373-4373-8373-737373737373";
+
+/// `graph` renders a setting of a top-level `GraphOutput`, `SetVariable` and `GetVariable` as
+/// taking no wire, and a link into one of those settings is refused as taking no wire, naming the setting, as one into a setting of a
+/// `GraphInput` is.
+///
+/// Mental-revert: rendering the settings of a node the graph resolves itself without the rule
+/// leaves out `takes_a_wire`; refusing a link into one by its port alone answers `refused`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_taking_no_wire() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    let mut graph = project.the_graph_document_of("main");
+    let nodes = graph["nodes"].as_array_mut().expect("nodes");
+    nodes.push(json!({
+        "id": LEVEL_GRAPH_OUTPUT_NODE_UUID, "name": "level-out",
+        "type": "tatolab.stream:GraphOutput", "config": { "port": "level" },
+    }));
+    nodes.push(json!({
+        "id": GAIN_SET_VARIABLE_NODE_UUID, "name": "gain-set",
+        "type": "tatolab.stream:SetVariable", "config": { "variable": "gain" },
+    }));
+    nodes.push(json!({
+        "id": GAIN_GET_VARIABLE_NODE_UUID, "name": "gain-get",
+        "type": "tatolab.stream:GetVariable", "config": { "variable": "gain" },
+    }));
+    let links = graph["links"].as_array_mut().expect("links");
+    for target in ["level-out", "gain-set"] {
+        links.push(json!({
+            "source": { "node": "mixer", "port": "level" },
+            "target": { "node": target, "port": "value" },
+        }));
+    }
+    project.write_the_graph_document(graph);
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let saved_before = project.the_graph_document_of("main");
+    let rendered = engine.the_live_graph_of(&stream_id);
+    for (node, setting) in [
+        ("level-out", "port"),
+        ("gain-set", "variable"),
+        ("gain-get", "variable"),
+    ] {
+        let rendered_setting = the_input_named(&the_node_named(&rendered, node), setting);
+        assert_eq!(
+            rendered_setting["takes_a_wire"],
+            json!(false),
+            "`graph` renders {node}.{setting}: {rendered_setting}"
+        );
+    }
+
+    for (node, setting) in [
+        (LEVEL_GRAPH_OUTPUT_NODE_UUID, "port"),
+        (GAIN_SET_VARIABLE_NODE_UUID, "variable"),
+        (GAIN_GET_VARIABLE_NODE_UUID, "variable"),
+    ] {
+        let refusal = engine
+            .the_answer_or_the_refusal_of(
+                "connect",
+                json!({
+                    "stream": stream_asset, "author": an_agent_named("alice"),
+                    "source": { "node": MIXER_NODE_UUID, "port": "level" },
+                    "target": { "node": node, "port": setting },
+                }),
+            )
+            .await
+            .expect_err("a setting of a node type of the graph itself takes no wire");
+
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::InputTakesNoWire,
+            "{node}.{setting}: {refusal:?}"
+        );
+        assert_eq!(
+            refusal.refused_field.as_deref(),
+            Some(setting),
+            "{refusal:?}"
+        );
+        assert_eq!(refusal.refused_node.as_deref(), Some(node), "{refusal:?}");
+    }
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
 /// A link inside a placed stream is judged by its pin types as the same link at the stream's

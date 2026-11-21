@@ -30,8 +30,9 @@ use crate::core::json_schema::{
     GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::{
-    NodeTypesOneStreamResolves, the_settings_of_a_get_variable_offering,
-    the_settings_of_a_graph_variable_node, the_value_port_of_a_graph_variable_node,
+    NodeTypesOneStreamResolves, refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself,
+    the_settings_of_a_get_variable_offering, the_settings_of_a_graph_variable_node,
+    the_value_port_of_a_graph_variable_node,
 };
 use crate::core::{Error, Result};
 use streamlib_runtime_client_contract::local_api_wire_contract::GraphVariableOnTheWire;
@@ -235,6 +236,7 @@ impl GraphVariablesAsDrawn {
             let settings = the_settings_rendered_reading_the_values_held(
                 &settings_declared,
                 &variable_node.input_values,
+                Some(&variable_node.node_type),
             )
             .into_iter();
             let values =
@@ -534,6 +536,11 @@ impl GraphSnapshot {
                 )));
             }
             if is_a_get(&target_cast) {
+                refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
+                    GET_VARIABLE_NODE_TYPE,
+                    &link.target.node,
+                    &link.target.port,
+                )?;
                 return Err(Error::GraphError(format!(
                     "a link enters `GetVariable` node `{}`, which has no input: set a \
                      variable by linking into a `SetVariable` node",
@@ -712,6 +719,11 @@ fn value_one_setter_holds(
     let mut links_in = Vec::new();
     for link in &graph.links {
         if cast_of(&link.target.node)? == setter_cast {
+            refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
+                setter.node_type.as_str(),
+                &link.target.node,
+                &link.target.port,
+            )?;
             refuse_a_variable_port_other_than_value(&link.target, "a link enters")?;
             links_in.push(link);
         }

@@ -233,8 +233,8 @@ impl GraphNode {
     }
 
     /// Refuse a link into input `input` when it is a setting that takes no wire: one read each
-    /// run, one of a type no message carries, and every setting of a `GraphInput`, which
-    /// declares its stream's interface rather than running on a value.
+    /// run, one of a type no message carries, and every setting of a node type of the graph
+    /// itself, which names a port of its stream or a variable rather than running on a value.
     pub(crate) fn refuse_a_link_into_a_setting(&self, input: &str) -> crate::core::Result<()> {
         match self.input_port(input) {
             Some(port) if !port.takes_a_wire_on_a_node_of(&self.node_type) => Err(

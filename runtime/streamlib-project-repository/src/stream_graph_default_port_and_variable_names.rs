@@ -8,11 +8,7 @@ use crate::stream_graph_document::{
     StreamGraphDocument,
 };
 
-/// The import path a graph names `SetVariable` by, in the built-in node module.
-pub const SET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:SetVariable";
-
-/// The import path a graph names `GetVariable` by, in the built-in node module.
-pub const GET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:GetVariable";
+pub use streamlib_node_schema::{GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE};
 
 /// The config key both variable nodes name their variable under.
 pub const GRAPH_VARIABLE_NAME_CONFIG_KEY: &str = "variable";

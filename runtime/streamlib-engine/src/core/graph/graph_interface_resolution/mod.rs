@@ -32,7 +32,9 @@ use crate::core::json_schema::{
     GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered,
     LinkOutput, LinkPortRefOutput,
 };
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{
+    NodeTypesOneStreamResolves, refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself,
+};
 use crate::core::{Error, Result};
 use streamlib_node_schema::output_port_family_resolved_against_config;
 
@@ -298,6 +300,7 @@ impl GraphInterfaceNodeAsDrawn {
                 }
             },
             &self.node.input_values,
+            Some(&self.node.node_type),
         )
     }
 }
@@ -516,6 +519,13 @@ impl GraphSnapshot {
             } else {
                 (&link.target, &link.source)
             };
+            if target_direction.is_some() {
+                refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself(
+                    GRAPH_OUTPUT_NODE_TYPE,
+                    &link.target.node,
+                    &link.target.port,
+                )?;
+            }
             refuse_an_interface_port_other_than_value(interface_end)?;
             let interface_node_cast = cast_of(&interface_end.node)?;
             let interface_node_runs = running_graph_input_casts.contains(&interface_node_cast);

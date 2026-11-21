@@ -56,6 +56,7 @@ pub use node_instance_factory::{
 };
 pub use node_spec::NodeSpec;
 pub use node_type_ports_described_on_the_wire::NodeTypePortsDescribedOnTheWire;
+pub(crate) use node_types_of_the_graph_itself::refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself;
 pub use node_types_of_the_graph_itself::{
     GRAPH_NODE_TYPE_CATEGORY, the_node_types_of_the_graph_itself,
 };
