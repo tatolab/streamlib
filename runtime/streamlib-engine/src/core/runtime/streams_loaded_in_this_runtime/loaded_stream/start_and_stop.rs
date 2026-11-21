@@ -370,6 +370,16 @@ impl LoadedStreamInThisRuntime {
                 tracing::warn!("[stop] Failed to stop audio clock: {}", e);
             }
 
+            // Every reader is gone with its node, and each release goes
+            // through the surface store, so before it closes.
+            self.teardown_progress_note()
+                .note_what_the_teardown_is_waiting_on(
+                    "releasing the frames its rebuilt nodes left to their readers",
+                );
+            this_streams_runtime_context
+                .gpu
+                .release_every_slot_outliving_its_producer();
+
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the stream's surface store");
             this_streams_runtime_context.gpu.clear_surface_store();
