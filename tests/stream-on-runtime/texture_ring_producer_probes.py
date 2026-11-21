@@ -12,19 +12,21 @@ Both report over the same `MARKER:PROBE_RESULT` lines on `tatolabd`'s stderr
 the other probes use, tagged with `probe` because a scenario runs two of them.
 """
 
-import dataclasses
 import json
 import os
 import traceback
+from typing import Annotated
 
 from tatolab.stream import (
     ColorInfo,
-    Image,
     ImageFrame,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     clock,
     log,
     node,
@@ -77,28 +79,23 @@ def pixel_value_of_frame(frame_index: int) -> int:
     return 10 + frame_index
 
 
-@dataclasses.dataclass
-class TextureRingPublishingVideoSourceConfig:
+@node(execution="continuous", interval_ms=10)
+class TextureRingPublishingVideoSource:
+    """Publishes frames from its own output ring, one slot per frame."""
+
+    frames_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats(RING_TEXTURE_FORMAT)]]
+
     frames_to_publish: int = RING_DEPTH
     # Paces the source so a consumer in another process takes its claim on
     # the first frame before the ring's depth of publishes has gone by.
     minimum_interval_between_publishes_ns: int = 0
 
-
-@node.process(execution="continuous", interval_ms=10)
-class TextureRingPublishingVideoSource:
-    """Publishes frames from its own output ring, one slot per frame."""
-
-    frames_to_downstream = Output(Image)
-
-    def __init__(self, config: TextureRingPublishingVideoSourceConfig) -> None:
+    def __init__(self) -> None:
         self._output_texture_ring = NodeOutputTextureRing(
             RING_TEXTURE_FORMAT, RING_TEXTURE_USAGE, depth=RING_DEPTH
         )
-        self._frames_to_publish = config.frames_to_publish
-        self._minimum_interval_between_publishes_ns = (
-            config.minimum_interval_between_publishes_ns
-        )
+        self._frames_to_publish = self.frames_to_publish
+        self._minimum_interval_between_publishes_ns = self.minimum_interval_between_publishes_ns
         self._last_publish_ns: "int | None" = None
         self._surface_ids_published_so_far: "list[str]" = []
 
@@ -124,8 +121,7 @@ class TextureRingPublishingVideoSource:
         finally:
             slot_for_this_frame.unlock()
 
-        ctx.outputs.write(
-            self.frames_to_downstream,
+        self.frames_to_downstream.write(
             ImageFrameToWrite.of_texture(slot_for_this_frame, ColorInfo()),
         )
         self._surface_ids_published_so_far.append(slot_for_this_frame.surface_id)
@@ -137,17 +133,17 @@ class TextureRingPublishingVideoSource:
             )
 
 
-@node.process
+@node
 class PublishedFramePixelReadingSink:
     """Resolves each published surface id and reports the pixels behind it."""
 
-    frames_from_upstream = Input(Image, delivery="ordered")
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
         self._frames_read = 0
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.frames_from_upstream)
+        frame = self.frames_from_upstream.read()
         if frame is None:
             return
         frame_index = self._frames_read
@@ -168,15 +164,15 @@ class PublishedFramePixelReadingSink:
         _report("PublishedFramePixelReadingSink", read_the_frames_pixels)
 
 
-@node.process
+@node
 class PublishedFrameIdRecordingSink:
     """Records each published surface id without resolving it — the link an
     output port needs, for a scenario that reads only the producer's report."""
 
-    frames_from_upstream = Input(Image, delivery="ordered")
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.frames_from_upstream)
+        frame = self.frames_from_upstream.read()
         if frame is None:
             return
         surface_id = frame.surface_id
@@ -191,12 +187,12 @@ def _top_left_pixel_of(ctx, surface_id: str) -> "list[int]":
     return top_left_pixel
 
 
-@node.process
+@node
 class ClaimedFrameHoldingSink:
     """Claims the first frame with a typed read and holds it, re-reading its
     pixels as every later frame arrives."""
 
-    frames_from_upstream = Input(Image, delivery="ordered")
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
         self._held_frame: "ImageFrame | None" = None
@@ -204,9 +200,9 @@ class ClaimedFrameHoldingSink:
 
     def process(self, ctx) -> None:
         if self._held_frame is None:
-            self._held_frame = ctx.inputs.read(self.frames_from_upstream)
+            self._held_frame = self.frames_from_upstream.read()
             return
-        later_frame = ctx.inputs.read(self.frames_from_upstream)
+        later_frame = self.frames_from_upstream.read()
         if later_frame is None:
             return
         self._later_frames_seen += 1
@@ -224,19 +220,19 @@ class ClaimedFrameHoldingSink:
         _report("ClaimedFrameHoldingSink", reread_the_held_frame)
 
 
-@node.process
+@node
 class UnclaimedFrameHoldingSink:
     """Keeps only the first frame's id — no claim — and tries it again as every
     later frame arrives: the negative control for the claimed sink."""
 
-    frames_from_upstream = Input(Image, delivery="ordered")
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
         self._first_surface_id: "str | None" = None
         self._later_frames_seen = 0
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.frames_from_upstream)
+        frame = self.frames_from_upstream.read()
         if frame is None:
             return
         if self._first_surface_id is None:

@@ -13,7 +13,9 @@ a startup transient from a stream losing a period at a time; a couple of
 seconds of blocks can.
 """
 
-from tatolab.stream import Channels, Input, RuntimeContextLimitedAccess, log, node
+from typing import Annotated
+
+from tatolab.stream import Audio, InputPin, RuntimeContextLimitedAccess, StreamDelivery, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_COUNTED "
 
@@ -22,14 +24,14 @@ RESULT_MARKER = "MARKER:BLOCKS_COUNTED "
 BLOCKS_TO_COUNT = 100
 
 
-@node.process
+@node
 class AudioBlockCountingProbe:
     """Reports once enough blocks have crossed the link to judge a run by."""
 
     def __init__(self) -> None:
-        self.blocks_seen = 0
+        self._blocks_seen = 0
 
-    audio_from_upstream = Input(Channels, delivery="ordered")
+    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         # Drained even after the report is out: a probe that stopped reading
@@ -37,8 +39,8 @@ class AudioBlockCountingProbe:
         # by, and what a full link costs is dropped blocks rather than a
         # stalled producer — `PortMailbox::push_frame_from_inbound_link`
         # evicts its oldest entry whatever a port's profile says.
-        if ctx.inputs.read(self.audio_from_upstream) is None:
+        if self.audio_from_upstream.read() is None:
             return
-        self.blocks_seen += 1
-        if self.blocks_seen == BLOCKS_TO_COUNT:
-            log.info(RESULT_MARKER + str(self.blocks_seen))
+        self._blocks_seen += 1
+        if self._blocks_seen == BLOCKS_TO_COUNT:
+            log.info(RESULT_MARKER + str(self._blocks_seen))

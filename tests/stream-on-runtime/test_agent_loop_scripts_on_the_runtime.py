@@ -37,7 +37,7 @@ CLAMP_SOURCE = '''\
 from tatolab.stream import node
 
 
-@node.function
+@node
 def Clamp(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:  # noqa: N802
     """`x` held between `low` and `high`."""
     return min(max(x, low), high)

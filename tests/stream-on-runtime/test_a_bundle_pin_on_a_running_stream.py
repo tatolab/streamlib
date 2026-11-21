@@ -37,7 +37,7 @@ PYPROJECT = """\
 name = "a-bundle"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream", "numpy"]
+dependencies = ["tatolab-stream"]
 """
 
 NODES_OF_THE_PROJECT = '''\
@@ -45,8 +45,7 @@ import json
 from dataclasses import dataclass
 from typing import Annotated
 
-import numpy
-from tatolab.stream import Channels, Input, PinMeaning, log, node
+from tatolab.stream import InputPin, PinMeaning, log, node
 
 
 @dataclass(frozen=True)
@@ -74,18 +73,18 @@ def ToneAsOneNumber(tone: Tone = Tone(0.0)) -> float:
 
 
 @node.meta(description="Reports the number it reads, once.")
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class ReportsTheToneItReads:
-    tone = Input(Channels, delivery="newest")
+    tone: InputPin[float]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read(self.tone)
-        if block is not None and not self.reported:
-            self.reported = True
-            log.info("MARKER:BUNDLE_TONE_READ " + json.dumps({"tone": float(numpy.from_dlpack(block)[0][0])}))
+        tone = self.tone.read()
+        if tone is not None and not self._reported:
+            self._reported = True
+            log.info("MARKER:BUNDLE_TONE_READ " + json.dumps({"tone": tone}))
 '''
 
 

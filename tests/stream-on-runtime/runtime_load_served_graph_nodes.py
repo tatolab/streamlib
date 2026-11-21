@@ -3,14 +3,16 @@
 
 """The sink a running stream in `test_stream_graph_load_on_tatolabd.py` is read back through."""
 
-from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
+from typing import Annotated
+
+from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
 
-@node.process
+@node
 class LoadedFrameSink:
     """Reads each frame it receives and keeps none."""
 
-    video_from_upstream = Input(Image, delivery="newest")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read(self.video_from_upstream)
+        self.video_from_upstream.read()

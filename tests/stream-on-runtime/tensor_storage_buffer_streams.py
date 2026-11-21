@@ -21,12 +21,12 @@ from tensor_storage_buffer_probes import (
 
 def _wire_the_publishing_source_into(
     stream_builder: StreamBuilder,
-    source_config: dict[str, Any],
+    source_input_values: dict[str, Any],
     sink_class: type,
-    sink_config: dict[str, Any] | None = None,
+    sink_input_values: dict[str, Any] | None = None,
 ) -> None:
-    source = stream_builder.add(TensorStorageBufferPublishingSource, config=source_config)
-    sink = stream_builder.add(sink_class, config=sink_config)
+    source = stream_builder.add(TensorStorageBufferPublishingSource, input_values=source_input_values)
+    sink = stream_builder.add(sink_class, input_values=sink_input_values)
     stream_builder.connect(
         source.output("tensors_to_downstream"), sink.input("tensors_from_upstream")
     )

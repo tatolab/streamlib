@@ -29,7 +29,7 @@ def ring_rotation(stream_builder: StreamBuilder) -> None:
     """
     source = stream_builder.add(
         TextureRingPublishingVideoSource,
-        config={"frames_to_publish": SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK + 1},
+        input_values={"frames_to_publish": SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK + 1},
     )
     sink = stream_builder.add(PublishedFrameIdRecordingSink)
     stream_builder.connect(
@@ -47,7 +47,7 @@ def published_frames_reach_a_downstream_consumer(stream_builder: StreamBuilder) 
     """
     source = stream_builder.add(
         TextureRingPublishingVideoSource,
-        config={"frames_to_publish": RING_DEPTH},
+        input_values={"frames_to_publish": RING_DEPTH},
     )
     sink = stream_builder.add(PublishedFramePixelReadingSink)
     stream_builder.connect(
@@ -60,7 +60,7 @@ def _add_a_source_holding_its_first_frame_downstream(
 ) -> None:
     source = stream_builder.add(
         TextureRingPublishingVideoSource,
-        config={
+        input_values={
             "frames_to_publish": FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD + 1,
             "minimum_interval_between_publishes_ns": (
                 MINIMUM_INTERVAL_BETWEEN_HELD_FRAME_PUBLISHES_NS

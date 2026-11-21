@@ -27,7 +27,7 @@ FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL = 2000
 
 def _source_into_tint_into_sink(stream_builder: StreamBuilder, texture_format: str) -> None:
     source = stream_builder.add(
-        KnownPixelsVideoSource, config={"texture_format": texture_format}
+        KnownPixelsVideoSource, input_values={"texture_format": texture_format}
     )
     shaded = stream_builder.add(tint)
     sink = stream_builder.add(ShadedFramePixelReadingSink)
@@ -48,7 +48,7 @@ def bgra_source_into_tint_into_sink(stream_builder: StreamBuilder) -> None:
 def _source_into_shader_chain_into_sink(
     stream_builder: StreamBuilder, shader_nodes, *, every_intermediate_read_twice: bool
 ) -> None:
-    source = stream_builder.add(KnownPixelsVideoSource, config={"texture_format": "rgba8_unorm"})
+    source = stream_builder.add(KnownPixelsVideoSource, input_values={"texture_format": "rgba8_unorm"})
     upstream = source.output("video")
     for position, shader_node in enumerate(shader_nodes):
         shaded = stream_builder.add(shader_node, name=shader_node.__name__)
@@ -88,7 +88,7 @@ def tint_into_invert_fused_publishing_until_stopped(stream_builder: StreamBuilde
     source = stream_builder.add(
         KnownPixelsVideoSource,
         name="source",
-        config={
+        input_values={
             "texture_format": "rgba8_unorm",
             "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
         },
@@ -108,7 +108,7 @@ def tint_and_invert_each_an_island_of_its_own_publishing_until_stopped(
     source = stream_builder.add(
         KnownPixelsVideoSource,
         name="source",
-        config={
+        input_values={
             "texture_format": "rgba8_unorm",
             "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
         },
@@ -135,7 +135,7 @@ def _function_node_into_the_amount_of_tint(
 ) -> None:
     source = stream_builder.add(
         KnownPixelsVideoSource,
-        config={
+        input_values={
             "texture_format": "rgba8_unorm",
             "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
         },
@@ -169,7 +169,7 @@ def function_node_into_the_amount_of_a_tint_fused_into_invert(
 def source_into_a_shader_reading_only_the_extent_of_its_image(
     stream_builder: StreamBuilder,
 ) -> None:
-    source = stream_builder.add(KnownPixelsVideoSource, config={"texture_format": "rgba8_unorm"})
+    source = stream_builder.add(KnownPixelsVideoSource, input_values={"texture_format": "rgba8_unorm"})
     ramp = stream_builder.add(red_ramp_of_the_extent_of)
     sink = stream_builder.add(ShadedFramePixelReadingSink)
     stream_builder.connect(source.output("video"), ramp.input("extent_from"))
@@ -181,7 +181,7 @@ def _source_into_a_color_tint_into_sink(
 ) -> None:
     source = stream_builder.add(
         KnownPixelsVideoSource,
-        config={
+        input_values={
             "texture_format": "rgba8_unorm",
             "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
         },

@@ -3,42 +3,43 @@
 
 """Probe that reads the microphone module's blocks from a node interpreter.
 
-Reports what each Channels block read for the first few blocks as one JSON
+Reports what each audio block read for the first few blocks as one JSON
 marker line on `tatolabd`'s standard error — the boundary under test is native
 capture in the microphone's helper process reaching a Python node in its
 own interpreter, as numpy over the borrowed sample.
 """
 
 import json
+from typing import Annotated
 
 import numpy
 
-from tatolab.stream import Channels, Input, log, node
+from tatolab.stream import Audio, InputPin, StreamDelivery, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_SEEN "
 
 BLOCKS_REPORTED = 8
 
 
-@node.process
+@node
 class ChannelsBlockProbe:
     """Reports what each read saw for the first few blocks the source publishes."""
 
     def __init__(self) -> None:
-        self.readings = []
+        self._readings = []
 
-    audio_from_upstream = Input(Channels, delivery="ordered")
+    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]]
 
     def process(self, ctx) -> None:
         # Drained even after the report is out: a probe that stopped reading
         # would be measuring its own backlog draining away as counted drops
         # rather than the capture.
-        block = ctx.inputs.read(self.audio_from_upstream)
-        if block is None or len(self.readings) >= BLOCKS_REPORTED:
+        block = self.audio_from_upstream.read()
+        if block is None or len(self._readings) >= BLOCKS_REPORTED:
             return
 
         samples = numpy.from_dlpack(block)
-        self.readings.append(
+        self._readings.append(
             {
                 "sample_rate": block.sample_rate,
                 "channels": block.channel_count,
@@ -52,5 +53,5 @@ class ChannelsBlockProbe:
                 "samples_borrow_the_sample_with_no_copy": not samples.flags.owndata,
             }
         )
-        if len(self.readings) == BLOCKS_REPORTED:
-            log.info(RESULT_MARKER + json.dumps(self.readings))
+        if len(self._readings) == BLOCKS_REPORTED:
+            log.info(RESULT_MARKER + json.dumps(self._readings))
