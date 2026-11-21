@@ -53,7 +53,7 @@ from helper_placement_nodes import (
 def _labelled_source_into_sink(
     stream_builder: StreamBuilder, label: str, *, sink_name: "str | None" = None
 ) -> None:
-    source = stream_builder.add(ReportsItsOwnProcessSource, config={"label": label})
+    source = stream_builder.add(ReportsItsOwnProcessSource, input_values={"label": label})
     sink = stream_builder.add(ReportsUpstreamProcessSink, name=sink_name)
     stream_builder.connect(source.output("frames_to_downstream"), sink.input("frames_from_upstream"))
 
@@ -93,7 +93,7 @@ def dies_abruptly_beside_a_survivor_pair(stream_builder: StreamBuilder) -> None:
 @graph_generator
 def stale_build_labelled_source(stream_builder: StreamBuilder) -> None:
     """A lone source labelled `stale`, for a helper made to see another build."""
-    stream_builder.add(ReportsItsOwnProcessSource, config={"label": "stale"})
+    stream_builder.add(ReportsItsOwnProcessSource, input_values={"label": "stale"})
 
 
 @graph_generator
@@ -262,7 +262,7 @@ def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuil
 
 @graph_generator
 def function_node_run_as_python_into_python_records_sink(stream_builder: StreamBuilder) -> None:
-    """A function node giving a `dict`, which runs as Python, read by a Python class as Records."""
+    """A function node giving a bundle, which runs as Python, read by a Python class's field."""
     labeller = stream_builder.add(LabelsTheLevel, name="labeller")
     sink = stream_builder.add(ReportsTheRecordsItReadSink, name="sink")
     stream_builder.connect(labeller.output("result"), sink.input("label"))

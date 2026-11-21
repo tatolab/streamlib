@@ -10,16 +10,19 @@ name the runtime spawns this node's child interpreter with.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
@@ -93,36 +96,31 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 )
 
 
-@dataclass
-class SyntheticFisheyeLensConfig:
-    """SyntheticFisheyeLens's settings, as its node's config in the graph document spells them."""
-
-    radial_distortion_k1: float = DEFAULT_RADIAL_DISTORTION_K1
-    radial_distortion_k2: float = DEFAULT_RADIAL_DISTORTION_K2
-
-
 @node.meta(description="Barrels each camera frame the way a wide-FOV lens would, on the GPU")
-@node.process
+@node
 class SyntheticFisheyeLens:
-    """Camera frame in, the same picture through a synthetic fisheye lens out."""
+    """Camera frame in, the same picture through a synthetic fisheye lens out.
 
-    camera_frame_from_upstream = Input(
-        Image, delivery="newest", description="Frames from the camera"
-    )
-    fisheye_frame_to_downstream = Output(
-        Image, description="The same frames with a barrel distortion applied"
-    )
+    Both coefficients are read on each frame, so the barrel follows a change
+    while the stream plays.
+    """
 
-    def __init__(self, config: SyntheticFisheyeLensConfig) -> None:
-        self.radial_distortion_k1 = float(config.radial_distortion_k1)
-        self.radial_distortion_k2 = float(config.radial_distortion_k2)
-        # Push constants travel with each dispatch and never persist on the
-        # kernel, so this is handed to every one.
-        self.lens_coefficient_push_constants = struct.pack(
-            LENS_COEFFICIENT_PUSH_CONSTANT_FORMAT,
-            self.radial_distortion_k1,
-            self.radial_distortion_k2,
-        )
+    radial_distortion_k1: Annotated[
+        float, Description("The lens's first radial distortion coefficient.")
+    ] = DEFAULT_RADIAL_DISTORTION_K1
+    radial_distortion_k2: Annotated[
+        float, Description("The lens's second radial distortion coefficient.")
+    ] = DEFAULT_RADIAL_DISTORTION_K2
+    camera_frame_from_upstream: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
+    ]
+    fisheye_frame_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(FRAME_TEXTURE_FORMAT),
+            Description("The same frames with a barrel distortion applied"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Depth 1: `dispatch` returns with the GPU work retired, and nothing
@@ -150,7 +148,7 @@ class SyntheticFisheyeLens:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.camera_frame_from_upstream)
+        frame = self.camera_frame_from_upstream.read()
         if frame is None:
             return
 
@@ -178,12 +176,17 @@ class SyntheticFisheyeLens:
                 workgroups_covering(frame.height),
                 1,
             ),
-            push_constants=self.lens_coefficient_push_constants,
+            # Push constants travel with each dispatch and never persist on the
+            # kernel, so the coefficients are packed for every one.
+            push_constants=struct.pack(
+                LENS_COEFFICIENT_PUSH_CONSTANT_FORMAT,
+                self.radial_distortion_k1,
+                self.radial_distortion_k2,
+            ),
         )
 
         # The capture's timestamp, not the lens's: downstream orders by it.
-        ctx.outputs.write(
-            self.fisheye_frame_to_downstream,
+        self.fisheye_frame_to_downstream.write(
             ImageFrameToWrite.of_texture(fisheye_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
