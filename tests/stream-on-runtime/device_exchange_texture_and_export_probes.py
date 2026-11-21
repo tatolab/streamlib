@@ -26,7 +26,7 @@ from tatolab.stream import (
 )
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class DmaBufExportProbe:
     """Round-trips a surface's DMA-BUF fd out of and back into the graph.
 
@@ -82,7 +82,7 @@ RENDER_TARGET_FLAVOUR_USAGE = [
 ]
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class TextureHandleRoundTripProbe:
     """A kernel output crosses the process boundary as the texture itself.
 
@@ -251,7 +251,7 @@ class TextureHandleRoundTripProbe:
         return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class PrivilegedCapabilityProbe:
     """What the privileged capability answers from a helper process."""
 
@@ -292,7 +292,7 @@ class PrivilegedCapabilityProbe:
         return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class PooledTextureExportProbe:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -318,7 +318,7 @@ class PooledTextureExportProbe:
         return outcomes
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class OpaqueFdExportHandoffProbe:
     """Hands a kernel-written texture's OPAQUE_FD export to a foreign process.
 
@@ -391,7 +391,7 @@ class OpaqueFdExportHandoffProbe:
         return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class OpaqueFdPixelBufferExportHandoffProbe:
     """Hands a pooled pixel buffer's OPAQUE_FD export to a foreign process.
 
@@ -613,7 +613,7 @@ def _export_iosurface_and_read_it_natively(ctx, shim, surface) -> dict:
     }
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class IOSurfaceExportProbe:
     """A pixel buffer and a texture whose rows pad, each exported as an
     IOSurface port and read back by native code in this same helper."""
@@ -648,7 +648,7 @@ def _refusal_of(export_call) -> str | None:
     return None
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class RawHandleOffItsPlatformRefusesProbe:
     """Every raw-handle flavour exists on both floors; off its own it refuses,
     naming its peer."""

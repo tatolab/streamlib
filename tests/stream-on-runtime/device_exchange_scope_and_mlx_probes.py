@@ -39,7 +39,7 @@ FILL_FLOAT_RGBA = [0.25, 0.5, 1.5, 2.0]
 DOUBLED_FLOAT_RGBA = [0.5, 1.0, 3.0, 4.0]
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class DeviceTensorScopeDoublesAKernelOutputProbe:
     """The demo: torch doubles a kernel output in place through the scope.
 
@@ -90,7 +90,7 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
             return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class DeviceTensorScopeDiscardsOnRaiseProbe:
     """A raise mid-scope leaves the surface holding its pre-scope content.
 
@@ -151,7 +151,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
             return observation
 
 
-@node.process
+@node
 class PixelBufferScopeDiscardsOnRaiseProbe(DeviceExchangeFrameProbeBase):
     """One rule for both scopes: the CPU pixel-buffer scope discards a pending
     device write when the block is left by a raise.
@@ -195,7 +195,7 @@ class PixelBufferScopeDiscardsOnRaiseProbe(DeviceExchangeFrameProbeBase):
         }
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
     """No usage an author spells at `acquire_texture` can close the scope.
 
@@ -304,7 +304,7 @@ class _DeviceWriteThenEngineGpuReadProbe:
             return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class TorchDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
         import torch
@@ -322,7 +322,7 @@ def _mlx_or_none():
         return None
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:
@@ -344,7 +344,7 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
         mx.eval(array)
 
 
-@node.process
+@node
 class MlxReadsTheFrameProbe(DeviceExchangeFrameProbeBase):
     """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
     frame's own bytes."""
@@ -379,7 +379,7 @@ def _frame_pixels_now(ctx, surface_id: str):
     return pixels
 
 
-@node.process
+@node
 class MlxWritesTheFrameThroughTheWriteDoorProbe(DeviceExchangeFrameProbeBase):
     """`with frame.writable() as t:` with MLX as the package: an in-place,
     evaluated write reaches every other holder once the block ends."""
@@ -407,7 +407,7 @@ class MlxWritesTheFrameThroughTheWriteDoorProbe(DeviceExchangeFrameProbeBase):
         }
 
 
-@node.process
+@node
 class MlxWriteWithAViewAliveMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
     """The negative control the MLX write contract rests on: with a view of the
     array alive at the write, MLX cannot donate the buffer, so the scatter lands
@@ -435,7 +435,7 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
         }
 
 
-@node.process
+@node
 class MlxWholeArrayAssignmentMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
     """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
     array to MLX, not a store into this one, so the frame never sees it even
@@ -461,7 +461,7 @@ class MlxWholeArrayAssignmentMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
 SCOPES_IN_ONE_HELPER = 12
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class TorchAndMlxScopesAlternateInOneHelperProbe:
     """Many device-tensor scopes in one helper, torch and MLX alternating, each
     over a fresh texture whose arrays are dropped as soon as the scope ends.
@@ -562,7 +562,7 @@ class _DeviceArrayOutlivesTextureHandleProbe:
         }
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _import(self, handle):
         import torch
@@ -575,7 +575,7 @@ class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandlePro
         return int(array.to(torch.int64).sum().item())
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:

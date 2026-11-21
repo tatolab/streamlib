@@ -20,7 +20,7 @@ the published frame id retired with it. A scene that never moves would
 make the typed half vacuous, so scene motion is measured separately.
 
 The host-side bare-protocol probes need only a GPU. They reach a delivered
-Image frame's pixels through the object itself and consume the capsule with
+Texture frame's pixels through the object itself and consume the capsule with
 plain numpy, so every part of the seam is real — the resolved handle, the read-only
 lock, the engine-minted capsule — while the consumer needs no CUDA build.
 
@@ -31,7 +31,7 @@ they keep the camera deliberately: a capture surface is an imported V4L2
 DMA-BUF where a test pattern is engine-allocated, so it is the harder subject
 for a device export.
 
-The bare-protocol and write-door probes read an Image port, so the object
+The bare-protocol and write-door probes read a Texture pin, so the object
 they hold is the `ImageFrame` the read returns.
 """
 
@@ -40,13 +40,16 @@ import os
 import struct
 import traceback
 import zlib
+from typing import Annotated, ClassVar
+
 import numpy
 
 from tatolab.stream import (
-    Image,
-    Input,
     ImageFrame,
+    InputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
     log,
     node,
 )
@@ -117,25 +120,25 @@ class _LaggedHolderProbe:
     dropped — which is the whole variable under test.
     """
 
-    HOLDS_THE_FIRST_FRAME: bool
+    HOLDS_THE_FIRST_FRAME: ClassVar[bool]
 
     # `newest`, not `ordered`: a queued message's id is only good for
     # pool-depth frames after publish, so a probe that lets messages queue reads
     # ids the camera has already recycled — refused loudly, but that refusal on
     # *arrival* is not what these probes measure. Reading the newest message
     # keeps arrivals current; the first frame still gets lapped.
-    video_from_upstream = Input(Image, delivery="newest")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     def __init__(self) -> None:
-        self.held_frame: "ImageFrame | None" = None
-        self.held_surface_id: "str | None" = None
-        self.claim_taken: "bool | None" = None
-        self.pixels_as_delivered: "numpy.ndarray | None" = None
-        self.pixels_of_the_previous_arrival: "numpy.ndarray | None" = None
-        self.frames_the_producer_ran_ahead = 0
-        self.the_source_produced_a_different_picture = False
-        self.arrivals_already_recycled_before_the_probe_read_them = 0
-        self.reported = False
+        self._held_frame: "ImageFrame | None" = None
+        self._held_surface_id: "str | None" = None
+        self._claim_taken: "bool | None" = None
+        self._pixels_as_delivered: "numpy.ndarray | None" = None
+        self._pixels_of_the_previous_arrival: "numpy.ndarray | None" = None
+        self._frames_the_producer_ran_ahead = 0
+        self._the_source_produced_a_different_picture = False
+        self._arrivals_already_recycled_before_the_probe_read_them = 0
+        self._reported = False
 
     def _sample_pixels(self, ctx: RuntimeContextLimitedAccess, surface_id: str):
         """A copy of the surface's pixels, taken through a handle that is closed
@@ -147,29 +150,29 @@ class _LaggedHolderProbe:
         return pixels
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.reported:
+        if self._reported:
             return
         try:
             self._observe(ctx)
         except BaseException:  # noqa: BLE001 — surfaced through the marker line
-            self.reported = True
-            self.held_frame = None
+            self._reported = True
+            self._held_frame = None
             _report(lambda: {"failure": traceback.format_exc()})
 
     def _observe(self, ctx: RuntimeContextLimitedAccess) -> None:
-        read = ctx.inputs.read(self.video_from_upstream)
+        read = self.video_from_upstream.read()
         if read is None:
             return
 
         arrived_surface_id = read.surface_id
 
-        if self.held_surface_id is None:
-            self.held_surface_id = arrived_surface_id
-            self.claim_taken = _the_claim_the_read_took(read) is not None
-            self.pixels_as_delivered = self._sample_pixels(ctx, arrived_surface_id)
-            self.pixels_of_the_previous_arrival = self.pixels_as_delivered
+        if self._held_surface_id is None:
+            self._held_surface_id = arrived_surface_id
+            self._claim_taken = _the_claim_the_read_took(read) is not None
+            self._pixels_as_delivered = self._sample_pixels(ctx, arrived_surface_id)
+            self._pixels_of_the_previous_arrival = self._pixels_as_delivered
             if self.HOLDS_THE_FIRST_FRAME:
-                self.held_frame = read
+                self._held_frame = read
             return
 
         # Does the source actually produce different pictures? Measured on
@@ -185,16 +188,16 @@ class _LaggedHolderProbe:
         except RuntimeError as refusal:
             if "recycled" not in str(refusal):
                 raise
-            self.arrivals_already_recycled_before_the_probe_read_them += 1
+            self._arrivals_already_recycled_before_the_probe_read_them += 1
         else:
             if not (
-                pixels_that_just_arrived == self.pixels_of_the_previous_arrival
+                pixels_that_just_arrived == self._pixels_of_the_previous_arrival
             ).all():
-                self.the_source_produced_a_different_picture = True
-            self.pixels_of_the_previous_arrival = pixels_that_just_arrived
+                self._the_source_produced_a_different_picture = True
+            self._pixels_of_the_previous_arrival = pixels_that_just_arrived
 
-        self.frames_the_producer_ran_ahead += 1
-        if self.frames_the_producer_ran_ahead < FRAMES_TO_LAG_BY:
+        self._frames_the_producer_ran_ahead += 1
+        if self._frames_the_producer_ran_ahead < FRAMES_TO_LAG_BY:
             return
 
         # The held frame, read again after the producer has lapped its pool.
@@ -202,8 +205,8 @@ class _LaggedHolderProbe:
         # and the resolve is *refused* — that refusal is the result,
         # not a probe failure. A held frame's slot never recycled, so its
         # id is still current and the pixels must be the delivered ones.
-        held_surface_id = self.held_surface_id
-        pixels_as_delivered = self.pixels_as_delivered
+        held_surface_id = self._held_surface_id
+        pixels_as_delivered = self._pixels_as_delivered
         assert held_surface_id is not None and pixels_as_delivered is not None
         pixels_now = None
         late_read_refusal = None
@@ -230,28 +233,28 @@ class _LaggedHolderProbe:
                 _write_png(path, pixels)
                 written.append(path)
 
-        self.reported = True
+        self._reported = True
         observation = {
             "read_as": type(self).__name__,
-            "claim_taken": self.claim_taken,
+            "claim_taken": self._claim_taken,
             "held_surface_id": held_surface_id,
-            "frames_the_producer_ran_ahead": self.frames_the_producer_ran_ahead,
+            "frames_the_producer_ran_ahead": self._frames_the_producer_ran_ahead,
             "held_frame_unchanged": held_frame_unchanged,
             "late_read_refused_as_recycled": late_read_refusal is not None,
             "late_read_refusal": late_read_refusal,
             "arrivals_already_recycled_before_the_probe_read_them": (
-                self.arrivals_already_recycled_before_the_probe_read_them
+                self._arrivals_already_recycled_before_the_probe_read_them
             ),
             "the_source_produced_a_different_picture": (
-                self.the_source_produced_a_different_picture
+                self._the_source_produced_a_different_picture
             ),
             "png_samples": written,
         }
-        self.held_frame = None
+        self._held_frame = None
         _report(lambda: observation)
 
 
-@node.process
+@node
 class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
     """The first `ImageFrame` is held, and holding the object is the only thing
     keeping the camera off that slot — no handle, no view, no context
@@ -260,7 +263,7 @@ class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
     HOLDS_THE_FIRST_FRAME = True
 
 
-@node.process
+@node
 class ADroppedImageFrameReleasesItsSlotProbe(_LaggedHolderProbe):
     """The control. Same probe, same lag, the first `ImageFrame` dropped once
     its pixels are sampled — so its claim is released and the camera is free
@@ -283,29 +286,29 @@ class _BareProtocolProbe:
 
     # `newest`: this probe reads exactly one frame at whatever moment it
     # starts, so a queue of stale messages would only delay it.
-    video_from_upstream = Input(Image, delivery="newest")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read(self.video_from_upstream)
+        return self.video_from_upstream.read()
 
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         raise NotImplementedError
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.reported:
+        if self._reported:
             return
         try:
             frame = self._read(ctx)
         except BaseException:  # noqa: BLE001 — surfaced through the marker line
-            self.reported = True
+            self._reported = True
             _report(lambda: {"failure": traceback.format_exc()})
             return
         if frame is None:
             return
-        self.reported = True
+        self._reported = True
         _report(lambda: self._observe(ctx, frame))
 
     def _observe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
@@ -386,13 +389,13 @@ class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
         return observation
 
 
-@node.process
+@node
 class TheImageFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
-    """The `ImageFrame` an Image read returns reaches its pixels through the
+    """The `ImageFrame` a Texture read returns reaches its pixels through the
     object itself, and reaches the surface's own pixels."""
 
 
-@node.process
+@node
 class TheImageFrameReachesItsPixelsAsADeviceTensorProbe(_BareProtocolDeviceSideProbe):
     """The same on the device side, with a real GPU package taking the capsule."""
 
@@ -447,7 +450,7 @@ class _WriteDoorProbe(_BareProtocolProbe):
         }
 
 
-@node.process
+@node
 class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.writable() as t:` — a CUDA package editing a live frame in
     place, with the edit on the surface once the block ends."""
@@ -459,7 +462,7 @@ class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
             torch.from_dlpack(device_tensor)[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node.process
+@node
 class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
     """The other half of the one write rule: the raise is never suppressed on
     the way out, and the surface follows its floor's publication rule — the
@@ -499,7 +502,7 @@ class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
         }
 
 
-@node.process
+@node
 class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.cpu() as img:` — the named slow path, editing a live frame
     through plain numpy with no CUDA consumer anywhere in it."""
@@ -509,7 +512,7 @@ class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
             host_pixels[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node.process
+@node
 class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
     """The CPU door's exception path, reported as what it is.
 
@@ -548,11 +551,11 @@ class _NestedWriteDoorProbe(_WriteDoorProbe):
     or the half written after it closed.
     """
 
-    REFUSAL_NAMES: str
+    REFUSAL_NAMES: ClassVar[str]
 
     def __init__(self) -> None:
         super().__init__()
-        self.the_inner_door_was_refused_by_name = False
+        self._the_inner_door_was_refused_by_name = False
 
     def _open_the_inner_door(self, frame) -> None:
         raise NotImplementedError
@@ -563,15 +566,15 @@ class _NestedWriteDoorProbe(_WriteDoorProbe):
         except RuntimeError as refusal:
             if self.REFUSAL_NAMES not in str(refusal):
                 raise
-            self.the_inner_door_was_refused_by_name = True
+            self._the_inner_door_was_refused_by_name = True
 
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         observation = super()._observe_the_pixels(ctx, frame)
-        observation["the_inner_door_was_refused_by_name"] = self.the_inner_door_was_refused_by_name
+        observation["the_inner_door_was_refused_by_name"] = self._the_inner_door_was_refused_by_name
         return observation
 
 
-@node.process
+@node
 class AnInnerCpuDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
     """`with frame.cpu()` inside another over the same frame."""
 
@@ -589,7 +592,7 @@ class AnInnerCpuDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
             outer_pixels[half : self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node.process
+@node
 class AnInnerGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
     """`with frame.writable()` inside another over the same frame."""
 
@@ -612,7 +615,7 @@ class AnInnerGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
             outer[half : self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node.process
+@node
 class ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
     """`with frame.cpu()` writing inside `with frame.writable()` before the
     outer scope mints its first tensor: the outer scope's blit-back would

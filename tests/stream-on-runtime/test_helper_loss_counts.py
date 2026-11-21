@@ -37,12 +37,15 @@ import json
 import os
 import time
 
+from typing import Annotated
+
 from tatolab.stream import (
-    Input,
-    Output,
-    Packets,
+    EncodedVideo,
+    InputPin,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     log,
     node,
 )
@@ -51,65 +54,64 @@ BAGS_PER_TICK = 20
 TICKS_PER_OVERSIZED_BAG = 50
 
 
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class FastBagSource:
     """Writes far faster than `SlowOrderedSink` reads, and now and then a message no
     helper link can carry."""
 
     def __init__(self) -> None:
-        self.ticks = 0
+        self._ticks = 0
 
-    bags = Output(Packets)
+    bags: OutputPin[EncodedVideo]
 
-    oversized_bags = Output(Packets)
+    oversized_bags: OutputPin[EncodedVideo]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.ticks += 1
+        self._ticks += 1
         for message_index in range(BAGS_PER_TICK):
-            ctx.outputs.write(
-                "bags",
-                bytes([self.ticks % 256, message_index]),
+            self.bags.write(
+                bytes([self._ticks % 256, message_index]),
                 starts_group=message_index == 0,
             )
-        if self.ticks % TICKS_PER_OVERSIZED_BAG == 0:
-            ctx.outputs.write("oversized_bags", bytes({OVERSIZED_BAG_PADDING_BYTES}))
+        if self._ticks % TICKS_PER_OVERSIZED_BAG == 0:
+            self.oversized_bags.write(bytes({OVERSIZED_BAG_PADDING_BYTES}))
 
 
-@node.process
+@node
 class SlowOrderedSink:
     """Takes every message in order, far slower than they arrive, and says once
     what its reads were told: a loss on its link, and a message continuing a
     group."""
 
     def __init__(self) -> None:
-        self.lost_told_so_far = 0
-        self.a_message_continuing_a_group_arrived = False
-        self.reported_what_its_reads_were_told = False
+        self._lost_told_so_far = 0
+        self._a_message_continuing_a_group_arrived = False
+        self._reported_what_its_reads_were_told = False
 
-    bags = Input(Packets, delivery="ordered")
+    bags: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         log.info("MARKER:SLOW_SINK_PID " + json.dumps({{"pid": os.getpid()}}))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        message = ctx.inputs.read_message("bags")
+        message = self.bags.read_message()
         if message is None:
             return
-        self.lost_told_so_far += message.lost_since_last_read
+        self._lost_told_so_far += message.lost_since_last_read
         if not message.starts_group:
-            self.a_message_continuing_a_group_arrived = True
+            self._a_message_continuing_a_group_arrived = True
         if (
             message.lost_since_last_read > 0
-            and self.a_message_continuing_a_group_arrived
-            and not self.reported_what_its_reads_were_told
+            and self._a_message_continuing_a_group_arrived
+            and not self._reported_what_its_reads_were_told
         ):
-            self.reported_what_its_reads_were_told = True
+            self._reported_what_its_reads_were_told = True
             log.info(
                 "MARKER:SLOW_SINK_TOLD_OF_A_LOSS "
                 + json.dumps(
                     {{
                         "lost_since_last_read": message.lost_since_last_read,
-                        "lost_told_so_far": self.lost_told_so_far,
+                        "lost_told_so_far": self._lost_told_so_far,
                         "inbound_link": message.inbound_link,
                         "sink_pid": os.getpid(),
                     }}
@@ -118,14 +120,14 @@ class SlowOrderedSink:
         time.sleep(0.05)
 
 
-@node.process
+@node
 class NewestSink:
     """Drains whatever reaches it."""
 
-    bags = Input(Packets, delivery="newest")
+    bags: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read("bags")
+        self.bags.read()
 '''
 
 LOSS_COUNTING_STREAM_SOURCE = f'''\

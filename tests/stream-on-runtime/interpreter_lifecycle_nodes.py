@@ -13,7 +13,7 @@ import signal
 import subprocess
 import time
 
-from tatolab.stream import Output, Records, log, node
+from tatolab.stream import OutputPin, Trigger, log, node
 
 # How long a probe's teardown takes when it is meant to be slow but still inside
 # the ladder's five-second teardown budget.
@@ -24,11 +24,11 @@ def report(marker_name: str, payload: "dict[str, object] | None" = None) -> None
     log.info(f"MARKER:{marker_name}" + ("" if payload is None else " " + json.dumps(payload)))
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackProbe:
     """Parks in `process()` far past the ladder's one-second callback budget."""
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]
 
     def process(self, ctx) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
@@ -44,11 +44,11 @@ class AsleepInItsCallbackProbe:
 TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_TEST_TEARDOWN_RECORD_DIRECTORY"
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackRecordingItsTeardownProbe:
     """Parks in `process()`, and records its `teardown()` in a file."""
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]
 
     def process(self, ctx) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
@@ -60,7 +60,7 @@ class AsleepInItsCallbackRecordingItsTeardownProbe:
             pass
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackAndSlowToTearDownProbe:
     """Parks in `process()`, then takes three seconds over `teardown()`.
 
@@ -68,7 +68,7 @@ class AsleepInItsCallbackAndSlowToTearDownProbe:
     seconds each; stopped at once, about one.
     """
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]
 
     def process(self, ctx) -> None:
         report("SLOW_TO_TEAR_DOWN_ASLEEP", {"pid": os.getpid()})
@@ -79,7 +79,7 @@ class AsleepInItsCallbackAndSlowToTearDownProbe:
         report("SLOW_TEARDOWN_FINISHED", {"pid": os.getpid()})
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class WorkerKeepingTeardownGoingProbe:
     """Forks a worker that ignores SIGTERM, then spends thirty seconds in a
     `teardown()` that ignores it too.
@@ -91,18 +91,18 @@ class WorkerKeepingTeardownGoingProbe:
     """
 
     def __init__(self) -> None:
-        self.worker_pid = None
+        self._worker_pid = None
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]
 
     def process(self, ctx) -> None:
-        if self.worker_pid is None:
-            self.worker_pid = os.fork()
-            if self.worker_pid == 0:
+        if self._worker_pid is None:
+            self._worker_pid = os.fork()
+            if self._worker_pid == 0:
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
                 time.sleep(120)
                 os._exit(0)
-            report("TEARDOWN_WORKER_PID", {"pid": self.worker_pid})
+            report("TEARDOWN_WORKER_PID", {"pid": self._worker_pid})
         time.sleep(30)
 
     def teardown(self, ctx) -> None:
@@ -112,7 +112,7 @@ class WorkerKeepingTeardownGoingProbe:
         report("LONG_TEARDOWN_FINISHED")
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class StartsAProcessThatOutlivesItProbe:
     """Starts a process that inherits every descriptor it can and outlives
     `tatolabd` by far.
@@ -122,16 +122,16 @@ class StartsAProcessThatOutlivesItProbe:
     """
 
     def __init__(self) -> None:
-        self.survivor_pid = None
+        self._survivor_pid = None
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]
 
     def process(self, ctx) -> None:
-        if self.survivor_pid is None:
+        if self._survivor_pid is None:
             survivor = subprocess.Popen(
                 ["sleep", "30"], close_fds=False, stdin=subprocess.DEVNULL, start_new_session=True
             )
-            self.survivor_pid = survivor.pid
+            self._survivor_pid = survivor.pid
             report("SURVIVOR_PID", {"pid": survivor.pid})
 
 
@@ -143,8 +143,8 @@ if os.environ.get("STREAMLIB_ENTRYPOINT", "").endswith(":ThirtySecondImportProbe
     time.sleep(30)
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class ThirtySecondImportProbe:
     """Its module takes thirty seconds to import in the helper that hosts it."""
 
-    frames_to_downstream = Output(Records)
+    frames_to_downstream: OutputPin[Trigger]

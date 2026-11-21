@@ -13,7 +13,7 @@ import surface_copy_probes
 
 
 def _wire_a_test_pattern_into_probe(
-    stream_builder: StreamBuilder, probe_class: type, probe_config: dict[str, Any]
+    stream_builder: StreamBuilder, probe_class: type, probe_input_values: dict[str, Any]
 ) -> None:
     pattern = stream_builder.add(
         TestPatternSource,
@@ -22,7 +22,7 @@ def _wire_a_test_pattern_into_probe(
             "height": surface_copy_probes.FRAME_HEIGHT,
         },
     )
-    probe = stream_builder.add(probe_class, config=probe_config)
+    probe = stream_builder.add(probe_class, input_values=probe_input_values)
     stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 

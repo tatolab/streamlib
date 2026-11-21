@@ -11,23 +11,24 @@ standard library at module scope.
 import json
 import os
 import sys
+from typing import Annotated
 
-from tatolab.stream import Input, Output, Records, log, node
+from tatolab.stream import EncodedVideo, InputPin, OutputPin, StreamDelivery, log, node
 
 BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS = 20
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ReportsItsInterpreterSource:
-    """Announces its interpreter and the lent runtime's file, then emits a bag per tick."""
+    """Announces its interpreter and the lent runtime's file, then emits a JSON bag per tick."""
 
     def __init__(self) -> None:
-        self.announced = False
+        self._announced = False
 
-    bags_to_downstream = Output(Records)
+    bags_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx) -> None:
-        if not self.announced:
+        if not self._announced:
             # Lent by the runtime unit; the venv this runs from has none of its own.
             import tatolab.runtime  # pyright: ignore[reportMissingImports]
 
@@ -41,32 +42,33 @@ class ReportsItsInterpreterSource:
                     }
                 )
             )
-            self.announced = True
-        ctx.outputs.write(
-            self.bags_to_downstream, {"produced_by_interpreter": sys.executable}
+            self._announced = True
+        self.bags_to_downstream.write(
+            json.dumps({"produced_by_interpreter": sys.executable}).encode()
         )
 
 
-@node.process
+@node
 class CountsBagsFromUpstreamSink:
     """Announces once it has processed enough messages to call the stream live."""
 
     def __init__(self) -> None:
-        self.bags_processed = 0
+        self._bags_processed = 0
 
-    bags_from_upstream = Input(Records, delivery="ordered")
+    bags_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]]
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read(self.bags_from_upstream)
-        if payload is None:
+        unit = self.bags_from_upstream.read()
+        if unit is None:
             return
-        self.bags_processed += 1
-        if self.bags_processed == BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS:
+        payload = json.loads(bytes(unit.payload))
+        self._bags_processed += 1
+        if self._bags_processed == BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS:
             log.info(
                 "MARKER:BAGS_PROCESSED "
                 + json.dumps(
                     {
-                        "bags_processed": self.bags_processed,
+                        "bags_processed": self._bags_processed,
                         "sink_interpreter": sys.executable,
                         "upstream_interpreter": payload["produced_by_interpreter"],
                     }

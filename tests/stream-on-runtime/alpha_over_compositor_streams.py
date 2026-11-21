@@ -86,7 +86,7 @@ def _wire_the_scenario(stream_builder: StreamBuilder, scenario: str) -> None:
         else:
             source = stream_builder.add(
                 SolidPremultipliedColourSource,
-                config={
+                input_values={
                     "width": layer.width,
                     "height": layer.height,
                     "premultiplied_rgba": list(layer.premultiplied_rgba),

@@ -39,14 +39,13 @@ PYPROJECT = """\
 name = "a-mix"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream", "numpy"]
+dependencies = ["tatolab-stream"]
 """
 
 NODES_OF_THE_PROJECT = '''\
 import json
 
-import numpy
-from tatolab.stream import Channels, Input, Vector2, log, node
+from tatolab.stream import InputPin, Vector2, log, node
 
 
 @node.meta(description="A Vector of two as one number: x plus ten times y.")
@@ -56,23 +55,23 @@ def SpotAsOneNumber(spot: Vector2 = Vector2(0.0, 0.0)) -> float:
 
 
 @node.meta(description="Reports the green and the spot it reads, once both have arrived.")
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class ReportsTheLevelsItReads:
-    green = Input(Channels, delivery="newest")
-    spot = Input(Channels, delivery="newest")
+    green: InputPin[float]
+    spot: InputPin[float]
 
     def __init__(self) -> None:
-        self.latest = {}
-        self.reported = False
+        self._latest = {}
+        self._reported = False
 
     def process(self, ctx) -> None:
-        for name, port in (("green", self.green), ("spot", self.spot)):
-            block = ctx.inputs.read(port)
-            if block is not None:
-                self.latest[name] = float(numpy.from_dlpack(block)[0][0])
-        if not self.reported and len(self.latest) == 2:
-            self.reported = True
-            log.info("MARKER:COMBINED_LEVELS_READ " + json.dumps(self.latest))
+        for name, pin in (("green", self.green), ("spot", self.spot)):
+            level = pin.read()
+            if level is not None:
+                self._latest[name] = level
+        if not self._reported and len(self._latest) == 2:
+            self._reported = True
+            log.info("MARKER:COMBINED_LEVELS_READ " + json.dumps(self._latest))
 '''
 
 

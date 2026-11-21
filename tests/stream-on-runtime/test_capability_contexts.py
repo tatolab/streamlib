@@ -5,9 +5,8 @@
 
 Full-access hooks (`setup`/`teardown`/`start`/`stop`) get
 `RuntimeContextFullAccess`; limited hooks (`process`/`on_pause`/`on_resume`) get
-`RuntimeContextLimitedAccess` with no `gpu_full_access` at all. `ctx.outputs`
-survives the hook that produced it, which is what the manual-source pattern is
-built on.
+`RuntimeContextLimitedAccess` with no `gpu_full_access` at all. An output pin
+writes outside the hooks, which is what the manual-source pattern is built on.
 
 Every probe runs in its own node interpreter and reports one
 `MARKER:PROBE_RESULT` JSON line; each test starts the probe's stream on
@@ -34,13 +33,13 @@ pytestmark = pytest.mark.requires_gpu
 STREAM_BY_SCENARIO = {
     "SetupContextProbe": capability_context_streams.setup_context_probe_alone,
     "ProcessContextProbe": capability_context_streams.process_context_probe_alone,
-    "ConfigProbe": capability_context_streams.config_probe_alone,
+    "FieldsProbe": capability_context_streams.fields_probe_alone,
     "TimeProbe": capability_context_streams.time_probe_alone,
     "ContextStasher": capability_context_streams.context_stasher_alone,
     "PixelBufferAcquirer": capability_context_streams.pixel_buffer_acquirer_alone,
     "RepeatedPixelBufferAcquirer": capability_context_streams.repeated_pixel_buffer_acquirer_alone,
     "WorkerThreadPrivilegedConstructor": capability_context_streams.worker_thread_privileged_constructor_alone,
-    "configured_probe": capability_context_streams.one_config_probe_with_gain_and_label,
+    "probe_with_input_values": capability_context_streams.one_fields_probe_with_gain_and_label,
     "explicit_timestamp": (
         capability_context_streams.an_explicitly_stamped_source_into_a_timestamp_collecting_sink
     ),
@@ -95,22 +94,20 @@ def test_process_receives_the_limited_context_without_gpu_full_access(
 
 
 # ---------------------------------------------------------------------------
-# ctx.config and ctx.time
+# A node's fields and ctx.time
 # ---------------------------------------------------------------------------
 
 
-def test_ctx_config_is_the_dict_the_node_was_added_with(start_tatolabd_running_stream):
-    observation = run_probe(start_tatolabd_running_stream, "configured_probe")
-    assert observation["config"] == {"gain": 2.5, "label": "left"}
-    # The helper built the config class out of that mapping and handed the
-    # object to `__init__`; `ctx.config` above is still the mapping itself.
-    assert observation["constructed"] == {"gain": 2.5, "label": "left"}
-    assert observation["constructed_type"] == "ConfigProbeConfig"
+def test_a_nodes_fields_hold_the_values_it_was_added_with_when_init_runs(
+    start_tatolabd_running_stream,
+):
+    observation = run_probe(start_tatolabd_running_stream, "probe_with_input_values")
+    assert observation["fields_in_init"] == {"gain": 2.5, "label": "left"}
 
 
-def test_ctx_config_is_an_empty_dict_when_nothing_was_passed(start_tatolabd_running_stream):
-    observation = run_probe(start_tatolabd_running_stream, "ConfigProbe")
-    assert observation["config"] == {}
+def test_a_nodes_fields_hold_their_defaults_when_nothing_was_passed(start_tatolabd_running_stream):
+    observation = run_probe(start_tatolabd_running_stream, "FieldsProbe")
+    assert observation["fields_in_init"] == {"gain": 0.0, "label": ""}
 
 
 def test_ctx_time_is_the_engine_media_clock_in_nanoseconds(start_tatolabd_running_stream):
@@ -170,11 +167,11 @@ def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd_running_str
 # ---------------------------------------------------------------------------
 
 
-def test_outputs_captured_in_setup_still_write_from_a_worker_thread(
+def test_an_output_pin_still_writes_from_a_worker_thread_started_in_setup(
     start_tatolabd_running_stream,
 ):
-    """`ctx.outputs` is deliberately not hook-bound: a manual source hands it to
-    its own thread and keeps producing between hooks."""
+    """An output pin is deliberately not hook-bound: a manual source writes it
+    from its own thread and keeps producing between hooks."""
     observation = run_probe(start_tatolabd_running_stream, "worker_thread_source")
     assert observation["message"] == {"origin": "worker-thread"}
 

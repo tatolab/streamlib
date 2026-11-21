@@ -13,17 +13,17 @@ travel as their names: the observation crosses a process boundary, so nothing
 in it can be a live object.
 """
 
-import dataclasses
 import json
 import os
 import threading
 import traceback
 
 from engine_media_clock import engine_media_clock_now_ns
+from json_messages import JsonMessagesInOrder, json_bytes, json_read
 from tatolab.stream import (
-    Input,
-    Output,
-    Records,
+    EncodedVideo,
+    InputPin,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
@@ -53,7 +53,7 @@ def _report(probe_body) -> None:
 # ---------------------------------------------------------------------------
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class SetupContextProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report(
@@ -65,15 +65,15 @@ class SetupContextProbe:
         )
 
 
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class ProcessContextProbe:
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.reported:
+        if self._reported:
             return
-        self.reported = True
+        self._reported = True
 
         def observe() -> dict:
             try:
@@ -91,34 +91,25 @@ class ProcessContextProbe:
 
 
 # ---------------------------------------------------------------------------
-# ctx.config and ctx.time
+# A node's fields and ctx.time
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass
-class ConfigProbeConfig:
+@node(execution="manual")
+class FieldsProbe:
+    """Reports the values its fields held when `__init__` ran."""
+
     gain: float = 0.0
     label: str = ""
 
-
-@node.process(execution="manual")
-class ConfigProbe:
-    def __init__(self, config: ConfigProbeConfig) -> None:
-        self.config = config
+    def __init__(self) -> None:
+        self._fields_in_init = {"gain": self.gain, "label": self.label}
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        # Both halves of the contract from inside the helper: the object the
-        # helper constructed, and `ctx.config` still being the raw mapping.
-        _report(
-            lambda: {
-                "config": ctx.config,
-                "constructed": dataclasses.asdict(self.config),
-                "constructed_type": type(self.config).__name__,
-            }
-        )
+        _report(lambda: {"fields_in_init": self._fields_in_init})
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class TimeProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
@@ -135,39 +126,37 @@ class TimeProbe:
 # ---------------------------------------------------------------------------
 
 
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class ExplicitlyStampedSource:
-    bags_to_downstream = Output(Records)
+    bags_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write(
-            self.bags_to_downstream, {"value": 1}, timestamp_ns=EXPLICIT_TIMESTAMP_NS
-        )
+        self.bags_to_downstream.write(json_bytes({"value": 1}), timestamp_ns=EXPLICIT_TIMESTAMP_NS)
 
 
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class DefaultStampedSource:
-    bags_to_downstream = Output(Records)
+    bags_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write(self.bags_to_downstream, {"value": 1})
+        self.bags_to_downstream.write(json_bytes({"value": 1}))
 
 
-@node.process
+@node
 class TimestampCollectingSink:
-    bags_from_upstream = Input(Records, delivery="ordered")
+    bags_from_upstream: InputPin[JsonMessagesInOrder]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.reported:
+        if self._reported:
             return
-        payload, timestamp_ns = ctx.inputs.read_with_timestamp(self.bags_from_upstream)
-        if payload is not None:
-            self.reported = True
-            message = payload
-            _report(lambda: {"message": message, "timestamp_ns": timestamp_ns})
+        read = self.bags_from_upstream.read_message()
+        if read is not None:
+            self._reported = True
+            bag = json_read(read.payload)
+            _report(lambda: {"message": bag, "timestamp_ns": read.timestamp_ns})
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +164,7 @@ class TimestampCollectingSink:
 # ---------------------------------------------------------------------------
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class ContextStasher:
     """Keeps the setup context and reads it again from `start`."""
 
@@ -198,22 +187,20 @@ class ContextStasher:
 # ---------------------------------------------------------------------------
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class WorkerThreadSource:
-    """`ctx.outputs` captured in setup, written from a thread the node owns."""
+    """Its output pin, written from a thread the node starts in setup."""
 
     def __init__(self) -> None:
         self._stop = threading.Event()
         self._worker: "threading.Thread | None" = None
 
-    bags_to_downstream = Output(Records)
+    bags_to_downstream: OutputPin[EncodedVideo]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        captured_outputs = ctx.outputs
-
         def produce_from_worker_thread() -> None:
             while not self._stop.is_set():
-                captured_outputs.write(self.bags_to_downstream, {"origin": "worker-thread"})
+                self.bags_to_downstream.write(json_bytes({"origin": "worker-thread"}))
                 self._stop.wait(0.01)
 
         self._worker = threading.Thread(target=produce_from_worker_thread, daemon=True)
@@ -225,21 +212,21 @@ class WorkerThreadSource:
             self._worker.join(timeout=5.0)
 
 
-@node.process
+@node
 class WorkerThreadBagSink:
-    bags_from_upstream = Input(Records, delivery="ordered")
+    bags_from_upstream: InputPin[JsonMessagesInOrder]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.reported:
+        if self._reported:
             return
-        payload = ctx.inputs.read(self.bags_from_upstream)
-        if payload is not None:
-            self.reported = True
-            message = payload
-            _report(lambda: {"message": message})
+        unit = self.bags_from_upstream.read()
+        if unit is not None:
+            self._reported = True
+            bag = json_read(unit)
+            _report(lambda: {"message": bag})
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +234,7 @@ class WorkerThreadBagSink:
 # ---------------------------------------------------------------------------
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class PixelBufferAcquirer:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
@@ -267,7 +254,7 @@ class PixelBufferAcquirer:
         _report(observe)
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class RepeatedPixelBufferAcquirer:
     """Acquires and closes the same shape more times than the pool has slots."""
 
@@ -287,7 +274,7 @@ class RepeatedPixelBufferAcquirer:
         _report(observe)
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class WorkerThreadPrivilegedConstructor:
     """The native camera's shape: stash the capabilities in setup, construct
     privileged resources from a thread the node owns.
