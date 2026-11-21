@@ -92,6 +92,7 @@ def bind_the_pins_of_a_class_node(
 ) -> "dict[str, BoundInputPin | BoundOutputPin]":
     """The pin object of each `InputPin` and `OutputPin` of `members`, by its port's name."""
     pins: "dict[str, BoundInputPin | BoundOutputPin]" = {}
+    member_by_port = {member.port: member for member in members}
     for member in members:
         if member.form == "input_pin":
             pins[member.port] = BoundInputPin(
@@ -99,7 +100,11 @@ def bind_the_pins_of_a_class_node(
             )
         elif member.form == "output_pin":
             pins[member.port] = BoundOutputPin(
-                member, link_data_access=link_data_access, outputs=outputs, node_id=node_id
+                member,
+                link_data_access=link_data_access,
+                outputs=outputs,
+                node_id=node_id,
+                pin_types=_the_pin_types_of(member, member_by_port),
             )
     return pins
 
@@ -288,11 +293,11 @@ class BoundOutputPin:
         link_data_access: NodeLinkDataAccess,
         outputs: LinkOutputDataWriter,
         node_id: str,
+        pin_types: "list[dict[str, Any]]",
     ) -> None:
         self._outputs = outputs
         self._port = member.port
         self._node_id = node_id
-        pin_types = _the_pin_types_of(member)
         if len(pin_types) != 1:
             raise TypeError(
                 f"`{node_id}`'s output `{member.port}` declares no one type, and an output writes "
@@ -440,13 +445,20 @@ def _the_writer_of_a_value_on_an_output_port(
     raise TypeError(f"{what_it_is} is a {pin_type_name}, which no value is written as")
 
 
-def _the_pin_types_of(member: ClassNodeMember) -> "list[dict[str, Any]]":
-    """The pin types `member` declares: its one type, each of several, or none for a pin typed another way."""
+def _the_pin_types_of(
+    member: ClassNodeMember, member_by_port: "Optional[dict[str, ClassNodeMember]]" = None
+) -> "list[dict[str, Any]]":
+    """The pin types `member` declares: its one type, each of several, the types of the input an
+    output typed by the class's type parameter follows, or none for a pin typed another way."""
     declared_pin_type: Any = member.pin_declaration["pin_type"]
     if declared_pin_type["kind"] == "is":
         return [declared_pin_type["pin_type"]]
     if declared_pin_type["kind"] == "one_of":
         return list(declared_pin_type["pin_types"])
+    if declared_pin_type["kind"] == "same_as_input" and member_by_port is not None:
+        followed = member_by_port.get(declared_pin_type["input_port_name"])
+        if followed is not None:
+            return _the_pin_types_of(followed)
     return []
 
 
