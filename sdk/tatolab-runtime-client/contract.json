@@ -7937,7 +7937,7 @@
           {
             "type": "string",
             "const": "link_from_a_function_node_into_a_setting",
-            "description": "No longer answered: a link from a function or shader node into a setting read at setup\nconnects as a link from any other node does. Kept for a client built against an earlier\nrevision until the contract's next version.",
+            "description": "Never answered: a link from a function or shader node into a setting read at setup\nconnects. Listed for a client of an earlier revision until contract version 4.",
             "x-removed-in": 4
           },
           {

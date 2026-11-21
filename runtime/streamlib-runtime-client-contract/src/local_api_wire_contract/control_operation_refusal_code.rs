@@ -58,9 +58,8 @@ pub enum ControlOperationRefusalCode {
     /// Value wire only, since each change of what it carries rebuilds the setting's node;
     /// `refused_field` names the setting, and the runtime's words the node to place between them.
     LinkStreamsIntoASetting,
-    /// No longer answered: a link from a function or shader node into a setting read at setup
-    /// connects as a link from any other node does. Kept for a client built against an earlier
-    /// revision until the contract's next version.
+    /// Never answered: a link from a function or shader node into a setting read at setup
+    /// connects. Listed for a client of an earlier revision until contract version 4.
     #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     LinkFromAFunctionNodeIntoASetting,
     /// The project holds no file or folder at the path sent; `refused_file` names it.

@@ -15,7 +15,7 @@ use pyo3::types::{PyBytes, PyDict, PyNone, PyTuple};
 use streamlib::sdk::descriptors::{PinType, VectorComponentCount};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
-    DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
+    ChannelsBlockDescriptorBody, DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputValue,
     GpuPoolSlotFrameDescriptorBody, HelperProcessLossCountBoardWriter, ImageFrameDescriptorBody,
     InputMailboxesInner, MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
@@ -55,10 +55,11 @@ use messages_read_off_links_from_outside_the_island::{
     the_stored_value_a_record_carries_packed,
 };
 pub(crate) use ports_of_a_function_node_run_standalone::{
-    hand_an_unread_message_on, read_the_control_value_at_an_input_port,
-    read_the_message_at_an_input_port_unread, read_the_named_value_at_an_input_port,
-    read_the_parts_at_an_input_port, read_the_stored_value_at_an_input_port,
-    write_the_named_value_on_an_output_port, write_the_stored_value_on_an_output_port,
+    an_unread_message_carries_what_another_does, hand_an_unread_message_on,
+    read_the_control_value_at_an_input_port, read_the_message_at_an_input_port_unread,
+    read_the_named_value_at_an_input_port, read_the_parts_at_an_input_port,
+    read_the_stored_value_at_an_input_port, write_the_named_value_on_an_output_port,
+    write_the_stored_value_on_an_output_port,
 };
 
 /// One value a function node takes or gives.

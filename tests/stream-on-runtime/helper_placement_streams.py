@@ -37,6 +37,7 @@ from helper_placement_nodes import (
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
     ReportsTheCountsItReadInOrderSink,
     ReportsTheFunctionNodeValuesItReadSink,
+    ReportsTheLevelItIsBuiltWith,
     ReportsTheLevelRecordsItReadSink,
     ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
@@ -405,3 +406,24 @@ def python_level_source_through_a_gate_into_a_native_converter(stream_builder: S
     stream_builder.connect(source.output("level_to_downstream"), gate.input("value"))
     stream_builder.connect(gate.output("result"), converter.input("channels"))
     stream_builder.connect(converter.output("records"), sink.input("level_records"))
+
+
+@graph_generator
+def typed_level_into_a_setting_a_python_class_reads_at_setup(stream_builder: StreamBuilder) -> None:
+    """A typed function node built with `gain` 0.5 into `level`, a setting a Python class reads at setup."""
+    scaled = stream_builder.add(
+        LevelScaledByItsTypedGain, name="scaled", input_values={"gain": 0.5}
+    )
+    reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
+    stream_builder.connect(scaled.output("result"), reader.input("level"))
+
+
+@graph_generator
+def held_level_into_a_setting_and_read_by_a_python_sink(stream_builder: StreamBuilder) -> None:
+    """A stateful function node holding its config's `level`, into a setting a Python class reads
+    at setup and into a second Python class: two readers, so it runs in a process of its own."""
+    held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
+    reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(held.output("result"), reader.input("level"))
+    stream_builder.connect(held.output("result"), sink.input("brightness"))

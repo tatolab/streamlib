@@ -19,6 +19,9 @@ pub struct FunctionNodePromotedToItsOwnProcessComponent {
     /// Where the node's own helper notes how it ran it, the report its
     /// [`FunctionNodeRanCompiledComponent`](super::FunctionNodeRanCompiledComponent) renders.
     pub how_its_own_helper_ran_it: Arc<HowItsHelpersRanAFunctionNode>,
+    /// Whether its own helper evaluates it once as it sets up: when an output of it feeds a
+    /// setting read at setup, whose node the engine builds after this one has set up.
+    pub evaluated_at_setup: bool,
 }
 
 /// What moved a function node out of its readers' islands, as `graph` renders

@@ -42,6 +42,7 @@ from tatolab.runtime._function_node_pool import (
     the_node_class_the_function_node_pool_runs_as,
 )
 from tatolab.runtime._function_node_run_as_a_standalone_node import (
+    evaluate_a_promoted_function_node_at_its_setup,
     ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs,
 )
 from tatolab.runtime._not_ready_placeholder_frames import (
@@ -280,6 +281,8 @@ class HelperProcessLifecycle:
                     configuration or {}, self._link_data_access
                 )
                 configuration = None
+            if command.get("function_node_evaluated_at_setup"):
+                evaluate_a_promoted_function_node_at_its_setup(self._node_class)
             port_wiring = command.get("ports") or {}
             self._take_the_config_fields_its_node_exposes_as_inputs(
                 port_wiring.get("exposed_config_fields") or []

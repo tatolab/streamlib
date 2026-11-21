@@ -76,35 +76,92 @@ fn a_node_or_link_the_same_edit_adds_or_removes_is_not_restarted() {
     );
 }
 
+/// Mark `function_node` promoted out of its readers' islands into a helper of its own.
+fn promote(graph: &mut Graph, function_node: &NodeRunId) {
+    graph
+        .traversal_mut()
+        .v(function_node)
+        .first_mut()
+        .unwrap()
+        .insert_component_without_rendering_it(
+            crate::core::graph::FunctionNodePromotedToItsOwnProcessComponent {
+                process_execution: crate::core::execution::ProcessExecution::Continuous {
+                    interval_ms: 10,
+                },
+                how_its_own_helper_ran_it: std::sync::Arc::default(),
+                evaluated_at_setup: true,
+            },
+        );
+}
+
+/// A node whose setting a wire rebuilds restarts with an island into another of its inputs,
+/// which it evaluates itself and is fed again as it sets up, and with a channel from a function
+/// node promoted out of the islands; the island is taken off it with no channel to close.
+///
+/// Mental-revert: refusing every link that joins a function node refuses the rebuild, and the
+/// setting its wire carries a value into never takes it.
 #[test]
-fn a_rebuild_of_a_node_linked_to_a_function_node_is_refused_naming_both() {
+fn a_rebuild_restarts_a_node_with_the_island_it_evaluates_and_a_promoted_nodes_channel() {
     let mut graph = a_graph_resolving_three_function_node_types();
     let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+    let promoted = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+    promote(&mut graph, &promoted);
     let rebuilt = a_mock_node(&mut graph);
-    link(&mut graph, (&lfo, "result"), (&rebuilt, "in1"));
+    let island_it_evaluates = link(&mut graph, (&lfo, "result"), (&rebuilt, "in1"));
+    let from_the_promoted_node = link(&mut graph, (&promoted, "result"), (&rebuilt, "in2"));
+
+    let restarted =
+        the_running_nodes_a_rebuild_restarts(&graph, std::slice::from_ref(&rebuilt), &[], &[], &[])
+            .unwrap();
+    unwire_each_link_of_the_nodes_restarted(&mut graph, &restarted).unwrap();
+
+    assert_eq!(
+        restarted,
+        RunningNodesALiveEditRestarts {
+            nodes: vec![rebuilt],
+            links: sorted(&[island_it_evaluates.clone(), from_the_promoted_node]),
+        }
+    );
+    assert!(
+        graph
+            .traversal()
+            .e(&island_it_evaluates)
+            .first()
+            .unwrap()
+            .get::<LinkStateComponent>()
+            .is_some_and(|state| state.0 == LinkState::Disconnected),
+        "the island is taken off its reader, to be fed to it again"
+    );
+}
+
+/// A node whose output feeds an island another node evaluates is refused a rebuild, naming both
+/// nodes: its place in that island is read once, when the island's reader starts.
+#[test]
+fn a_rebuild_of_a_node_feeding_an_island_another_node_evaluates_is_refused_naming_both() {
+    let mut graph = a_graph_resolving_three_function_node_types();
+    let rebuilt = a_mock_node(&mut graph);
+    let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+    let island_reader = a_mock_node(&mut graph);
+    link(&mut graph, (&rebuilt, "out1"), (&remap, "x"));
+    link(&mut graph, (&remap, "result"), (&island_reader, "in1"));
 
     let refusal =
         the_running_nodes_a_rebuild_restarts(&graph, std::slice::from_ref(&rebuilt), &[], &[], &[])
             .unwrap_err()
             .to_string();
 
-    let rebuilt_name = graph
-        .traversal()
-        .v(&rebuilt)
-        .first()
-        .unwrap()
-        .display_name
-        .clone();
-    let lfo_name = graph
-        .traversal()
-        .v(&lfo)
-        .first()
-        .unwrap()
-        .display_name
-        .clone();
+    let name_of = |node: &NodeRunId| {
+        graph
+            .traversal()
+            .v(node)
+            .first()
+            .unwrap()
+            .display_name
+            .clone()
+    };
     assert!(
-        refusal.contains(&format!("`{rebuilt_name}` is rebuilt"))
-            && refusal.contains(&format!("joins function node `{lfo_name}`"))
+        refusal.contains(&format!("`{}` is rebuilt", name_of(&rebuilt)))
+            && refusal.contains(&format!("joins function node `{}`", name_of(&remap)))
             && refusal.contains("To fix: stop the stream"),
         "{refusal}"
     );

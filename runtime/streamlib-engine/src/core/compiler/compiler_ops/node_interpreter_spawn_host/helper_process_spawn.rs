@@ -426,6 +426,8 @@ impl NodeInterpreterSpawnHost {
                         "loss_count_board": loss_count_board,
                         "output_ports_keeping_their_last_message":
                             output_ports_keeping_their_last_message,
+                        "function_node_evaluated_at_setup":
+                            self.its_function_node_is_evaluated_at_setup,
                         "stream_clock": stream_clock_named_to_the_helper,
                     }))
                 },

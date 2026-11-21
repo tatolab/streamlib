@@ -10,12 +10,15 @@ import time
 
 import numpy
 
+from typing import Annotated
+
 from tatolab.stream import (
     Channels,
     Input,
     Output,
     Packets,
     Records,
+    SettingOnly,
     State,
     Stateful,
     UnreadMessage,
@@ -392,6 +395,19 @@ def LevelScaledByItsGain(  # noqa: N802
 def LevelScaledByItsTypedGain(level: float = 1.0, gain: float = 0.25) -> float:  # noqa: N802
     """A typed node: its level scaled by its `gain` input."""
     return level * gain
+
+
+@node(execution="continuous", interval_ms=10)
+class ReportsTheLevelItIsBuiltWith:
+    """Reports `level`, a setting read at setup, each time it is built, with its own pid."""
+
+    level: Annotated[float, SettingOnly()] = 0.1
+
+    def __init__(self) -> None:
+        report("BUILT_WITH_LEVEL", {"sink_pid": os.getpid(), "level": float(self.level)})
+
+    def process(self, ctx) -> None:
+        pass
 
 
 @dataclasses.dataclass(frozen=True)

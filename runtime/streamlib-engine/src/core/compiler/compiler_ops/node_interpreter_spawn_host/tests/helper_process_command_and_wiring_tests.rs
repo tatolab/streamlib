@@ -14,6 +14,7 @@ fn a_promoted_function_nodes_own_helper_reports_how_it_ran_it() {
     let how_its_own_helper_ran_it = Arc::new(HowItsHelpersRanAFunctionNode::default());
     node.insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
         process_execution: ProcessExecution::Continuous { interval_ms: 10 },
+        evaluated_at_setup: false,
         how_its_own_helper_ran_it: Arc::clone(&how_its_own_helper_ran_it),
     });
     let host = spawn_host_for_a_function_node_promoted_to_its_own_process(

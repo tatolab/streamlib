@@ -13,9 +13,9 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 use crate::core::compiler::compiler_ops::shader_node_island::the_host_input_port_a_fused_shader_node_input_is_read_at;
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
-use crate::core::test_support::MockInputOnlyNode;
+use crate::core::test_support::{MockInputOnlyNode, make_in1_a_setting_read_at_setup};
 
-fn a_graph_resolving_the_pool_and_three_function_node_types() -> Graph {
+pub(crate) fn a_graph_resolving_the_pool_and_three_function_node_types() -> Graph {
     let graph = a_graph_resolving_three_function_node_types();
     graph
         .node_types_this_stream_resolves()
@@ -617,28 +617,6 @@ fn a_carry_into_a_pool_the_commit_adds_hands_nothing_to_a_running_helper() {
     assert_eq!(handed, None);
 }
 
-/// Make input `in1` of `reader` a Float setting read at setup.
-fn make_in1_a_setting_read_at_setup(graph: &mut Graph, reader: &NodeRunId) {
-    use crate::core::descriptors::{NodeInputMode, PinFlow, PinType, ResolvedPin, SettingReadTime};
-    let in1 = graph
-        .traversal_mut()
-        .v(reader)
-        .first_mut()
-        .unwrap()
-        .ports
-        .inputs
-        .iter_mut()
-        .find(|port| port.name == "in1")
-        .expect("the mock reader has an input `in1`");
-    in1.pin = Some(ResolvedPin {
-        pin_type: PinType::Float { exact_size: None },
-        flow: PinFlow::Value,
-    });
-    in1.input_mode = Some(NodeInputMode::SettingOnly {
-        read: SettingReadTime::AtSetup,
-    });
-}
-
 /// An island into a setting its reader reads at setup is carried through the pool, though the
 /// reader evaluates islands into its other inputs itself, as no read of the reader takes a
 /// setting: its carry is written as the pool sets up, and the half out of the pool is a channel,
@@ -652,7 +630,7 @@ fn an_island_into_a_setting_read_at_setup_is_carried_through_the_pool_written_at
     let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
     let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
     let reading_a_setting = a_helper_reader_before_its_setup(&mut graph);
-    make_in1_a_setting_read_at_setup(&mut graph, &reading_a_setting);
+    make_in1_a_setting_read_at_setup(&mut graph, reading_a_setting.as_str());
     let reading_each_run = a_helper_reader_before_its_setup(&mut graph);
     let into_the_setting = link(&mut graph, (&lfo, "result"), (&reading_a_setting, "in1"));
     let into_a_read = link(&mut graph, (&lfo, "result"), (&reading_each_run, "in1"));

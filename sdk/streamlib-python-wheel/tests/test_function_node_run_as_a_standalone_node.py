@@ -454,6 +454,138 @@ def test_the_pool_writes_an_island_carried_into_a_setting_as_it_sets_up_and_no_o
     assert bytes(payload) == struct.pack("<d", 0.25)
 
 
+def _a_pool_with_its_carries_wired_to_readers(carries: "list[dict[str, Any]]") -> "tuple[Any, Any, dict[int, Any]]":
+    """A pool built from `carries`, each output wired to a reader of its own: the pool, its data plane and each reader by carry number."""
+    from tatolab.runtime._function_node_pool import the_node_class_the_function_node_pool_runs_as
+
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    pool_class = the_node_class_the_function_node_pool_runs_as({"carries": carries}, data_plane)
+    pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)
+    readers = {}
+    for carry_number in range(len(carries)):
+        reader = _engine.open_node_link_data_access_for_helper_process()
+        link_id = f"L-out-of-the-pool-{carry_number}-{next(_links_into_promoted_nodes_opened)}"
+        node_interpreter_bootstrap.wire_link_data_access(
+            reader, {"inputs": [_wiring_of_one_link_end("input", "read", link_id)]}
+        )
+        node_interpreter_bootstrap.wire_link_data_access(
+            data_plane,
+            {"outputs": [_wiring_of_one_link_end("output", f"island_{carry_number}_output", link_id)]},
+        )
+        readers[carry_number] = reader
+    return pool, data_plane, readers
+
+
+def _a_carry(carry_number: int, *, written_at_setup: bool) -> "dict[str, Any]":
+    carry: "dict[str, Any]" = {
+        "input_port": f"island_{carry_number}",
+        "output_port": f"island_{carry_number}_output",
+        "family": "channels",
+    }
+    if written_at_setup:
+        carry["written_at_setup"] = True
+    return carry
+
+
+def test_an_island_raising_as_the_pool_sets_up_leaves_the_other_carries_written(monkeypatch):
+    """An island carried into a setting that raises as the pool sets up is logged, and the pool
+    still sets up: another island into a setting is written then, and every carry from the
+    pool's first `process` on.
+
+    Fail-without-fix: the island's failure fails the pool's setup, and no carry is written.
+    """
+    from tatolab.runtime import _function_node_pool
+
+    pool, data_plane, readers = _a_pool_with_its_carries_wired_to_readers(
+        [_a_carry(0, written_at_setup=True), _a_carry(1, written_at_setup=True), _a_carry(2, written_at_setup=False)]
+    )
+    island = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["island_0", "island_1", "island_2"])
+    for carry_number, value in ((0, 0.5), (1, 0.25), (2, 0.125)):
+        island.write_block(f"island_{carry_number}", "d", [[value]], sample_rate=0)
+    read_the_island_as_the_engine_does = _function_node_pool.read_the_message_at_an_input_port_unread
+
+    def an_island_that_raises_at_island_0(*, link_data_access: Any, input_port: str) -> Any:
+        if input_port == "island_0":
+            raise RuntimeError("the island raised")
+        return read_the_island_as_the_engine_does(link_data_access=link_data_access, input_port=input_port)
+
+    monkeypatch.setattr(
+        _function_node_pool, "read_the_message_at_an_input_port_unread", an_island_that_raises_at_island_0
+    )
+    pool.setup(_ContextOfOneProcess())
+
+    assert readers[0].read_from_input_port("read") is None, "the island that raised wrote nothing"
+    payload = readers[1].read_from_input_port("read")
+    assert payload is not None and bytes(payload) == struct.pack("<d", 0.25)
+    monkeypatch.setattr(
+        _function_node_pool, "read_the_message_at_an_input_port_unread", read_the_island_as_the_engine_does
+    )
+    pool.process(_ContextOfOneProcess())
+    for carry_number, value in ((0, 0.5), (2, 0.125)):
+        payload = readers[carry_number].read_from_input_port("read")
+        assert payload is not None, f"carry {carry_number} is written at the pool's first `process`"
+        assert bytes(payload) == struct.pack("<d", value)
+
+
+def test_the_pool_writes_an_island_carried_into_a_setting_again_only_once_its_value_changes():
+    """Each value the engine reads into a setting may rebuild its node, so the pool writes an
+    island into a setting only when what it carries changed; an island into any other input is
+    written at each evaluation.
+
+    Fail-without-fix: the unchanged value is written again, and the reader's wire wakes.
+    """
+    pool, data_plane, readers = _a_pool_with_its_carries_wired_to_readers(
+        [_a_carry(0, written_at_setup=True), _a_carry(1, written_at_setup=False)]
+    )
+    island = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["island_0", "island_1"])
+
+    def the_values_each_reader_reads_after_one_process(values: "tuple[float, float]") -> "list[Any]":
+        for carry_number, value in enumerate(values):
+            island.write_block(f"island_{carry_number}", "d", [[value]], sample_rate=0)
+        pool.process(_ContextOfOneProcess())
+        read = [readers[carry_number].read_from_input_port("read") for carry_number in (0, 1)]
+        return [None if payload is None else struct.unpack("<d", bytes(payload))[0] for payload in read]
+
+    assert the_values_each_reader_reads_after_one_process((0.5, 0.5)) == [0.5, 0.5]
+    assert the_values_each_reader_reads_after_one_process((0.5, 0.5)) == [None, 0.5], (
+        "the setting's island is not written again with what it carried"
+    )
+    assert the_values_each_reader_reads_after_one_process((0.75, 0.5)) == [0.75, 0.5]
+
+
+def test_a_promoted_function_node_feeding_a_setting_is_called_as_it_sets_up():
+    """A promoted function node whose output feeds a setting read at setup is called once at
+    its setup, so the setting's node, set up after it, is built with its value; one feeding no
+    setting is first called at its first `process`.
+
+    Fail-without-fix: the node is not called at its setup, and the setting's node is built with
+    the setting's own value.
+    """
+    from tatolab.runtime._function_node_run_as_a_standalone_node import (
+        evaluate_a_promoted_function_node_at_its_setup,
+    )
+
+    def a_runner(evaluated_at_setup: bool) -> "tuple[Any, Any, Any]":
+        data_plane = _engine.open_node_link_data_access_for_helper_process()
+        runner_class = the_node_class_a_promoted_function_node_runs_as(
+            tally, f"{__name__}:tally", "tally-1", data_plane
+        )
+        if evaluated_at_setup:
+            evaluate_a_promoted_function_node_at_its_setup(runner_class)
+        runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
+        control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+        control_values.write_control_value("x", 4.0)
+        return runner, _ContextOfOneProcess(), control_values
+
+    feeding_a_setting, ctx, _control_values = a_runner(evaluated_at_setup=True)
+    feeding_a_setting.setup(ctx)
+    assert ctx.outputs.blocks_written == [("result", [[7.0]], 0, 0)]
+
+    feeding_no_setting, ctx, _control_values = a_runner(evaluated_at_setup=False)
+    feeding_no_setting.setup(ctx)
+    assert ctx.outputs.blocks_written == []
+
+
 def test_a_running_pool_takes_a_new_carry_and_hands_its_island_on_without_a_restart():
     from tatolab.runtime._function_node_pool import (
         take_the_carries_a_running_pool_is_handed,
