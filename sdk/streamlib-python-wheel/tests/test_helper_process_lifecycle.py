@@ -46,14 +46,8 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
         bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
-    stand_in_parent.send(
-        {
-            "cmd": "setup",
-            "capability": "full",
-            "config": {},
-            "ports": {"input_values": {"tag": "probe"}},
-        }
-    )
+    ports = {"input_values": {"tag": "probe"}}
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": ports})
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
@@ -71,7 +65,7 @@ def doubles_its_level(level: float = 0.5) -> float:
 
 
 @node
-def answers_whether_its_level_is_high_in_python(level: float = 0.5) -> float:
+def says_if_high_in_python(level: float = 0.5) -> float:
     """Builds an object, which keeps its body from compiling, so it runs as Python."""
     repr(object())
     return 1.0 if level > 0.5 else 0.0
@@ -79,10 +73,7 @@ def answers_whether_its_level_is_high_in_python(level: float = 0.5) -> float:
 
 @pytest.mark.parametrize(
     ("function_node", "node_id", "ran_compiled"),
-    [
-        (doubles_its_level, "doubler-1", True),
-        (answers_whether_its_level_is_high_in_python, "answerer-1", False),
-    ],
+    [(doubles_its_level, "doubler-1", True), (says_if_high_in_python, "sayer-1", False)],
 )
 def test_a_promoted_function_nodes_ready_says_how_its_own_helper_runs_it(
     stand_in_parent, function_node, node_id, ran_compiled
