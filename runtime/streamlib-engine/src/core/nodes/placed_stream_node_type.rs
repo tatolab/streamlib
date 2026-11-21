@@ -31,3 +31,14 @@ static THE_SETTINGS_OF_A_PLACED_STREAM: LazyLock<Vec<PortDescriptor>> = LazyLock
 pub(crate) fn the_settings_of_a_placed_stream() -> &'static [PortDescriptor] {
     &THE_SETTINGS_OF_A_PLACED_STREAM
 }
+
+/// The setting of a placed stream named `input_name`, which an Input of the stream it places
+/// may not share: a link into that Input would also feed the setting, which would lose the value
+/// it holds.
+pub(crate) fn the_setting_of_a_placed_stream_named(
+    input_name: &str,
+) -> Option<&'static PortDescriptor> {
+    the_settings_of_a_placed_stream()
+        .iter()
+        .find(|setting| setting.name == input_name)
+}
