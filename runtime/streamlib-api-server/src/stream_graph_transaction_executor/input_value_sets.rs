@@ -383,8 +383,8 @@ pub(super) fn the_link_overriding_the_input(
 
 /// What node `node` of a running stream holds on its input `input`: its saved value, its pin
 /// value else its config field else the input value it saves, as a `GraphInput` saves its
-/// `value`, which its config renders under `default`, and the value set live over it; so a set made on the running
-/// node is reversed to the saved value with the live one set live again.
+/// `value`, which its config renders under `default`, and the value set live over it; so a set
+/// made on the running node is reversed to the saved value with the live one set live again.
 pub(super) struct ValueARunningInputHolds {
     pub(super) saved: Option<Value>,
     pub(super) live: Option<Value>,
