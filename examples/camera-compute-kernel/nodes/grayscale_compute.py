@@ -16,16 +16,20 @@ touch the host and no GPU array package is involved.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -90,35 +94,22 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
-@dataclass
-class GrayscaleComputeConfig:
-    """GrayscaleCompute's settings, as its node's config in the graph document spells them."""
-
-    strength: float = 1.0
-
-
 @node.meta(description="Grades each frame toward its luma with a compute kernel")
-@node.process
+@node
 class GrayscaleCompute:
     """Camera frame in, the same picture in black and white out."""
 
-    def __init__(self, config: GrayscaleComputeConfig) -> None:
-        strength = float(config.strength)
-        if not 0.0 <= strength <= 1.0:
-            raise ValueError(
-                f"GrayscaleCompute was configured with strength={strength} — the "
-                f"dial runs from 0.0 (the picture untouched) to 1.0 (full luma)"
-            )
-        # Push constants travel with a dispatch and never persist on the
-        # kernel, so these bytes are handed to every dispatch.
-        self.strength_push_constants = struct.pack(GRAYSCALE_STRENGTH_FORMAT, strength)
-
-    camera_frame_from_upstream = Input(
-        Image, delivery="newest", description="Frames from the camera"
-    )
-    grayscale_frame_to_downstream = Output(
-        Image, description="The same frames graded toward their luma by the kernel"
-    )
+    strength: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("How far each frame is graded toward its luma: 0.0 untouched, 1.0 full."),
+    ] = 1.0
+    camera_frame_from_upstream: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
+    ]
+    grayscale_frame_to_downstream: OutputPin[
+        Annotated[Texture, TexturePixelFormats(TEXTURE_FORMAT), Description("The same frames graded toward their luma by the kernel")]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Depth 1: `dispatch` returns with the GPU work retired, and nothing
@@ -141,7 +132,7 @@ class GrayscaleCompute:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.camera_frame_from_upstream)
+        frame = self.camera_frame_from_upstream.read()
         if frame is None:
             return
 
@@ -169,12 +160,13 @@ class GrayscaleCompute:
                 _workgroups_covering(frame.height),
                 1,
             ),
-            push_constants=self.strength_push_constants,
+            # Push constants travel with a dispatch and never persist on the
+            # kernel, so the dial's value as it stands now goes with each one.
+            push_constants=struct.pack(GRAYSCALE_STRENGTH_FORMAT, self.strength),
         )
 
         # The capture's timestamp, not the effect's: downstream orders frames by it.
-        ctx.outputs.write(
-            self.grayscale_frame_to_downstream,
+        self.grayscale_frame_to_downstream.write(
             ImageFrameToWrite.of_texture(grayscale_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

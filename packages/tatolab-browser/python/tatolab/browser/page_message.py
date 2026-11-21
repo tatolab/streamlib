@@ -35,4 +35,13 @@ class PageMessage:
         return cls(members)
 
     def to_bytes(self) -> bytes:
-        return json.dumps(self.members, separators=(",", ":"), allow_nan=False).encode()
+        return json.dumps(
+            self.members, separators=(",", ":"), allow_nan=False, default=_a_mapping_as_a_dict
+        ).encode()
+
+
+def _a_mapping_as_a_dict(value: object) -> object:
+    """Any other mapping as the dict JSON writes as an object; anything else is refused."""
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")

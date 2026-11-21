@@ -7,18 +7,21 @@ Importable as `nodes.halftone_compute:HalftoneCompute`, which is the name the
 engine spawns this node's child interpreter with.
 """
 
-import math
 import struct
-from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -121,61 +124,36 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
-@dataclass
-class HalftoneComputeConfig:
-    """HalftoneCompute's settings, as its node's config in the graph document spells them."""
-
-    cell_size: int = DEFAULT_CELL_SIZE
-    """Pixels across one dot cell; bigger is a coarser screen. At least 2."""
-
-    dot_boost: float = DEFAULT_DOT_BOOST
-    """How far a dot's ink is lifted above the colour it sampled; finite and above 0.0."""
-
-    background_level: float = DEFAULT_BACKGROUND_LEVEL
-    """The grey the paper is, from 0.0 (black) to 1.0 (white)."""
-
-
 @node.meta(description="Screens each camera frame into halftone dots with a compute kernel")
-@node.process
+@node
 class HalftoneCompute:
     """Camera frame in, the same picture as a halftone dot screen out."""
 
-    camera_frame_from_upstream = Input(
-        Image, delivery="newest", description="Frames from the camera"
-    )
-    halftone_frame_to_downstream = Output(
-        Image, description="The same frames screened into halftone dots by the kernel"
-    )
-
-    def __init__(self, config: HalftoneComputeConfig) -> None:
-        cell_size = int(config.cell_size)
-        dot_boost = float(config.dot_boost)
-        background_level = float(config.background_level)
-        if cell_size < 2:
-            raise ValueError(
-                f"HalftoneCompute was configured with cell_size={cell_size} — a "
-                f"cell holds one dot and needs at least 2 pixels across to draw "
-                f"one; 8 is the screen the effect was written for"
-            )
-        if not math.isfinite(dot_boost) or dot_boost <= 0.0:
-            raise ValueError(
-                f"HalftoneCompute was configured with dot_boost={dot_boost} — the "
-                f"dial scales the ink a dot is drawn in, so it wants a finite "
-                f"number above 0.0: 1.0 leaves the sampled colour alone, at or "
-                f"below 0.0 prints black dots on the background, and a NaN or an "
-                f"infinity reaches the shader as a multiply with no defined result"
-            )
-        if not 0.0 <= background_level <= 1.0:
-            raise ValueError(
-                f"HalftoneCompute was configured with "
-                f"background_level={background_level} — the dial is the grey the "
-                f"paper is, from 0.0 (black) to 1.0 (white)"
-            )
-        # Push constants travel with a dispatch and never persist on the
-        # kernel, so these bytes are handed to every dispatch.
-        self.halftone_dial_push_constants = struct.pack(
-            HALFTONE_DIAL_FORMAT, cell_size, dot_boost, background_level
-        )
+    cell_size: Annotated[
+        int,
+        NumberRange(minimum=2, maximum=64),
+        Description("Pixels across one dot cell; bigger is a coarser screen."),
+    ] = DEFAULT_CELL_SIZE
+    dot_boost: Annotated[
+        float,
+        NumberRange(minimum=0.01, maximum=4.0),
+        Description("How far a dot's ink is lifted above the colour it sampled."),
+    ] = DEFAULT_DOT_BOOST
+    background_level: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("The grey the paper is, from 0.0 (black) to 1.0 (white)."),
+    ] = DEFAULT_BACKGROUND_LEVEL
+    camera_frame_from_upstream: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
+    ]
+    halftone_frame_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The same frames screened into halftone dots by the kernel"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Depth 1: `dispatch` returns with the GPU work retired, and nothing
@@ -198,7 +176,7 @@ class HalftoneCompute:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.camera_frame_from_upstream)
+        frame = self.camera_frame_from_upstream.read()
         if frame is None:
             return
 
@@ -226,13 +204,16 @@ class HalftoneCompute:
                 _workgroups_covering(frame.height),
                 1,
             ),
-            push_constants=self.halftone_dial_push_constants,
+            # Push constants travel with a dispatch and never persist on the
+            # kernel, so the dials as they stand now go with each one.
+            push_constants=struct.pack(
+                HALFTONE_DIAL_FORMAT, self.cell_size, self.dot_boost, self.background_level
+            ),
         )
 
         # The capture's timestamp, not the effect's: downstream orders frames by
         # when the camera captured them.
-        ctx.outputs.write(
-            self.halftone_frame_to_downstream,
+        self.halftone_frame_to_downstream.write(
             ImageFrameToWrite.of_texture(halftone_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
