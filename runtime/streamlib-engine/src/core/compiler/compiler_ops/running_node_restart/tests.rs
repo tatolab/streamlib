@@ -183,7 +183,7 @@ fn a_rebuild_closes_the_read_its_island_holds_of_an_upstream_channel_and_opens_i
     let restarted =
         the_running_nodes_a_rebuild_restarts(&graph, std::slice::from_ref(&rebuilt), &[], &[], &[])
             .unwrap();
-    assert_eq!(restarted.links, [into_the_rebuilt.clone()]);
+    assert_eq!(restarted.links, std::slice::from_ref(&into_the_rebuilt));
     unwire_each_link_of_the_nodes_restarted(&mut graph, &restarted).unwrap();
     assert!(
         !is_read_for_the_island_link(&graph, &into_the_island, &into_the_rebuilt),
