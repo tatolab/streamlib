@@ -32,6 +32,10 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
         "0029-every-key-with-a-moq-track-receive-every-media-module-and-a-texture-format-convert.json",
         "0daa892bc3ced58bb97e622ff28d6b137ac087178d2a8de088e138bb1240262e",
     ),
+    (
+        "0030-every-key-with-a-moq-track-receive-every-media-module-a-texture-format-convert-and-the-number-conversions.json",
+        "72ee398309187b19c093497710f3d39770489616f3a8757a5196aeb6a6505e69",
+    ),
 ];
 
 fn golden_graph_paths() -> Vec<PathBuf> {

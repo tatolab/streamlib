@@ -43,6 +43,7 @@ fn the_typed_conversions() -> [PinConversion; 5] {
             output_port_name: output_port_name.to_owned(),
             output_pin_type,
             output_picked_for_the_input: None,
+            saved_value_cast: None,
         }
     };
     [

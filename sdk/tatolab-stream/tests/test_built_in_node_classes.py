@@ -28,7 +28,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 7
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 13
 
 
 @pytest.mark.parametrize(
@@ -45,6 +45,12 @@ def test_a_built_in_is_named_by_its_own_class_in_the_stream_package(built_in_nod
 # its fields and pins and publishes no config class.
 TYPED_BUILT_IN_NODE_CLASS_NAMES = {
     "AudioToTensor",
+    "BooleanToFloat",
+    "BooleanToInteger",
+    "FloatToBoolean",
+    "FloatToInteger",
+    "IntegerToBoolean",
+    "IntegerToFloat",
     "TensorToAudio",
     "TensorToTexture",
     "TextureFormatConvert",

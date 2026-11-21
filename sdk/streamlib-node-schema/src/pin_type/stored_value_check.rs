@@ -116,10 +116,7 @@ impl PinType {
             Self::Integer { exact_size } => {
                 let (lowest, highest) = integer_bounds(*exact_size);
                 match value {
-                    Value::Number(number) => number
-                        .as_i64()
-                        .map(i128::from)
-                        .or_else(|| number.as_u64().map(i128::from))
+                    Value::Number(number) => the_whole_number_of(number)
                         .is_some_and(|whole| (lowest..=highest).contains(&whole)),
                     _ => false,
                 }
@@ -296,5 +293,24 @@ pub(super) fn integer_bounds(exact_size: Option<IntegerSize>) -> (i128, i128) {
         Some(IntegerSize::UInt16) => (0, u16::MAX.into()),
         Some(IntegerSize::UInt32) => (0, u32::MAX.into()),
         Some(IntegerSize::UInt64) => (0, u64::MAX.into()),
+    }
+}
+
+/// The whole number `number` holds; `None` for one with a fraction.
+pub(super) fn the_whole_number_of(number: &serde_json::Number) -> Option<i128> {
+    number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+}
+
+/// `whole` as a JSON number, which holds every whole number an Integer of any size holds; one
+/// past those is held at the nearest end.
+pub(super) fn a_whole_json_number(whole: i128) -> Value {
+    match (i64::try_from(whole), u64::try_from(whole)) {
+        (Ok(signed), _) => Value::from(signed),
+        (_, Ok(unsigned)) => Value::from(unsigned),
+        _ if whole < 0 => Value::from(i64::MIN),
+        _ => Value::from(u64::MAX),
     }
 }

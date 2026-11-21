@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A `GraphInput` whose type a `transact` changes: a cleared value stays cleared, so a change of
+//! A `GraphInput` whose type a `transact` changes: a saved value is cast into the new type by the
+//! one conversion that fits, held within the Input's range, or gives way to the new type's
+//! default saying why, and one undo puts back both; a cleared value stays cleared, so a change of
 //! type that clears it first takes; a type a client does not write is refused for that reason;
 //! and a type the port it is linked into does not take is refused naming that port.
 
@@ -164,5 +166,373 @@ async fn a_linked_graph_input_retyped_with_its_value_cleared_is_refused_naming_t
         kept["components"]["graph_interface"]["pin_type"],
         json!({ "type": "float" }),
         "{kept}"
+    );
+}
+
+/// A project whose stream `main` holds the `GraphInput` `warmth_base` of `pin_type`, saving
+/// `value` with the settings `annotations`, by [`WARMTH_BASE_NODE_UUID`], the built-in
+/// conversions registered.
+fn a_project_whose_main_stream_holds_an_input_saving(
+    pin_type: Value,
+    value: Value,
+    annotations: Value,
+) -> ProjectWithGraphDocuments {
+    streamlib_media_builtins::register_the_conversion_node_types();
+    let mut config = json!({ "port": "warmth_base", "pin_type": pin_type, "value": value });
+    if let (Some(config), Some(annotations)) = (config.as_object_mut(), annotations.as_object()) {
+        config.extend(annotations.clone());
+    }
+    ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [{ "id": WARMTH_BASE_NODE_UUID, "name": "warmth_base",
+                    "type": "tatolab.stream:GraphInput", "config": config }],
+        "links": [],
+    }))
+}
+
+/// The value `warmth_base` saves and the pin type it chooses, as `stream_id`'s live graph and
+/// `project`'s graph document of `main` hold them.
+fn what_warmth_base_holds(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    project: &ProjectWithGraphDocuments,
+    stream_id: &str,
+) -> (Value, Value, Value) {
+    let live = the_node_named(&engine.the_live_graph_of(stream_id), "warmth_base");
+    let saved = super::input_value_set_tests::the_input_values_of(
+        &project.the_graph_document_of("main"),
+        WARMTH_BASE_NODE_UUID,
+    );
+    (
+        live["input_values"]["value"].clone(),
+        saved["value"].clone(),
+        live["components"]["graph_interface"]["pin_type"].clone(),
+    )
+}
+
+/// The answer of a `transact` by alice in `engine` of `operations`, or its refusal.
+async fn transact_by_alice(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    operations: Value,
+) -> std::result::Result<Value, String> {
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": operations }),
+        )
+        .await,
+    )
+}
+
+/// A Float `GraphInput` saving 0.1 that chooses an Integer saves 0 in the same edit, cast by
+/// the registered `FloatToInteger`, which the answer names; `graph`, the graph document and
+/// the answer show 0, and one undo puts back the Float and 0.1.
+///
+/// Mental-revert: without the cast the Integer is refused for the 0.1 it holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_float_input_choosing_an_integer_casts_its_saved_value_and_one_undo_puts_both_back() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({ "range": [0, 1] }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "integer" })
+        )]),
+    )
+    .await
+    .expect("the retype casts the saved value");
+    assert_eq!(
+        retyped["saved_values_retyped"],
+        json!([{ "stream": stream_id, "node": WARMTH_BASE_NODE_UUID, "value_before": 0.1,
+                 "value": 0, "cast_by": "tatolab.stream:FloatToInteger" }]),
+        "{retyped}"
+    );
+    assert!(
+        retyped["operations"]
+            .as_array()
+            .is_some_and(|operations| operations
+                .iter()
+                .any(|operation| { operation["input"] == "value" && operation["to"] == json!(0) })),
+        "the answer shows the value cast: {retyped}"
+    );
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id),
+        (json!(0), json!(0), json!({ "type": "integer" }))
+    );
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the retype undoes");
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id),
+        (json!(0.1), json!(0.1), json!({ "type": "float" })),
+        "one undo puts back both the type and the value"
+    );
+}
+
+/// An Integer `GraphInput` saving 2 that chooses a Float saves 2.0, cast by `IntegerToFloat`.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_integer_input_choosing_a_float_saves_the_same_value_as_a_float() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "integer" }),
+        json!(2),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "float" })
+        )]),
+    )
+    .await
+    .expect("the retype casts the saved value");
+    assert_eq!(
+        retyped["saved_values_retyped"][0]["cast_by"], "tatolab.stream:IntegerToFloat",
+        "{retyped}"
+    );
+    let (live, saved, pin_type) = what_warmth_base_holds(&engine, &project, &stream_id);
+    assert_eq!(pin_type, json!({ "type": "float" }));
+    for value in [live, saved] {
+        assert!(value.is_f64() && value == json!(2.0), "{value}");
+    }
+}
+
+/// A Float `GraphInput` saving 0.9 within `[0.5, 1]` that chooses an Integer saves 1: the cast
+/// truncates to 0, then is held within the range's whole numbers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_value_cast_by_a_retype_is_held_within_the_inputs_range() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.9),
+        json!({ "range": [0.5, 1] }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "integer" })
+        )]),
+    )
+    .await
+    .expect("the retype casts the saved value");
+    assert_eq!(retyped["saved_values_retyped"][0]["value"], 1, "{retyped}");
+    assert_eq!(what_warmth_base_holds(&engine, &project, &stream_id).1, 1);
+}
+
+/// A Float `GraphInput` saving 0.1 that chooses a String, which no conversion reaches, saves no
+/// value, and the answer says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retype_no_conversion_reaches_gives_way_to_the_default_saying_why() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "string" })
+        )]),
+    )
+    .await
+    .expect("a retype no conversion reaches is taken");
+    let answered = &retyped["saved_values_retyped"][0];
+    assert!(answered.get("value").is_none(), "{retyped}");
+    assert!(
+        answered["default_because"]
+            .as_str()
+            .is_some_and(|why| why.contains("no conversion the stream registers")),
+        "{retyped}"
+    );
+    let (live, saved, pin_type) = what_warmth_base_holds(&engine, &project, &stream_id);
+    assert_eq!(
+        (live, saved, pin_type),
+        (Value::Null, Value::Null, json!({ "type": "string" }))
+    );
+}
+
+/// The Python node type `node_type`, a conversion from a Float into a String, which the stream
+/// `stream_id` resolves as its interpreter would describe it.
+fn a_projects_float_to_string_conversion(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    stream_id: &str,
+    node_type: &str,
+) {
+    engine
+        .engine
+        .loaded_stream_of_the_id(stream_id)
+        .expect("the stream is loaded")
+        .node_types_this_stream_resolves()
+        .register_a_described_type_that_runs_no_node_for_a_test(
+            a_python_function_node_type(
+                node_type,
+                vec![a_typed_port("level", PinType::Float { exact_size: None })],
+                vec![a_typed_port("text", PinType::String {})],
+            )
+            .stating_a_conversion(),
+            None,
+        )
+        .expect("the stream resolves the project's node type");
+}
+
+/// A retype that only a conversion a project's Python node declares reaches saves no value: a
+/// module's conversion is a node body, which converts only inside a started stream, and the
+/// answer names it.
+///
+/// Mental-revert: treating the module's conversion as the built-in number cast casts 0.1 into a
+/// value no String takes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retype_only_a_modules_conversion_reaches_gives_way_to_the_default_naming_it() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsText");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "string" })
+        )]),
+    )
+    .await
+    .expect("the retype is taken");
+    let answered = &retyped["saved_values_retyped"][0];
+    assert_eq!(
+        answered["conversions_that_fit"],
+        json!(["nodes.format:LevelAsText"]),
+        "{retyped}"
+    );
+    assert!(
+        answered["default_because"]
+            .as_str()
+            .is_some_and(|why| why.contains("only inside a started stream")),
+        "{retyped}"
+    );
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id).1,
+        Value::Null
+    );
+}
+
+/// A retype two conversions reach picks neither: the value gives way to the default, and the
+/// answer names both.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retype_two_conversions_reach_gives_way_to_the_default_naming_both() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    for node_type in ["nodes.format:LevelAsText", "nodes.format:LevelAsPercent"] {
+        a_projects_float_to_string_conversion(&engine, &stream_id, node_type);
+    }
+    let stream = project.stream_asset_of("main");
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "string" })
+        )]),
+    )
+    .await
+    .expect("the retype is taken");
+    let answered = &retyped["saved_values_retyped"][0];
+    assert_eq!(
+        answered["conversions_that_fit"],
+        json!(["nodes.format:LevelAsPercent", "nodes.format:LevelAsText"]),
+        "{retyped}"
+    );
+    assert!(answered.get("value").is_none(), "{retyped}");
+}
+
+/// A Float `GraphInput` saving 0.1 within `[0, 1]` that chooses a String is refused at the type,
+/// after its value is taken off, naming the `range` a String does not take; the graph document,
+/// the live graph and the project's history still hold the Float and 0.1, with no commit made.
+///
+/// Mental-revert: reading a running `GraphInput`'s saved value from its config alone, which
+/// renders it under `default`, reverses the value taken off to none, and draws it cleared.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retype_refused_partway_leaves_the_type_the_value_and_the_history_as_they_were() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({ "range": [0, 1] }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+    let document_before = project.the_graph_document_of("main");
+
+    let refusal = transact_by_alice(
+        &engine,
+        json!([set_on_warmth_base(
+            stream,
+            "pin_type",
+            json!({ "type": "string" })
+        )]),
+    )
+    .await
+    .expect_err("a String holding a range is refused");
+    assert!(refusal.contains("`range`"), "{refusal}");
+
+    let live = the_node_named(&engine.the_live_graph_of(&stream_id), "warmth_base");
+    assert_eq!(live["input_values"]["value"], json!(0.1));
+    assert_eq!(
+        live["components"]["graph_interface"]["pin_type"],
+        json!({ "type": "float" })
+    );
+    let document_after = project.the_graph_document_of("main");
+    assert_eq!(document_after, document_before);
+    assert_eq!(document_after["nodes"][0]["config"]["value"], json!(0.1));
+    let undone = engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await;
+    assert!(
+        undone.is_err(),
+        "the refused retype made no commit: {undone:?}"
     );
 }
