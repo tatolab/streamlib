@@ -427,8 +427,8 @@ pub struct NodeTypeInputDescribed {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<NodeTypeInputMode>,
     /// Whether a link may end at it: `false` on a setting read each run, a setting of a type no
-    /// message carries, every setting of a `GraphInput`, and each legacy field of a node type
-    /// not yet typed, which is no port.
+    /// message carries, every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or
+    /// `GetVariable`, and each legacy field of a node type not yet typed, which is no port.
     #[serde(default = "an_input_takes_a_wire_unless_it_says_not")]
     pub takes_a_wire: bool,
     /// When the node reads a setting: once at setup, a change rebuilding the node, or each run.

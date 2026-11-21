@@ -192,9 +192,10 @@ fn a_node_whose_one_setting_is_read(
 
 /// Each input `graph` serves says whether it takes a wire as the link check rules: a setting
 /// read at setup takes one, a setting read each run takes none, and neither does any setting of
-/// a `GraphInput`; an output says nothing of it.
+/// a node type of the graph itself; an output says nothing of it.
 ///
-/// Mental-revert: reading the mark from the mode alone says the `GraphInput`'s `port` takes one.
+/// Mental-revert: reading the mark from the mode alone says the `GraphInput`'s `port` takes one;
+/// exempting a `GraphInput` alone says the `GetVariable`'s does.
 #[test]
 fn each_input_the_graph_serves_says_whether_it_takes_a_wire() {
     use crate::core::descriptors::SettingReadTime;
@@ -214,13 +215,18 @@ fn each_input_the_graph_serves_says_whether_it_takes_a_wire() {
         takes_a_wire("tests:Labeller", SettingReadTime::EachRun),
         serde_json::json!(false)
     );
-    assert_eq!(
-        takes_a_wire(
-            streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
-            SettingReadTime::AtSetup
-        ),
-        serde_json::json!(false)
-    );
+    for node_type in [
+        streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
+        streamlib_project_repository::GRAPH_OUTPUT_NODE_TYPE,
+        streamlib_project_repository::SET_VARIABLE_NODE_TYPE,
+        streamlib_project_repository::GET_VARIABLE_NODE_TYPE,
+    ] {
+        assert_eq!(
+            takes_a_wire(node_type, SettingReadTime::AtSetup),
+            serde_json::json!(false),
+            "{node_type}"
+        );
+    }
     let output = serde_json::to_value(GraphNodeOutput::from(&a_node_whose_output_is(
         crate::core::descriptors::PortFamily::Records,
         None,

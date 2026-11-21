@@ -234,9 +234,10 @@ pub enum NodeInputMode {
 /// Whether a link may end at an input of `mode` carrying `pin_type` on a node of `node_type`,
 /// the one rule every place that asks follows: every input but a setting read each run, a
 /// setting of a type no message carries, such as a node reference or a choice of pin type, and
-/// any setting of a `GraphInput`, which declares its stream's interface rather than running on
-/// a value. An input of no `mode` is a port that takes a wire; one of no `pin_type` links by
-/// its family.
+/// any setting of a node type of the graph itself — `GraphInput`, `GraphOutput`, `SetVariable`
+/// or `GetVariable` — which names a port of its stream or a variable, so fixes types across
+/// the graph before any link is judged, rather than running on a value. An input of no `mode`
+/// is a port that takes a wire; one of no `pin_type` links by its family.
 pub fn an_input_takes_a_wire(
     node_type: &crate::NodeClassImportPath,
     mode: Option<NodeInputMode>,
@@ -245,7 +246,7 @@ pub fn an_input_takes_a_wire(
     mode.is_none_or(|mode| {
         !mode.is_a_setting()
             || !(mode.is_a_setting_read_each_run()
-                || node_type.is_the_graph_input_type()
+                || node_type.is_a_node_type_of_the_graph_itself()
                 || pin_type.is_some_and(|pin_type| !pin_type.takes_a_wire()))
     })
 }

@@ -481,32 +481,43 @@ fn a_setting_of_a_type_no_message_carries_takes_no_wire() {
     assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
 }
 
-/// A setting of a `GraphInput` read at setup takes no wire, though the same setting on another
-/// node takes a Value wire; an input of a `GraphInput` that is no setting still takes one.
+/// A setting read at setup of each node type of the graph itself — `GraphInput`,
+/// `GraphOutput`, `SetVariable` and `GetVariable` — takes no wire, though the same setting on
+/// another node takes a Value wire; an input of one of them that is no setting still takes one.
 ///
-/// Mental-revert: judging an input by its mode and type alone connects the `GraphInput`'s
-/// setting.
+/// Mental-revert: exempting a `GraphInput`'s settings alone connects the `GraphOutput`'s, the
+/// `SetVariable`'s and the `GetVariable`'s.
 #[test]
-fn a_setting_of_a_graph_input_takes_no_wire() {
-    let graph_input = NodeClassImportPath::new(crate::GRAPH_INPUT_NODE_TYPE).unwrap();
-    let verdict = pin_link_verdict(
-        a_value_output(&float()),
-        PinLinkInputEnd {
-            node_type: &graph_input,
-            ..a_setting(SettingReadTime::AtSetup, &float())
-        },
-        &[],
-    );
-    let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
-        panic!("a setting of a GraphInput takes no wire: {verdict:?}");
-    };
-    assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
+fn a_setting_of_a_node_type_of_the_graph_itself_takes_no_wire() {
+    for node_type in [
+        crate::GRAPH_INPUT_NODE_TYPE,
+        crate::GRAPH_OUTPUT_NODE_TYPE,
+        crate::SET_VARIABLE_NODE_TYPE,
+        crate::GET_VARIABLE_NODE_TYPE,
+    ] {
+        let node_type = NodeClassImportPath::new(node_type).unwrap();
+        let verdict = pin_link_verdict(
+            a_value_output(&float()),
+            PinLinkInputEnd {
+                node_type: &node_type,
+                ..a_setting(SettingReadTime::AtSetup, &float())
+            },
+            &[],
+        );
+        let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
+            panic!("a setting of {node_type} takes no wire: {verdict:?}");
+        };
+        assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
 
-    assert!(an_input_takes_a_wire(
-        &graph_input,
-        Some(NodeInputMode::WireOrValue),
-        Some(&float())
-    ));
+        assert!(
+            an_input_takes_a_wire(&node_type, Some(NodeInputMode::WireOrValue), Some(&float())),
+            "an input of {node_type} that is no setting takes a wire"
+        );
+        assert!(
+            an_input_takes_a_wire(&node_type, None, None),
+            "a port of {node_type} takes a wire"
+        );
+    }
     assert!(an_input_takes_a_wire(
         the_sinks_node_type(),
         Some(NodeInputMode::SettingOnly {
