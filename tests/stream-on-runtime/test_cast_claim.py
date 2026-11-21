@@ -4,7 +4,7 @@
 """The cast-claim contract, over a live camera, in the real placement.
 
 `[surface-id-lifetime-contract]` says the claim on a frame's pixels is taken
-when an Image read builds its `ImageFrame` and released when that object drops,
+when a Texture read builds its `ImageFrame` and released when that object drops,
 after which the frame's id rides pool depth like any other. Both halves are
 load-bearing: the first is what lets a node outlive the producer's ring,
 and the second is what keeps a dropped frame from pinning a slot.
@@ -19,8 +19,8 @@ proves little.
 
 `[cast-object-tensor-protocol]` then says that same object *is* the tensor
 protocol: `torch.from_dlpack(frame)` straight off the read, GPU-resident, with
-the resolve and the lock absorbed. That half is proven here for the `ImageFrame` an
-Image read returns. Its write doors close the gradient, and the only place they can be proven
+the resolve and the lock absorbed. That half is proven here for the `ImageFrame` a
+Texture read returns. Its write doors close the gradient, and the only place they can be proven
 is one with a real producer behind the frame: an edit through `writable()` or
 `cpu()` is checked by resolving the surface again from scratch, because
 published means every *other* holder observes it.
@@ -144,7 +144,7 @@ def _require_a_moving_scene(observation: dict) -> None:
 def test_a_held_image_frame_claims_its_slot_and_outlives_the_producers_ring(
     start_tatolabd_running_stream,
 ):
-    """An Image read takes the claim, and holding the `ImageFrame` is what keeps
+    """A Texture read takes the claim, and holding the `ImageFrame` is what keeps
     the producer off that slot.
 
     No handle, no view, no context manager — the frame alone. A lease that rode
@@ -233,7 +233,7 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
 def test_the_image_frame_reaches_its_pixels_with_no_ceremony(
     start_tatolabd_running_stream,
 ):
-    """The `ImageFrame` an Image read returns hands its pixels to a DLPack
+    """The `ImageFrame` a Texture read returns hands its pixels to a DLPack
     consumer with no `resolve_surface`, no `lock` and no context manager, and
     they are the surface's own pixels."""
     observation = run_claim_probe(

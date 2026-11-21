@@ -48,42 +48,39 @@ LIVE_ADDED_EFFECT_CLASS = "LiveAddedEffect"
 LIVE_ADDED_EFFECT_SOURCE = '''\
 """An effect that announces its frames, written after the node started."""
 
-import dataclasses
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
 
 
-@dataclasses.dataclass
-class LiveAddedEffectConfig:
-    marker: str = "LIVE_FRAME"
-
-
-@node.process
+@node
 class LiveAddedEffect:
     """Republishes each frame on a texture of its own and counts them."""
 
-    video_from_upstream = Input(Image, delivery="newest")
-    video_to_downstream = Output(Image)
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
+    marker: str = "LIVE_FRAME"
 
-    def __init__(self, config: LiveAddedEffectConfig) -> None:
-        self.marker = config.marker
-        self.frames = 0
+    def __init__(self) -> None:
+        self._frames = 0
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.output_ring = NodeOutputTextureRing("rgba8_unorm", ["texture_binding"])
+        self._output_ring = NodeOutputTextureRing("rgba8_unorm", ["texture_binding"])
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is None:
             return
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as upstream:
@@ -92,7 +89,7 @@ class LiveAddedEffect:
                 pixels = upstream.as_numpy().copy()
             finally:
                 upstream.unlock()
-        texture = self.output_ring.next_texture_for_this_frame(
+        texture = self._output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
         texture.lock(read_only=False)
@@ -100,13 +97,12 @@ class LiveAddedEffect:
             texture.as_numpy()[...] = pixels
         finally:
             texture.unlock()
-        ctx.outputs.write(
-            self.video_to_downstream,
+        self.video_to_downstream.write(
             ImageFrameToWrite.of_texture(texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
-        self.frames += 1
-        if self.frames == 1:
+        self._frames += 1
+        if self._frames == 1:
             log.info(f"MARKER:{self.marker}")
 '''
 
@@ -128,11 +124,11 @@ def test_the_live_added_effect_written_as_a_source_string_still_declares():
     )
 
     effect = namespace[LIVE_ADDED_EFFECT_CLASS]
-    assert effect.__tatolab_node_config_class__ is namespace["LiveAddedEffectConfig"]
-    assert effect.__tatolab_node_config_schema__["properties"]["marker"] == {
-        "type": "string",
-        "default": "LIVE_FRAME",
-    }
+    (marker,) = [
+        port for port in effect.__tatolab_node_input_ports__ if port["name"] == "marker"
+    ]
+    assert marker["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "string"}}
+    assert marker["pin_default"] == "LIVE_FRAME"
 
 
 def node_named(graph: dict, name: str) -> dict:
@@ -300,7 +296,7 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
         stream_id,
         {
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
-            "config": {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
+            "pins": {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
             "name": "effect",
         },
     )
@@ -310,8 +306,8 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     effect = node_named(graph_after_add, "effect")
     assert effect["id"] == added["node"], "the node keeps the UUID `add_node` answered"
     assert effect["type"] == f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}"
-    assert effect["config"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
-    assert [port["name"] for port in effect["ports"]["inputs"]] == ["video_from_upstream"]
+    assert effect["pins"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
+    assert [port["name"] for port in effect["ports"]["inputs"]] == ["video_from_upstream", "marker"]
     assert [port["name"] for port in effect["ports"]["outputs"]] == ["video_to_downstream"]
 
     upstream_link_id = connect_live(
@@ -345,7 +341,7 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
         stream_id,
         {
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
-            "config": {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
+            "pins": {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
             "name": "second-effect",
         },
     )
@@ -365,7 +361,7 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
         stream_id,
         {
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
-            "config": {"marker": "DOWNSTREAM_EFFECT_SAW_A_FRAME"},
+            "pins": {"marker": "DOWNSTREAM_EFFECT_SAW_A_FRAME"},
             "name": "downstream-effect",
         },
     )
@@ -445,26 +441,22 @@ SLOWLY_IMPORTING_SINK_SOURCE = f'''\
 
 import os
 import time
+from typing import Annotated
 
-from tatolab.stream import (
-    Image,
-    Input,
-    RuntimeContextLimitedAccess,
-    node,
-)
+from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
 if "STREAMLIB_ENTRYPOINT" in os.environ:
     time.sleep({HELPER_IMPORT_SECONDS})
 
 
-@node.process
+@node
 class SlowlyImportingSink:
     """Reads and drops every frame."""
 
-    video_from_upstream = Input(Image, delivery="newest")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read(self.video_from_upstream)
+        self.video_from_upstream.read()
 '''
 
 

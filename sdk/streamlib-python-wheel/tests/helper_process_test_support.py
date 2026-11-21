@@ -8,9 +8,12 @@ import os
 import threading
 
 from tatolab.runtime import _engine
+from tatolab.runtime._class_node_bound_pins import BoundOutputPin, bind_the_pins_of_a_class_node
+from tatolab.runtime._node_hosting import class_node_members_of
 from tatolab.runtime._node_interpreter_bootstrap import (
     HelperProcessLifecycle,
 )
+from tatolab.stream import EncodedVideo, OutputPin, node
 
 
 PROBE_MODULE = "helper_process_probes"
@@ -19,6 +22,32 @@ PROBE_MODULE = "helper_process_probes"
 def frame_index_payload(frame_index: int) -> bytes:
     """The JSON record the pass-through probes read and forward."""
     return json.dumps({"frame_index": frame_index}).encode()
+
+
+@node(execution="manual")
+class _UpstreamOfAPassThroughProbe:
+    """The typed node upstream of a pass-through probe, written by the test in its place."""
+
+    frames_to_downstream: OutputPin[EncodedVideo]
+
+
+def the_pin_upstream_of_a_pass_through_probe(link_data_access) -> BoundOutputPin:
+    """The `frames_to_downstream` pin of a typed node upstream of a pass-through probe, bound on
+    `link_data_access`, so a test writes the probe each frame as a typed node does."""
+    members = class_node_members_of(_UpstreamOfAPassThroughProbe)
+    assert members is not None
+    context = _engine.open_runtime_context_full_access_for_helper_process(
+        {}, link_data_access, "R-helper-test", "upstream-of-the-probe"
+    )
+    pin = bind_the_pins_of_a_class_node(
+        members,
+        link_data_access=link_data_access,
+        inputs=context.inputs,
+        outputs=context.outputs,
+        node_id="upstream-of-the-probe",
+    )["frames_to_downstream"]
+    assert isinstance(pin, BoundOutputPin)
+    return pin
 
 
 def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 
-import dataclasses
 import json
 import math
 import os
@@ -10,7 +9,8 @@ import sys
 import traceback
 import uuid
 
-from tatolab.stream import Input, Output, Records, clock, log, node
+from json_messages import JsonMessagesInOrder, json_bytes, json_read
+from tatolab.stream import EncodedVideo, InputPin, OutputPin, clock, log, node
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
@@ -79,23 +79,19 @@ def expected_tensor_values(torch, shape: "list[int]", dtype: str, frame_index: i
     return ramp.reshape(shape).to(getattr(torch, dtype))
 
 
-@dataclasses.dataclass
-class TensorStorageBufferPublishingSourceConfig:
-    tensor_name: str = "model_input"
-    frames_to_publish: int = POOL_ROTATION_DEPTH
-    minimum_interval_between_publishes_ns: int = 0
-
-
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class TensorStorageBufferPublishingSource:
     """Writes each frame's values into a pooled tensor through torch and
     publishes its surface id once the handle's close has ordered the writes."""
 
-    tensors_to_downstream = Output(Records)
+    tensors_to_downstream: OutputPin[EncodedVideo]
 
-    def __init__(self, config: TensorStorageBufferPublishingSourceConfig) -> None:
-        self._config = config
-        self._shape, self._dtype = TENSORS_BY_NAME[config.tensor_name]
+    tensor_name: str = "model_input"
+    frames_to_publish: int = POOL_ROTATION_DEPTH
+    minimum_interval_between_publishes_ns: int = 0
+
+    def __init__(self) -> None:
+        self._shape, self._dtype = TENSORS_BY_NAME[self.tensor_name]
         self._pool_key = f"tensor-storage-buffer-probe-{uuid.uuid4().hex}"
         self._last_publish_ns: "int | None" = None
         self._surface_ids_published_so_far: "list[str]" = []
@@ -108,7 +104,7 @@ class TensorStorageBufferPublishingSource:
         if self._stopped:
             return
         frame_index = len(self._surface_ids_published_so_far)
-        if frame_index >= self._config.frames_to_publish:
+        if frame_index >= self.frames_to_publish:
             return
         unavailable = _torch_device_unavailable_reason()
         if unavailable is not None:
@@ -122,7 +118,7 @@ class TensorStorageBufferPublishingSource:
         if (
             self._last_publish_ns is not None
             and now_ns - self._last_publish_ns
-            < self._config.minimum_interval_between_publishes_ns
+            < self.minimum_interval_between_publishes_ns
         ):
             return
         self._last_publish_ns = now_ns
@@ -168,16 +164,17 @@ class TensorStorageBufferPublishingSource:
                 }
             )
 
-        ctx.outputs.write(
-            self.tensors_to_downstream,
-            {
-                "surface_id": surface_id,
-                "frame_index": frame_index,
-                "timestamp_ns": clock.monotonic_now_ns(),
-            },
+        self.tensors_to_downstream.write(
+            json_bytes(
+                {
+                    "surface_id": surface_id,
+                    "frame_index": frame_index,
+                    "timestamp_ns": clock.monotonic_now_ns(),
+                }
+            )
         )
         self._surface_ids_published_so_far.append(surface_id)
-        if len(self._surface_ids_published_so_far) == self._config.frames_to_publish:
+        if len(self._surface_ids_published_so_far) == self.frames_to_publish:
             _report(
                 "TensorStorageBufferPublishingSource",
                 lambda: {
@@ -221,33 +218,29 @@ def _read_a_published_tensor(
         return observation
 
 
-@dataclasses.dataclass
-class PublishedTensorReadingSinkConfig:
+@node
+class PublishedTensorReadingSink:
+    """Resolves each published tensor id and compares its values to the ones
+    its producer wrote for that frame."""
+
+    tensors_from_upstream: InputPin[JsonMessagesInOrder]
+
     tensor_name: str = "model_input"
     # The negative control: resolve the previous frame's id against this
     # frame's expected values, which must then mismatch.
     resolve_the_previous_frames_id: bool = False
 
-
-@node.process
-class PublishedTensorReadingSink:
-    """Resolves each published tensor id and compares its values to the ones
-    its producer wrote for that frame."""
-
-    tensors_from_upstream = Input(Records, delivery="ordered")
-
-    def __init__(self, config: PublishedTensorReadingSinkConfig) -> None:
-        self._config = config
+    def __init__(self) -> None:
         self._previous_surface_id: "str | None" = None
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read(self.tensors_from_upstream)
-        if payload is None:
+        unit = self.tensors_from_upstream.read()
+        if unit is None:
             return
-        message = payload
+        message = json_read(unit)
         resolved_surface_id = message["surface_id"]
         resolved_frame_index = message["frame_index"]
-        if self._config.resolve_the_previous_frames_id:
+        if self.resolve_the_previous_frames_id:
             previous_surface_id = self._previous_surface_id
             self._previous_surface_id = message["surface_id"]
             if previous_surface_id is None:
@@ -263,7 +256,7 @@ class PublishedTensorReadingSink:
                 **_read_a_published_tensor(
                     ctx,
                     resolved_surface_id,
-                    *TENSORS_BY_NAME[self._config.tensor_name],
+                    *TENSORS_BY_NAME[self.tensor_name],
                     message["frame_index"],
                     resolved_frame_index,
                 ),
@@ -271,12 +264,12 @@ class PublishedTensorReadingSink:
         )
 
 
-@node.process
+@node
 class HeldTensorRereadingSink:
     """Resolves the first tensor and holds its handle open, re-reading it
     through torch as every later tensor is published."""
 
-    tensors_from_upstream = Input(Records, delivery="ordered")
+    tensors_from_upstream: InputPin[JsonMessagesInOrder]
 
     def __init__(self) -> None:
         self._held_tensor_surface = None
@@ -294,10 +287,10 @@ class HeldTensorRereadingSink:
     def process(self, ctx) -> None:
         import torch
 
-        payload = ctx.inputs.read(self.tensors_from_upstream)
-        if payload is None:
+        unit = self.tensors_from_upstream.read()
+        if unit is None:
             return
-        message = payload
+        message = json_read(unit)
         if self._held_tensor_surface is None:
             # The claim holds the slot from the read to the resolve, then
             # drops, so the rereads rest on the resolved handle alone.
@@ -373,7 +366,7 @@ float4 main() : SV_Target {
 @node.meta(
     description="A compute kernel and a draw each bind a tensor storage buffer by surface id",
 )
-@node.process(execution="manual")
+@node(execution="manual")
 class TensorStorageBufferKernelBindingProbe:
     """A compute kernel writes an index pattern into one tensor, which torch
     reads back; a second tensor the kernel never names keeps its sentinel.

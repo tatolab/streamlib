@@ -59,7 +59,7 @@ def _add_the_cross_process_edit(stream_builder: StreamBuilder, *, skip_edit: boo
         TestPatternSource, config={"width": 320, "height": 180}
     )
     effect = stream_builder.add(
-        pixel_exchange_probes.ReportingInvertingEffect, config={"skip_edit": skip_edit}
+        pixel_exchange_probes.ReportingInvertingEffect, input_values={"skip_edit": skip_edit}
     )
     verifier = stream_builder.add(pixel_exchange_probes.FrameDigestVerifier)
     stream_builder.connect(pattern.output("video"), effect.input("video_from_upstream"))
