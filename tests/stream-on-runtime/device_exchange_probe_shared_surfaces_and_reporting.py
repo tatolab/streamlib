@@ -8,12 +8,14 @@ import json
 import os
 import sys
 import traceback
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
     ImageFrame,
-    Input,
+    InputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
     log,
 )
 
@@ -32,6 +34,9 @@ DLPACK_DEVICE_METAL = 8
 NATURAL_DLPACK_DEVICE = DLPACK_DEVICE_METAL if sys.platform == "darwin" else DLPACK_DEVICE_CUDA
 NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
 
+#: An input that takes every frame in order.
+FramesInOrder = Annotated[Texture, StreamDelivery("ordered")]
+
 
 def report_device_exchange_probe_observation(probe_body) -> None:
     """One result line per probe, success or failure — the failure carries the
@@ -44,21 +49,21 @@ def report_device_exchange_probe_observation(probe_body) -> None:
 
 
 class DeviceExchangeFrameProbeBase:
-    """Reads exactly one Image frame, held against producer reuse while it lives, then reports through `report_device_exchange_probe_observation`."""
+    """Reads exactly one Texture frame, held against producer reuse while it lives, then reports through `report_device_exchange_probe_observation`."""
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[FramesInOrder]
 
     def __init__(self) -> None:
-        self.frames_seen = 0
+        self._frames_seen = 0
 
     def _probe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> dict:
         raise NotImplementedError
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None or self.frames_seen >= 1:
+        frame = self.video_from_upstream.read()
+        if frame is None or self._frames_seen >= 1:
             return
-        self.frames_seen += 1
+        self._frames_seen += 1
         report_device_exchange_probe_observation(lambda: self._probe(ctx, frame))
 
 

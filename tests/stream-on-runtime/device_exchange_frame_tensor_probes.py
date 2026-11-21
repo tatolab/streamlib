@@ -13,19 +13,19 @@ from device_exchange_probe_shared_surfaces_and_reporting import (
     PADDED_SURFACE_HEIGHT,
     PADDED_SURFACE_WIDTH,
     DeviceExchangeFrameProbeBase,
+    FramesInOrder,
     report_device_exchange_probe_observation,
 )
 from tatolab.stream import (
-    Image,
     ImageFrame,
-    Input,
+    InputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     node,
 )
 
 
-@node.process
+@node
 class GraphFrameToTorchProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -53,7 +53,7 @@ class GraphFrameToTorchProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node.process
+@node
 class DeviceEditProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -85,7 +85,7 @@ class DeviceEditProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node.process
+@node
 class WithBlockEditProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -114,7 +114,7 @@ class WithBlockEditProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node.process
+@node
 class TensorOutlivesHandleProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -139,7 +139,7 @@ class TensorOutlivesHandleProbe(DeviceExchangeFrameProbeBase):
         }
 
 
-@node.process
+@node
 class HostSideProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -159,7 +159,7 @@ class HostSideProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node.process
+@node
 class LaggedConsumerHoldsItsFrameProbe:
     """View identity across ring cycles, plus a frame held past the pool's own
     depth.
@@ -176,7 +176,7 @@ class LaggedConsumerHoldsItsFrameProbe:
     the last share would let the producer recycle the slot underneath a live
     array.
 
-    The read goes through the `Image` port attribute and that is load-bearing,
+    The read goes through the Texture pin and that is load-bearing,
     not style: the claim is taken as the read builds its `ImageFrame`. A read
     by name returns the payload bytes and takes no claim at all, so the held
     frame would ride pool depth like any other — and this probe would assert a
@@ -186,49 +186,49 @@ class LaggedConsumerHoldsItsFrameProbe:
     slot within a ring cycle and `held_frame_unchanged` reads False.
     """
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[FramesInOrder]
 
     # Comfortably past the pool's pre-allocated depth, so the producer has
     # cycled its ring several times over while the first frame is still held.
     FRAMES_TO_LAG_BY = 16
 
     def __init__(self) -> None:
-        self.comparisons: "list[bool]" = []
-        self.view_of_the_delivered_frame = None
-        self.pixels_as_delivered = None
-        self.frames_the_producer_ran_ahead = 0
-        self.a_later_frame_differed = False
-        self.frames_recycled_before_this_probe_read_them = 0
-        self.reported = False
+        self._comparisons: "list[bool]" = []
+        self._view_of_the_delivered_frame = None
+        self._pixels_as_delivered = None
+        self._frames_the_producer_ran_ahead = 0
+        self._a_later_frame_differed = False
+        self._frames_recycled_before_this_probe_read_them = 0
+        self._reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None or self.reported:
+        frame = self.video_from_upstream.read()
+        if frame is None or self._reported:
             return
         try:
             self._observe(ctx, frame)
         except BaseException:  # noqa: BLE001 — surfaced through the marker line
-            self.reported = True
-            self.view_of_the_delivered_frame = None
+            self._reported = True
+            self._view_of_the_delivered_frame = None
             report_device_exchange_probe_observation(lambda: {"failure": traceback.format_exc()})
 
     def _observe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> None:
         import torch
 
-        if self.view_of_the_delivered_frame is None:
+        if self._view_of_the_delivered_frame is None:
             surface = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
             surface.lock()
             if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
                 surface.unlock()
                 surface.close()
-                self.reported = True
+                self._reported = True
                 report_device_exchange_probe_observation(lambda: {"device_unavailable": "device side not reachable"})
                 return
             view = numpy.from_dlpack(surface, device="cpu")
             # Copied, because this is the ground truth the view is compared
             # against — a second view would follow the memory under test.
-            self.pixels_as_delivered = view.copy()
-            self.view_of_the_delivered_frame = view
+            self._pixels_as_delivered = view.copy()
+            self._view_of_the_delivered_frame = view
             # The handle goes now and the view stays: what keeps this frame
             # still from here on is the surface's last share, not the handle.
             surface.unlock()
@@ -246,9 +246,9 @@ class LaggedConsumerHoldsItsFrameProbe:
         except RuntimeError as recycled:
             if "recycled frame" not in str(recycled):
                 raise
-            self.frames_recycled_before_this_probe_read_them += 1
-            self.frames_the_producer_ran_ahead += 1
-            if self.frames_the_producer_ran_ahead < self.FRAMES_TO_LAG_BY:
+            self._frames_recycled_before_this_probe_read_them += 1
+            self._frames_the_producer_ran_ahead += 1
+            if self._frames_the_producer_ran_ahead < self.FRAMES_TO_LAG_BY:
                 return
             self._report_the_held_frame()
             return
@@ -257,15 +257,15 @@ class LaggedConsumerHoldsItsFrameProbe:
             surface.lock()
             device_pixels = torch.from_dlpack(surface).cpu().numpy()
             host_pixels = numpy.from_dlpack(surface, device="cpu")
-            self.comparisons.append(bool((device_pixels == host_pixels).all()))
+            self._comparisons.append(bool((device_pixels == host_pixels).all()))
             # A scene that never changes cannot prove anything about a frame
             # staying still, so the test skips unless something moved.
-            if not (host_pixels == self.pixels_as_delivered).all():
-                self.a_later_frame_differed = True
+            if not (host_pixels == self._pixels_as_delivered).all():
+                self._a_later_frame_differed = True
             surface.unlock()
 
-        self.frames_the_producer_ran_ahead += 1
-        if self.frames_the_producer_ran_ahead < self.FRAMES_TO_LAG_BY:
+        self._frames_the_producer_ran_ahead += 1
+        if self._frames_the_producer_ran_ahead < self.FRAMES_TO_LAG_BY:
             return
         self._report_the_held_frame()
 
@@ -277,23 +277,23 @@ class LaggedConsumerHoldsItsFrameProbe:
         is what keeps the slot.
         """
         held_frame_unchanged = bool(
-            (self.view_of_the_delivered_frame == self.pixels_as_delivered).all()
+            (self._view_of_the_delivered_frame == self._pixels_as_delivered).all()
         )
-        self.reported = True
+        self._reported = True
         observation = {
-            "comparisons": self.comparisons,
-            "frames_the_producer_ran_ahead": self.frames_the_producer_ran_ahead,
+            "comparisons": self._comparisons,
+            "frames_the_producer_ran_ahead": self._frames_the_producer_ran_ahead,
             "frames_recycled_before_this_probe_read_them": (
-                self.frames_recycled_before_this_probe_read_them
+                self._frames_recycled_before_this_probe_read_them
             ),
             "held_frame_unchanged": held_frame_unchanged,
-            "a_later_frame_differed": self.a_later_frame_differed,
+            "a_later_frame_differed": self._a_later_frame_differed,
         }
-        self.view_of_the_delivered_frame = None
+        self._view_of_the_delivered_frame = None
         report_device_exchange_probe_observation(lambda: observation)
 
 
-@node.process
+@node
 class CopyRequestRefusedAtBothDoorsProbe(DeviceExchangeFrameProbeBase):
     """`copy=True` asks for memory the consumer owns; both doors export in
     place, so both refuse by name rather than hand back an alias."""
@@ -348,7 +348,7 @@ def _store_at_the_end_of_a_row_and_read_it_back(tensor_scope_or_handle, host_rea
     return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class DeviceTensorStridesFollowTheRowPitchProbe:
     """Both backings at a width whose GPU-image rows pad: the device tensor's
     row stride is the surface's own pitch, so a store at the last pixel of a
