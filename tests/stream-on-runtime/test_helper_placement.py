@@ -156,7 +156,7 @@ def test_a_payload_one_helper_writes_reaches_a_reader_in_another_helper_unchange
         f"the writer and the reader shared one process ({sink_pid}) — one node, one helper"
     )
     assert payload_read["payload_type"] == "PortPayloadBorrow", (
-        "an untyped read borrows the sample rather than copying it into bytes; "
+        "an EncodedVideo read borrows the sample rather than copying it into bytes; "
         f"got {payload_read['payload_type']}"
     )
     assert bytes.fromhex(payload_read["payload_hex"]) == RAW_MESSAGE_PAYLOAD_BYTES, (
@@ -242,9 +242,9 @@ def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_proce
     """`Lfo -> Remap -> <Python class>` starts exactly one helper, the class's.
 
     The two function nodes are compiled into the class's helper and evaluated
-    at each of its reads: the class reads a value the island computed, one f64
-    sample at no regular rate, that moves with the stream's time and stays in
-    `Remap`'s 0..1, and no process was started for either function node.
+    at each of its reads: the class's field holds a value the island computed,
+    that moves with the stream's time and stays in `Remap`'s 0..1, and no
+    process was started for either function node.
     """
     tatolabd = start_tatolabd_running_stream(lfo_into_remap_into_python_sink)
     values_read = tatolabd.await_marker("FUNCTION_NODE_VALUES_READ")
@@ -257,9 +257,6 @@ def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_proce
     assert helper_pids == [sink_pid], (
         f"a stream of two function nodes and one Python class started {helper_pids}; only "
         f"the class gets a process:\n{tatolabd.recent_stderr()}"
-    )
-    assert values_read["sample_rates"] == [0], (
-        f"a control value on a wire states no regular rate; read {values_read['sample_rates']}"
     )
     values = values_read["values"]
     assert values[0] == pytest.approx(0.5), (
@@ -734,7 +731,7 @@ def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool
 ):
     """A Python body a native half reads runs in the pool, so the lend is taken.
 
-    `LabelsTheLevel` gives a `dict`, which no compiled body carries, and its
+    `LabelsTheLevel` formats a string, which no compiled body does, and its
     describe says so. Its reader is driven manually, as a class lending ports
     to native code is, and a native read holds no Python interpreter lock, so
     the stream places the node in its pool before it runs: the class's port is
@@ -769,10 +766,10 @@ def test_a_function_node_that_does_not_compile_runs_as_python_inside_the_read_of
 ):
     """`LabelsTheLevel -> <Python class>` starts exactly one helper, the class's.
 
-    `LabelsTheLevel` gives a `dict`, which no compiled body carries, so it
+    `LabelsTheLevel` formats a string, which no compiled body does, so it
     runs as Python inside the class's helper, called at each of its reads: the
-    class reads the dict it gave as a Records message, no process was started
-    for it, and `graph` shows it ran uncompiled.
+    class's field holds the bundle it gave, no process was started for it, and
+    `graph` shows it ran uncompiled.
     """
     tatolabd = start_tatolabd_running_stream(function_node_run_as_python_into_python_records_sink)
     stream_id = tatolabd.await_the_latest_stream_loaded()
@@ -789,7 +786,7 @@ def test_a_function_node_that_does_not_compile_runs_as_python_inside_the_read_of
         f"class gets a process:\n{tatolabd.recent_stderr()}"
     )
     assert records_read["records"] == [{"label": "high", "spelled": "0.75"}] * 10, (
-        f"the class reads the dict the node gave at its pin's 0.75: {records_read['records']}"
+        f"the class reads the bundle the node gave at its pin's 0.75: {records_read['records']}"
     )
     nodes_by_name = {node["name"]: node for node in graph["nodes"]}
     assert nodes_by_name["labeller"]["components"]["ran_compiled"] is False, nodes_by_name["labeller"]
