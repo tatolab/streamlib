@@ -119,18 +119,6 @@ pub enum PinLinkRefusal {
         /// The setting.
         input_name: String,
     },
-    /// The output is a function or shader node's, whose value is worked out inside each read of
-    /// the node it feeds, and the input a setting read at setup, which no read takes.
-    ComputedValueIntoASetting {
-        /// The node of the output.
-        output_node_name: String,
-        /// How the node of the output runs: as a function or a shader.
-        output_node_kind: crate::NodeKind,
-        /// The node of the setting.
-        node_name: String,
-        /// The setting.
-        input_name: String,
-    },
     /// No rule connects the output's type to the input's.
     PinTypesDoNotConnect {
         /// The output end.
@@ -243,20 +231,6 @@ impl fmt::Display for PinLinkRefusal {
                      `set_node_input_value`"
                 )
             }
-            Self::ComputedValueIntoASetting {
-                output_node_name,
-                output_node_kind,
-                node_name,
-                input_name,
-            } => write!(
-                formatter,
-                "a link from {kind} node `{output_node_name}` enters setting `{input_name}` of \
-                 `{node_name}`; a {kind} node's value is worked out inside the read of each node \
-                 it feeds, and a setting is read by no run. To fix: link a node that is no \
-                 function or shader node, or set the setting's value with \
-                 `set_node_input_value`",
-                kind = output_node_kind.name(),
-            ),
             Self::PinTypesDoNotConnect {
                 output,
                 input,

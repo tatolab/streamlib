@@ -58,7 +58,7 @@ type TheNextWaveAndTheRest = (
     Vec<(NodeRunId, NodeReadyBarrierHandle)>,
     Vec<(NodeRunId, NodeReadyBarrierHandle)>,
 );
-fn the_next_wave(
+pub(super) fn the_next_wave(
     graph_arc: &RwLock<Graph>,
     barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)>,
 ) -> TheNextWaveAndTheRest {

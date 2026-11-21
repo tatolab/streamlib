@@ -128,7 +128,8 @@ pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_proces
 
 /// Mark `function_node_id` promoted into a helper of its own driven the way
 /// `process_execution` says, sharing the report `graph` renders as its
-/// `ran_compiled` with that helper.
+/// `ran_compiled` with that helper, and evaluated as it sets up when an output
+/// of it feeds a setting read at setup.
 fn mark_a_function_node_promoted_to_its_own_process(
     graph: &mut Graph,
     function_node_id: &NodeRunId,
@@ -139,10 +140,22 @@ fn mark_a_function_node_promoted_to_its_own_process(
     else {
         return;
     };
+    let evaluated_at_setup = graph
+        .traversal()
+        .v(function_node_id)
+        .out_e()
+        .iter()
+        .any(|link| {
+            graph.is_a_setting_read_at_setup(
+                link.to_port().node_run_id(),
+                link.to_port().port_name(),
+            )
+        });
     if let Some(node) = graph.traversal_mut().v(function_node_id).first_mut() {
         node.insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
             process_execution,
             how_its_own_helper_ran_it,
+            evaluated_at_setup,
         });
     }
 }

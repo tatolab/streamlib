@@ -20,7 +20,9 @@ one reads back, a `dict` output as a Records message, a value of a named type
 as the Bytes message its class packs, and an `UnreadMessage` output exactly as
 the message arrived. A named type's input that may take `None` holds `None`
 until a value arrives, and every other input holds back the call until one
-does.
+does. A node whose output feeds a setting read at setup is called once as it
+sets up too, so the setting's node, which the engine builds after it, is built
+with its value.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from tatolab.stream import (
     Output,
     Packets,
     Records,
+    log,
     node,
 )
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
@@ -137,6 +140,12 @@ def the_node_class_a_promoted_function_node_runs_as(
     return declared
 
 
+def evaluate_a_promoted_function_node_at_its_setup(node_class: Any) -> None:
+    """Have `node_class`, the class a promoted function node runs as, call the node once at its setup; any other class is left as it is."""
+    if isinstance(node_class, type) and issubclass(node_class, _FunctionNodeRunAsAStandaloneNode):
+        node_class._evaluated_at_setup = True
+
+
 def ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(
     node_class: Any,
 ) -> "dict[str, bool]":
@@ -164,6 +173,19 @@ class _FunctionNodeRunAsAStandaloneNode:
     _body_run_as_python: Optional[FunctionNodeBodyRunAsPython]
     _control_values_written: int
     _evaluation: FunctionNodeEvaluatedAsAStandaloneNode
+    _evaluated_at_setup: bool = False
+
+    def setup(self, ctx: Any) -> None:
+        if not self._evaluated_at_setup:
+            return
+        try:
+            self.process(ctx)
+        except Exception as error:
+            log.warn(
+                "a promoted function node raised as it set up, so the setting it feeds is "
+                "built with its own value",
+                error=str(error),
+            )
 
     def start_from_its_config(self, config: Any = None) -> None:
         """Take the node's config and start its state from its initial record; set as `__init__` once declared."""
