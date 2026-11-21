@@ -121,6 +121,8 @@ class _ClassNodeReading:
         self._node = node_class.__name__
         self._of_the_runtimes_own_node = of_the_runtimes_own_node
         self._port_spelling_by_cast_name: dict[str, str] = {}
+        self._input_ports_of_each_type_parameter: dict[typing.TypeVar, list[str]] = {}
+        self._input_port_by_name: dict[str, DeclaredPort] = {}
 
     def ports(
         self, *, constructed_in_python: bool
@@ -132,7 +134,9 @@ class _ClassNodeReading:
         output_ports: list[DeclaredPort] = []
         members: list[ClassNodeMember] = []
         typed_pins: list[tuple[str, str, PinDeclarationOnTheWire]] = []
-        for attribute_name, annotation in self._resolved_annotations().items():
+        annotations = self._resolved_annotations()
+        self._note_the_input_pins_each_type_parameter_types(annotations)
+        for attribute_name, annotation in annotations.items():
             if attribute_name.startswith("_") or _is_a_class_variable(annotation):
                 continue
             description, annotation = description_and_annotation_without_it(
@@ -149,6 +153,7 @@ class _ClassNodeReading:
             elif _DIRECTION_OF_EACH_PIN_FORM[pin_form] == "input":
                 port = self._input_pin(attribute_name, pin_type_annotation, description)
                 input_ports.append(port)
+                self._input_port_by_name[port["name"]] = port
                 form = "input_pin"
             else:
                 port = self._output_pin(attribute_name, pin_type_annotation, description)
@@ -173,6 +178,13 @@ class _ClassNodeReading:
                 )
             )
         refuse_former_names_that_find_no_one_pin(self._node, typed_pins)
+        for output_port in output_ports:
+            followed = output_port["family"].get("family_follows_input_port")
+            if followed is not None and "family" not in output_port["family"]:
+                output_port["family"] = {
+                    "family": self._input_port_by_name[followed]["family"]["family"],
+                    "family_follows_input_port": followed,
+                }
         return input_ports, output_ports, tuple(members)
 
     def _refusal(
@@ -224,14 +236,38 @@ class _ClassNodeReading:
         )
 
     def _resolved_annotations(self) -> dict[str, Any]:
+        type_parameters = {
+            type_parameter.__name__: type_parameter
+            for type_parameter in getattr(self._node_class, "__type_params__", ())
+        }
         try:
-            return typing.get_type_hints(self._node_class, include_extras=True)
+            return typing.get_type_hints(
+                self._node_class, localns=type_parameters, include_extras=True
+            )
         except Exception as unresolvable:
             raise TypeError(
                 f"{self._node} carries an annotation that cannot be resolved, so its fields and "
                 f"pins cannot be read: {unresolvable}. Every annotation must be importable at "
                 f"run time, not only under `TYPE_CHECKING`."
             ) from unresolvable
+
+    def _note_the_input_pins_each_type_parameter_types(self, annotations: dict[str, Any]) -> None:
+        """Note, by port, each `InputPin` a type parameter of the class types, which an
+        `OutputPin` typed by the same parameter follows, wherever the output is declared."""
+        for attribute_name, annotation in annotations.items():
+            if attribute_name.startswith("_") or _is_a_class_variable(annotation):
+                continue
+            _, annotation = description_and_annotation_without_it(
+                annotation, f"`{self._node}`'s attribute `{attribute_name}`"
+            )
+            pin_form, pin_type_annotation = self._pin_form_and_its_type(attribute_name, annotation)
+            if pin_form is None or _DIRECTION_OF_EACH_PIN_FORM[pin_form] != "input":
+                continue
+            type_parameter = _the_type_parameter_typing(pin_type_annotation)
+            if type_parameter is not None:
+                self._input_ports_of_each_type_parameter.setdefault(type_parameter, []).append(
+                    cast_exposed_name_to_url_safe(attribute_name)
+                )
 
     def _pin_form_and_its_type(
         self, attribute_name: str, annotation: Any
@@ -470,19 +506,27 @@ class _ClassNodeReading:
             pin_type_annotation,
             direction="output",
             form="pin",
+            input_ports_of_each_type_parameter=self._input_ports_of_each_type_parameter,
             of_the_runtimes_own_node=self._of_the_runtimes_own_node,
         )
         port_name = self._cast_port_name(attribute_name)
         return {
             "name": port_name,
             "description": description or "",
-            "family": (
-                family_declaration_of_a_typed_output(port_name, declared.declaration)
-                if declared.declaration["pin_type"]["kind"] == "is"
-                else {"family": _family_a_declared_pin_travels_on(declared.declaration)}
-            ),
+            "family": self._family_of_an_output_pin(port_name, declared.declaration),
             "pin_declaration": declared.declaration,
         }
+
+    def _family_of_an_output_pin(
+        self, port_name: str, declaration: PinDeclarationOnTheWire
+    ) -> dict[str, Any]:
+        declared_pin_type = declaration["pin_type"]
+        if declared_pin_type["kind"] == "is":
+            return family_declaration_of_a_typed_output(port_name, declaration)
+        if declared_pin_type["kind"] == "same_as_input":
+            # The family of the input it follows, filled in once every input is read.
+            return {"family_follows_input_port": declared_pin_type["input_port_name"]}
+        return {"family": _family_a_declared_pin_travels_on(declaration)}
 
     def _cast_port_name(self, spelling: str) -> str:
         try:
@@ -516,6 +560,14 @@ def _chooses_a_pin_type(declaration: PinDeclarationOnTheWire) -> bool:
     """Whether a field is a `PinTypeChoice`, a setting by its type."""
     declared_pin_type = declaration["pin_type"]
     return declared_pin_type["kind"] == "is" and declared_pin_type["pin_type"]["type"] == "pin_type_choice"
+
+
+def _the_type_parameter_typing(pin_type_annotation: Any) -> Optional[typing.TypeVar]:
+    """The type parameter a pin's type is, inside any `Annotated[...]`; `None` for another type."""
+    written = pin_type_annotation
+    while typing.get_origin(written) is typing.Annotated:
+        written = typing.get_args(written)[0]
+    return written if isinstance(written, typing.TypeVar) else None
 
 
 def _is_a_class_variable(annotation: Any) -> bool:

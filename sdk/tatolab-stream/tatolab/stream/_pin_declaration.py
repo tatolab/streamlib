@@ -263,6 +263,10 @@ class _PinReading:
             )
         if written_type is object and self._of_the_runtimes_own_node and self._form == "pin":
             return self._read_a_pin_of_the_runtimes_own_node_its_link_types(metadata)
+        if isinstance(written_type, typing.TypeVar) and self._form == "pin":
+            return self._read_a_pin_a_class_type_parameter_types(
+                written_type, metadata, optional, input_ports_of_each_type_parameter
+            )
         if (
             written_type is object
             or isinstance(written_type, typing.TypeVar)
@@ -444,6 +448,58 @@ class _PinReading:
             optional=optional,
             default_value=None if optional else NO_DEFAULT,
             type_parameter=type_parameter,
+        )
+
+    def _read_a_pin_a_class_type_parameter_types(
+        self,
+        type_parameter: typing.TypeVar,
+        metadata: "list[object]",
+        optional: bool,
+        input_ports_of_each_type_parameter: "Mapping[typing.TypeVar, Sequence[str]]",
+    ) -> DeclaredPin:
+        """A class node's pin typed by the class's type parameter, which is bound to one pin
+        type: an input of that type, or an output carrying the type linked into the one input
+        the parameter also types."""
+        name = type_parameter.__name__
+        bound = type_parameter.__bound__
+        if (
+            optional
+            or type_parameter.__constraints__
+            or bound is None
+            or bound is object
+            or _is_a_union(bound)
+        ):
+            raise self._refusal(
+                f"{self._pin_named} is typed `{name}`"
+                + (" | None" if optional else "")
+                + f", and a class node's pin typed by a type parameter carries the one pin type "
+                f"the parameter is bound to. To fix: bind it to one type, `class "
+                f"{self._node}[{name}: Texture]`, and type the pin `{name}`.",
+                "pin_type_not_read_yet",
+            )
+        for entry in metadata:
+            if not isinstance(entry, (Description, FormerlyNamed)):
+                raise self._refusal(
+                    f"{self._pin_named} is typed `{name}`, which its link finds the type of, and "
+                    f"carries {entry!r}, which only a pin of one type takes. To fix: drop it; "
+                    f"such a pin takes `FormerlyNamed` and `Description`.",
+                    "pin_annotation_not_taken",
+                )
+        pin_type = self._a_member_pin_type(bound, limit="bound to")
+        flow = self._flow_of(_PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]], pin_type)
+        declaration: PinDeclarationOnTheWire = {
+            "pin_type": (
+                self._output_pin_type_found_from_an_input(
+                    type_parameter, type_parameter, input_ports_of_each_type_parameter
+                )
+                if self._direction == "output"
+                else {"kind": "is", "pin_type": pin_type}
+            ),
+            "flow": flow,
+        }
+        self._state_former_names(declaration, metadata)
+        return DeclaredPin(
+            declaration, optional=False, default_value=NO_DEFAULT, type_parameter=type_parameter
         )
 
     def _read_a_pin_of_the_runtimes_own_node_its_link_types(
