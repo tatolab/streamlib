@@ -258,12 +258,11 @@ class ReportsTheFunctionNodeValuesItReadSink:
 
     def __init__(self) -> None:
         self._values_read: "list[float]" = []
-        self._reported_its_start = False
+
+    def setup(self, ctx) -> None:
+        report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
 
     def process(self, ctx) -> None:
-        if not self._reported_its_start:
-            self._reported_its_start = True
-            report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
         if len(self._values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
             return
         if self.brightness is None:
