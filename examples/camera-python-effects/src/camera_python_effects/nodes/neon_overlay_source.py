@@ -11,17 +11,21 @@ slow one; an overlay redrawn at 30 Hz is what it is for.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Annotated
 
 import numpy
 import skia
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
     NodeOutputTextureRing,
-    Output,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -41,32 +45,30 @@ from ..neon_overlay_canvas import (
 OVERLAY_REDRAW_INTERVAL_MS = 33
 
 
-@dataclass
-class NeonOverlaySourceConfig:
-    """NeonOverlaySource's settings, as its node's config in the graph document spells them."""
-
-    width: int = 1920
-    height: int = 1080
-
-
 @node.meta(description="Cyberpunk lower third and spray-paint watermark, drawn with skia")
-@node.process(execution="continuous", interval_ms=OVERLAY_REDRAW_INTERVAL_MS)
+@node(execution="continuous", interval_ms=OVERLAY_REDRAW_INTERVAL_MS)
 class NeonOverlaySource:
     """A transparent RGBA layer, redrawn every tick."""
 
-    def __init__(self, config: NeonOverlaySourceConfig) -> None:
-        self.overlay_width = config.width
-        self.overlay_height = config.height
-
-    overlay_to_downstream = Output(
-        Image, description="The overlay, premultiplied RGBA over a transparent frame"
-    )
+    width: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The overlay's width in pixels.")
+    ] = 1920
+    height: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The overlay's height in pixels.")
+    ] = 1080
+    overlay_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The overlay, premultiplied RGBA over a transparent frame"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # skia draws straight into this one host buffer; the surface borrows it
         # without holding a reference, so the node keeps it alive.
         self.overlay_host_pixels = numpy.zeros(
-            (self.overlay_height, self.overlay_width, 4), dtype=numpy.uint8
+            (self.height, self.width, 4), dtype=numpy.uint8
         )
         self.skia_surface_over_overlay_host_pixels = skia.Surface(
             self.overlay_host_pixels, OVERLAY_COLOR_TYPE, OVERLAY_ALPHA_TYPE
@@ -84,16 +86,15 @@ class NeonOverlaySource:
 
         with self.skia_surface_over_overlay_host_pixels as canvas:
             draw_neon_overlay(
-                canvas, self.overlay_width, self.overlay_height, elapsed_seconds
+                canvas, self.width, self.height, elapsed_seconds
             )
 
         overlay_texture = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.overlay_width, self.overlay_height
+            ctx.gpu_limited_access, self.width, self.height
         )
         copy_host_pixels_into_ring_texture(overlay_texture, self.overlay_host_pixels)
 
-        ctx.outputs.write(
-            self.overlay_to_downstream,
+        self.overlay_to_downstream.write(
             ImageFrameToWrite.of_texture(overlay_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=tick_time_ns,
         )

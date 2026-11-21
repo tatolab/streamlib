@@ -68,7 +68,9 @@ pub(crate) use node_types_one_stream_resolves::{
 pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOneStreamResolves};
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
-pub(crate) use placed_stream_node_type::the_settings_of_a_placed_stream;
+pub(crate) use placed_stream_node_type::{
+    the_setting_of_a_placed_stream_named, the_settings_of_a_placed_stream,
+};
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 pub(crate) use project_view_node::{
     is_the_input_of_an_output_a_panel_writes,

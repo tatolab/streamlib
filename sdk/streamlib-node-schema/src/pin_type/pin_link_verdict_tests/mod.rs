@@ -100,6 +100,7 @@ fn a_conversion(node_type: NodeClassImportPath, from: PinType, to: PinType) -> P
         output_port_name: "out".to_owned(),
         output_pin_type: to,
         output_picked_for_the_input: None,
+        saved_value_cast: None,
     }
 }
 

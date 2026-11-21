@@ -15,14 +15,14 @@ CameraSource ─┬─ CameraFrameToTexture ─ CyberpunkGlitch ─ CrtFilmGrain
 ## The model this example teaches
 
 **A stream with many nodes is still one graph asset.** `streams/main.graph.json`
-holds the seven nodes, their config and their links; the nodes, the code they
+holds the seven nodes, their settings and their links; the nodes, the code they
 share and their shaders live in an ordinary installable package,
 `src/camera_python_effects/`.
 
 - `CameraSource` comes from the **`tatolab-camera` module**, a dependency in
   `pyproject.toml`. It runs in its own child process, and its per-frame path is
   the module's Rust, never Python.
-- The six between them are this project's own `@node.process` classes, one module each
+- The six between them are this project's own typed `@node` classes, one module each
   under `camera_python_effects/nodes/`. **Every one runs in its own child
   process with its own interpreter**, so pose tracking at whatever rate the CPU
   allows never slows the effect chain down.
@@ -77,20 +77,21 @@ The effects live in `src/camera_python_effects/shaders/` as ordinary `.slang`
 files. The `dev` watch follows `.py` files only, so after editing a shader save
 any `.py` file (or restart `tatolab dev`) to load it.
 
-Each node's config is a dataclass beside it with ordinary Python defaults,
-named by its `__init__(self, config: ...)` annotation —
-setting `crtfilmgrain`'s `barrel_curve` to `0.0` flattens the
-tube. `CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar`
-takes `scene_width`, `scene_height`, `detection_confidence` and
-`pose_model_path` (a local `.task` file, which skips the download).
+Each node's settings are annotated fields on its class with ordinary Python
+defaults, and each shows as a row in Tato Studio — dragging `crtfilmgrain`'s
+`barrel_curve` slider to `0.0` flattens the tube while the stream plays.
+`CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar` takes
+`scene_width`, `scene_height`, `detection_confidence` and `pose_model_path` (a
+local `.task` file, which skips the download), each read at setup, so a change
+builds the node again.
 
 The avatar is three third-party worlds in one child process — numpy reads the
 camera frame's host side through `numpy.from_dlpack(frame, device="cpu")`,
 MediaPipe lifts a 3D pose out of it on the CPU, ModernGL renders the posed
 android on its own stage — and the engine sees only a frame in and a frame
-out. The pose itself rides `pose_to_downstream`, a Records port carrying
-`timestamp_ns`, `provenance`, `joints` and `visibility`, stamped with the camera
-frame it was lifted from. If tracking cannot run, the android holds its idle sway, the warning is
+out. The pose itself rides `pose_to_downstream` as a `SolvedPose`, the sample's
+own pin type, carrying `timestamp_ns`, `provenance`, `joints` and `visibility`
+from the camera frame it was lifted from; it links only to a `SolvedPose` pin. If tracking cannot run, the android holds its idle sway, the warning is
 logged once, and the other five layers carry on.
 
 ## Two things worth knowing before you write a node here
@@ -100,7 +101,7 @@ frames and a kernel binding resolves texture-backed surfaces only, so a draw
 handed a camera surface id is refused by name. That is what
 `CameraFrameToTexture` is for: `ctx.gpu_limited_access.copy_surface_to_surface`
 copies the frame into a texture this node owns, device to device, with no GPU
-array package involved. The `ImageFrame` its `Input(Image)` port hands back
+array package involved. The `ImageFrame` its `InputPin[Texture]` hands back
 holds its surface still for the length of the copy.
 
 It is also the *only* reason the chain opens that way. A camera frame is
@@ -165,9 +166,9 @@ The nodes are `camerasource`, `cameraframetotexture`, `cyberpunkglitch`,
 
 ## Knobs
 
-Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
-Studio's inspector or with the runtime's `set_node_config` MCP tool, which
-records the edit in the project's history and applies it to the running stream.
+Each knob is a node's setting in `streams/main.graph.json`. Change it in its row
+in Tato Studio, which records the edit in the project's history and applies it
+to the running stream.
 
 | Knob | Node | Effect |
 | --- | --- | --- |
