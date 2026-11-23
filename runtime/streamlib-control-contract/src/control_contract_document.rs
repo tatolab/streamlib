@@ -529,6 +529,7 @@ mod tests {
             "tensor",
             "trigger",
             "named",
+            "connection",
         ];
         let document = control_contract_document();
         let rows = document["x-pin-types"]
