@@ -466,7 +466,7 @@ class AudioConsumer:
                 window_size = 512,
                 hop = 160
             ),
-            family = Channels,
+            pin_type = Audio,
         ),
     )]
     struct RustDeclaredAudioConsumer;
@@ -484,7 +484,7 @@ class AudioConsumer:
     /// the same port the Python class below declares.
     #[streamlib::sdk::node(
         execution = manual,
-        output("video", family = Image, frame_rate = from_config("frames_per_second")),
+        output("video", pin_type = Texture, frame_rate = from_config("frames_per_second")),
     )]
     struct RustDeclaredFrameRateSource;
 

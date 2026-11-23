@@ -36,7 +36,7 @@ pub(super) struct InputValueTestNodeConfig {
     execution = manual,
     config = crate::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNodeConfig,
     input("gain", delivery_profile = "newest", pin_type = Float),
-    input("video", delivery_profile = "newest", family = Image),
+    input("video", delivery_profile = "newest", pin_type = Texture),
     output("level", pin_type = Float),
     output("count", pin_type = Integer),
 )]

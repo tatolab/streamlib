@@ -34,6 +34,22 @@ fn a_port_declared_by_pin_type_serves_the_family_its_messages_belong_to() {
 }
 
 #[test]
+fn a_string_port_serves_the_records_family_and_states_its_flow() {
+    let schema = parse_ok(quote! {
+        execution = manual,
+        input("cue", pin_type = String, flow = Stream, delivery_profile = "newest"),
+        output("label", pin_type = String),
+    })
+    .to_node_schema();
+
+    assert_eq!(schema.inputs[0].pin_type, Some(PinType::String {}));
+    assert_eq!(schema.inputs[0].family.family, PortFamily::Records);
+    assert_eq!(schema.inputs[0].flow, Some(PinFlow::Stream));
+    assert_eq!(schema.outputs[0].pin_type, Some(PinType::String {}));
+    assert_eq!(schema.outputs[0].flow, None);
+}
+
+#[test]
 fn a_port_declaring_only_a_family_declares_no_pin_type() {
     let schema = parse_ok(quote! {
         execution = manual,

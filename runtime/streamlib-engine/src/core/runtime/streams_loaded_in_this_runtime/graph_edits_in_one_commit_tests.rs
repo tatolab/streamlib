@@ -35,7 +35,7 @@ use crate::core::test_support::{
 /// created at its delivery profile's depth, shallower than a windowed ring.
 #[crate::node(
     execution = reactive,
-    input("audio", delivery_profile = "ordered", family = Channels),
+    input("audio", delivery_profile = "ordered", pin_type = Audio),
 )]
 pub(crate) struct PlainAudioConsumerOfAGraphEditTest;
 

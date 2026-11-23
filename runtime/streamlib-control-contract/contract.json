@@ -9794,7 +9794,506 @@
                 "items": {
                   "$ref": "#/components/schemas/BundleMember"
                 },
-                "description": "The members, in declared order."
+                "description": "The members, in declared order.",
+                "x-unique-by": "name",
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/BundleMember",
+                      "properties": {
+                        "member_type": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "boolean"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "True or false."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "exact_size": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/components/schemas/IntegerSize"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "The size the number must fit; absent, any whole number exact to 2^53."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "integer"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A whole number."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "exact_size": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/components/schemas/FloatSize"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "The size the number is held in; absent, a 64-bit float."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "float"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A number."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "Text."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "option_names": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "The options, spelled as declared."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "menu"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "option_names"
+                              ],
+                              "description": "One of a fixed list of option names."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "color"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "An sRGB colour with alpha."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "component_count": {
+                                  "$ref": "#/components/schemas/VectorComponentCount",
+                                  "description": "How many numbers it holds."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "vector"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "component_count"
+                              ],
+                              "description": "Two, three or four numbers."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "rectangle"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A rectangle by its left and top edges, width and height."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "transform"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A 4 by 4 matrix."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "media": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/components/schemas/ProjectAssetMedia"
+                                  },
+                                  "description": "The media the asset must hold one of; empty takes any asset."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "asset"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "One of the project's assets."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "pixel_formats": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/components/schemas/TexturePixelFormat"
+                                  },
+                                  "description": "The formats it may hold; on an input, empty takes any."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "texture"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A GPU picture."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "audio"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A stream of audio samples."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "codecs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "The codecs it may hold; empty takes any."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "encoded_video"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "Encoded video, one access unit per message."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "codecs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "The codecs it may hold; empty takes any."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "encoded_audio"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "Encoded audio, one packet per message."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "element_type": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "True or false."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "exact_size": {
+                                          "anyOf": [
+                                            {
+                                              "$ref": "#/components/schemas/IntegerSize"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ],
+                                          "description": "The size the number must fit; absent, any whole number exact to 2^53."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A whole number."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "exact_size": {
+                                          "anyOf": [
+                                            {
+                                              "$ref": "#/components/schemas/FloatSize"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ],
+                                          "description": "The size the number is held in; absent, a 64-bit float."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "float"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A number."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "Text."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "option_names": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "description": "The options, spelled as declared."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "menu"
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "option_names"
+                                      ],
+                                      "description": "One of a fixed list of option names."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "color"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "An sRGB colour with alpha."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "component_count": {
+                                          "$ref": "#/components/schemas/VectorComponentCount",
+                                          "description": "How many numbers it holds."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "vector"
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "component_count"
+                                      ],
+                                      "description": "Two, three or four numbers."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "rectangle"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A rectangle by its left and top edges, width and height."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "transform"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A 4 by 4 matrix."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "media": {
+                                          "type": "array",
+                                          "items": {
+                                            "$ref": "#/components/schemas/ProjectAssetMedia"
+                                          },
+                                          "description": "The media the asset must hold one of; empty takes any asset."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "asset"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "One of the project's assets."
+                                    }
+                                  ]
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "list_of"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "element_type"
+                              ],
+                              "description": "A list of values of one type."
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/BundleMember",
+                      "properties": {
+                        "member_type": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "tensor"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "An array of numbers with a shape."
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
               },
               "type": {
                 "type": "string",

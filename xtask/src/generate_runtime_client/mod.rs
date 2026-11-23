@@ -11,6 +11,7 @@ use std::path::Path;
 
 use crate::contract_component_references::{
     COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names, component_schemas_of,
+    the_union_a_schema_is,
 };
 use crate::runtime_client_contract_schemas::{
     contract_schemas_declarations, contract_schemas_javascript,
@@ -811,19 +812,17 @@ fn typescript_type_of(schema: &Value, indent_level: usize) -> String {
     if let Some(constant) = schema.get("const") {
         return json_literal(constant);
     }
-    for union_keyword in ["oneOf", "anyOf"] {
-        if let Some(variants) = schema[union_keyword].as_array() {
-            let union = variants
-                .iter()
-                .map(|variant| parenthesized(typescript_type_of(variant, indent_level)))
-                .collect::<Vec<_>>()
-                .join(" | ");
-            return if schema.get("properties").is_some() {
-                format!("{} & ({union})", object_type_of(schema, indent_level))
-            } else {
-                union
-            };
-        }
+    if let Some(variants) = the_union_a_schema_is(schema) {
+        let union = variants
+            .iter()
+            .map(|variant| parenthesized(typescript_type_of(variant, indent_level)))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return if schema.get("properties").is_some() {
+            format!("{} & ({union})", object_type_of(schema, indent_level))
+        } else {
+            union
+        };
     }
     match &schema["type"] {
         Value::String(type_name) => typescript_type_of_a_json_type(type_name, schema, indent_level),

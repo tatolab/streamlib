@@ -54,6 +54,7 @@ fn pin_type_tokens(pin_type: &PinType) -> TokenStream {
     };
     match pin_type {
         PinType::Boolean {} => quote! { #descriptors::PinType::Boolean {} },
+        PinType::String {} => quote! { #descriptors::PinType::String {} },
         PinType::Integer { exact_size } => {
             let exact_size = optional(exact_size.map(|size| {
                 let size = variant(size.variant_name());

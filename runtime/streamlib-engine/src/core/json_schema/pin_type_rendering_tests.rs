@@ -6,9 +6,7 @@ use serde_json::json;
 use super::*;
 use crate::core::graph::Graph;
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
-use crate::core::test_support::{
-    MockChannelsSourceNode, MockPinTypedNode, ensure_test_mocks_registered,
-};
+use crate::core::test_support::{MockPinTypedNode, ensure_test_mocks_registered};
 
 /// The node `graph` renders for one node of `node_type`, placed alone.
 fn rendered_node_of_type(
@@ -145,15 +143,31 @@ fn graph_and_the_catalog_serve_the_flow_a_port_states_and_the_delivery_its_pin_d
     assert_eq!(flows_and_deliveries(&catalog_ports), expected);
 }
 
+/// Mock source whose one output declares only the Channels family, and so no exact pin type.
+#[crate::node(execution = manual, output("audio", family = Channels))]
+struct MockUntypedChannelsSourceNode;
+
+impl crate::core::ManualNode for MockUntypedChannelsSourceNode::Node {
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 #[test]
 fn a_port_with_no_exact_pin_type_serves_neither_field_in_graph_or_the_catalog() {
-    let node = rendered_node_of_type(MockChannelsSourceNode::node_class_import_path());
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<MockUntypedChannelsSourceNode::Node>());
+    let node = rendered_node_of_type(MockUntypedChannelsSourceNode::node_class_import_path());
     let audio = &node["ports"]["outputs"][0];
     assert_eq!(audio["family"], json!({"family": "channels"}));
     assert!(audio.get("pin_type").is_none(), "{audio}");
     assert!(audio.get("flow").is_none(), "{audio}");
 
-    let catalog_audio = &catalog_ports_of_type(MockChannelsSourceNode::node_class_import_path())[0];
+    let catalog_audio =
+        &catalog_ports_of_type(MockUntypedChannelsSourceNode::node_class_import_path())[0];
     assert!(catalog_audio.get("pin_type").is_none(), "{catalog_audio}");
     assert!(catalog_audio.get("flow").is_none(), "{catalog_audio}");
 }

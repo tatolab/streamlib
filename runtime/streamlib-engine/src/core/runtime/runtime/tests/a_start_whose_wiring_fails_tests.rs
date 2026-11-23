@@ -17,8 +17,8 @@ static SETUPS_AND_STARTS_OF_THE_SOURCE: AtomicUsize = AtomicUsize::new(0);
 /// A source with two outputs that counts each `setup()` and `start()` it runs.
 #[crate::node(
     execution = manual,
-    output("out1", family = Records),
-    output("out2", family = Records),
+    output("out1", pin_type = String, flow = Stream),
+    output("out2", pin_type = String, flow = Stream),
 )]
 pub(crate) struct SourceCountingItsSetupsAndStarts;
 

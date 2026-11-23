@@ -21,10 +21,10 @@ pub(crate) mod rig_only_capability_skip;
 
 #[crate::node(
     execution = manual,
-    input("in1", delivery_profile = "newest", family = Records),
-    input("in2", delivery_profile = "newest", family = Records),
-    output("out1", family = Records),
-    output("out2", family = Records),
+    input("in1", delivery_profile = "newest", pin_type = String, flow = Stream),
+    input("in2", delivery_profile = "newest", pin_type = String, flow = Stream),
+    output("out1", pin_type = String, flow = Stream),
+    output("out2", pin_type = String, flow = Stream),
 )]
 pub(crate) struct MockNode;
 
@@ -51,8 +51,8 @@ impl crate::core::ManualNode for MockNode::Node {
 
 #[crate::node(
     execution = manual,
-    output("out1", family = Records),
-    output("out2", family = Records),
+    output("out1", pin_type = String, flow = Stream),
+    output("out2", pin_type = String, flow = Stream),
 )]
 pub(crate) struct MockOutputOnlyNode;
 
@@ -78,7 +78,7 @@ impl crate::core::ManualNode for MockOutputOnlyNode::Node {
 }
 
 /// Mock source with one Channels output, written to by a test.
-#[crate::node(execution = manual, output("audio", family = Channels))]
+#[crate::node(execution = manual, output("audio", pin_type = Audio))]
 pub(crate) struct MockChannelsSourceNode;
 
 impl crate::core::ManualNode for MockChannelsSourceNode::Node {
@@ -104,8 +104,8 @@ impl crate::core::ManualNode for MockChannelsSourceNode::Node {
 
 #[crate::node(
     execution = manual,
-    input("in1", delivery_profile = "newest", family = Records),
-    input("in2", delivery_profile = "newest", family = Records),
+    input("in1", delivery_profile = "newest", pin_type = String, flow = Stream),
+    input("in2", delivery_profile = "newest", pin_type = String, flow = Stream),
 )]
 pub(crate) struct MockInputOnlyNode;
 
@@ -148,7 +148,7 @@ impl crate::core::ManualNode for MockTriggerReaderNode::Node {
 
 #[crate::node(
     execution = manual,
-    input("in1", delivery_profile = "ordered", family = Records),
+    input("in1", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
 pub(crate) struct MockOrderedInputOnlyNode;
 
@@ -175,8 +175,8 @@ impl crate::core::ManualNode for MockOrderedInputOnlyNode::Node {
 
 #[crate::node(
     execution = reactive,
-    input("in1", delivery_profile = "newest", family = Records),
-    input("in2", delivery_profile = "newest", family = Records),
+    input("in1", delivery_profile = "newest", pin_type = String, flow = Stream),
+    input("in2", delivery_profile = "newest", pin_type = String, flow = Stream),
 )]
 pub(crate) struct MockReactiveInputOnlyNode;
 
@@ -203,7 +203,7 @@ impl crate::core::ReactiveNode for MockReactiveInputOnlyNode::Node {
             window_size = 512,
             hop = 512
         ),
-        family = Channels,
+        pin_type = Audio,
     ),
 )]
 pub(crate) struct MockWindowedAudioConsumerNode;
@@ -220,7 +220,7 @@ impl crate::core::ReactiveNode for MockWindowedAudioConsumerNode::Node {
 /// Mock consumer whose input port declares a borrow quota past the default.
 #[crate::node(
     execution = reactive,
-    input("frames", delivery_profile = "ordered", borrow_quota = 5, family = Image),
+    input("frames", delivery_profile = "ordered", borrow_quota = 5, pin_type = Texture),
 )]
 pub(crate) struct MockBorrowingConsumerNode;
 
@@ -255,7 +255,7 @@ impl crate::core::ReactiveNode for MockPinTypedNode::Node {
 /// rather than a default.
 #[crate::node(
     execution = reactive,
-    input("audio", delivery_profile = "ordered", audio_window = match_device, family = Channels),
+    input("audio", delivery_profile = "ordered", audio_window = match_device, pin_type = Audio),
 )]
 pub(crate) struct MockDeviceMatchedAudioConsumerNode;
 
@@ -272,7 +272,7 @@ impl crate::core::ReactiveNode for MockDeviceMatchedAudioConsumerNode::Node {
 /// registers under its cast `outone`.
 #[crate::node(
     execution = manual,
-    output("outOne", family = Records),
+    output("outOne", pin_type = String, flow = Stream),
 )]
 pub(crate) struct MockNodeWithACamelCaseOutputPort;
 
@@ -299,7 +299,7 @@ pub(crate) struct MockSourceTakingOneSettingConfig {
 #[crate::node(
     execution = manual,
     config = crate::core::test_support::MockSourceTakingOneSettingConfig,
-    output("video", family = Image),
+    output("video", pin_type = Texture),
 )]
 pub(crate) struct MockSourceTakingOneSetting;
 
@@ -328,7 +328,7 @@ pub(crate) struct MockSourceTakingAFrameSizeConfig {
 #[crate::node(
     execution = manual,
     config = crate::core::test_support::MockSourceTakingAFrameSizeConfig,
-    output("video", family = Image),
+    output("video", pin_type = Texture),
 )]
 pub(crate) struct MockSourceTakingAFrameSize;
 
@@ -355,7 +355,7 @@ pub(crate) struct MockSourceReadingAnImageAssetConfig {
 #[crate::node(
     execution = manual,
     config = crate::core::test_support::MockSourceReadingAnImageAssetConfig,
-    output("video", family = Image),
+    output("video", pin_type = Texture),
 )]
 pub(crate) struct MockSourceReadingAnImageAsset;
 
@@ -372,7 +372,7 @@ impl crate::core::ManualNode for MockSourceReadingAnImageAsset::Node {
 /// stream may not ask the user for an access nobody has answered.
 #[crate::node(
     execution = manual,
-    output("out1", family = Records),
+    output("out1", pin_type = String, flow = Stream),
 )]
 pub(crate) struct MockSourceRefusingAnAccessNobodyAskedFor;
 
