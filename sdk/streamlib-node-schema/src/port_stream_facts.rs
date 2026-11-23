@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::PortFamily;
+use crate::pin_type::{BuiltInPinTypeName, PinType};
 
 /// An Image stream's frame rate, as a rational number of frames per second.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -115,6 +116,13 @@ impl PortStreamFacts {
             PortStreamFacts::Image(_) => None,
         }
     }
+
+    /// The name of `pin_type` when these facts describe a stream of it, as Image facts describe
+    /// a Texture and Packets facts an encoded type; `None` for a type another family carries.
+    pub fn the_pin_type_they_describe(&self, pin_type: &PinType) -> Option<BuiltInPinTypeName> {
+        let name = pin_type.built_in_name();
+        (PortFamily::carrying_a_pin_of(name) == Some(self.family())).then_some(name)
+    }
 }
 
 impl From<ImageStreamFacts> for PortStreamFacts {
@@ -206,6 +214,33 @@ mod tests {
             serde_json::from_value::<PortStreamFacts>(json!({"family": "image", "fps": 30}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn facts_describe_the_pin_type_their_family_carries_and_no_other() {
+        let image = PortStreamFacts::from(ImageStreamFacts::default());
+        let packets = PortStreamFacts::from(PacketsStreamFacts::default());
+        let texture = PinType::Texture {
+            pixel_formats: Vec::new(),
+        };
+        let encoded_video = PinType::EncodedVideo { codecs: Vec::new() };
+        let encoded_audio = PinType::EncodedAudio { codecs: Vec::new() };
+
+        assert_eq!(
+            image.the_pin_type_they_describe(&texture),
+            Some(BuiltInPinTypeName::Texture)
+        );
+        assert_eq!(
+            packets.the_pin_type_they_describe(&encoded_video),
+            Some(BuiltInPinTypeName::EncodedVideo)
+        );
+        assert_eq!(
+            packets.the_pin_type_they_describe(&encoded_audio),
+            Some(BuiltInPinTypeName::EncodedAudio)
+        );
+        assert_eq!(image.the_pin_type_they_describe(&encoded_video), None);
+        assert_eq!(packets.the_pin_type_they_describe(&texture), None);
+        assert_eq!(image.the_pin_type_they_describe(&PinType::Audio {}), None);
     }
 
     #[test]

@@ -4,7 +4,8 @@
 """An output port's stream facts, end to end on a running stream.
 
 Each node runs in its own helper process. A Python node declares an Image
-frame rate and `graph` shows it as the port's stream facts; a running node
+frame rate and `graph` shows it as the port's stream facts, named by the
+port's pin type, a Texture, beside their family; a running node
 replaces a Packets port's facts over its bridge and the next `graph` shows the
 replacement; a reader reads its upstream's current facts off its inbound link;
 facts of another family are refused naming the port; and a Records port
@@ -31,6 +32,7 @@ GRAPH_READY_TIMEOUT_SECONDS = 90.0
 MARKER_TIMEOUT_SECONDS = 30.0
 
 DECLARED_RENDERING = {
+    "type": "texture",
     "family": "image",
     "frame_rate": {"numerator": DECLARED_FRAMES_PER_SECOND, "denominator": 1},
 }

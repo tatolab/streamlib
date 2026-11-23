@@ -539,6 +539,9 @@ impl Graph {
             {
                 rendered_output.pin =
                     the_pin_a_port_resolves_to(self, node, port, PortDirection::Output);
+                if let Some(stream_facts) = rendered_output.stream_facts.as_mut() {
+                    stream_facts.name_the_pin_type_of_the_port_of(rendered_output.pin.as_ref());
+                }
             }
             rendered
         };

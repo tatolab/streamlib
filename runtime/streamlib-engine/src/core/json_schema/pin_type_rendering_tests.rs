@@ -239,3 +239,112 @@ fn graph_and_the_catalog_serve_the_formats_a_texture_pin_states() {
     assert_eq!(node["ports"]["inputs"][0]["pin_type"], frames);
     assert_eq!(node["ports"]["outputs"][0]["pin_type"], picture);
 }
+
+#[test]
+fn graph_serves_a_typed_ports_stream_facts_under_its_pin_type_beside_their_family() {
+    use crate::core::descriptors::{ImageStreamFacts, ImageStreamFrameRate};
+
+    ensure_test_mocks_registered();
+    let mut graph = Graph::new();
+    let added = graph
+        .traversal_mut()
+        .add_v(NodeSpec::new(
+            MockPinTypedNode::node_class_import_path(),
+            serde_json::Value::Null,
+        ))
+        .expect("the node is named");
+    added
+        .first()
+        .expect("the mock is registered")
+        .stream_facts_of_output_ports()
+        .replace_facts_of(
+            "frames",
+            ImageStreamFacts {
+                frame_rate: Some(ImageStreamFrameRate {
+                    numerator: 60,
+                    denominator: 1,
+                }),
+                ..ImageStreamFacts::default()
+            }
+            .into(),
+        )
+        .expect("an Image port carries Image facts");
+
+    let rendered = serde_json::to_value(graph.to_graph_response("desk".to_string())).unwrap();
+    assert_eq!(
+        rendered["nodes"][0]["ports"]["outputs"][0]["stream_facts"],
+        json!({
+            "type": "texture",
+            "family": "image",
+            "frame_rate": {"numerator": 60, "denominator": 1},
+        })
+    );
+}
+
+/// Mock node with one Packets output, which states no pin type.
+#[crate::node(execution = reactive, output("encoded", family = Packets))]
+struct MockNodeWritingEncodedUnits;
+
+impl crate::core::ReactiveNode for MockNodeWritingEncodedUnits::Node {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn graph_names_encoded_stream_facts_by_the_ports_encoded_type_and_an_untyped_ports_by_family() {
+    use crate::core::descriptors::{PacketsStreamFacts, PinFlow, PinType, ResolvedPin};
+
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<MockNodeWritingEncodedUnits::Node>());
+    let mut graph = Graph::new();
+    let added = graph
+        .traversal_mut()
+        .add_v(NodeSpec::new(
+            MockNodeWritingEncodedUnits::node_class_import_path(),
+            serde_json::Value::Null,
+        ))
+        .expect("the node is named");
+    let node = added.first().expect("the mock is registered");
+    let node_id = node.id.clone();
+    node.stream_facts_of_output_ports()
+        .replace_facts_of(
+            "encoded",
+            PacketsStreamFacts {
+                rfc6381_codec: Some("avc1.64001f".to_string()),
+                ..PacketsStreamFacts::default()
+            }
+            .into(),
+        )
+        .expect("a Packets port carries Packets facts");
+    let stream_facts_rendered = |graph: &Graph| {
+        serde_json::to_value(graph.to_graph_response("desk".to_string())).unwrap()["nodes"][0]
+            ["ports"]["outputs"][0]["stream_facts"]
+            .clone()
+    };
+
+    assert_eq!(
+        stream_facts_rendered(&graph),
+        json!({"family": "packets", "rfc6381_codec": "avc1.64001f"}),
+        "a port with no pin type keeps its facts under `family` alone"
+    );
+
+    graph
+        .traversal_mut()
+        .v(&node_id)
+        .first_mut()
+        .expect("the node is in the graph")
+        .ports
+        .outputs[0]
+        .pin = Some(ResolvedPin {
+        pin_type: PinType::EncodedVideo { codecs: Vec::new() },
+        flow: PinFlow::Stream,
+    });
+    assert_eq!(
+        stream_facts_rendered(&graph),
+        json!({"type": "encoded_video", "family": "packets", "rfc6381_codec": "avc1.64001f"})
+    );
+}
