@@ -286,11 +286,8 @@ impl fmt::Display for PinLinkRefusal {
     }
 }
 
-/// The node or nodes a person places between an output of `output` and an input of `input` to
-/// convert one into the other: an encoder or decoder only of a codec the encoded end states, or
-/// of any when it states none. Between two unencoded types a node is named only as a conversion
-/// that bridges, which states the pin types it converts, so an `nv12` Texture is not sent to a
-/// `TextureToTensor` that does not take it.
+/// The encoder or decoder a person places between `output` and `input`: only of a codec the
+/// encoded end states, or of any when it states none.
 fn node_placed_between(output: &PinType, input: &PinType) -> Option<String> {
     use CodecDirection::{Decode, Encode};
     use EncodedMedia::{Audio, Video};
