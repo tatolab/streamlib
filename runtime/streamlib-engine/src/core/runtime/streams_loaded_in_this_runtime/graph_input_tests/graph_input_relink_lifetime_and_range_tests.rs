@@ -18,7 +18,7 @@ static RECORDS_READ: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 /// A reader of Records on its input `cue`, which records each one it reads.
 #[crate::node(
     execution = reactive,
-    input("cue", delivery_profile = "newest", family = Records)
+    input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
 pub(crate) struct GraphInputTestRecordsRecorder;
 

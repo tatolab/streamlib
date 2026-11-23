@@ -481,10 +481,11 @@ fn texture_of_the_formats_stated(
 
 /// Each pin type a Rust port declares by name alone, taking any size, format or layout: the
 /// types whose family carries them today as it carries that family's messages.
-const RUST_DECLARED_PIN_TYPES: [(&str, PinType); 7] = [
+const RUST_DECLARED_PIN_TYPES: [(&str, PinType); 8] = [
     ("Boolean", PinType::Boolean {}),
     ("Integer", PinType::Integer { exact_size: None }),
     ("Float", PinType::Float { exact_size: None }),
+    ("String", PinType::String {}),
     (
         "Texture",
         PinType::Texture {

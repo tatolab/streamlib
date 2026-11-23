@@ -304,7 +304,7 @@ async fn a_view_node_renders_its_manifest_settings_as_inputs_reading_its_config(
 /// A native reader of Records on its input `cue`, which does nothing with them.
 #[streamlib::sdk::node(
     execution = manual,
-    input("cue", delivery_profile = "newest", family = Records)
+    input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
 pub struct StreamToolsTestRecordsReader;
 

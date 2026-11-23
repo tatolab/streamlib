@@ -90,7 +90,7 @@ mod venv_sync_stream_action_resource_tests;
 mod view_output_of_a_playing_stream_tests;
 
 /// A native source with one output port, `video`, and nothing to do.
-#[streamlib::sdk::node(execution = manual, output("video", family = Image))]
+#[streamlib::sdk::node(execution = manual, output("video", pin_type = Texture))]
 pub struct StreamToolsTestSource;
 
 impl ManualNode for StreamToolsTestSource::Node {
@@ -439,7 +439,7 @@ async fn the_stream_action_once(
 /// A native sink with one input port, `video`, and nothing to do.
 #[streamlib::sdk::node(
     execution = manual,
-    input("video", delivery_profile = "newest", family = Image)
+    input("video", delivery_profile = "newest", pin_type = Texture)
 )]
 pub struct StreamToolsTestSink;
 
