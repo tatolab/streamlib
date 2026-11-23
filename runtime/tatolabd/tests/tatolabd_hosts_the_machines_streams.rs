@@ -16,7 +16,7 @@ mod common;
 use common::{
     A_RUNTIME_STARTS_SERVING_WITHIN, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
     a_native_only_stream_graph, a_stream_record, an_executable_standing_in_for_the_interpreter,
-    call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_location_of_the_stream,
+    call_a_tool_over_the_local_api, the_local_apis_answer_to, the_location_of_the_stream,
     the_mode_of, the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
 
@@ -46,7 +46,11 @@ fn graph_answers_the_machine_by_its_hostname_cast_and_no_streams() {
     let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command(&runtime_unit.tatolabd),
     );
-    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
+    let graph = the_local_apis_answer_to(
+        &machine_root.local_api_socket_path(),
+        "graph",
+        &serde_json::json!({}),
+    );
     runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(
@@ -253,7 +257,11 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
         "{standard_error}"
     );
 
-    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
+    let graph = the_local_apis_answer_to(
+        &machine_root.local_api_socket_path(),
+        "graph",
+        &serde_json::json!({}),
+    );
     let mut streams_in_the_graph: Vec<&str> = graph["streams"]
         .as_array()
         .unwrap()

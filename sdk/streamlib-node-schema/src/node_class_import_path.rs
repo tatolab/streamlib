@@ -28,7 +28,6 @@ use crate::error::{SchemaError, SchemaResult};
 /// `imports/<folder>/<module>:<qualname>`, names a class in that import's own
 /// node code, imported from that folder.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct NodeClassImportPath(String);
 

@@ -57,7 +57,7 @@ def test_declared_replaced_refused_and_read_downstream(
     refusal = tatolabd.await_marker("STREAM_FACTS_REFUSED", timeout=MARKER_TIMEOUT_SECONDS)
     tatolabd.await_marker("STREAM_FACTS_REPLACED", timeout=MARKER_TIMEOUT_SECONDS)
     graph = local_api.graph(stream_id)
-    registry = local_api.registry(stream_id)
+    node_catalog = local_api.node_catalog(stream_id)
 
     read_downstream: "list[Any]" = []
     occurrence = 0
@@ -83,11 +83,11 @@ def test_declared_replaced_refused_and_read_downstream(
 
     (declaring_type,) = [
         entry
-        for entry in registry["nodes"]
+        for entry in node_catalog["nodes"]
         if entry["type"].endswith(":DeclaresItsFrameRateAndWritesRecords")
     ]
-    (registry_records,) = [port for port in declaring_type["outputs"] if port["name"] == "records"]
-    assert registry_records["values_checked"] is False
+    (catalog_records,) = [port for port in declaring_type["outputs"] if port["name"] == "records"]
+    assert catalog_records["values_checked"] is False
 
     assert {(node["name"], node["kind"]) for node in graph["nodes"]} == {
         (node["name"], "process") for node in graph["nodes"]
