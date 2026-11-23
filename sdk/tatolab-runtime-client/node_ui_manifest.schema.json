@@ -146,6 +146,11 @@
         },
         {
           "type": "string",
+          "const": "connection",
+          "description": "A node given out on a wire, a module's class naming its kind: an output gives out its own node, and an input takes the node its wire comes from. It carries no data."
+        },
+        {
+          "type": "string",
           "const": "node_reference",
           "description": "A setting naming another node of the graph. It never takes a wire."
         },

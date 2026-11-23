@@ -226,6 +226,17 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     stability: "experimental",
   }),
   Object.freeze({
+    name: "connection",
+    label: "Connection",
+    documentation: "A node given out on a wire, a module's class naming its kind: an output gives out its own node, and an input takes the node its wire comes from. It carries no data.",
+    flows: Object.freeze(["value"]),
+    annotations: Object.freeze([]),
+    python_forms: Object.freeze(["connection_type"]),
+    typescript_form: "\"connection\"",
+    since: 3,
+    stability: "experimental",
+  }),
+  Object.freeze({
     name: "node_reference",
     label: "Node reference",
     documentation: "A setting naming another node of the graph. It never takes a wire.",

@@ -100,7 +100,7 @@ impl PackedPinValue {
 }
 
 /// The kind of message a value of `pin_type` travels as on a link; `None` for a setting's type,
-/// which never takes a link.
+/// which never takes a link, and a Connection, whose wire carries no message.
 pub fn message_kind_of(pin_type: &PinType) -> Option<DataChannelPayloadDescriptorKind> {
     Some(match pin_type {
         PinType::Boolean {}
@@ -133,7 +133,9 @@ pub fn message_kind_of(pin_type: &PinType) -> Option<DataChannelPayloadDescripto
         | PinType::ListOf { .. }
         | PinType::Trigger {} => DataChannelPayloadDescriptorKind::RecordsMessage,
         PinType::Named { .. } => DataChannelPayloadDescriptorKind::Bytes,
-        PinType::NodeReference { .. } | PinType::PinTypeChoice { .. } => return None,
+        PinType::Connection { .. }
+        | PinType::NodeReference { .. }
+        | PinType::PinTypeChoice { .. } => return None,
     })
 }
 

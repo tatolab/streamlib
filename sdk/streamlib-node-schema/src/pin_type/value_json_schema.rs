@@ -126,7 +126,8 @@ impl PinType {
             | Self::EncodedAudio { .. }
             | Self::Tensor {}
             | Self::Trigger {}
-            | Self::Named { .. } => return None,
+            | Self::Named { .. }
+            | Self::Connection { .. } => return None,
         };
         Some(schema)
     }

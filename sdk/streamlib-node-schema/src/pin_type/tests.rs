@@ -50,6 +50,11 @@ fn a_pin_type_named(name: BuiltInPinTypeName) -> PinType {
         BuiltInPinTypeName::Named => PinType::Named {
             named_pin_type: NamedPinTypeImportPath::new("faces:FaceBox").expect("names a class"),
         },
+        BuiltInPinTypeName::Connection => PinType::Connection {
+            connection_type: NamedPinTypeImportPath::new("relays:RelayConnection")
+                .expect("names a class"),
+            one_referrer_per_referenced_node: true,
+        },
         BuiltInPinTypeName::NodeReference => PinType::NodeReference {
             referenced_node_type: None,
             one_referrer_per_referenced_node: true,
@@ -489,6 +494,7 @@ fn a_type_holds_a_stored_value_exactly_when_it_states_a_value_form() {
                 | BuiltInPinTypeName::Tensor
                 | BuiltInPinTypeName::Trigger
                 | BuiltInPinTypeName::Named
+                | BuiltInPinTypeName::Connection
         );
         assert_eq!(pin_type.holds_a_stored_value(), !holds_none, "{name:?}");
     }

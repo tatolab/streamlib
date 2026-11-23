@@ -105,6 +105,16 @@ pub enum PinType {
         /// The class that declares it.
         named_pin_type: NamedPinTypeImportPath,
     },
+    /// A node given out on a wire: an output gives out its own node, and an input takes the node
+    /// a wire brings it from. It carries no data and holds no stored value.
+    Connection {
+        /// The class a module declares the connection by; two ends connect only when it is the
+        /// same.
+        connection_type: NamedPinTypeImportPath,
+        /// On an input, whether one input at most of its node type may take a given node.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        one_referrer_per_referenced_node: bool,
+    },
     /// A setting naming another node of the graph. It never takes a wire.
     NodeReference {
         /// The node type the referenced node must be; absent, any node.

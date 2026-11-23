@@ -591,7 +591,7 @@ impl LoadedStreamInThisRuntime {
                     the_value_of_each_graph_input(graph),
                 )
             });
-        graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
+        graph_response.references = self.reference_edges_the_nodes_hold(&graph_response.nodes);
         self.render_the_state_of_each_stateful_function_node_into(
             &mut graph_response.nodes,
             &stateful_function_nodes_by_node_uuid,
@@ -634,39 +634,50 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// Every reference edge the configs of `nodes` hold, under the keys their
-    /// types mark; a config holding a malformed one renders none for that key.
-    fn reference_edges_the_configs_of(
+    /// Every reference edge `nodes` hold, under the keys their types mark: in a node's config,
+    /// else in its input values, where a connection input holds the node its wire brings. A key
+    /// holding a malformed one renders none.
+    fn reference_edges_the_nodes_hold(
         &self,
         nodes: &[crate::core::json_schema::GraphNodeOutput],
     ) -> Vec<ConfigNodeReferenceEdgeOnTheWire> {
         nodes
             .iter()
             .flat_map(|node| {
-                let Some(config) = &node.config else {
-                    return Vec::new();
-                };
-                crate::core::graph::config_keys_of_a_node_type_holding_a_node_reference(
+                let keys = crate::core::graph::config_keys_of_a_node_type_holding_a_node_reference(
                     &self.node_types_this_stream_resolves,
                     &node.node_type,
-                )
-                .into_iter()
-                .filter_map(|key| {
-                    crate::core::graph::config_node_reference_edges_of_one_node(
-                        &node.name,
-                        config,
-                        vec![key],
-                    )
-                    .ok()
-                })
-                .flatten()
-                .map(|reference| ConfigNodeReferenceEdgeOnTheWire {
-                    referenced_node: cast_exposed_name_to_url_safe(&reference.edge.referenced_node)
+                );
+                let held_under_the_keys: serde_json::Map<String, serde_json::Value> = keys
+                    .iter()
+                    .filter_map(|key| {
+                        node.config
+                            .as_ref()
+                            .and_then(|config| config.get(&key.config_key))
+                            .or_else(|| node.input_values.get(&key.config_key))
+                            .map(|value| (key.config_key.clone(), value.clone()))
+                    })
+                    .collect();
+                let held_under_the_keys = serde_json::Value::Object(held_under_the_keys);
+                keys.into_iter()
+                    .filter_map(|key| {
+                        crate::core::graph::config_node_reference_edges_of_one_node(
+                            &node.name,
+                            &held_under_the_keys,
+                            vec![key],
+                        )
+                        .ok()
+                    })
+                    .flatten()
+                    .map(|reference| ConfigNodeReferenceEdgeOnTheWire {
+                        referenced_node: cast_exposed_name_to_url_safe(
+                            &reference.edge.referenced_node,
+                        )
                         .map(std::borrow::Cow::into_owned)
                         .unwrap_or(reference.edge.referenced_node),
-                    ..reference.edge
-                })
-                .collect()
+                        ..reference.edge
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect()
     }

@@ -43,6 +43,7 @@ built_in_pin_type_names![
     ListOf,
     Bundle,
     Named,
+    Connection,
     NodeReference,
     PinTypeChoice,
 ];
@@ -70,9 +71,15 @@ impl PinType {
             Self::ListOf { .. } => BuiltInPinTypeName::ListOf,
             Self::Bundle { .. } => BuiltInPinTypeName::Bundle,
             Self::Named { .. } => BuiltInPinTypeName::Named,
+            Self::Connection { .. } => BuiltInPinTypeName::Connection,
             Self::NodeReference { .. } => BuiltInPinTypeName::NodeReference,
             Self::PinTypeChoice { .. } => BuiltInPinTypeName::PinTypeChoice,
         }
+    }
+
+    /// Whether this is a Connection, whose wire brings a node and carries no data.
+    pub fn is_a_connection(&self) -> bool {
+        matches!(self, Self::Connection { .. })
     }
 
     /// Whether a link may end at a pin of this type; the rows of the two that never may say so.
@@ -336,6 +343,15 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             &["named_pin_type"],
             "\"named\"",
         ),
+        BuiltInPinTypeName::Connection => row(
+            "Connection",
+            "A node given out on a wire, a module's class naming its kind: an output gives out \
+             its own node, and an input takes the node its wire comes from. It carries no data.",
+            VALUE_ONLY,
+            &[],
+            &["connection_type"],
+            "\"connection\"",
+        ),
         BuiltInPinTypeName::NodeReference => row(
             "Node reference",
             "A setting naming another node of the graph. It never takes a wire.",
@@ -394,6 +410,7 @@ impl BuiltInPinTypeName {
             | Self::Asset
             | Self::Trigger
             | Self::Named
+            | Self::Connection
             | Self::NodeReference
             | Self::PinTypeChoice => None,
         }
@@ -451,7 +468,8 @@ impl BuiltInPinTypeName {
             | Self::EncodedAudio
             | Self::Tensor
             | Self::Trigger
-            | Self::Named => None,
+            | Self::Named
+            | Self::Connection => None,
         }
     }
 }

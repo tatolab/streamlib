@@ -17,6 +17,7 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_of_a_document_node,
 };
 use crate::core::graph::{
+    PortInfo,
     ALinkConnected, LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
     the_default_name_a_new_node_takes, the_verdict_on_a_link_between_typed_ends,
 };
@@ -73,6 +74,22 @@ impl LoadedStreamInThisRuntime {
             (StreamGraphOperation::Disconnect { link }, Some(as_given)) => link != as_given,
             _ => false,
         };
+        if let StreamGraphOperation::AddNode { node, links } = &graph_operation
+            && links.iter().any(|link| link.target.node == node.id)
+        {
+            // The added node's own inputs are read from its type, which a first use describes,
+            // to tell whether a link into one of them is a connection wire drawn first.
+            let node_type = NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
+                Error::GraphError(format!("node {} `type`: {refusal}", node.id))
+            })?;
+            describe_the_type_an_add_names_when_it_must(
+                &self.node_interpreter_launch_record,
+                &node_type,
+                self.lend_directory(),
+                ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+            )
+            .await?;
+        }
         if self.the_operation_is_drawn_before_the_live_graph_takes_it(&graph_operation) {
             return self
                 .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
@@ -221,7 +238,8 @@ impl LoadedStreamInThisRuntime {
 
     /// Whether `graph_operation` is applied to the graph as drawn first and the live graph
     /// reconciled to it: an edit that places or touches a node no node runs as, one that places
-    /// or takes out a `SetVariable` or `GetVariable`, which the graph resolves away, and one that
+    /// or takes out a `SetVariable` or `GetVariable`, which the graph resolves away, a wire into
+    /// a `Connection` input, which runs as the reference it brings, and one that
     /// places, takes out or changes a `GraphInput` or `GraphOutput`, whose interface the graph as
     /// drawn declares and `graph` renders from. A link to a running interface node is the live
     /// graph's own, and `graph` renders it from there.
@@ -241,9 +259,14 @@ impl LoadedStreamInThisRuntime {
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
                         .any(|end| end != node.id && no_node_runs_as(end))
+                    || links
+                        .iter()
+                        .any(|link| self.a_link_of_an_added_node_wires_a_connection(node, link))
             }
             StreamGraphOperation::Connect { link } | StreamGraphOperation::Disconnect { link } => {
-                no_node_runs_as(link.source.node) || no_node_runs_as(link.target.node)
+                no_node_runs_as(link.source.node)
+                    || no_node_runs_as(link.target.node)
+                    || self.the_input_takes_a_connection(link.target.node, &link.target.port)
             }
             StreamGraphOperation::RemoveNode { node, .. } => {
                 is_a_node_type_of_the_graph_itself(&node.node_type) || held_only_as_drawn(node.id)
@@ -505,6 +528,37 @@ impl LoadedStreamInThisRuntime {
             Ok(serde_json::Value::Object(config))
         })
         .await
+    }
+
+    /// Whether input `input` of the node `node` takes a `Connection`, whose wire the graph as
+    /// drawn holds and the running graph holds as the reference it brings.
+    fn the_input_takes_a_connection(&self, node: Uuid, input: &str) -> bool {
+        self.compiler.scope_reading(|graph| {
+            graph
+                .node_by_uuid(node)
+                .and_then(|held| held.input_port(input))
+                .is_some_and(PortInfo::takes_a_connection)
+        })
+    }
+
+    /// Whether `link`, a link `add_node` makes along with `node`, ends at a `Connection` input:
+    /// one of `node`'s, as its type declares it, or one of a node the stream holds.
+    fn a_link_of_an_added_node_wires_a_connection(
+        &self,
+        node: &StreamGraphDocumentNode,
+        link: &StreamGraphDocumentLink,
+    ) -> bool {
+        if link.target.node != node.id {
+            return self.the_input_takes_a_connection(link.target.node, &link.target.port);
+        }
+        NodeClassImportPath::new(&node.node_type)
+            .ok()
+            .and_then(|node_type| self.node_types_this_stream_resolves().port_info(&node_type))
+            .is_some_and(|ports| {
+                ports
+                    .the_input_of_the_type_a_name_finds(&link.target.port)
+                    .is_some_and(PortInfo::takes_a_connection)
+            })
     }
 
     /// Whether the node `node` runs as a `GraphInput` or a `GraphOutput`, whose interface the

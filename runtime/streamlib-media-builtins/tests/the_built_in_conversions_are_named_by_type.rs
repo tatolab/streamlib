@@ -367,6 +367,11 @@ fn every_built_in_end_type(conversions: &[PinConversion]) -> Vec<PinType> {
                 named_pin_type: NamedPinTypeImportPath::new("conversion_check:Temperature")
                     .expect("a named pin type"),
             }),
+            BuiltInPinTypeName::Connection => end_types.push(PinType::Connection {
+                connection_type: NamedPinTypeImportPath::new("conversion_check:RelayConnection")
+                    .expect("a connection type"),
+                one_referrer_per_referenced_node: false,
+            }),
             BuiltInPinTypeName::NodeReference => end_types.push(PinType::NodeReference {
                 referenced_node_type: None,
                 one_referrer_per_referenced_node: false,

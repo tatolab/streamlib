@@ -76,7 +76,8 @@ impl PinType {
             | Self::EncodedAudio { .. }
             | Self::Tensor {}
             | Self::Trigger {}
-            | Self::Named { .. } => false,
+            | Self::Named { .. }
+            | Self::Connection { .. } => false,
             Self::Boolean {}
             | Self::Integer { .. }
             | Self::Float { .. }
@@ -172,7 +173,8 @@ impl PinType {
             | Self::EncodedAudio { .. }
             | Self::Tensor {}
             | Self::Trigger {}
-            | Self::Named { .. } => false,
+            | Self::Named { .. }
+            | Self::Connection { .. } => false,
         }
     }
 
@@ -246,7 +248,8 @@ impl PinType {
             | Self::EncodedVideo { .. }
             | Self::EncodedAudio { .. }
             | Self::Tensor {}
-            | Self::Named { .. } => "no value, only a link".to_owned(),
+            | Self::Named { .. }
+            | Self::Connection { .. } => "no value, only a link".to_owned(),
         }
     }
 
@@ -297,7 +300,8 @@ impl PinType {
             | Self::EncodedAudio { .. }
             | Self::Tensor {}
             | Self::Trigger {}
-            | Self::Named { .. } => Value::Null,
+            | Self::Named { .. }
+            | Self::Connection { .. } => Value::Null,
         }
     }
 }
