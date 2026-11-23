@@ -37,11 +37,11 @@ const DECK_VIEW_TYPE: &str = "acme-dj:deck";
 
 fn the_deck_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Deck", "description": "Cues a track at the drop.",
+        "contract": "1.1", "title": "Deck", "description": "Cues a track at the drop.",
         "entry": "index.html", "placement": "node",
-        "inputs": [{ "name": "cue_in", "family": "records", "description": "Cues to show." }],
-        "outputs": [{ "name": "cue", "family": "records", "description": "The cue played." },
-                    { "name": "fader", "family": "array", "range": [0, 1] }]
+        "inputs": [{ "name": "cue_in", "pin_type": { "type": "string" }, "description": "Cues to show." }],
+        "outputs": [{ "name": "cue", "pin_type": { "type": "string" }, "description": "The cue played." },
+                    { "name": "fader", "pin_type": { "type": "tensor" }, "range": [0, 1] }]
     })
 }
 
@@ -49,8 +49,9 @@ const PULSE_VIEW_TYPE: &str = "acme-dj:pulse";
 
 fn the_pulse_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Pulse", "entry": "index.html", "placement": "node",
-        "outputs": [{ "name": "beat", "family": "channels" }]
+        "contract": "1.1", "title": "Pulse", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "beat", "pin_type": { "type": "audio" } },
+                    { "name": "tempo", "pin_type": { "type": "float" } }]
     })
 }
 
@@ -58,10 +59,10 @@ const BOARD_VIEW_TYPE: &str = "acme-dj:board";
 
 fn the_board_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Board", "entry": "index.html", "placement": "node",
-        "outputs": [{ "name": "beat", "family": "channels" },
-                    { "name": "cue", "family": "records" },
-                    { "name": "fader", "family": "array" }]
+        "contract": "1.1", "title": "Board", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "beat", "pin_type": { "type": "audio" } },
+                    { "name": "cue", "pin_type": { "type": "string" } },
+                    { "name": "fader", "pin_type": { "type": "tensor" } }]
     })
 }
 
@@ -69,8 +70,8 @@ const LEVEL_VIEW_TYPE: &str = "acme-dj:level";
 
 fn the_level_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Level", "entry": "index.html", "placement": "node",
-        "outputs": [{ "name": "level", "family": "array" }],
+        "contract": "1.1", "title": "Level", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "level", "pin_type": { "type": "tensor" } }],
         "settings": { "type": "object",
                       "properties": { "gain": { "type": "number", "default": 1 } } }
     })

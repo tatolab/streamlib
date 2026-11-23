@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use streamlib_node_schema::PortFamily;
-use streamlib_node_schema::pin_type::PinType;
+use streamlib_node_schema::pin_type::{BundleMessage, PinType, built_in_pin_type};
 
 use crate::manifest_fields::{
     a_value_never_written_as_null, is_a_contract_version,
@@ -94,18 +94,17 @@ impl TatolabViewPlacement {
     }
 }
 
-/// An input or output a `node` view declares, by its pin type, or by the older `family` alone.
+/// An input or output a `node` view declares, by its pin type.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "TatolabViewDeclaredPortAsWritten")]
 pub struct TatolabViewDeclaredPort {
     /// The port's name: lower-case letters, digits and underscores.
     pub name: String,
-    /// The one family the port carries: the one its pin type's messages belong to, when it
-    /// names one.
+    /// The one family the messages of the port's pin type belong to, which a reader of the
+    /// contract's earlier versions still reads beside the pin type.
     pub family: PortFamily,
-    /// The pin type the port carries; `None` on a port declared by `family` alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pin_type: Option<PinType>,
+    /// The pin type the port carries.
+    pub pin_type: PinType,
     /// What the port carries.
     #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub description: Option<String>,
@@ -114,8 +113,8 @@ pub struct TatolabViewDeclaredPort {
     pub range: Option<[f64; 2]>,
 }
 
-/// A declared port as `tatolab_view.json` writes it: its `pin_type`, its `family`, or both
-/// where they agree.
+/// A declared port as `tatolab_view.json` writes it, the older `family` field read so that a
+/// port still declared by it is refused naming the `pin_type` to write.
 #[derive(Deserialize)]
 struct TatolabViewDeclaredPortAsWritten {
     name: String,
@@ -133,43 +132,78 @@ impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
     type Error = String;
 
     fn try_from(port: TatolabViewDeclaredPortAsWritten) -> Result<Self, String> {
-        let family = match (&port.pin_type, port.family) {
+        let name = &port.name;
+        let pin_type = match (port.pin_type, port.family) {
             (None, None) => {
-                return Err(
-                    "a port names the `pin_type` it carries, or the older `family`".to_owned(),
-                );
+                return Err(format!("port `{name}` names the `pin_type` it carries"));
             }
-            (None, Some(family)) => family,
-            (Some(pin_type), stated_family) => {
-                pin_type
-                    .validate()
-                    .map_err(|why| format!("`pin_type`: {why}"))?;
-                let Some(carried) = PortFamily::carrying_a_whole_value_of(pin_type) else {
-                    return Err(format!(
-                        "`pin_type`: a {pin_type} rides no message a view's port reads or \
-                         writes; a view declares a port of a type a link carries"
-                    ));
-                };
-                if let Some(stated) = stated_family
-                    && stated != carried
-                {
-                    return Err(format!(
-                        "`family` is `{}`, and a {pin_type} is carried as `{}`; drop `family`, \
-                         which the `pin_type` sets",
-                        stated.wire_name(),
-                        carried.wire_name()
-                    ));
-                }
-                carried
+            (None, Some(family)) => {
+                return Err(the_words_of_a_port_declared_by_family(name, family));
             }
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "port `{name}` names the older `family` field beside its `pin_type`; drop \
+                     `family`, which the `pin_type` sets"
+                ));
+            }
+            (Some(pin_type), None) => pin_type,
+        };
+        pin_type
+            .validate()
+            .map_err(|why| format!("`pin_type`: {why}"))?;
+        let Some(family) = PortFamily::carrying_a_whole_value_of(&pin_type) else {
+            return Err(format!(
+                "`pin_type`: a {pin_type} rides no message a view's port reads or writes; a \
+                 view declares a port of a type a link carries"
+            ));
         };
         Ok(Self {
             name: port.name,
             family,
-            pin_type: port.pin_type,
+            pin_type,
             description: port.description,
             range: port.range,
         })
+    }
+}
+
+/// Why port `name`, declared by the older `family` field as `family`, does not open, and what
+/// it writes in its place: the one pin type the family's messages carry where there is one, as
+/// an Image port's Texture; else the types it may become, none picked, since a guessed type can
+/// refuse a link that works today.
+fn the_words_of_a_port_declared_by_family(name: &str, family: PortFamily) -> String {
+    let family_name = family.wire_name();
+    let to_write = format!(
+        "in place of `\"family\": \"{family_name}\"`, with `\"contract\": \
+         \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"
+    );
+    let pin_types: Vec<&str> = family
+        .the_pin_types_it_carries()
+        .into_iter()
+        .map(|pin_type| built_in_pin_type(pin_type).typescript_form)
+        .collect();
+    let bundle_advice = if BundleMessage::RecordsMap.its_family() == Some(family) {
+        ", or a `bundle` of small members, as a record of named numbers is, written \
+         `{\"type\": \"bundle\", \"members\": [{\"name\": \"<name>\", \
+         \"member_type\": {\"type\": \"float\"}}, ...]}`"
+    } else {
+        ""
+    };
+    match pin_types.as_slice() {
+        [pin_type] => format!(
+            "port `{name}` is declared by the older `family` field, which a view's port no \
+             longer names; write `\"pin_type\": {{\"type\": {pin_type}}}` {to_write}"
+        ),
+        _ => format!(
+            "port `{name}` is declared by the older `family` field, which a view's port no \
+             longer names; a `{family_name}` port carries one of {}{bundle_advice}: write the \
+             one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, {to_write}",
+            pin_types
+                .iter()
+                .map(|pin_type| format!("`{}`", pin_type.trim_matches('"')))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -205,28 +239,54 @@ pub enum TatolabViewCapability {
     Microphone,
 }
 
-/// One way a manifest falls short of the view contract: the field it names and why.
+/// One way a manifest falls short of the view contract: the field it names, why, and the
+/// declared port that field lies in, by its name, when it lies in one.
 struct TatolabViewManifestIssue {
     field_path: String,
     why: String,
+    port: Option<String>,
+}
+
+/// Why a view's `tatolab_view.json` does not open: every way it falls short, and the name of the
+/// declared port the first of them that is about a port is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TatolabViewManifestRefusal {
+    /// Each way the manifest falls short, as "`field`: why.", as the view SDK words them.
+    pub(crate) words: String,
+    /// The declared port a refusal of one of its fields is about, by its name.
+    pub(crate) port: Option<String>,
 }
 
 /// `manifest_json`, a view's `tatolab_view.json` as parsed, read against view contract 1.1, or
 /// every way it falls short, each as "`field`: why.", as the view SDK words them.
 pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewManifest, String> {
+    read_tatolab_view_manifest_naming_the_port_it_refuses(manifest_json)
+        .map_err(|refusal| refusal.words)
+}
+
+/// [`read_tatolab_view_manifest`], its refusal naming the declared port it is about.
+pub(crate) fn read_tatolab_view_manifest_naming_the_port_it_refuses(
+    manifest_json: &Value,
+) -> Result<TatolabViewManifest, TatolabViewManifestRefusal> {
     let mut manifest: TatolabViewManifest = serde_path_to_error::deserialize(manifest_json.clone())
         .map_err(|not_the_contract| {
             let field_path =
                 the_field_a_serde_refusal_names(&not_the_contract, TATOLAB_VIEW_MANIFEST_FILE_NAME);
-            format!("`{field_path}`: {}.", not_the_contract.into_inner())
+            TatolabViewManifestRefusal {
+                port: the_declared_port_a_path_lies_in(manifest_json, not_the_contract.path()),
+                words: format!("`{field_path}`: {}.", not_the_contract.into_inner()),
+            }
         })?;
     let issues = every_issue_of_a_manifest(&manifest);
     if !issues.is_empty() {
-        return Err(issues
-            .iter()
-            .map(|issue| format!("`{}`: {}.", issue.field_path, issue.why))
-            .collect::<Vec<_>>()
-            .join(" "));
+        return Err(TatolabViewManifestRefusal {
+            words: issues
+                .iter()
+                .map(|issue| format!("`{}`: {}.", issue.field_path, issue.why))
+                .collect::<Vec<_>>()
+                .join(" "),
+            port: issues.iter().find_map(|issue| issue.port.clone()),
+        });
     }
     manifest.title = manifest.title.trim().to_owned();
     let mut capabilities_seen = BTreeSet::new();
@@ -236,18 +296,45 @@ pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewMa
     Ok(manifest)
 }
 
+/// The name of the declared port of `manifest_json` that `path`, where serde refused it, lies
+/// in, when it lies in one that has a name: its first steps are `inputs` or `outputs`, then an
+/// index.
+fn the_declared_port_a_path_lies_in(
+    manifest_json: &Value,
+    path: &serde_path_to_error::Path,
+) -> Option<String> {
+    let mut segments = path.iter();
+    let serde_path_to_error::Segment::Map { key: direction } = segments.next()? else {
+        return None;
+    };
+    let serde_path_to_error::Segment::Seq { index } = segments.next()? else {
+        return None;
+    };
+    if direction != "inputs" && direction != "outputs" {
+        return None;
+    }
+    manifest_json
+        .get(direction)?
+        .get(*index)?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewManifestIssue> {
     let mut issues = Vec::new();
-    let mut issue = |field_path: String, why: &str| {
+    let mut issue = |field_path: String, why: &str, port: Option<&str>| {
         issues.push(TatolabViewManifestIssue {
             field_path,
             why: why.to_owned(),
+            port: port.map(str::to_owned),
         })
     };
     if !is_a_contract_version(&manifest.contract) {
         issue(
             "contract".into(),
             "it names the view contract the view was built for, as \"1.0\"",
+            None,
         );
     } else if !is_a_contract_version_this_runtime_reads(&manifest.contract) {
         issue(
@@ -255,10 +342,15 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             &format!(
                 "this runtime reads view contract {VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_READ_MINOR}"
             ),
+            None,
         );
     }
     if manifest.title.trim().is_empty() {
-        issue("title".into(), "it is the name the view-type menu lists");
+        issue(
+            "title".into(),
+            "it is the name the view-type menu lists",
+            None,
+        );
     }
     for (field, path) in [
         ("icon", manifest.icon.as_deref()),
@@ -271,6 +363,7 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             issue(
                 field.into(),
                 "it is a path inside the view's folder, with no `..` step, scheme or backslash",
+                None,
             );
         }
     }
@@ -281,22 +374,14 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
                 issue(
                     format!("{direction}[{index}].name"),
                     "a port name is lower-case letters, digits and underscores",
+                    Some(&port.name),
                 );
             }
             if !names_seen.insert(port.name.as_str()) {
                 issue(
                     format!("{direction}[{index}].name"),
                     &format!("`{}` is named twice", port.name),
-                );
-            }
-            if port.pin_type.is_some() && !names_a_minor_with_a_ports_pin_type(&manifest.contract) {
-                issue(
-                    format!("{direction}[{index}].pin_type"),
-                    &format!(
-                        "a port's `pin_type` is view contract \
-                         {VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}; \
-                         write `\"contract\": \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"
-                    ),
+                    Some(&port.name),
                 );
             }
             if let Some([lowest, highest]) = port.range {
@@ -304,28 +389,46 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
                     issue(
                         format!("{direction}[{index}].range"),
                         "a range is [lowest, highest], lowest first",
+                        Some(&port.name),
                     );
                 }
                 if port.family != PortFamily::Array {
                     issue(
                         format!("{direction}[{index}].range"),
                         "only an Array port carries a range",
+                        Some(&port.name),
                     );
                 }
             }
         }
     }
+    let first_port = ["inputs", "outputs"]
+        .into_iter()
+        .zip([&manifest.inputs, &manifest.outputs])
+        .find_map(|(direction, ports)| Some((direction, ports.first()?)));
+    if let Some((direction, port)) = first_port
+        && !names_a_minor_with_a_ports_pin_type(&manifest.contract)
+    {
+        issue(
+            format!("{direction}[0].pin_type"),
+            &format!(
+                "a port's `pin_type` is view contract \
+                 {VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}; write \
+                 `\"contract\": \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"
+            ),
+            Some(&port.name),
+        );
+    }
     for (index, output) in manifest.outputs.iter().enumerate() {
-        if let Some(pin_type) = &output.pin_type
-            && a_panel_writes(output.family)
-            && !is_a_type_a_panel_writes_a_value_of(pin_type)
-        {
+        if a_panel_writes(output.family) && !is_a_type_a_panel_writes_a_value_of(&output.pin_type) {
             issue(
                 format!("outputs[{index}].pin_type"),
                 &format!(
-                    "a panel writes a value onto a `{}` output, and a {pin_type} holds none",
-                    output.family.wire_name()
+                    "a panel writes a value onto a `{}` output, and a {} holds none",
+                    output.family.wire_name(),
+                    output.pin_type
                 ),
+                Some(&output.name),
             );
         }
     }
@@ -355,20 +458,21 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         } else {
             continue;
         };
-        issue(format!("outputs[{index}].name"), &why);
+        issue(format!("outputs[{index}].name"), &why, Some(name));
     }
     for (index, extension) in manifest.accepts.files.iter().enumerate() {
         if !is_a_file_extension(extension) {
             issue(
                 format!("accepts.files[{index}]"),
                 "an extension is lower case with its dot, as \".glb\"",
+                None,
             );
         }
     }
     if let Some(settings) = &manifest.settings
         && let Some((field_path, why)) = why_a_settings_declaration_is_not_one(settings)
     {
-        issue(field_path, why);
+        issue(field_path, why, None);
     }
     if manifest.placement == TatolabViewPlacement::Area
         && (!manifest.inputs.is_empty() || !manifest.outputs.is_empty())
@@ -376,6 +480,7 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         issue(
             "placement".into(),
             "an `area` view has no node, so it declares no inputs or outputs; a view with ports has `node` placement",
+            None,
         );
     }
     issues

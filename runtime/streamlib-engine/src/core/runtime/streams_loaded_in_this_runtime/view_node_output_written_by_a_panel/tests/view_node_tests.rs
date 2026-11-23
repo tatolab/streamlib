@@ -62,22 +62,22 @@ fn a_value_written_onto_a_view_nodes_output_reaches_its_reader_and_the_graph_kee
     let (_viewer, mut reader) = stream.a_reader_of(&deck_uuid, "cue");
 
     stream
-        .write(&deck_uuid, "cue", json!({ "track": "intro", "beat": 32 }))
-        .expect("the view node takes the record");
+        .write(&deck_uuid, "cue", json!("intro"))
+        .expect("the view node takes the string");
     let message = the_next_message_read(&mut reader);
     assert_eq!(
         message.payload_descriptor.known_kind().ok(),
         Some(DataChannelPayloadDescriptorKind::RecordsMessage)
     );
     let read_back: Value = rmp_serde::from_slice(&message.payload).unwrap();
-    assert_eq!(read_back, json!({ "track": "intro", "beat": 32 }));
+    assert_eq!(read_back, json!({ "value": "intro" }));
 
     stream
-        .write(&deck_uuid, "cue", json!({ "track": "drop", "beat": 64 }))
+        .write(&deck_uuid, "cue", json!("drop"))
         .expect("a later write is taken too");
     let message = the_next_message_read(&mut reader);
     let read_back: Value = rmp_serde::from_slice(&message.payload).unwrap();
-    assert_eq!(read_back["track"], "drop", "the last write is what is read");
+    assert_eq!(read_back["value"], "drop", "the last write is what is read");
 
     assert_eq!(stream.what_the_graph_holds_of(&deck_id), graph_before);
 }
@@ -246,7 +246,7 @@ fn a_panel_reads_a_view_nodes_input_through_a_viewer_of_the_port_linked_into_it(
         .expect("the camera's output links into the view node's input");
     let (_viewer, mut reader) = stream.a_reader_of(&camera_uuid, "out1");
 
-    let record = rmp_serde::to_vec_named(&json!({ "track": "outro" })).unwrap();
+    let record = rmp_serde::to_vec_named(&json!({ "value": "outro" })).unwrap();
     stream
         .the_output_writer_of(&camera_id)
         .write_bytes_described_by(
@@ -275,8 +275,8 @@ fn a_write_sets_the_view_nodes_input_of_the_outputs_name_which_takes_no_link() {
     let deck_uuid = stream.run(&deck_id);
 
     stream
-        .write(&deck_uuid, "cue", json!({ "track": "intro" }))
-        .expect("the view node takes the record");
+        .write(&deck_uuid, "cue", json!("intro"))
+        .expect("the view node takes the string");
     let live_value = stream.stream.compiler.scope(|graph, _tx| {
         graph
             .live_input_values()
@@ -284,7 +284,7 @@ fn a_write_sets_the_view_nodes_input_of_the_outputs_name_which_takes_no_link() {
     });
     assert_eq!(
         live_value,
-        Some(json!({ "track": "intro" })),
+        Some(json!("intro")),
         "the value is the live value of the input `cue`"
     );
 
@@ -314,7 +314,7 @@ fn the_start_sample_of(message: &MessageReadFromAReservedSlot) -> u64 {
 
 #[test]
 #[serial]
-fn the_same_records_event_written_twice_is_published_twice() {
+fn the_same_string_written_twice_is_published_twice() {
     let stream = AStreamOfAProjectBringingViews::load();
     let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
     let deck_uuid = stream.run(&deck_id);
@@ -322,11 +322,11 @@ fn the_same_records_event_written_twice_is_published_twice() {
 
     for _ in 0..2 {
         stream
-            .write(&deck_uuid, "cue", json!({ "track": "drop" }))
-            .expect("the view node takes the record");
+            .write(&deck_uuid, "cue", json!("drop"))
+            .expect("the view node takes the string");
         assert_eq!(
             the_record_of(&the_next_message_read(&mut reader)),
-            json!({ "track": "drop" }),
+            json!({ "value": "drop" }),
             "each write is one message, the same event as much as a new one"
         );
     }
@@ -387,7 +387,7 @@ fn a_batch_one_output_does_not_carry_is_refused_before_the_node_publishes_any() 
             &board_uuid,
             &[
                 ("beat", silence.clone()),
-                ("cue", json!({ "track": "drop" })),
+                ("cue", json!("drop")),
                 ("fader", json!([[1], [2, 3]])),
             ],
         )
@@ -416,12 +416,8 @@ fn a_write_onto_one_output_publishes_nothing_on_another() {
     stream.write(&deck_uuid, "fader", json!(0.5)).unwrap();
     the_next_message_read(&mut fader_reader);
 
-    stream
-        .write(&deck_uuid, "cue", json!({ "track": "intro" }))
-        .unwrap();
-    stream
-        .write(&deck_uuid, "cue", json!({ "track": "intro" }))
-        .unwrap();
+    stream.write(&deck_uuid, "cue", json!("intro")).unwrap();
+    stream.write(&deck_uuid, "cue", json!("intro")).unwrap();
 
     std::thread::sleep(Duration::from_millis(100));
     assert!(
@@ -439,12 +435,10 @@ fn a_reader_that_connects_after_a_write_reads_the_value_its_output_keeps() {
     let pulse_id = stream.add_a_node(PULSE_VIEW_TYPE, "pulse").unwrap();
     let pulse_uuid = stream.run(&pulse_id);
 
-    stream
-        .write(&deck_uuid, "cue", json!({ "track": "outro" }))
-        .unwrap();
-    stream.write(&pulse_uuid, "beat", json!(1)).unwrap();
+    stream.write(&deck_uuid, "cue", json!("outro")).unwrap();
+    stream.write(&pulse_uuid, "tempo", json!(1)).unwrap();
     let (_cue_viewer, mut cue_reader) = stream.a_reader_of(&deck_uuid, "cue");
-    let (_beat_viewer, mut beat_reader) = stream.a_reader_of(&pulse_uuid, "beat");
+    let (_tempo_viewer, mut tempo_reader) = stream.a_reader_of(&pulse_uuid, "tempo");
     for node_id in [&deck_id, &pulse_id] {
         // What each pass of a running node's scheduling loop does; these nodes run none.
         stream
@@ -454,11 +448,11 @@ fn a_reader_that_connects_after_a_write_reads_the_value_its_output_keeps() {
 
     assert_eq!(
         the_record_of(&the_next_message_read(&mut cue_reader)),
-        json!({ "track": "outro" })
+        json!({ "value": "outro" })
     );
-    let beat = the_next_message_read(&mut beat_reader);
+    let tempo = the_next_message_read(&mut tempo_reader);
     assert_eq!(
-        beat.payload,
+        tempo.payload,
         1.0_f64.to_le_bytes().to_vec(),
         "the control value written before the reader connected"
     );

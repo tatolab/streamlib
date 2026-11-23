@@ -180,7 +180,7 @@ fn no_extension_sdk_kit_answers_both_extension_checks_not_checked_with_its_code(
 }
 
 #[test]
-fn a_type_error_fails_extension_types_alone_and_lists_the_files_checked() {
+fn a_type_error_and_a_js_file_fail_their_checks_and_list_the_files_checked() {
     let answer = the_answer_of_the_extension_code_check(an_extension_code_check(
         None,
         vec![
@@ -196,8 +196,9 @@ fn a_type_error_fails_extension_types_alone_and_lists_the_files_checked() {
             ExtensionCodeFinding {
                 kind: ExtensionCodeCheckKind::Lint,
                 finding_code: "not_written_in_ts".to_owned(),
-                severity: ExtensionCodeFindingSeverity::Warning,
-                words: "an extension's code is written in .ts".to_owned(),
+                severity: ExtensionCodeFindingSeverity::Error,
+                words: "an extension's own code is written in .ts, so `old.js` is refused"
+                    .to_owned(),
                 path: "views/meter/old.js".to_owned(),
                 line: None,
                 column: None,
@@ -213,7 +214,8 @@ fn a_type_error_fails_extension_types_alone_and_lists_the_files_checked() {
     assert_eq!(answer.checks[2].check, ProjectCodeCheckKind::ExtensionTypes);
     assert_eq!(answer.checks[2].state, ProjectCodeCheckState::Failed);
     assert_eq!(answer.checks[2].checked_with, ["tsc 7.0.2"]);
-    assert_eq!(answer.checks[3].state, ProjectCodeCheckState::Passed);
+    assert_eq!(answer.checks[3].check, ProjectCodeCheckKind::ExtensionLint);
+    assert_eq!(answer.checks[3].state, ProjectCodeCheckState::Failed);
     assert_eq!(
         answer
             .findings

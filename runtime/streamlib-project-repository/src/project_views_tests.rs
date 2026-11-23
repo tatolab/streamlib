@@ -27,7 +27,7 @@ fn a_view_folder_holding(project_directory: &Path, view_folder_name: &str, manif
     std::fs::write(folder.join(TATOLAB_VIEW_MANIFEST_FILE_NAME), manifest).unwrap();
 }
 
-const DECK_MANIFEST: &str = r#"{"contract": "1.0", "title": "Deck", "entry": "index.html", "placement": "node", "outputs": [{"name": "fader", "family": "array"}]}"#;
+const DECK_MANIFEST: &str = r#"{"contract": "1.1", "title": "Deck", "entry": "index.html", "placement": "node", "outputs": [{"name": "fader", "pin_type": {"type": "tensor"}}]}"#;
 
 const METER_MANIFEST: &str =
     r#"{"contract": "1.0", "title": "Meter", "entry": "index.html", "placement": "area"}"#;
