@@ -125,7 +125,7 @@ class ContractBackedAgentSession:
         }
         #: The inputs a link from a picture output connects to; `check_link` refuses any other
         #: but those of `tensor_inputs`.
-        self.picture_inputs = {"layer_0"}
+        self.picture_inputs = {"layers.0.picture"}
         #: The Tensor inputs a link from a picture output reaches through a `TextureToTensor`
         #: node `connect` places between them.
         self.tensor_inputs = {"array"}

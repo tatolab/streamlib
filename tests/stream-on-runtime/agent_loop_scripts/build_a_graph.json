@@ -9,7 +9,7 @@
       "source_output": "video",
       "compositor_node_type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor",
       "compositor_label": "compositor",
-      "compositor_input": "layer_0",
+      "compositor_input": "layers.0.picture",
       "clamp_node_type": "nodes.clamp:Clamp",
       "clamp_label": "clamp",
       "clamp_input": "x",

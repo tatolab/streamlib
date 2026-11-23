@@ -20,7 +20,7 @@ from camera_under_test import camera_source_config
 def _add_a_test_pattern_into(stream_builder: StreamBuilder, frame_probe_class: type) -> None:
     pattern = stream_builder.add(
         TestPatternSource,
-        config={
+        input_values={
             "width": device_exchange_probes.SURFACE_WIDTH,
             "height": device_exchange_probes.SURFACE_HEIGHT,
         },

@@ -14,7 +14,7 @@ PATTERN_WIDTH = 320
 @graph_generator
 def a_test_pattern_held_in_a_variable_and_read_twice(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
-        TestPatternSource, config={"width": PATTERN_WIDTH, "height": 180}
+        TestPatternSource, input_values={"width": PATTERN_WIDTH, "height": 180}
     )
     setter = stream_builder.add(SetVariable, input_values={"variable": "pattern"})
     stream_builder.connect(pattern.output("video"), setter.input("value"))

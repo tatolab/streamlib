@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 38
+    "x-contract-revision": 39
   },
   "methods": [
     {
@@ -656,7 +656,7 @@
                   "ports": {
                     "inputs": [
                       {
-                        "name": "layer_0",
+                        "name": "layers.0.picture",
                         "pin_type": {
                           "type": "texture"
                         },
@@ -690,7 +690,7 @@
                   },
                   "target": {
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   },
                   "state": "wired",
                   "components": {}
@@ -793,7 +793,7 @@
                     },
                     "target": {
                       "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                      "port": "layer_0"
+                      "port": "layers.0.picture"
                     }
                   },
                   {
@@ -834,7 +834,7 @@
                   },
                   "target": {
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   }
                 },
                 {
@@ -862,7 +862,7 @@
                   },
                   "target": {
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   },
                   "state": "wired"
                 }
@@ -1037,7 +1037,7 @@
                 },
                 "target": {
                   "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                  "port": "layer_0"
+                  "port": "layers.0.picture"
                 },
                 "stream": "night-show-main-3fa2b1"
               }
@@ -1242,7 +1242,7 @@
                     {
                       "kind": "placed_port",
                       "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                      "port": "layer_0"
+                      "port": "layers.0.picture"
                     },
                     {
                       "kind": "placed_port",
@@ -1263,7 +1263,7 @@
                   "end": {
                     "kind": "placed_port",
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   },
                   "check": {
                     "outcome": "connects"
@@ -1536,7 +1536,7 @@
                 },
                 "target": {
                   "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                  "port": "layer_0"
+                  "port": "layers.0.picture"
                 },
                 "stream": "night-show-main-3fa2b1"
               }

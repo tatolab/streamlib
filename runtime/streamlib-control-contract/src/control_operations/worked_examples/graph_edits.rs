@@ -16,7 +16,7 @@ const ADDED_SOURCE_NODE: &str = "5e1a7c3d-9f2b-4d8e-a6c4-2b0d8f6e4a19";
 fn the_source_into_the_compositor() -> Value {
     json!({
         "source": { "node": SOURCE_NODE, "port": "video" },
-        "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
+        "target": { "node": COMPOSITOR_NODE, "port": "layers.0.picture" },
     })
 }
 
@@ -61,7 +61,7 @@ pub(in crate::control_operations) const TRANSACT: ControlOperationExample =
                         "operation": "connect",
                         "stream": STREAM,
                         "source": { "node": "source", "port": "video" },
-                        "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
+                        "target": { "node": COMPOSITOR_NODE, "port": "layers.0.picture" },
                     },
                     {
                         "operation": "set_node_input_value",
@@ -91,7 +91,7 @@ pub(in crate::control_operations) const TRANSACT: ControlOperationExample =
                         "operation": "connect",
                         "stream": STREAM,
                         "source": { "node": ADDED_SOURCE_NODE, "port": "video" },
-                        "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
+                        "target": { "node": COMPOSITOR_NODE, "port": "layers.0.picture" },
                     },
                     {
                         "operation": "set_node_input_value",
@@ -110,7 +110,7 @@ pub(in crate::control_operations) const TRANSACT: ControlOperationExample =
                 "connected_links": [{
                     "stream": STREAM,
                     "source": { "node": ADDED_SOURCE_NODE, "port": "video" },
-                    "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
+                    "target": { "node": COMPOSITOR_NODE, "port": "layers.0.picture" },
                     "state": "wired",
                 }],
             })
@@ -174,7 +174,7 @@ pub(in crate::control_operations) const CHECK_LINK_CANDIDATES: ControlOperationE
                 "from": { "output": { "node": SOURCE_NODE, "port": "video" } },
                 "among": {
                     "ends": [
-                        { "kind": "placed_port", "node": COMPOSITOR_NODE, "port": "layer_0" },
+                        { "kind": "placed_port", "node": COMPOSITOR_NODE, "port": "layers.0.picture" },
                         { "kind": "placed_port", "node": CLAMP_NODE, "port": "x" },
                     ],
                 },
@@ -184,7 +184,7 @@ pub(in crate::control_operations) const CHECK_LINK_CANDIDATES: ControlOperationE
             json!({
                 "candidates": [
                     {
-                        "end": { "kind": "placed_port", "node": COMPOSITOR_NODE, "port": "layer_0" },
+                        "end": { "kind": "placed_port", "node": COMPOSITOR_NODE, "port": "layers.0.picture" },
                         "check": { "outcome": "connects" },
                     },
                     {

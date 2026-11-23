@@ -23,7 +23,7 @@ def _add_the_camera(stream_builder: StreamBuilder) -> NodeReference:
 
 def _add_the_test_pattern(stream_builder: StreamBuilder) -> NodeReference:
     return stream_builder.add(
-        TestPatternSource, config={"width": 640, "height": 480}
+        TestPatternSource, input_values={"width": 640, "height": 480}
     )
 
 

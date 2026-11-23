@@ -65,6 +65,17 @@ LAYERS_BY_SCENARIO: "dict[str, list[CompositedLayerUnderTest]]" = {
         CompositedLayerUnderTest(None),
         CompositedLayerUnderTest(OPAQUE_RED),
     ],
+    # Past the eight layers one dispatch lays: the ninth and tenth are laid over the composite
+    # of the first eight, each a 2x2 square of its own, the tenth half covering the ninth.
+    "ten_layers": [
+        CompositedLayerUnderTest(OPAQUE_GREY),
+        *(
+            CompositedLayerUnderTest((20 * index, 0, 0, 255), width=2, height=2, x=2 * index, y=0)
+            for index in range(1, 8)
+        ),
+        CompositedLayerUnderTest(OPAQUE_RED, width=4, height=4, x=4, y=6),
+        CompositedLayerUnderTest(OPAQUE_BLUE, width=4, height=4, x=6, y=8, opacity=0.5),
+    ],
 }
 
 
@@ -72,12 +83,14 @@ def _wire_the_scenario(stream_builder: StreamBuilder, scenario: str) -> None:
     layers = LAYERS_BY_SCENARIO[scenario]
     compositor = stream_builder.add(
         AlphaOverCompositor,
-        config={
+        input_values={
             "width": alpha_over_compositor_probes.CANVAS_WIDTH,
             "height": alpha_over_compositor_probes.CANVAS_HEIGHT,
-            "layers": [
-                {"x": layer.x, "y": layer.y, "opacity": layer.opacity} for layer in layers
-            ],
+            **{
+                f"layers.{layer_index}.{member}": value
+                for layer_index, layer in enumerate(layers)
+                for member, value in (("x", layer.x), ("y", layer.y), ("opacity", layer.opacity))
+            },
         },
     )
     for layer_index, layer in enumerate(layers):
@@ -92,7 +105,7 @@ def _wire_the_scenario(stream_builder: StreamBuilder, scenario: str) -> None:
                     "premultiplied_rgba": list(layer.premultiplied_rgba),
                 },
             )
-        stream_builder.connect(source.output("video"), compositor.input(f"layer_{layer_index}"))
+        stream_builder.connect(source.output("video"), compositor.input(f"layers.{layer_index}.picture"))
     probe = stream_builder.add(AlphaOverCompositeProbe)
     stream_builder.connect(compositor.output("video"), probe.input("composite_from_upstream"))
 
@@ -122,10 +135,16 @@ def a_layer_0_that_never_sends_into_the_compositor(stream_builder: StreamBuilder
     _wire_the_scenario(stream_builder, "layer_0_never_sends")
 
 
+@graph_generator
+def ten_layers_into_the_compositor(stream_builder: StreamBuilder) -> None:
+    _wire_the_scenario(stream_builder, "ten_layers")
+
+
 STREAM_BY_SCENARIO = {
     "premultiplied_alpha": premultiplied_layers_into_the_compositor,
     "red_on_layer_1_blue_on_layer_2": red_on_layer_1_and_blue_on_layer_2_into_the_compositor,
     "blue_on_layer_1_red_on_layer_2": blue_on_layer_1_and_red_on_layer_2_into_the_compositor,
     "layer_1_never_sends": a_layer_1_that_never_sends_into_the_compositor,
     "layer_0_never_sends": a_layer_0_that_never_sends_into_the_compositor,
+    "ten_layers": ten_layers_into_the_compositor,
 }

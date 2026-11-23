@@ -56,7 +56,7 @@ def unsupported_format_probe_alone(stream_builder: StreamBuilder) -> None:
 
 def _add_the_cross_process_edit(stream_builder: StreamBuilder, *, skip_edit: bool) -> None:
     pattern = stream_builder.add(
-        TestPatternSource, config={"width": 320, "height": 180}
+        TestPatternSource, input_values={"width": 320, "height": 180}
     )
     effect = stream_builder.add(
         pixel_exchange_probes.ReportingInvertingEffect, input_values={"skip_edit": skip_edit}
@@ -73,7 +73,7 @@ def a_test_pattern_into_an_inverting_effect(stream_builder: StreamBuilder) -> No
     """Test pattern → Python effect, the user-facing story: the frames one
     node produces are edited in place by another one's interpreter."""
     pattern = stream_builder.add(
-        TestPatternSource, config={"width": 320, "height": 180}
+        TestPatternSource, input_values={"width": 320, "height": 180}
     )
     effect = stream_builder.add(pixel_exchange_probes.InvertingEffect)
     stream_builder.connect(pattern.output("video"), effect.input("video_from_upstream"))
