@@ -68,6 +68,27 @@ pub(crate) fn component_name_of_a_reference(schema: &Value) -> Option<&str> {
         .strip_prefix(COMPONENT_SCHEMA_REFERENCE_PREFIX)
 }
 
+/// The keywords by which a schema states what type it is.
+const KEYWORDS_THAT_STATE_A_TYPE: &[&str] =
+    &["type", "$ref", "const", "properties", "oneOf", "anyOf"];
+
+/// The alternatives of the `oneOf` or `anyOf` `schema` states as its type. A union none of whose
+/// alternatives states a type only narrows the values of the type the schema states around it,
+/// as each alternative of a bundle's `members` narrows what its items may be, so it is no type of
+/// its own and none is returned.
+pub(crate) fn the_union_a_schema_is(schema: &Value) -> Option<&Vec<Value>> {
+    ["oneOf", "anyOf"]
+        .into_iter()
+        .find_map(|union_keyword| schema[union_keyword].as_array())
+        .filter(|alternatives| {
+            alternatives.iter().any(|alternative| {
+                KEYWORDS_THAT_STATE_A_TYPE
+                    .iter()
+                    .any(|keyword| alternative.get(keyword).is_some())
+            })
+        })
+}
+
 /// The property names of the object component `name`, in order.
 pub(crate) fn property_names_of<'contract>(
     component_schemas: &'contract Map<String, Value>,

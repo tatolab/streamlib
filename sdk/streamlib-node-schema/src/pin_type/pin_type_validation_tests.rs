@@ -216,3 +216,25 @@ fn a_bundle_naming_a_member_twice_is_refused_by_that_name() {
         );
     }
 }
+
+/// The bundles the client's checker is tested against, which it takes and refuses as the
+/// runtime does.
+const BUNDLE_PIN_TYPES_TAKEN_AND_REFUSED: &str = include_str!(
+    "../../../tatolab-runtime-client/client_tests/bundle_pin_types_taken_and_refused.json"
+);
+
+#[test]
+fn the_runtime_takes_and_refuses_each_bundle_the_client_is_tested_against() {
+    let examples: serde_json::Value = serde_json::from_str(BUNDLE_PIN_TYPES_TAKEN_AND_REFUSED)
+        .unwrap_or_else(|refusal| panic!("the bundle examples are JSON: {refusal}"));
+    for (list, taken) in [("taken", true), ("refused", false)] {
+        let listed = examples[list].as_array().map_or(&[][..], Vec::as_slice);
+        assert!(!listed.is_empty(), "the examples list bundles {list}");
+        for example in listed {
+            let why = example["why"].as_str().unwrap_or_default();
+            let pin_type: PinType = serde_json::from_value(example["pin_type"].clone())
+                .unwrap_or_else(|refusal| panic!("{why} reads as a pin type: {refusal}"));
+            assert_eq!(pin_type.validate().is_ok(), taken, "{why}");
+        }
+    }
+}

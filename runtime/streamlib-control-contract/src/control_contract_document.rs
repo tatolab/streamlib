@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn every_component_schema_uses_only_the_keywords_the_contract_uses() {
-        const KEYWORDS: [&str; 18] = [
+        const KEYWORDS: [&str; 19] = [
             "type",
             "properties",
             "required",
@@ -647,6 +647,7 @@ mod tests {
             "default",
             "x-may-grow",
             "x-removed-in",
+            "x-unique-by",
         ];
         let document = control_contract_document();
         let mut keywords = std::collections::BTreeSet::new();
