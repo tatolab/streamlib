@@ -364,7 +364,7 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
             "import typing",
             "from dataclasses import dataclass",
             "from typing import Annotated, NamedTuple",
-            "from tatolab.stream import Description, State, Stateful, Texture, named_pin_type, node",
+            "from tatolab.stream import Description, State, Stateful, named_pin_type, node",
             "",
             "@named_pin_type(description='A span.')",
             "class Span(NamedTuple):",
@@ -377,7 +377,8 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
             "class Bounds(NamedTuple):",
             "    low: Annotated[float, Description('The least value.')]",
             "    high: float",
-            "    picture: Texture",
+            "    count: int",
+            "    Mixed_Case: int",
             "",
             "class Spread(typing.NamedTuple):",
             "    width: float",
@@ -424,7 +425,8 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
             "annotation": "Annotated[float, Description('The least value.')]",
         },
         {"name": "high", "family": "channels", "description": "", "annotation": "float"},
-        {"name": "picture", "family": "image", "description": "", "annotation": "Texture"},
+        {"name": "count", "family": "channels", "description": "", "annotation": "int"},
+        {"name": "mixed_case", "family": "channels", "description": "", "annotation": "int"},
     ]
     assert outputs_by_node_type["nodes.limits:Limits"] == bounds_outputs
     assert outputs_by_node_type["nodes.limits:Count"] == bounds_outputs
@@ -432,7 +434,7 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
         {"name": "width", "family": "channels", "description": "", "annotation": "float"}
     ]
     # A named pin type is one pin. Under bare `@node` a dataclass is one bundle pin; under
-    # `@node.function`, one output a field.
+    # `@node.function`, one output per field.
     assert [port["name"] for port in outputs_by_node_type["nodes.limits:Measure"]] == ["result"]
     assert [port["name"] for port in outputs_by_node_type["nodes.limits:Tally"]] == ["result"]
     assert [port["name"] for port in outputs_by_node_type["nodes.limits:OldTally"]] == ["count"]
