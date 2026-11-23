@@ -728,6 +728,29 @@ fn a_condition_value_this_client_does_not_know_reads_as_its_sets_fallback() {
 }
 
 #[test]
+fn an_audio_capture_device_kind_this_client_does_not_know_reads_as_other() {
+    let read: ListAudioCaptureDevicesToolResult = serde_json::from_value(serde_json::json!({
+        "audio_backend": "pipewire",
+        "devices": [
+            { "id": "mic", "name": "Mic", "kind": "input" },
+            { "id": "sink.monitor", "name": "Monitor of Sink", "kind": "output_monitor" },
+            { "id": "bus", "name": "Bus", "kind": "network_bus" },
+        ],
+    }))
+    .unwrap();
+    let kinds: Vec<AudioCaptureDeviceKindOnTheWire> =
+        read.devices.iter().map(|device| device.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            AudioCaptureDeviceKindOnTheWire::Input,
+            AudioCaptureDeviceKindOnTheWire::OutputMonitor,
+            AudioCaptureDeviceKindOnTheWire::Other,
+        ]
+    );
+}
+
+#[test]
 fn a_listing_from_a_runtime_before_conditions_reads_with_none() {
     let listed: ListStreamsToolResultStream = serde_json::from_value(serde_json::json!({
         "stream": "main", "display_name": "main", "location": null, "state": "running",

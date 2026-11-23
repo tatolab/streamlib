@@ -26,9 +26,9 @@ use std::thread::JoinHandle;
 use libloading::Library;
 
 use crate::core::context::{
-    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
-    AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureDevice,
+    AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream,
+    AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
     DeviceStreamLivenessReport, RequestedAudioStreamFormat,
 };
@@ -36,6 +36,7 @@ use crate::core::execution::ThreadPriority;
 use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
 use crate::linux::thread_priority::apply_thread_priority;
+use alsa_capture_device_listing::alsa_capture_devices_among;
 use alsa_capture_stream_and_reader_thread::prepare_and_start_capture;
 use alsa_hardware_parameter_negotiation::{
     negotiate_capture_timestamp_contract, negotiate_hardware_parameters,
@@ -47,6 +48,7 @@ use alsa_period_wait_recovery_and_timestamps::{
     refuse_a_stamp_outside_the_monotonic_domain, wait_for_the_device_to_release_a_period,
 };
 
+mod alsa_capture_device_listing;
 mod alsa_capture_stream_and_reader_thread;
 mod alsa_hardware_parameter_negotiation;
 mod alsa_period_wait_recovery_and_timestamps;
@@ -262,6 +264,10 @@ alsa_library_entry_points! {
     fn snd_pcm_status(*mut c_void, *mut c_void) -> c_int;
     fn snd_pcm_status_get_htstamp(*const c_void, *mut libc::timespec);
     fn snd_pcm_status_get_delay(*const c_void) -> SndPcmSframes;
+
+    fn snd_device_name_hint(c_int, *const c_char, *mut *mut *mut c_void) -> c_int;
+    fn snd_device_name_get_hint(*const c_void, *const c_char) -> *mut c_char;
+    fn snd_device_name_free_hint(*mut *mut c_void) -> c_int;
 }
 
 impl AlsaLibraryEntryPoints {
@@ -575,6 +581,17 @@ impl AlsaStreamDirection {
 impl AudioDeviceBackend for AlsaAudioDeviceBackend {
     fn backend_name(&self) -> &'static str {
         "alsa"
+    }
+
+    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
+        Ok(alsa_capture_devices_among(
+            alsa_capture_device_listing::pcm_hints_of(&self.entry_points)?,
+        ))
+    }
+
+    /// None: an ALSA PCM captures no output's monitor.
+    fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
+        Ok(None)
     }
 
     fn open_capture_stream(

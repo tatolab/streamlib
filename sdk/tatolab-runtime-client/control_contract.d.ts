@@ -424,6 +424,51 @@ export interface DescribeRuntimeToolResult {
 }
 
 /**
+ * `list_audio_capture_devices`' params: none.
+ */
+export type ListAudioCaptureDevicesRequest = Record<string, never>;
+
+/**
+ * The `list_audio_capture_devices` operation's result.
+ */
+export interface ListAudioCaptureDevicesToolResult {
+  /**
+   * The audio backend this machine's runtime opens devices through: `pipewire`, `alsa`,
+   * `coreaudio`, or `silent-null` where it found none.
+   */
+  audio_backend: string;
+  /**
+   * Each capture device the backend can open: its inputs, the default input first, then the
+   * monitors of its outputs, the default output's first.
+   */
+  devices: Array<AudioCaptureDeviceOnTheWire>;
+}
+
+/**
+ * One capture device a microphone's `device_id` names.
+ */
+export interface AudioCaptureDeviceOnTheWire {
+  /**
+   * What a microphone's `device_id` names the device by.
+   */
+  id: string;
+  /**
+   * The name a person reads, as the backend describes the device.
+   */
+  name: string;
+  /**
+   * Whether the device is an input or an output's monitor.
+   */
+  kind: AudioCaptureDeviceKindOnTheWire;
+}
+
+/**
+ * What a listed capture device captures. The set grows: a value a client does not know reads
+ * as `other`.
+ */
+export type AudioCaptureDeviceKindOnTheWire = "input" | "output_monitor" | "other";
+
+/**
  * `list_streams`'s params: none.
  */
 export type ListStreamsRequest = Record<string, never>;
@@ -6952,6 +6997,10 @@ export interface ControlContractComponents {
   SubscribeProjectLogRecordsResult: SubscribeProjectLogRecordsResult;
   DescribeRuntimeRequest: DescribeRuntimeRequest;
   DescribeRuntimeToolResult: DescribeRuntimeToolResult;
+  ListAudioCaptureDevicesRequest: ListAudioCaptureDevicesRequest;
+  ListAudioCaptureDevicesToolResult: ListAudioCaptureDevicesToolResult;
+  AudioCaptureDeviceOnTheWire: AudioCaptureDeviceOnTheWire;
+  AudioCaptureDeviceKindOnTheWire: AudioCaptureDeviceKindOnTheWire;
   ListStreamsRequest: ListStreamsRequest;
   ListStreamsToolResult: ListStreamsToolResult;
   ListStreamsToolResultStream: ListStreamsToolResultStream;
@@ -7345,6 +7394,17 @@ export interface ControlOperations {
   describe_runtime: {
     params: DescribeRuntimeRequest;
     result: DescribeRuntimeToolResult;
+  };
+  /**
+   * List the machine's audio inputs and the monitors of its outputs, each by the id a Microphone Source's `device_id` takes, its name and its kind.
+   *
+   * List each audio capture device this machine's audio backend can open, which a Microphone Source's `device_id` names: its `id`, the `name` a person reads and its `kind`, `input` or `output_monitor` (what an output plays). Inputs come first, the default input first, then the outputs' monitors, the default output's first; leaving `device_id` unset takes the default input. Where the backend has a default output's monitor — on PipeWire, each sink has one, `<sink>.monitor` — the list holds `@DEFAULT_MONITOR@` ahead of the monitors: a `device_id` of `@DEFAULT_MONITOR@` captures what the default output plays, whichever it is when the node opens, so a saved project names no machine's own output; on a backend with none it is refused when the node opens. `audio_backend` names the backend: `pipewire`, `alsa`, `coreaudio`, or `silent-null` where the runtime found none, which lists nothing and captures silence. A `kind` this client does not know reads as `other`. Names no stream.
+   *
+   * Since contract version 3, experimental.
+   */
+  list_audio_capture_devices: {
+    params: ListAudioCaptureDevicesRequest;
+    result: ListAudioCaptureDevicesToolResult;
   };
   /**
    * List every stream the runtime holds, by stream id, with its location and state.
@@ -8281,7 +8341,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 44;
+export declare const CONTROL_CONTRACT_REVISION: 45;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

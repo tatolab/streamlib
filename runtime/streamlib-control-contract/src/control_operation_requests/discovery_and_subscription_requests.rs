@@ -19,6 +19,11 @@ pub const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose gra
 #[serde(deny_unknown_fields)]
 pub struct DescribeRuntimeRequest {}
 
+/// `list_audio_capture_devices`' params: none.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListAudioCaptureDevicesRequest {}
+
 /// `list_streams`'s params: none.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

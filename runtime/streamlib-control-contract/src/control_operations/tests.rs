@@ -117,3 +117,13 @@ fn a_graph_edit_names_its_stream_by_its_stream_id_or_by_its_stream_assets_uuid()
         GraphEditStream::StreamId("main-0a1b2c".to_owned())
     );
 }
+
+#[test]
+fn the_audio_capture_device_listing_names_the_default_output_monitor_alias_as_the_runtime_spells_it()
+ {
+    use streamlib_runtime_client_contract::local_api_wire_contract::DEFAULT_OUTPUT_MONITOR_DEVICE_ID;
+    assert!(
+        ListAudioCaptureDevices::AGENT_USAGE_NOTE.contains(DEFAULT_OUTPUT_MONITOR_DEVICE_ID),
+        "the note names the alias a microphone's device_id takes, in the runtime's spelling"
+    );
+}

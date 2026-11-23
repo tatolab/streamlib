@@ -11,6 +11,9 @@
 use std::sync::{Arc, OnceLock};
 
 use crate::core::Result;
+use crate::core::context::capture_and_playback_devices::audio_capture_device_listing::{
+    AudioCaptureDevice, capture_request_with_the_default_output_monitor_resolved,
+};
 use crate::core::context::capture_and_playback_devices::device_backend_probe_chain::{
     DeviceBackendArm, first_device_backend_arm_that_opens_among,
 };
@@ -110,11 +113,15 @@ impl RequestedAudioStreamFormat {
 }
 
 /// Open a capture stream on `backend` and refuse it, by name, unless it opened
-/// in the format the request asks for.
+/// in the format the request asks for. A request naming the default output's
+/// monitor opens the monitor the backend resolves it to now.
 pub fn open_capture_stream_in_requested_format(
     backend: &dyn AudioDeviceBackend,
     request: &AudioDeviceStreamRequest,
 ) -> Result<Box<dyn AudioCaptureStream>> {
+    let resolved_request =
+        capture_request_with_the_default_output_monitor_resolved(backend, request)?;
+    let request = resolved_request.as_ref().unwrap_or(request);
     let capture_stream = backend.open_capture_stream(request)?;
     refuse_a_stream_outside_the_requested_format(
         backend,
@@ -281,6 +288,15 @@ pub trait AudioDeviceBackend: Send + Sync {
     /// The arm's name, for the one probe log line and for error text.
     fn backend_name(&self) -> &'static str;
 
+    /// The capture devices this backend can open, inputs first, each kind in
+    /// the order the backend's default picks from.
+    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>>;
+
+    /// The id of the default output's monitor as a capture stream opens it, or
+    /// `None` where this backend captures no output's monitor or has no default
+    /// output.
+    fn default_output_monitor_device_id(&self) -> Result<Option<String>>;
+
     /// Open a capture stream against the named device, or the backend's
     /// default when none is named.
     fn open_capture_stream(
@@ -406,6 +422,14 @@ mod tests {
     impl AudioDeviceBackend for ArmThatOpened {
         fn backend_name(&self) -> &'static str {
             self.0
+        }
+
+        fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
+            unreachable!("the walk only ever opens the arm, never lists its devices")
+        }
+
+        fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
+            unreachable!("the walk only ever opens the arm, never lists its devices")
         }
 
         fn open_capture_stream(

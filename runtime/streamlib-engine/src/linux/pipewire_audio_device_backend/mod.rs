@@ -12,9 +12,9 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::Arc;
 
 use crate::core::context::{
-    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
-    AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureDevice,
+    AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream,
+    AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
     DeviceStreamLivenessReport, RequestedAudioStreamFormat,
 };
@@ -23,6 +23,8 @@ use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFai
 use crate::linux::thread_priority::{
     apply_realtime_priority_to_thread_of_this_process, thread_of_this_process_is_realtime,
 };
+
+mod audio_node_listing;
 
 mod audio_shim {
     use std::ffi::{c_char, c_int, c_void};
@@ -194,6 +196,17 @@ impl PipeWireAudioDeviceBackend {
 impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
     fn backend_name(&self) -> &'static str {
         "pipewire"
+    }
+
+    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
+        Ok(audio_node_listing::audio_nodes_of_the_session(&self.entry_points)?.capture_devices())
+    }
+
+    fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
+        Ok(
+            audio_node_listing::audio_nodes_of_the_session(&self.entry_points)?
+                .default_output_monitor_device_id(),
+        )
     }
 
     fn open_capture_stream(

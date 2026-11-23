@@ -267,6 +267,22 @@ async fn describe_runtime_answers_the_runtimes_description_and_names_no_stream()
 }
 
 #[tokio::test]
+async fn list_audio_capture_devices_answers_the_machines_audio_capture_devices() {
+    let listed = tool_call_result(
+        Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+        "list_audio_capture_devices",
+        json!({}),
+    )
+    .await;
+    let listed: streamlib_runtime_client_contract::local_api_wire_contract::ListAudioCaptureDevicesToolResult =
+        serde_json::from_value(first_text_block_json(&listed)).unwrap();
+    assert_eq!(
+        listed,
+        crate::control_plane_stub_support::the_stub_machines_audio_capture_devices()
+    );
+}
+
+#[tokio::test]
 async fn tools_list_is_exactly_what_the_contract_lists_each_tool_as_the_contract_states_it() {
     let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
     assert_names_exactly_the_tools_the_contract_lists(

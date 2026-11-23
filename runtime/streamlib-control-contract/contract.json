@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 44
+    "x-contract-revision": 45
   },
   "methods": [
     {
@@ -437,6 +437,101 @@
               "value": {}
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "list_audio_capture_devices",
+      "summary": "List the machine's audio inputs and the monitors of its outputs, each by the id a Microphone Source's `device_id` takes, its name and its kind.",
+      "description": "List each audio capture device this machine's audio backend can open, which a Microphone Source's `device_id` names: its `id`, the `name` a person reads and its `kind`, `input` or `output_monitor` (what an output plays). Inputs come first, the default input first, then the outputs' monitors, the default output's first; leaving `device_id` unset takes the default input. Where the backend has a default output's monitor — on PipeWire, each sink has one, `<sink>.monitor` — the list holds `@DEFAULT_MONITOR@` ahead of the monitors: a `device_id` of `@DEFAULT_MONITOR@` captures what the default output plays, whichever it is when the node opens, so a saved project names no machine's own output; on a backend with none it is refused when the node opens. `audio_backend` names the backend: `pipewire`, `alsa`, `coreaudio`, or `silent-null` where the runtime found none, which lists nothing and captures silence. A `kind` this client does not know reads as `other`. Names no stream.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ListAudioCaptureDevicesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "list_audio_capture_devices_result",
+        "schema": {
+          "$ref": "#/components/schemas/ListAudioCaptureDevicesToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_audio_capture_devices_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {}
+            }
+          ],
+          "result": {
+            "name": "list_audio_capture_devices_result",
+            "value": {
+              "audio_backend": "pipewire",
+              "devices": [
+                {
+                  "id": "alsa_input.usb-microphone.mono",
+                  "name": "USB Microphone",
+                  "kind": "input"
+                },
+                {
+                  "id": "@DEFAULT_MONITOR@",
+                  "name": "What the default output plays (now Monitor of Speakers)",
+                  "kind": "output_monitor"
+                },
+                {
+                  "id": "alsa_output.speakers.analog-stereo.monitor",
+                  "name": "Monitor of Speakers",
+                  "kind": "output_monitor"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -8409,6 +8504,76 @@
           "machine"
         ],
         "description": "The `describe_runtime` tool's result."
+      },
+      "ListAudioCaptureDevicesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "`list_audio_capture_devices`' params: none."
+      },
+      "ListAudioCaptureDevicesToolResult": {
+        "type": "object",
+        "properties": {
+          "audio_backend": {
+            "type": "string",
+            "description": "The audio backend this machine's runtime opens devices through: `pipewire`, `alsa`,\n`coreaudio`, or `silent-null` where it found none."
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudioCaptureDeviceOnTheWire"
+            },
+            "description": "Each capture device the backend can open: its inputs, the default input first, then the\nmonitors of its outputs, the default output's first."
+          }
+        },
+        "required": [
+          "audio_backend",
+          "devices"
+        ],
+        "description": "The `list_audio_capture_devices` operation's result."
+      },
+      "AudioCaptureDeviceOnTheWire": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "What a microphone's `device_id` names the device by."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name a person reads, as the backend describes the device."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AudioCaptureDeviceKindOnTheWire",
+            "description": "Whether the device is an input or an output's monitor."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "description": "One capture device a microphone's `device_id` names."
+      },
+      "AudioCaptureDeviceKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "input",
+            "description": "An input: a microphone, a line in, a virtual source."
+          },
+          {
+            "type": "string",
+            "const": "output_monitor",
+            "description": "The monitor of an output: what that output plays."
+          },
+          {
+            "type": "string",
+            "const": "other",
+            "description": "A kind this client does not know; the runtime never sends it."
+          }
+        ],
+        "description": "What a listed capture device captures. The set grows: a value a client does not know reads\nas `other`.",
+        "x-may-grow": true
       },
       "ListStreamsRequest": {
         "type": "object",

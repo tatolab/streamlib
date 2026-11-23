@@ -350,6 +350,41 @@ pub(crate) fn the_stub_runtimes_description()
     }
 }
 
+/// The audio capture devices a stub runtime lists: a microphone, the default output's monitor
+/// and that output's own monitor, on a backend named `stub-audio`.
+pub(crate) fn the_stub_machines_audio_capture_devices()
+-> ::streamlib_runtime_client_contract::local_api_wire_contract::ListAudioCaptureDevicesToolResult {
+    use ::streamlib_runtime_client_contract::local_api_wire_contract::{
+        AudioCaptureDeviceKindOnTheWire, AudioCaptureDeviceOnTheWire,
+        DEFAULT_OUTPUT_MONITOR_DEVICE_ID, ListAudioCaptureDevicesToolResult,
+    };
+    let a_device = |id: &str, name: &str, kind| AudioCaptureDeviceOnTheWire {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        kind,
+    };
+    ListAudioCaptureDevicesToolResult {
+        audio_backend: "stub-audio".to_owned(),
+        devices: vec![
+            a_device(
+                "stub-microphone",
+                "Stub Microphone",
+                AudioCaptureDeviceKindOnTheWire::Input,
+            ),
+            a_device(
+                DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
+                "What the default output plays (now Monitor of Stub Speakers)",
+                AudioCaptureDeviceKindOnTheWire::OutputMonitor,
+            ),
+            a_device(
+                "stub-speakers.monitor",
+                "Monitor of Stub Speakers",
+                AudioCaptureDeviceKindOnTheWire::OutputMonitor,
+            ),
+        ],
+    }
+}
+
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_ID: &str = "stub-stream";
 
@@ -424,6 +459,13 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult
             {
                 $crate::control_plane_stub_support::the_stub_runtimes_description()
+            }
+            fn list_audio_capture_devices(
+                &self,
+            ) -> ::streamlib::sdk::error::Result<
+                ::streamlib_runtime_client_contract::local_api_wire_contract::ListAudioCaptureDevicesToolResult,
+            > {
+                Ok($crate::control_plane_stub_support::the_stub_machines_audio_capture_devices())
             }
             fn runtime_operations_of_the_stream_a_call_names(
                 &self,

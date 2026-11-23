@@ -17,14 +17,14 @@ use crate::control_operation_requests::{
     CreateProjectRequest, CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest,
     DescribeAssetRequest, DescribeNodeTypesRequest, DescribeRuntimeRequest, DiscoverRequest,
     DuplicateProjectRequest, GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest,
-    ImportProjectRequest, ListAssetsRequest, ListDependenciesRequest, ListNodeTypesRequest,
-    ListPinTypesRequest, ListProjectFilesRequest, ListProjectNodeTypesRequest,
-    ListProjectNodeUiElementsRequest, ListProjectViewsRequest, ListSamplesRequest,
-    ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
-    OneProjectByItsDirectoryRequest, OneStreamActionRequest, OpenViewerRequest,
-    ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest, RelocateAssetRequest,
-    RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
-    RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
+    ImportProjectRequest, ListAssetsRequest, ListAudioCaptureDevicesRequest,
+    ListDependenciesRequest, ListNodeTypesRequest, ListPinTypesRequest, ListProjectFilesRequest,
+    ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest, ListProjectViewsRequest,
+    ListSamplesRequest, ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest,
+    OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
+    OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest,
+    RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest,
+    RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
     SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
     SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest, SetPinValueRequest,
     SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
@@ -54,9 +54,9 @@ pub use dependencies::{
     UseDependencyStream,
 };
 pub use discovery_and_subscriptions::{
-    DescribeRuntime, Discover, Graph, ListStreams, Logs, ReadProjectChanges,
-    SubscribeInputValueChanges, SubscribeProjectChanges, SubscribeProjectLogRecords,
-    SubscribeStreamActionChanges, SubscribeStreamGraphChanges,
+    DescribeRuntime, Discover, Graph, ListAudioCaptureDevices, ListStreams, Logs,
+    ReadProjectChanges, SubscribeInputValueChanges, SubscribeProjectChanges,
+    SubscribeProjectLogRecords, SubscribeStreamActionChanges, SubscribeStreamGraphChanges,
 };
 pub use graph_edits::{
     AddGroup, AddNode, AddNote, CheckLink, CheckLinkCandidates, CollapseSelectionIntoSubgraph,
@@ -84,7 +84,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 44;
+pub const CONTROL_CONTRACT_REVISION: u32 = 45;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -106,6 +106,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<SubscribeStreamActionChanges>(),
     ControlOperationDeclaration::of::<SubscribeProjectLogRecords>(),
     ControlOperationDeclaration::of::<DescribeRuntime>(),
+    ControlOperationDeclaration::of::<ListAudioCaptureDevices>(),
     ControlOperationDeclaration::of::<ListStreams>(),
     ControlOperationDeclaration::of::<Graph>(),
     ControlOperationDeclaration::of::<Transact>(),
@@ -207,6 +208,8 @@ pub enum ControlOperationCall {
     SubscribeProjectLogRecords(SubscribeProjectLogRecordsRequest),
     /// A `describe_runtime` call.
     DescribeRuntime(DescribeRuntimeRequest),
+    /// A `list_audio_capture_devices` call.
+    ListAudioCaptureDevices(ListAudioCaptureDevicesRequest),
     /// A `list_streams` call.
     ListStreams(ListStreamsRequest),
     /// A `graph` call.
@@ -443,6 +446,9 @@ impl ControlOperationCall {
             DescribeRuntime::METHOD_NAME => {
                 the_request_of::<DescribeRuntime>(params).map(Self::DescribeRuntime)
             }
+            ListAudioCaptureDevices::METHOD_NAME => {
+                the_request_of::<ListAudioCaptureDevices>(params).map(Self::ListAudioCaptureDevices)
+            }
             ListStreams::METHOD_NAME => {
                 the_request_of::<ListStreams>(params).map(Self::ListStreams)
             }
@@ -672,6 +678,7 @@ impl ControlOperationCall {
             Self::SubscribeInputValueChanges(_) => SubscribeInputValueChanges::METHOD_NAME,
             Self::SubscribeStreamActionChanges(_) => SubscribeStreamActionChanges::METHOD_NAME,
             Self::DescribeRuntime(_) => DescribeRuntime::METHOD_NAME,
+            Self::ListAudioCaptureDevices(_) => ListAudioCaptureDevices::METHOD_NAME,
             Self::ListStreams(_) => ListStreams::METHOD_NAME,
             Self::Graph(_) => Graph::METHOD_NAME,
             Self::Transact(_) => Transact::METHOD_NAME,

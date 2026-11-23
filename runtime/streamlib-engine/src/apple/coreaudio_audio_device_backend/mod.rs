@@ -47,11 +47,13 @@ use crate::apple::permissions::{
 };
 use crate::core::Result;
 use crate::core::context::{
-    AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream,
-    DeviceBackendArmUnavailableReason,
+    AudioCaptureDevice, AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest,
+    AudioPlaybackStream, DeviceBackendArmUnavailableReason,
 };
 
-use audio_objects_and_device_discovery::default_device_object_id;
+use audio_objects_and_device_discovery::{
+    capture_devices_default_first, default_device_object_id, devices_carrying,
+};
 use hal_output_unit::hal_output_component;
 
 /// `noErr`.
@@ -97,6 +99,18 @@ impl CoreAudioAudioDeviceBackend {
 impl AudioDeviceBackend for CoreAudioAudioDeviceBackend {
     fn backend_name(&self) -> &'static str {
         "coreaudio"
+    }
+
+    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
+        Ok(capture_devices_default_first(
+            devices_carrying(CoreAudioStreamDirection::Capture),
+            default_device_object_id(CoreAudioStreamDirection::Capture),
+        ))
+    }
+
+    /// None: CoreAudio offers no output's monitor to an input stream.
+    fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
+        Ok(None)
     }
 
     fn open_capture_stream(

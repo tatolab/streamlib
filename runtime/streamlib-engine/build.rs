@@ -104,11 +104,13 @@ fn compile_pipewire_shims() {
     const SHIM_SOURCES: &[&str] = &[
         "src/linux/pipewire_entry_points.c",
         "src/linux/pipewire_audio_shim.c",
+        "src/linux/pipewire_audio_node_listing_shim.c",
         "src/linux/pipewire_video_source_shim.c",
     ];
     const SHIM_HEADERS: &[&str] = &[
         "src/linux/pipewire_entry_points.h",
         "src/linux/pipewire_audio_shim.h",
+        "src/linux/pipewire_audio_node_listing_shim.h",
         "src/linux/pipewire_video_source_shim.h",
     ];
     const VENDORED_HEADERS: &str = "../../vendor/pipewire-headers/include";

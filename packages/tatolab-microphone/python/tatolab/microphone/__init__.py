@@ -63,10 +63,11 @@ class MicrophoneSource:
         str | None,
         SettingOnly(),
         Description(
-            "Backend-named capture device. Unset: the backend's default device. A name the "
-            "backend cannot open raises rather than landing on a different device — a wrong "
-            "device id is a wiring error. On the PipeWire backend, `<sink>.monitor` captures "
-            "what that sink is playing."
+            "Backend-named capture device, as the runtime's `list_audio_capture_devices` lists "
+            "it. Unset: the backend's default device. A name the backend cannot open raises "
+            "rather than landing on a different device — a wrong device id is a wiring error. "
+            "On the PipeWire backend, `<sink>.monitor` captures what that sink is playing, and "
+            "`@DEFAULT_MONITOR@` what the default output is playing when the node opens."
         ),
     ] = None
     audio: OutputPin[

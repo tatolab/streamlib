@@ -7,14 +7,18 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    DescribeRuntimeToolResult, ListSamplesToolResult,
+    AudioCaptureDeviceKindOnTheWire, AudioCaptureDeviceOnTheWire, DescribeRuntimeToolResult,
+    ListAudioCaptureDevicesToolResult, ListSamplesToolResult,
 };
 
 use crate::core::NodeDescriptor;
 use crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::{
     ExtensionCodeCheck, ExtensionSdkKitTemplate,
 };
-use crate::core::context::StreamClockReading;
+use crate::core::context::{
+    AudioCaptureDevice, AudioCaptureDeviceKind, AudioDeviceBackend, StreamClockReading,
+    list_audio_capture_devices, probe_audio_device_backend,
+};
 use crate::core::descriptors::PinConversion;
 use crate::core::error::Result;
 use crate::core::nodes::InstalledModuleOfANodeType;
@@ -42,6 +46,10 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::describe_this_runtime`].
     fn describe_this_runtime(&self) -> DescribeRuntimeToolResult;
+
+    /// The audio capture devices this machine's audio backend can open, under
+    /// the backend's name, in the order [`list_audio_capture_devices`] lists them.
+    fn list_audio_capture_devices(&self) -> Result<ListAudioCaptureDevicesToolResult>;
 
     /// The operations on the loaded stream `stream_id` names. Refused with
     /// [`Error::NotFound`](crate::core::error::Error::NotFound) naming the loaded streams when it is not loaded.
@@ -237,6 +245,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn describe_this_runtime(&self) -> DescribeRuntimeToolResult {
         Runner::describe_this_runtime(self)
+    }
+
+    fn list_audio_capture_devices(&self) -> Result<ListAudioCaptureDevicesToolResult> {
+        audio_capture_devices_on_the_wire(probe_audio_device_backend().as_ref())
     }
 
     fn runtime_operations_of_the_stream_a_call_names(
@@ -468,5 +480,30 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         template_file: &str,
     ) -> std::result::Result<ExtensionSdkKitTemplate, String> {
         Runner::a_template_from_the_extension_sdk_kit(self, project_directory, template_file)
+    }
+}
+
+/// Every capture device `backend` can open, in [`list_audio_capture_devices`]'s order, under the
+/// backend's name.
+fn audio_capture_devices_on_the_wire(
+    backend: &dyn AudioDeviceBackend,
+) -> Result<ListAudioCaptureDevicesToolResult> {
+    Ok(ListAudioCaptureDevicesToolResult {
+        audio_backend: backend.backend_name().to_owned(),
+        devices: list_audio_capture_devices(backend)?
+            .into_iter()
+            .map(audio_capture_device_on_the_wire)
+            .collect(),
+    })
+}
+
+fn audio_capture_device_on_the_wire(device: AudioCaptureDevice) -> AudioCaptureDeviceOnTheWire {
+    AudioCaptureDeviceOnTheWire {
+        id: device.id,
+        name: device.name,
+        kind: match device.kind {
+            AudioCaptureDeviceKind::Input => AudioCaptureDeviceKindOnTheWire::Input,
+            AudioCaptureDeviceKind::OutputMonitor => AudioCaptureDeviceKindOnTheWire::OutputMonitor,
+        },
     }
 }
