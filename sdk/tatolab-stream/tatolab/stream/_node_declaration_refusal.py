@@ -40,6 +40,10 @@ type NodeDeclarationFindingCode = Literal[
     "conversion_under_a_family_grammar",
     "conversion_not_one_input_to_one_output",
     "conversion_end_states_no_one_pin_type",
+    "pin_group_slot_not_a_frozen_dataclass",
+    "pin_group_slot_holds_no_pin",
+    "pin_group_inside_a_slot",
+    "pin_group_on_a_function_node",
 ]
 """What a refused declaration got wrong, as the declaration check's finding names it."""
 

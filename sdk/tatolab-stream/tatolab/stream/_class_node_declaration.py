@@ -14,6 +14,7 @@ State the node keeps is `_private` or a `ClassVar`, and `__init__` takes no para
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import types
 import typing
@@ -32,6 +33,7 @@ from ._input_declaration_annotations import (
     WireOnly,
 )
 from ._bundle_pin_type import dataclass_a_bundle_pin_is_written_as
+from ._class_node_pin_group import ClassNodePinGroup, a_pin_group_written_in, read_a_pin_group
 from ._pin_declaration import (
     NO_DEFAULT,
     DeclaredPin,
@@ -44,7 +46,13 @@ from ._former_name_check import refuse_former_names_that_find_no_one_pin
 from ._pin_family import family_a_pin_travels_on, family_declaration_of_a_typed_output
 from ._port_family_declaration import Input, Output
 
-__all__ = ["ClassNodeMember", "read_class_node_ports", "read_class_node_ports_and_members"]
+__all__ = [
+    "ClassNodeMember",
+    "ClassNodePinGroup",
+    "read_class_node_ports",
+    "read_class_node_ports_and_members",
+    "read_class_node_ports_members_and_pin_groups",
+]
 
 type DeclaredPort = dict[str, Any]
 """One port as the engine reads it off a described node type."""
@@ -97,7 +105,7 @@ def read_class_node_ports(
     pin typed `Annotated[object, PinTypeFromSetting("...")]`, a setting read each run, and a field
     `PublishedOnAnOutput()`, which declares an output of its name as well.
     """
-    input_ports, output_ports, _ = read_class_node_ports_and_members(
+    input_ports, output_ports, _, _ = read_class_node_ports_members_and_pin_groups(
         node_class, constructed_in_python=constructed_in_python
     )
     return input_ports, output_ports
@@ -108,9 +116,22 @@ def read_class_node_ports_and_members(
 ) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
     """The ports `read_class_node_ports` reads, and the field or pin that declares each, in
     declaration order; refused as `read_class_node_ports` refuses."""
-    return _ClassNodeReading(node_class, of_the_runtimes_own_node=not constructed_in_python).ports(
-        constructed_in_python=constructed_in_python
+    input_ports, output_ports, members, _ = read_class_node_ports_members_and_pin_groups(
+        node_class, constructed_in_python=constructed_in_python
     )
+    return input_ports, output_ports, members
+
+
+def read_class_node_ports_members_and_pin_groups(
+    node_class: type, *, constructed_in_python: bool = True
+) -> tuple[
+    list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...], tuple[ClassNodePinGroup, ...]
+]:
+    """What `read_class_node_ports_and_members` reads, and each `PinGroup` the class declares,
+    in declaration order."""
+    reading = _ClassNodeReading(node_class, of_the_runtimes_own_node=not constructed_in_python)
+    input_ports, output_ports, members = reading.ports(constructed_in_python=constructed_in_python)
+    return input_ports, output_ports, members, tuple(reading.pin_groups)
 
 
 class _ClassNodeReading:
@@ -123,6 +144,9 @@ class _ClassNodeReading:
         self._port_spelling_by_cast_name: dict[str, str] = {}
         self._input_ports_of_each_type_parameter: dict[typing.TypeVar, list[str]] = {}
         self._input_port_by_name: dict[str, DeclaredPort] = {}
+        self._default_by_attribute: dict[str, object] = {}
+        self.pin_groups: list[ClassNodePinGroup] = []
+        """Each `PinGroup` the class declares, in declaration order, once `ports` has read them."""
 
     def ports(
         self, *, constructed_in_python: bool
@@ -142,6 +166,9 @@ class _ClassNodeReading:
             description, annotation = description_and_annotation_without_it(
                 annotation, f"`{self._node}`'s attribute `{attribute_name}`"
             )
+            if a_pin_group_written_in(annotation):
+                self.pin_groups.append(self._pin_group(attribute_name, annotation, description))
+                continue
             pin_form, pin_type_annotation = self._pin_form_and_its_type(attribute_name, annotation)
             form: ClassNodeMemberForm
             if pin_form is None:
@@ -168,7 +195,7 @@ class _ClassNodeReading:
                     pin_declaration=port["pin_declaration"],
                     a_setting=port.get("input_mode", {}).get("mode") == "setting_only",
                     default=(
-                        getattr(self._node_class, attribute_name, NO_DEFAULT)
+                        self._default_of(attribute_name)
                         if form == "field"
                         else NO_DEFAULT
                     ),
@@ -264,6 +291,8 @@ class _ClassNodeReading:
             _, annotation = description_and_annotation_without_it(
                 annotation, f"`{self._node}`'s attribute `{attribute_name}`"
             )
+            if a_pin_group_written_in(annotation):
+                continue
             pin_form, pin_type_annotation = self._pin_form_and_its_type(attribute_name, annotation)
             if pin_form is None or _DIRECTION_OF_EACH_PIN_FORM[pin_form] != "input":
                 continue
@@ -313,8 +342,49 @@ class _ClassNodeReading:
             )
         return pin_form, pin_type_arguments[0]
 
+    def _pin_group(
+        self, attribute_name: str, annotation: Any, description: Optional[str]
+    ) -> ClassNodePinGroup:
+        """The pin group `attribute_name: PinGroup[Slot]` declares, each field of its slot read as
+        a field or pin of this class is."""
+
+        def read_the_slot(
+            slot_class: type,
+        ) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
+            return _ClassNodeReading(
+                slot_class, of_the_runtimes_own_node=self._of_the_runtimes_own_node
+            ).ports(constructed_in_python=False)
+
+        return read_a_pin_group(
+            node=self._node,
+            attribute_name=attribute_name,
+            group_name=self._cast_port_name(attribute_name),
+            annotation=annotation,
+            description=description,
+            declares_a_value=self._declares_a_value(attribute_name),
+            read_the_slot=read_the_slot,
+        )
+
     def _declares_a_value(self, attribute_name: str) -> bool:
+        if attribute_name in getattr(self._node_class, "__dataclass_fields__", {}):
+            return self._default_of(attribute_name) is not NO_DEFAULT
         return any(attribute_name in vars(ancestor) for ancestor in self._node_class.__mro__)
+
+    def _default_of(self, attribute_name: str) -> object:
+        """The value `attribute_name` is declared with: a slot's dataclass field default, which
+        `slots=True` takes off the class, else the class attribute; `NO_DEFAULT` for none."""
+        dataclass_fields: dict[str, Any] = getattr(self._node_class, "__dataclass_fields__", {})
+        declared_field = dataclass_fields.get(attribute_name)
+        if declared_field is None:
+            return getattr(self._node_class, attribute_name, NO_DEFAULT)
+        if declared_field.default is not dataclasses.MISSING:
+            return declared_field.default
+        if declared_field.default_factory is dataclasses.MISSING:
+            return NO_DEFAULT
+        # A factory is called once, so the port's default and the member's are one value.
+        if attribute_name not in self._default_by_attribute:
+            self._default_by_attribute[attribute_name] = declared_field.default_factory()
+        return self._default_by_attribute[attribute_name]
 
     def _field(
         self, attribute_name: str, annotation: Any, description: Optional[str]
@@ -340,7 +410,7 @@ class _ClassNodeReading:
                 "pin_annotation_repeated",
                 pin=attribute_name,
             )
-        default = getattr(self._node_class, attribute_name, NO_DEFAULT)
+        default = self._default_of(attribute_name)
         a_setting = bool(input_modes) and isinstance(input_modes[0], SettingOnly)
         declared = self._read_field(attribute_name, annotation, default, a_setting=a_setting)
         port: DeclaredPort = {

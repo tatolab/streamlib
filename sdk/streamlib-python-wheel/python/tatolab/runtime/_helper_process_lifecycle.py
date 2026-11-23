@@ -51,6 +51,7 @@ from tatolab.runtime._not_ready_placeholder_frames import (
 )
 from tatolab.runtime._node_hosting import (
     apply_configuration,
+    the_slots_its_pin_groups_are_built_with,
 )
 from tatolab.runtime._parent_process_bridge import EscalateRequestError, ParentProcessBridge
 from tatolab.runtime._node_class_description import load_node_class
@@ -289,18 +290,27 @@ class HelperProcessLifecycle:
             )
             self._config_as_last_applied = dict(configuration or {})
             self._config_its_node_was_last_handed = dict(configuration or {})
+            slot_counts, slot_input_ports, slot_output_ports = the_slots_its_pin_groups_are_built_with(
+                self._node_class, port_wiring
+            )
             self._link_data_access.declare_ports(
                 [
-                    port["name"]
-                    for port in getattr(
-                        self._node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, []
-                    )
+                    *(
+                        port["name"]
+                        for port in getattr(
+                            self._node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, []
+                        )
+                    ),
+                    *slot_input_ports,
                 ],
                 [
-                    port["name"]
-                    for port in getattr(
-                        self._node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, []
-                    )
+                    *(
+                        port["name"]
+                        for port in getattr(
+                            self._node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, []
+                        )
+                    ),
+                    *slot_output_ports,
                 ],
             )
             self._link_data_access.keep_the_last_message_of_output_ports(
@@ -349,6 +359,7 @@ class HelperProcessLifecycle:
                 self._node_run_id,
                 self._bridge,
                 port_wiring.get("input_values"),
+                slot_counts,
             )
             self._hosted.call_hook_letting_failure_propagate(
                 "setup", self._hosted.full_access_context
