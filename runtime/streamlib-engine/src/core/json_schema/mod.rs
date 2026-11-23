@@ -726,6 +726,18 @@ fn render_the_state_component_as(
     }
 }
 
+/// Why `link` is not wired, as it reports its state `error`: the refusal of the end that
+/// refused it; `None` for a link in any other state.
+pub(crate) fn why_the_link_is_not_wired(link: &crate::core::graph::Link) -> Option<String> {
+    match RenderedLinkState::of(link) {
+        RenderedLinkState::ErrorBecause(reason) => Some(reason),
+        RenderedLinkState::WithoutAReason(LinkStateOutput::Error) => {
+            Some("its wiring failed, and gave no reason".to_owned())
+        }
+        RenderedLinkState::WithoutAReason(_) => None,
+    }
+}
+
 /// What a link reports as its state, and why where that is `error`.
 enum RenderedLinkState {
     WithoutAReason(LinkStateOutput),
