@@ -61,7 +61,7 @@ pub struct BundleFrameReadAsItsBundle<'message> {
 /// The members of `bundle`, a bundle holding a heavy member, split into its small members, as
 /// a bundle of their own, and its heavy members; refused for any other type.
 fn small_and_heavy_members_of(bundle: &PinType) -> Result<(PinType, Vec<&BundleMember>), String> {
-    let PinType::Bundle { members } = bundle else {
+    let PinType::Bundle { members, .. } = bundle else {
         return Err(format!(
             "a {bundle} is no bundle, and a Bundle frame carries a bundle's members"
         ));
@@ -77,6 +77,7 @@ fn small_and_heavy_members_of(bundle: &PinType) -> Result<(PinType, Vec<&BundleM
         .partition(|member| member.member_type.is_a_heavy_type());
     Ok((
         PinType::Bundle {
+            name: None,
             members: small.into_iter().cloned().collect(),
         },
         heavy,
@@ -130,7 +131,7 @@ pub fn the_bundle_frame_of_a_bundle(
         ));
     }
     let small_message = match &small_bundle {
-        PinType::Bundle { members } if members.is_empty() => None,
+        PinType::Bundle { members, .. } if members.is_empty() => None,
         _ => Some(the_records_message_of_a_bundle(
             &small_bundle,
             small_members,
@@ -218,7 +219,7 @@ fn the_small_members_a_bundle_frame_carries(
     rows: &[BundleFrameRow],
     message: PackedPinValueRef<'_>,
 ) -> Result<Map<String, Value>, String> {
-    if matches!(small_bundle, PinType::Bundle { members } if members.is_empty()) {
+    if matches!(small_bundle, PinType::Bundle { members, .. } if members.is_empty()) {
         return Ok(Map::new());
     }
     let empty_records = rmp_serde::to_vec_named(&Map::new()).expect("an empty map encodes");

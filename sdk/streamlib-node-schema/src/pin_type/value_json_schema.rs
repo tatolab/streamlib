@@ -109,14 +109,17 @@ impl PinType {
                 "type": "array",
                 "items": element_type.value_json_schema(None).unwrap_or(Value::Bool(false)),
             }),
-            Self::Bundle { members } => a_bundle_object(members),
+            Self::Bundle { members, .. } => a_bundle_object(members),
             Self::NodeReference { .. } => json!({
                 "type": "object",
                 "properties": { "node": { "type": "string" } },
                 "required": ["node"],
                 "additionalProperties": false,
             }),
-            Self::PinTypeChoice { among } => a_pin_type_choice(among),
+            Self::PinTypeChoice {
+                among,
+                among_the_bundles_its_stream_declares,
+            } => a_pin_type_choice(among, *among_the_bundles_its_stream_declares),
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }
@@ -229,9 +232,10 @@ fn a_bundle_object(members: &[BundleMember]) -> Value {
     })
 }
 
-/// A pin type: one of `among`, each as the contract writes it, when it names any; else any
-/// pin type by a built-in `type` tag.
-fn a_pin_type_choice(among: &[PinType]) -> Value {
+/// A pin type: one of `among`, each as the contract writes it, when it names any; else a
+/// bundle by its `type` tag when it chooses among the bundles its stream declares, and any pin
+/// type by a built-in `type` tag otherwise.
+fn a_pin_type_choice(among: &[PinType], among_the_bundles_its_stream_declares: bool) -> Value {
     if !among.is_empty() {
         return json!({
             "enum": among
@@ -240,10 +244,15 @@ fn a_pin_type_choice(among: &[PinType]) -> Value {
                 .collect::<Vec<_>>(),
         });
     }
+    let tags_it_takes = if among_the_bundles_its_stream_declares {
+        json!([BuiltInPinTypeName::Bundle])
+    } else {
+        json!(BuiltInPinTypeName::EVERY_NAME)
+    };
     json!({
         "type": "object",
         "properties": {
-            "type": { "enum": BuiltInPinTypeName::EVERY_NAME },
+            "type": { "enum": tags_it_takes },
         },
         "required": ["type"],
     })

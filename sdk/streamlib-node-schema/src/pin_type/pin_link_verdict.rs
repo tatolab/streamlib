@@ -660,7 +660,12 @@ fn warn_of_member_meanings_that_differ(
     warnings: &mut Vec<PinLinkWarning>,
 ) {
     match (output, input) {
-        (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => {
+        (
+            PinType::Bundle {
+                members: output, ..
+            },
+            PinType::Bundle { members: input, .. },
+        ) => {
             for (output_member, input_member) in members_the_input_asks_for_paired(output, input)
                 .into_iter()
                 .flatten()
@@ -728,13 +733,16 @@ fn members_the_input_asks_for_paired<'members>(
 /// and compared by type.
 fn holds_what_the_input_asks_for(output: &PinType, input: &PinType) -> bool {
     match (output, input) {
-        (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => {
-            members_the_input_asks_for_paired(output, input).is_some_and(|pairs| {
-                pairs.into_iter().all(|(output, input)| {
-                    holds_what_the_input_asks_for(&output.member_type, &input.member_type)
-                })
+        (
+            PinType::Bundle {
+                members: output, ..
+            },
+            PinType::Bundle { members: input, .. },
+        ) => members_the_input_asks_for_paired(output, input).is_some_and(|pairs| {
+            pairs.into_iter().all(|(output, input)| {
+                holds_what_the_input_asks_for(&output.member_type, &input.member_type)
             })
-        }
+        }),
         (
             PinType::ListOf {
                 element_type: output,
@@ -752,7 +760,12 @@ fn holds_what_the_input_asks_for(output: &PinType, input: &PinType) -> bool {
 /// another type. Empty for two types that are no bundles, nor Lists of them.
 fn members_the_output_does_not_hold(output: &PinType, input: &PinType, path: &str) -> Vec<String> {
     match (output, input) {
-        (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => input
+        (
+            PinType::Bundle {
+                members: output, ..
+            },
+            PinType::Bundle { members: input, .. },
+        ) => input
             .iter()
             .enumerate()
             .flat_map(|(place, input_member)| {

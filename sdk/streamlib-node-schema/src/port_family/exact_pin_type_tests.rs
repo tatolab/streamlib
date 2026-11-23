@@ -89,7 +89,10 @@ fn a_typed_port_serves_the_family_its_messages_belong_to() {
         Some(PortFamily::Array)
     );
     assert_eq!(
-        PortFamily::carrying(&PinType::PinTypeChoice { among: vec![] }),
+        PortFamily::carrying(&PinType::PinTypeChoice {
+            among_the_bundles_its_stream_declares: false,
+            among: vec![]
+        }),
         None
     );
 }
@@ -102,6 +105,7 @@ fn a_typed_port_serves_the_family_its_messages_belong_to() {
 #[test]
 fn a_bundle_of_small_members_is_carried_whole_on_records() {
     let yaw_and_burst = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("yaw", PinType::Float { exact_size: None }),
             a_member("burst", PinType::Integer { exact_size: None }),
@@ -126,7 +130,10 @@ fn a_bundle_of_small_members_is_carried_whole_on_records() {
 /// with a List member, which the runtime packs as one Records map.
 #[test]
 fn a_whole_bundle_is_carried_on_the_family_of_the_message_it_travels_as() {
-    let bundle = |members| PinType::Bundle { members };
+    let bundle = |members| PinType::Bundle {
+        name: None,
+        members,
+    };
     let with_a_list = bundle(vec![
         a_member("label", PinType::String {}),
         a_member(

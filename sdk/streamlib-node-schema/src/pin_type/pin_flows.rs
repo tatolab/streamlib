@@ -33,7 +33,7 @@ impl PinType {
     fn member_types(&self) -> impl Iterator<Item = &PinType> {
         let (element_type, members) = match self {
             Self::ListOf { element_type } => (Some(element_type.as_ref()), &[][..]),
-            Self::Bundle { members } => (None, members.as_slice()),
+            Self::Bundle { members, .. } => (None, members.as_slice()),
             _ => (None, &[][..]),
         };
         element_type
@@ -71,7 +71,7 @@ impl PinType {
             Self::ListOf { element_type } => {
                 Some(format!("elements of the {} type", label_of(element_type)))
             }
-            Self::Bundle { members } => members
+            Self::Bundle { members, .. } => members
                 .iter()
                 .find(|member| member.member_type.flows() == flows)
                 .map(|member| {

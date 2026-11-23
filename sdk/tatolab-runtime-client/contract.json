@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 46
+    "x-contract-revision": 47
   },
   "methods": [
     {
@@ -9954,6 +9954,13 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The name of the class that declares it, such as the dataclass `Reading`; absent on a\nbundle no class declares."
+              },
               "members": {
                 "type": "array",
                 "items": {
@@ -10525,7 +10532,11 @@
                 "items": {
                   "$ref": "#/components/schemas/PinType"
                 },
-                "description": "The types it may choose; empty chooses any."
+                "description": "The types it may choose; empty chooses any, unless it chooses among the bundles its\nstream declares."
+              },
+              "among_the_bundles_its_stream_declares": {
+                "type": "boolean",
+                "description": "Whether it chooses one of the bundles its stream's node types declare: on a placed\nnode, `among` lists each of them, and is empty while the stream declares none."
               },
               "type": {
                 "type": "string",

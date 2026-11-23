@@ -110,11 +110,13 @@ integer_setting_pin_type! {
     u32 => UInt32,
 }
 
-/// A setting choosing a pin type, such as the bundle a node makes, which holds none until one
-/// is chosen.
+/// A setting choosing any pin type, which holds none until one is chosen.
 impl SettingPinType for Option<PinType> {
     fn setting_pin_type() -> PinType {
-        PinType::PinTypeChoice { among: Vec::new() }
+        PinType::PinTypeChoice {
+            among: Vec::new(),
+            among_the_bundles_its_stream_declares: false,
+        }
     }
 }
 
@@ -138,6 +140,24 @@ impl SettingChosenFromOptions for String {}
 pub fn the_menu_of_a_setting<T: SettingChosenFromOptions>(option_names: &[&str]) -> PinType {
     PinType::Menu {
         option_names: option_names.iter().map(|name| (*name).to_owned()).collect(),
+    }
+}
+
+/// A setting choosing one of the bundles its stream's node types declare, which
+/// `#[among_the_bundles_its_stream_declares]` declares on a field.
+#[diagnostic::on_unimplemented(
+    message = "`#[among_the_bundles_its_stream_declares]` marks a setting of type `{Self}`, and only an `Option<PinType>` setting chooses a pin type"
+)]
+pub trait SettingChoosingAPinType {}
+
+impl SettingChoosingAPinType for Option<PinType> {}
+
+/// The pin type choice a setting of type `T` is declared with when it chooses one of the bundles
+/// its stream's node types declare, which the runtime lists for a placed node.
+pub fn the_choice_among_the_bundles_its_stream_declares<T: SettingChoosingAPinType>() -> PinType {
+    PinType::PinTypeChoice {
+        among: Vec::new(),
+        among_the_bundles_its_stream_declares: true,
     }
 }
 

@@ -35,7 +35,7 @@ fn the_member_of<'pin>(
     member: &str,
 ) -> Option<&'pin BundleMember> {
     match pin_type {
-        PinTypeInItsGraph::Is(PinType::Bundle { members }) => {
+        PinTypeInItsGraph::Is(PinType::Bundle { members, .. }) => {
             members.iter().find(|held| held.name == member)
         }
         _ => None,
@@ -124,7 +124,7 @@ pub(crate) fn refuse_a_member_its_port_does_not_hold(
             continue;
         }
         let (pin_type_in_words, members_it_has) = match &pin_type {
-            PinTypeInItsGraph::Is(pin_type @ PinType::Bundle { members }) => (
+            PinTypeInItsGraph::Is(pin_type @ PinType::Bundle { members, .. }) => (
                 pin_type.to_string(),
                 members.iter().map(|held| held.name.clone()).collect(),
             ),

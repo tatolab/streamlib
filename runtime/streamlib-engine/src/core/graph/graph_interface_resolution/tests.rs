@@ -740,7 +740,10 @@ fn an_interface_node_renders_its_settings_as_inputs_reading_their_values() {
     let pin_type = &output.ports.inputs[1];
     assert_eq!(
         pin_type.pin.as_ref().map(|pin| pin.pin_type.clone()),
-        Some(PinType::PinTypeChoice { among: Vec::new() })
+        Some(PinType::PinTypeChoice {
+            among_the_bundles_its_stream_declares: false,
+            among: Vec::new()
+        })
     );
     let read = pin_type
         .value_read

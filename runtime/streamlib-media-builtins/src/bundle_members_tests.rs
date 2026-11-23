@@ -27,10 +27,11 @@ fn the_port<'descriptor>(
 }
 
 /// Each node carries the bundle its `bundle_type` setting chooses on its one input and its one
-/// output, and that setting chooses any pin type, holds none until it is set, and is read at
-/// setup.
+/// output, and that setting chooses one of the bundles its stream's node types declare, holds
+/// none until it is set, and is read at setup.
 ///
-/// Mental-revert: a port stating a type of its own would carry it whatever `bundle_type` holds.
+/// Mental-revert: a port stating a type of its own would carry it whatever `bundle_type` holds,
+/// and a setting unmarked chooses among any pin type.
 #[test]
 fn both_nodes_carry_the_bundle_their_bundle_type_setting_chooses() {
     for (descriptor, input, output) in [
@@ -63,7 +64,10 @@ fn both_nodes_carry_the_bundle_their_bundle_type_setting_chooses() {
         assert_eq!(
             declared.pin_type,
             DeclaredPinType::Is {
-                pin_type: PinType::PinTypeChoice { among: Vec::new() }
+                pin_type: PinType::PinTypeChoice {
+                    among: Vec::new(),
+                    among_the_bundles_its_stream_declares: true,
+                }
             }
         );
         assert!(declared.may_be_unset);

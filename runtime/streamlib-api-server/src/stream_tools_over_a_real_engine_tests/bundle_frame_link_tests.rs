@@ -63,6 +63,7 @@ fn the_bundle_frame_link_node_types_registered() {
                 FRAMED_SOURCE_TYPE,
                 "framed",
                 PinType::Bundle {
+                    name: None,
                     members: vec![
                         a_member(
                             "picture",
@@ -78,6 +79,7 @@ fn the_bundle_frame_link_node_types_registered() {
                 READING_SOURCE_TYPE,
                 "reading",
                 PinType::Bundle {
+                    name: None,
                     members: vec![
                         a_member("level", PinType::Float { exact_size: None }),
                         a_member("label", PinType::String {}),

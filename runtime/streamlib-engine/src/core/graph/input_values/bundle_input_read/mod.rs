@@ -17,7 +17,7 @@ use crate::core::graph::{GraphNode, PortInfo, WhatTheLinksIntoAnInputFeed};
 /// The members of the bundle input `port` carries; `None` for an input carrying another type.
 pub(crate) fn the_bundle_members_of(port: &PortInfo) -> Option<&[BundleMember]> {
     match &port.pin.as_ref()?.pin_type {
-        PinType::Bundle { members } => Some(members),
+        PinType::Bundle { members, .. } => Some(members),
         _ => None,
     }
 }

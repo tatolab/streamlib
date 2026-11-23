@@ -79,13 +79,18 @@ export type PinType = {
    */
   element_type: PinType;
   type: "list_of";
-} | {
+} | ({
+  /**
+   * The name of the class that declares it, such as the dataclass `Reading`; absent on a
+   * bundle no class declares.
+   */
+  name?: string | null;
   /**
    * The members, in declared order.
    */
   members: Array<BundleMember>;
   type: "bundle";
-} | {
+}) | {
   /**
    * The class that declares it.
    */
@@ -103,9 +108,15 @@ export type PinType = {
   type: "node_reference";
 }) | {
   /**
-   * The types it may choose; empty chooses any.
+   * The types it may choose; empty chooses any, unless it chooses among the bundles its
+   * stream declares.
    */
   among?: Array<PinType>;
+  /**
+   * Whether it chooses one of the bundles its stream's node types declare: on a placed
+   * node, `among` lists each of them, and is empty while the stream declares none.
+   */
+  among_the_bundles_its_stream_declares?: boolean;
   type: "pin_type_choice";
 };
 

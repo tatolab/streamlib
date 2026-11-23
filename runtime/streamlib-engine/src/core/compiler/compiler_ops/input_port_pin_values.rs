@@ -9,6 +9,7 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNode, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
 };
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use serde_json::Value as JsonValue;
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
@@ -72,9 +73,10 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .collect()
 }
 
-/// Refuse a pin value set on an input of `node` that the input does not take, as
-/// [`refuse_a_value_the_input_port_does_not_take`] decides.
+/// Refuse a pin value set on an input of `node`, a node of a stream resolving `node_types`, that
+/// the input does not take, as [`refuse_a_value_the_input_port_does_not_take`] decides.
 pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
+    node_types: &NodeTypesOneStreamResolves,
     node: &GraphNode,
     input: &str,
     pin_value: &JsonValue,
@@ -82,7 +84,10 @@ pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
     let Some(port) = node.input_port(input) else {
         return Ok(());
     };
-    let port = port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
+    let mut port = port
+        .typed_by_its_setting_in(&node.ports.inputs, &node.pins)
+        .into_owned();
+    node_types.list_the_bundles_its_node_types_declare_on(&mut port);
     refuse_a_value_the_input_port_does_not_take(
         &node.display_name,
         node.node_kind(),
@@ -255,24 +260,37 @@ pub(crate) mod tests {
         let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
         let level_meter = a_level_meter_in_a_helper(&mut graph);
         let node = graph.traversal().v(&level_meter).first().unwrap();
-        let refusal =
-            refuse_a_pin_value_a_process_node_cannot_read(node, "frames", &serde_json::json!(1.0))
-                .unwrap_err()
-                .to_string();
+        let refusal = refuse_a_pin_value_a_process_node_cannot_read(
+            graph.node_types_this_stream_resolves(),
+            node,
+            "frames",
+            &serde_json::json!(1.0),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             refusal.contains("`frames`") && refusal.contains("Channels"),
             "got {refusal}"
         );
-        let refusal =
-            refuse_a_pin_value_a_process_node_cannot_read(node, "gain", &serde_json::json!("loud"))
-                .unwrap_err()
-                .to_string();
+        let refusal = refuse_a_pin_value_a_process_node_cannot_read(
+            graph.node_types_this_stream_resolves(),
+            node,
+            "gain",
+            &serde_json::json!("loud"),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             refusal.contains("`gain`") && refusal.contains("a number or a bool"),
             "got {refusal}"
         );
-        refuse_a_pin_value_a_process_node_cannot_read(node, "gain", &serde_json::json!(0.25))
-            .unwrap();
+        refuse_a_pin_value_a_process_node_cannot_read(
+            graph.node_types_this_stream_resolves(),
+            node,
+            "gain",
+            &serde_json::json!(0.25),
+        )
+        .unwrap();
     }
 
     /// A graph holding `remap`, whose `x` declares no default, and `mix`,

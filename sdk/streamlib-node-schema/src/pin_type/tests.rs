@@ -39,6 +39,7 @@ fn a_pin_type_named(name: BuiltInPinTypeName) -> PinType {
             element_type: Box::new(PinType::Float { exact_size: None }),
         },
         BuiltInPinTypeName::Bundle => PinType::Bundle {
+            name: None,
             members: vec![BundleMember {
                 name: "opacity".into(),
                 member_type: PinType::Float { exact_size: None },
@@ -54,6 +55,7 @@ fn a_pin_type_named(name: BuiltInPinTypeName) -> PinType {
             one_referrer_per_referenced_node: true,
         },
         BuiltInPinTypeName::PinTypeChoice => PinType::PinTypeChoice {
+            among_the_bundles_its_stream_declares: false,
             among: vec![PinType::Audio {}],
         },
     }
@@ -423,6 +425,7 @@ fn a_type_flows_by_its_rows_first_flow_and_a_list_or_bundle_streams_when_a_membe
     );
     assert_eq!(
         PinType::Bundle {
+            name: None,
             members: vec![member("opacity", float.clone())]
         }
         .default_flow(),
@@ -430,6 +433,7 @@ fn a_type_flows_by_its_rows_first_flow_and_a_list_or_bundle_streams_when_a_membe
     );
     assert_eq!(
         PinType::Bundle {
+            name: None,
             members: vec![member("opacity", float), member("frame", texture)]
         }
         .default_flow(),
@@ -599,6 +603,7 @@ fn a_shaped_value_is_taken_only_whole_and_of_its_declared_size() {
 #[test]
 fn a_bundle_takes_each_member_in_its_form_and_leaves_out_only_one_with_a_default() {
     let bundle = PinType::Bundle {
+        name: None,
         members: vec![
             BundleMember {
                 name: "gain".into(),
@@ -622,6 +627,82 @@ fn a_bundle_takes_each_member_in_its_form_and_leaves_out_only_one_with_a_default
             .is_err()
     );
     assert!(bundle.check_value(&json!({ "enabled": 1 })).is_err());
+}
+
+/// A bundle `name` declares, of the one Float member `member`.
+fn a_bundle_named(name: &str, member: &str) -> PinType {
+    PinType::Bundle {
+        name: Some(name.into()),
+        members: vec![BundleMember {
+            name: member.into(),
+            member_type: PinType::Float { exact_size: None },
+            meaning: None,
+            default_value: None,
+        }],
+    }
+}
+
+/// A bundle writes the name its class gives it beside its members, and one no class declares
+/// writes none.
+///
+/// Mental-revert: a bundle that drops its name reads back without it.
+#[test]
+fn a_bundle_writes_and_reads_back_the_name_its_class_gives_it() {
+    let reading = a_bundle_named("Reading", "level");
+    let written = serde_json::to_value(&reading).expect("a bundle serializes");
+    assert_eq!(written["name"], json!("Reading"));
+    assert_eq!(
+        serde_json::from_value::<PinType>(written).expect("a bundle reads back"),
+        reading
+    );
+    let unnamed = PinType::Bundle {
+        name: None,
+        members: Vec::new(),
+    };
+    assert_eq!(
+        serde_json::to_value(&unnamed).expect("a bundle serializes"),
+        json!({ "type": "bundle", "members": [] })
+    );
+}
+
+/// A choice among the bundles its stream declares takes exactly a bundle it lists, refusing any
+/// other naming each it lists, and refuses every type while it lists none; a choice among any
+/// type takes any.
+///
+/// Mental-revert: reading an empty list as any type takes a bundle of a stream that declares
+/// none.
+#[test]
+fn a_choice_among_the_bundles_its_stream_declares_takes_only_a_bundle_it_lists() {
+    let reading = a_bundle_named("Reading", "level");
+    let tone = a_bundle_named("Tone", "pitch");
+    let offering = |among: Vec<PinType>| PinType::PinTypeChoice {
+        among,
+        among_the_bundles_its_stream_declares: true,
+    };
+    let as_written = |pin_type: &PinType| serde_json::to_value(pin_type).expect("serializes");
+
+    let both = offering(vec![reading.clone(), tone.clone()]);
+    assert!(both.check_value(&as_written(&tone)).is_ok());
+    let elsewhere = a_bundle_named("Elsewhere", "level");
+    let refused = both
+        .check_value(&as_written(&elsewhere))
+        .expect_err("a bundle it does not list is refused");
+    assert!(refused.takes.contains("`Reading`"), "{}", refused.takes);
+    assert!(refused.takes.contains("`Tone`"), "{}", refused.takes);
+    assert_eq!(refused.example, as_written(&reading));
+    assert!(both.check_value(&json!({ "type": "float" })).is_err());
+
+    let none = offering(Vec::new());
+    let refused = none
+        .check_value(&as_written(&reading))
+        .expect_err("a stream declaring no bundle offers none");
+    assert!(refused.takes.contains("declare none"), "{}", refused.takes);
+
+    let any = PinType::PinTypeChoice {
+        among: Vec::new(),
+        among_the_bundles_its_stream_declares: false,
+    };
+    assert!(any.check_value(&as_written(&reading)).is_ok());
 }
 
 #[test]

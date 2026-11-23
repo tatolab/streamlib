@@ -149,7 +149,7 @@ impl PinType {
                     .iter()
                     .all(|element| element_type.is_a_stored_value(element))
             }),
-            Self::Bundle { members } => value.as_object().is_some_and(|stored| {
+            Self::Bundle { members, .. } => value.as_object().is_some_and(|stored| {
                 stored
                     .keys()
                     .all(|key| members.iter().any(|member| &member.name == key))
@@ -159,8 +159,13 @@ impl PinType {
                     })
             }),
             Self::NodeReference { .. } => reads_as::<NodeReferenceInConfig>(value),
-            Self::PinTypeChoice { among } => serde_json::from_value::<PinType>(value.clone())
-                .is_ok_and(|chosen| among.is_empty() || among.contains(&chosen)),
+            Self::PinTypeChoice {
+                among,
+                among_the_bundles_its_stream_declares,
+            } => serde_json::from_value::<PinType>(value.clone()).is_ok_and(|chosen| {
+                among.contains(&chosen)
+                    || (among.is_empty() && !among_the_bundles_its_stream_declares)
+            }),
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }
@@ -208,7 +213,7 @@ impl PinType {
             Self::ListOf { element_type } => {
                 format!("a list, each element {}", element_type.what_it_takes())
             }
-            Self::Bundle { members } => format!(
+            Self::Bundle { members, .. } => format!(
                 "an object of the members {}",
                 members
                     .iter()
@@ -217,6 +222,21 @@ impl PinType {
                     .join(", ")
             ),
             Self::NodeReference { .. } => "a node reference, `{\"node\": \"<name>\"}`".to_owned(),
+            Self::PinTypeChoice {
+                among,
+                among_the_bundles_its_stream_declares: true,
+            } => match among.as_slice() {
+                [] => "one of the bundles its stream's node types declare, and they declare none"
+                    .to_owned(),
+                bundles => format!(
+                    "one of the bundles its stream's node types declare: {}",
+                    bundles
+                        .iter()
+                        .map(PinType::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
             Self::PinTypeChoice { .. } => "a pin type, `{\"type\": \"<name>\"}`".to_owned(),
             Self::Trigger {} => {
                 "no value: a live set with no value, or `null`, fires it once".to_owned()
@@ -251,17 +271,26 @@ impl PinType {
             ]),
             Self::Asset { .. } => json!({ "asset": "00000000-0000-0000-0000-000000000000" }),
             Self::ListOf { .. } => json!([]),
-            Self::Bundle { members } => Value::Object(
+            Self::Bundle { members, .. } => Value::Object(
                 members
                     .iter()
                     .map(|member| (member.name.clone(), member.member_type.an_example_value()))
                     .collect(),
             ),
             Self::NodeReference { .. } => json!({ "node": "<name>" }),
-            Self::PinTypeChoice { among } => among
+            Self::PinTypeChoice {
+                among,
+                among_the_bundles_its_stream_declares,
+            } => among
                 .first()
                 .and_then(|first| serde_json::to_value(first).ok())
-                .unwrap_or_else(|| json!({ "type": "float" })),
+                .unwrap_or_else(|| {
+                    if *among_the_bundles_its_stream_declares {
+                        Value::Null
+                    } else {
+                        json!({ "type": "float" })
+                    }
+                }),
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }

@@ -614,6 +614,7 @@ fn a_member(name: &str, member_type: PinType) -> BundleMember {
 /// A placement of `x`, `y` and `opacity`, `opacity` 1 when a stored value leaves it out.
 fn a_placement() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![
             a_member("x", PinType::Float { exact_size: None }),
             a_member("y", PinType::Float { exact_size: None }),
@@ -666,6 +667,7 @@ fn a_bundle_of_small_members_packs_as_one_records_map_of_its_members_made_whole(
 fn an_input_asking_for_fewer_members_reads_those_members_of_the_bundle_sent() {
     let packed = pack_pin_value(&a_placement(), &json!({"x": 0.5, "y": 0.25}), 0).unwrap();
     let x_and_opacity = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("opacity", PinType::Float { exact_size: None }),
             a_member("x", PinType::Float { exact_size: None }),
@@ -676,6 +678,7 @@ fn an_input_asking_for_fewer_members_reads_those_members_of_the_bundle_sent() {
         Ok(json!({"opacity": 1.0, "x": 0.5}))
     );
     let with_gain = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("x", PinType::Float { exact_size: None }),
             a_member("gain", PinType::Float { exact_size: None }),
@@ -718,6 +721,7 @@ fn a_bundle_value_missing_a_member_or_holding_another_does_not_pack() {
 #[test]
 fn a_bundle_of_tensors_packs_as_one_array_frame_of_an_attribute_for_each_member() {
     let detections = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("boxes", PinType::Tensor {}),
             a_member("scores", PinType::Tensor {}),
@@ -789,6 +793,7 @@ fn a_bundle_or_list_holding_a_heavy_member_travels_as_one_bundle_frame() {
     ] {
         let heavy: PinType = serde_json::from_value(heavy).unwrap();
         let frame_with_its_label = PinType::Bundle {
+            name: None,
             members: vec![
                 a_member("frame", heavy.clone()),
                 a_member("label", PinType::String {}),
@@ -825,9 +830,16 @@ fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as()
     };
     let bundles = [
         (a_placement(), json!({ "x": 0.5, "y": 0.25 })),
-        (PinType::Bundle { members: vec![] }, json!({})),
         (
             PinType::Bundle {
+                name: None,
+                members: vec![],
+            },
+            json!({}),
+        ),
+        (
+            PinType::Bundle {
+                name: None,
                 members: vec![
                     a_member("label", PinType::String {}),
                     a_member("levels", floats),
@@ -837,6 +849,7 @@ fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as()
         ),
         (
             PinType::Bundle {
+                name: None,
                 members: vec![
                     a_member("boxes", PinType::Tensor {}),
                     a_member("scores", PinType::Tensor {}),
@@ -846,6 +859,7 @@ fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as()
         ),
         (
             PinType::Bundle {
+                name: None,
                 members: vec![
                     a_member("label", PinType::String {}),
                     a_member(

@@ -139,3 +139,61 @@ fn options_are_refused_unless_one_list_of_string_literals() {
         assert!(refused.contains(refused_for), "{options}: {refused}");
     }
 }
+
+/// Mental-revert: reading the field's type alone declares a choice among any pin type, which
+/// no stream fills with its bundles.
+#[test]
+fn a_field_marked_as_choosing_among_its_streams_bundles_is_declared_as_that_choice() {
+    let rendered = expanded(
+        TokenStream::new(),
+        quote! {
+            struct BundleSettings {
+                #[description = "The bundle the node carries."]
+                #[among_the_bundles_its_stream_declares]
+                bundle_type: Option<PinType>,
+            }
+        },
+    )
+    .expect("expands");
+    assert!(
+        rendered.contains(
+            "the_choice_among_the_bundles_its_stream_declares :: < Option < PinType > > ()"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("# [among_the_bundles_its_stream_declares]"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_setting_chosen_from_options_and_among_its_streams_bundles_is_refused() {
+    let refused = refusal(
+        TokenStream::new(),
+        quote! {
+            struct BundleSettings {
+                #[description = "The bundle the node carries."]
+                #[options("one")]
+                #[among_the_bundles_its_stream_declares]
+                bundle_type: String,
+            }
+        },
+    );
+    assert!(refused.contains("not both"), "{refused}");
+}
+
+#[test]
+fn a_marker_of_a_choice_among_its_streams_bundles_taking_arguments_is_refused() {
+    let refused = refusal(
+        TokenStream::new(),
+        quote! {
+            struct BundleSettings {
+                #[description = "The bundle the node carries."]
+                #[among_the_bundles_its_stream_declares(any)]
+                bundle_type: Option<PinType>,
+            }
+        },
+    );
+    assert!(refused.contains("bare"), "{refused}");
+}

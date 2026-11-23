@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `#[node_settings]`: a struct whose every field is a setting a node reads when it is set up,
-//! each described by `#[description = …]` and, for a String chosen from a list,
-//! `#[options("…", …)]`.
+//! each described by `#[description = …]`; a String chosen from a list is marked
+//! `#[options("…", …)]`, and an `Option<PinType>` choosing one of the bundles its stream's node
+//! types declare `#[among_the_bundles_its_stream_declares]`.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -14,6 +15,8 @@ use syn::{Attribute, Fields, ItemStruct, LitStr, Meta, Token};
 use crate::node_config::take_the_declared_description;
 
 const OPTIONS_ATTRIBUTE: &str = "options";
+const AMONG_THE_BUNDLES_ITS_STREAM_DECLARES_ATTRIBUTE: &str =
+    "among_the_bundles_its_stream_declares";
 
 pub(crate) fn expand_node_settings(
     attribute: TokenStream,
@@ -60,9 +63,23 @@ pub(crate) fn expand_node_settings(
             ));
         };
         let field_type = &field.ty;
+        let chooses_among_the_bundles_its_stream_declares =
+            take_the_marker_of_a_choice_among_the_bundles_its_stream_declares(&mut field.attrs)?;
         let pin_type = match take_the_declared_options(&mut field.attrs)? {
+            Some(_) if chooses_among_the_bundles_its_stream_declares.is_some() => {
+                return Err(syn::Error::new(
+                    field_ident.span(),
+                    format!(
+                        "setting `{setting_name}` is chosen from `#[options(…)]` or among the \
+                         bundles its stream declares, not both"
+                    ),
+                ));
+            }
             Some(option_names) => quote! {
                 #sdk_root::descriptors::the_menu_of_a_setting::<#field_type>(&[#(#option_names),*])
+            },
+            None if chooses_among_the_bundles_its_stream_declares.is_some() => quote! {
+                #sdk_root::descriptors::the_choice_among_the_bundles_its_stream_declares::<#field_type>()
             },
             None => quote! {
                 <#field_type as #sdk_root::descriptors::SettingPinType>::setting_pin_type()
@@ -128,6 +145,34 @@ fn take_the_declared_options(attributes: &mut Vec<Attribute>) -> syn::Result<Opt
     }
     *attributes = kept_attributes;
     Ok(option_names)
+}
+
+/// Removes the field's `#[among_the_bundles_its_stream_declares]` and returns where it was
+/// written; `None` when the field declares none.
+fn take_the_marker_of_a_choice_among_the_bundles_its_stream_declares(
+    attributes: &mut Vec<Attribute>,
+) -> syn::Result<Option<proc_macro2::Span>> {
+    let mut marker = None;
+    let mut kept_attributes = Vec::with_capacity(attributes.len());
+    for attribute in attributes.drain(..) {
+        if !attribute
+            .path()
+            .is_ident(AMONG_THE_BUNDLES_ITS_STREAM_DECLARES_ATTRIBUTE)
+        {
+            kept_attributes.push(attribute);
+            continue;
+        }
+        if !matches!(attribute.meta, Meta::Path(_)) || marker.is_some() {
+            return Err(syn::Error::new(
+                attribute.span(),
+                "a setting is marked once with a bare \
+                 `#[among_the_bundles_its_stream_declares]`",
+            ));
+        }
+        marker = Some(attribute.span());
+    }
+    *attributes = kept_attributes;
+    Ok(marker)
 }
 
 fn options_spelling_refusal(span: proc_macro2::Span) -> syn::Error {

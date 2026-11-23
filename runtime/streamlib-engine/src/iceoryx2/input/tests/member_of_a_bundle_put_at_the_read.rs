@@ -16,6 +16,7 @@ use crate::core::pin_value_packing::{
 
 fn a_reading() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![
             a_bundle_member("level", PinType::Float { exact_size: None }, None),
             a_bundle_member("label", PinType::String {}, Some(json!("unnamed"))),
@@ -52,7 +53,7 @@ fn a_link_into_a_member_of(
     if !mailboxes.has_port("in") {
         mailboxes.add_port("in", 16, ReadMode::ReadNextInOrder);
     }
-    let PinType::Bundle { members } = bundle.clone() else {
+    let PinType::Bundle { members, .. } = bundle.clone() else {
         unreachable!("the input reads a bundle")
     };
     let member_declared = members
@@ -296,6 +297,7 @@ fn a_member_no_link_has_carried_reads_the_value_set_on_the_input() {
 /// A picture with the level metered off it: a Texture beside a Float.
 fn a_metered_picture() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![
             a_bundle_member("picture", a_texture(), None),
             a_bundle_member("level", PinType::Float { exact_size: None }, None),
@@ -498,6 +500,7 @@ fn a_message_of_another_kind_into_a_texture_member_is_dropped_and_counted() {
 #[test]
 fn an_audio_block_wired_into_a_member_rides_the_bundle_frame_with_its_samples() {
     let a_sound_with_its_label = PinType::Bundle {
+        name: None,
         members: vec![
             a_bundle_member("sound", PinType::Audio {}, None),
             a_bundle_member("label", PinType::String {}, Some(json!("unnamed"))),
@@ -533,6 +536,7 @@ fn an_audio_block_wired_into_a_member_rides_the_bundle_frame_with_its_samples() 
 #[test]
 fn a_defaulted_texture_member_not_yet_arrived_builds_no_bundle_and_drops_nothing() {
     let a_picture_defaulted = PinType::Bundle {
+        name: None,
         members: vec![
             a_bundle_member("picture", a_texture(), Some(json!({}))),
             a_bundle_member("level", PinType::Float { exact_size: None }, None),

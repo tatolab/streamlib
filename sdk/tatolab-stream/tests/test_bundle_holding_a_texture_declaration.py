@@ -25,6 +25,7 @@ class Framed:
 
 FRAMED = {
     "type": "bundle",
+    "name": "Framed",
     "members": [
         {"name": "picture", "member_type": {"type": "texture"}},
         {

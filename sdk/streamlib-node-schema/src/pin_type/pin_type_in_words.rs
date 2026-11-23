@@ -42,12 +42,15 @@ impl fmt::Display for PinType {
                 write!(formatter, "{label} ({})", media.join(", "))
             }
             Self::ListOf { element_type } => write!(formatter, "{label} of {element_type}"),
-            Self::Bundle { members } => {
+            Self::Bundle { name, members } => {
                 let members: Vec<_> = members
                     .iter()
                     .map(|member| format!("{}: {}", member.name, member.member_type))
                     .collect();
-                write!(formatter, "{label} ({})", members.join(", "))
+                match name {
+                    Some(name) => write!(formatter, "{label} `{name}` ({})", members.join(", ")),
+                    None => write!(formatter, "{label} ({})", members.join(", ")),
+                }
             }
             Self::Named { named_pin_type } => {
                 write!(formatter, "{label} `{}`", named_pin_type.as_str())
@@ -66,7 +69,7 @@ impl PinType {
             return None;
         }
         match self {
-            Self::Bundle { members } => {
+            Self::Bundle { members, .. } => {
                 let heavy: Vec<String> = members
                     .iter()
                     .filter(|member| member.member_type.is_a_heavy_type())

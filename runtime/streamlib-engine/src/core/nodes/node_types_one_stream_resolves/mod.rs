@@ -463,7 +463,8 @@ impl NodeTypesOneStreamResolves {
         .flatten()
     }
 
-    /// The input and output ports `node_type` declares, native first.
+    /// The input and output ports `node_type` declares, native first, each choice among the
+    /// bundles its stream declares listing them.
     pub fn port_info(&self, node_type: &NodeClassImportPath) -> Option<GraphNodePorts> {
         self.placeholder_of_the_node_type_not_described(node_type)
             .map(|placeholder| placeholder.input_and_output_port_info)
@@ -472,6 +473,12 @@ impl NodeTypesOneStreamResolves {
                 self.project_the_type_this_streams_interpreter_described(node_type, |described| {
                     described.input_and_output_port_info.clone()
                 })
+            })
+            .map(|mut ports| {
+                for input in &mut ports.inputs {
+                    self.list_the_bundles_its_node_types_declare_on(input);
+                }
+                ports
             })
     }
 
@@ -948,6 +955,8 @@ impl NodeTypesOneStreamResolves {
         catalog
     }
 }
+
+mod bundles_its_node_types_declare;
 
 #[cfg(test)]
 mod tests;

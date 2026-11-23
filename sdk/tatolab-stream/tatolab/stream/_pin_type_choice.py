@@ -34,6 +34,8 @@ def pin_type_in_words(pin_type: "PinType") -> str:
         members = ", ".join(
             f"{member['name']}: {pin_type_in_words(member['member_type'])}" for member in held["members"]
         )
+        if held.get("name"):
+            return f"{label} `{held['name']}` ({members})"
         return f"{label} ({members})"
     if held["type"] == "named":
         return f"{label} `{held['named_pin_type']}`"

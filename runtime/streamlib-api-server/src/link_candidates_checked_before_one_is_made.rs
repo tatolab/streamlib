@@ -204,7 +204,7 @@ fn the_members_a_declared_port_carries(port: &PortDescriptor) -> Vec<String> {
 /// The names of the members of `pin_type`, in declared order, when it is a bundle.
 fn the_members_of(pin_type: Option<&PinType>) -> Vec<String> {
     match pin_type {
-        Some(PinType::Bundle { members }) => {
+        Some(PinType::Bundle { members, .. }) => {
             members.iter().map(|member| member.name.clone()).collect()
         }
         _ => Vec::new(),

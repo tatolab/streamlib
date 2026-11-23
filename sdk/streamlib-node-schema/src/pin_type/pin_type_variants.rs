@@ -93,6 +93,10 @@ pub enum PinType {
     },
     /// Named members, each of its own type, carried as one.
     Bundle {
+        /// The name of the class that declares it, such as the dataclass `Reading`; absent on a
+        /// bundle no class declares.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         /// The members, in declared order.
         members: Vec<BundleMember>,
     },
@@ -114,9 +118,14 @@ pub enum PinType {
     /// A setting that chooses another port's pin type; its value is a pin type. It never takes
     /// a wire.
     PinTypeChoice {
-        /// The types it may choose; empty chooses any.
+        /// The types it may choose; empty chooses any, unless it chooses among the bundles its
+        /// stream declares.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         among: Vec<PinType>,
+        /// Whether it chooses one of the bundles its stream's node types declare: on a placed
+        /// node, `among` lists each of them, and is empty while the stream declares none.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        among_the_bundles_its_stream_declares: bool,
     },
 }
 

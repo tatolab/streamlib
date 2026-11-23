@@ -100,11 +100,16 @@ fn register_the_fixture_node_types() {
             a_node_type(class_name, vec![a_port("value", pin_type)], Vec::new())
         };
         let a_type_choice = || {
-            a_port("kind", is(PinType::PinTypeChoice { among: Vec::new() })).with_input_mode(
-                NodeInputMode::SettingOnly {
-                    read: SettingReadTime::AtSetup,
-                },
+            a_port(
+                "kind",
+                is(PinType::PinTypeChoice {
+                    among_the_bundles_its_stream_declares: false,
+                    among: Vec::new(),
+                }),
             )
+            .with_input_mode(NodeInputMode::SettingOnly {
+                read: SettingReadTime::AtSetup,
+            })
         };
         let chosen_by = |class_name, kind: PortDescriptor| {
             a_node_type(
@@ -488,6 +493,7 @@ fn a_setting_choosing_a_type_a_wired_link_does_not_take_is_refused_naming_the_li
 /// A bundle of one Float member for each of `member_names`.
 fn a_bundle_of_floats(member_names: &[&str]) -> PinType {
     PinType::Bundle {
+        name: None,
         members: member_names
             .iter()
             .map(|name| crate::core::descriptors::BundleMember {
@@ -766,6 +772,7 @@ fn a_value_set_on_an_input_a_setting_types_as_a_bundle_is_handed_to_its_node() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let reading = PinType::Bundle {
+        name: None,
         members: vec![
             crate::core::descriptors::BundleMember {
                 name: "level".to_owned(),

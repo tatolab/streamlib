@@ -120,6 +120,7 @@ fn the_conversions_named_by(refusal: &PinLinkRefusal) -> Vec<NodeClassImportPath
 #[test]
 fn the_same_type_connects_as_it_is_whatever_it_is() {
     let bundle = PinType::Bundle {
+        name: None,
         members: vec![BundleMember {
             name: "x".to_owned(),
             member_type: float(),

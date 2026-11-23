@@ -355,6 +355,7 @@ fn every_built_in_end_type(conversions: &[PinConversion]) -> Vec<PinType> {
                 element_type: Box::new(float()),
             }),
             BuiltInPinTypeName::Bundle => end_types.push(PinType::Bundle {
+                name: None,
                 members: vec![BundleMember {
                     name: "gain".to_owned(),
                     member_type: float(),
@@ -370,9 +371,10 @@ fn every_built_in_end_type(conversions: &[PinConversion]) -> Vec<PinType> {
                 referenced_node_type: None,
                 one_referrer_per_referenced_node: false,
             }),
-            BuiltInPinTypeName::PinTypeChoice => {
-                end_types.push(PinType::PinTypeChoice { among: Vec::new() })
-            }
+            BuiltInPinTypeName::PinTypeChoice => end_types.push(PinType::PinTypeChoice {
+                among_the_bundles_its_stream_declares: false,
+                among: Vec::new(),
+            }),
         }
     }
     for conversion in conversions {
