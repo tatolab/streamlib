@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use serde_json::Value;
-use streamlib_node_schema::pin_type::{BuiltInPinTypeName, built_in_pin_type};
+use streamlib_node_schema::pin_type::{BuiltInPinTypeName, BundleMessage, built_in_pin_type};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckRun, ProjectCodeCheckSeverity,
     ProjectCodeCheckState, ProjectFileChecked,
@@ -147,7 +147,8 @@ pub fn check_a_projects_view_manifests(
 
 /// What a port declared by `family` alone writes in its place: the one pin type the family's
 /// messages carry where there is one, as an Image port's Texture; else the types it may become,
-/// none picked, since a guessed type can refuse a link that works today.
+/// none picked, since a guessed type can refuse a link that works today, with a bundle of small
+/// members among them on Records, whose map of members a record of named numbers is.
 fn the_words_of_a_port_declared_by_family(port: &TatolabViewDeclaredPort) -> String {
     let family = port.family.wire_name();
     let to_write = format!(
@@ -168,14 +169,21 @@ fn the_words_of_a_port_declared_by_family(port: &TatolabViewDeclaredPort) -> Str
         ),
         _ => format!(
             "port `{}` is declared by the older `family` field; a `{family}` port carries one \
-             of {}: write the one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, \
+             of {}{}: write the one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, \
              {to_write}",
             port.name,
             pin_types
                 .iter()
                 .map(|pin_type| format!("`{}`", pin_type.trim_matches('"')))
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            if BundleMessage::RecordsMap.its_family() == Some(port.family) {
+                ", or a `bundle` of small members, as a record of named numbers is, written \
+                 `{\"type\": \"bundle\", \"members\": [{\"name\": \"<name>\", \
+                 \"member_type\": {\"type\": \"float\"}}, ...]}`"
+            } else {
+                ""
+            }
         ),
     }
 }

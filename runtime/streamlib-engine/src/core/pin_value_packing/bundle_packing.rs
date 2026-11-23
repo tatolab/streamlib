@@ -13,21 +13,13 @@ use streamlib_ipc_types::{
     DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, array_frame_attribute_table_of,
     array_frame_payload_of_cpu_attributes,
 };
-use streamlib_node_schema::pin_type::BundleMember;
+use streamlib_node_schema::pin_type::{BundleMember, BundleMessage};
 
 use super::{
     PackedPinValue, PackedPinValueRef, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
     the_array_attribute_of_a_value, the_array_frame_of_attributes, the_records_message_of_a_record,
 };
 use crate::core::descriptors::PinType;
-
-/// Whether a bundle of `members` is a bundle of Tensors, which travels as an Array frame.
-pub(super) fn is_a_bundle_of_tensors(members: &[BundleMember]) -> bool {
-    !members.is_empty()
-        && members
-            .iter()
-            .all(|member| matches!(member.member_type, PinType::Tensor {}))
-}
 
 /// `value`, a stored value of the bundle `pin_type` of small members, as the Records message of
 /// its members by name, each one `value` leaves out filled with its default.
@@ -138,10 +130,10 @@ pub fn the_member_a_bundle_message_carries(
     member: &BundleMember,
     message: PackedPinValueRef<'_>,
 ) -> Result<PackedPinValue, String> {
-    let PinType::Bundle { members } = bundle else {
+    let Some(travels_as) = bundle.the_message_a_bundle_travels_as() else {
         return Err(format!("a {bundle} is no bundle, so it holds no member"));
     };
-    if is_a_bundle_of_tensors(members) {
+    if travels_as == BundleMessage::ArrayFrameOfTensors {
         return the_tensor_member_an_array_frame_carries(&member.name, message);
     }
     if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)

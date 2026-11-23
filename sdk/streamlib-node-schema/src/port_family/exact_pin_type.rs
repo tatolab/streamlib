@@ -5,7 +5,7 @@
 //! states exactly, and the family a typed port serves.
 
 use super::{PortFamily, PortFamilyDeclaration};
-use crate::pin_type::{BuiltInPinTypeName, PinType, TexturePixelFormat};
+use crate::pin_type::{BuiltInPinTypeName, BundleMessage, PinType, TexturePixelFormat};
 
 impl PortFamilyDeclaration {
     /// The pin type this declaration states exactly: a Texture of the formats it states, for an
@@ -28,26 +28,21 @@ impl PortFamilyDeclaration {
 }
 
 impl PortFamily {
-    /// The family whose messages carry a pin of `pin_type`, which a typed port serves as its
-    /// `family`. `None` for a type that takes no wire, a named type, whose bytes belong to no
-    /// family, and a List or a bundle, which no family's message carries.
+    /// The family whose messages carry a pin of the built-in type `pin_type` names, which a
+    /// typed port serves as its `family`. `None` for a type that takes no wire, a named type,
+    /// whose bytes belong to no family, and a List or a bundle, whose family follows what it
+    /// holds: [`Self::carrying_a_whole_value_of`] finds the family of a whole bundle.
     pub fn carrying(pin_type: &PinType) -> Option<Self> {
         Self::carrying_a_pin_of(pin_type.built_in_name())
     }
 
-    /// The family one message of which carries a whole value of `pin_type`: the one
-    /// [`Self::carrying`] finds, and Records for a bundle whose every member is a small type,
-    /// which packs as one Records map of its members by name. `None` where neither carries it.
+    /// The family one message of which carries a whole value of `pin_type`: for a bundle, the
+    /// family of the one message it travels as ([`PinType::the_message_a_bundle_travels_as`],
+    /// [`BundleMessage::its_family`]); for any other type, the one [`Self::carrying`] finds.
     pub fn carrying_a_whole_value_of(pin_type: &PinType) -> Option<Self> {
-        match pin_type {
-            PinType::Bundle { members }
-                if members
-                    .iter()
-                    .all(|member| member.member_type.is_a_small_type()) =>
-            {
-                Some(Self::Records)
-            }
-            _ => Self::carrying(pin_type),
+        match pin_type.the_message_a_bundle_travels_as() {
+            Some(travels_as) => travels_as.its_family(),
+            None => Self::carrying(pin_type),
         }
     }
 
@@ -86,5 +81,18 @@ impl PortFamily {
             .into_iter()
             .filter(|name| Self::carrying_a_pin_of(*name) == Some(self))
             .collect()
+    }
+}
+
+impl BundleMessage {
+    /// The family this message of a whole bundle belongs to: Records for a map of members, Array
+    /// for a frame of Tensors, and none for a Bundle frame, which only an input typed as the
+    /// bundle takes apart.
+    pub fn its_family(self) -> Option<PortFamily> {
+        match self {
+            Self::RecordsMap => Some(PortFamily::Records),
+            Self::ArrayFrameOfTensors => Some(PortFamily::Array),
+            Self::BundleFrame => None,
+        }
     }
 }

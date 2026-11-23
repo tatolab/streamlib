@@ -23,7 +23,8 @@ use streamlib_ipc_types::{
     array_frame_attribute_table_of, array_frame_payload_of_cpu_attributes,
 };
 use streamlib_node_schema::pin_type::{
-    ColorPinValue, RectanglePinValue, TransformPinValue, VectorComponentCount, VectorPinValue,
+    BundleMessage, ColorPinValue, RectanglePinValue, TransformPinValue, VectorComponentCount,
+    VectorPinValue,
 };
 use streamlib_project_repository::FAMILIES_A_PANEL_WRITES;
 
@@ -47,8 +48,8 @@ pub use bundle_packing::{
 };
 
 use bundle_packing::{
-    is_a_bundle_of_tensors, the_array_frame_of_a_bundle_of_tensors,
-    the_bundle_a_records_message_carries, the_records_message_of_a_bundle, the_value_read_as,
+    the_array_frame_of_a_bundle_of_tensors, the_bundle_a_records_message_carries,
+    the_records_message_of_a_bundle, the_value_read_as,
 };
 
 /// The Array attribute a Tensor a client writes as a number or a list of numbers is carried as,
@@ -114,20 +115,21 @@ pub fn message_kind_of(pin_type: &PinType) -> Option<DataChannelPayloadDescripto
             DataChannelPayloadDescriptorKind::PacketsUnit
         }
         PinType::Tensor {} => DataChannelPayloadDescriptorKind::ArrayFrame,
-        PinType::ListOf { .. } | PinType::Bundle { .. } if pin_type.holds_a_heavy_member() => {
+        PinType::Bundle { .. } => match pin_type.the_message_a_bundle_travels_as()? {
+            BundleMessage::RecordsMap => DataChannelPayloadDescriptorKind::RecordsMessage,
+            BundleMessage::ArrayFrameOfTensors => DataChannelPayloadDescriptorKind::ArrayFrame,
+            BundleMessage::BundleFrame => DataChannelPayloadDescriptorKind::BundleFrame,
+        },
+        PinType::ListOf { .. } if pin_type.holds_a_heavy_member() => {
             DataChannelPayloadDescriptorKind::BundleFrame
         }
         PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
-            DataChannelPayloadDescriptorKind::ArrayFrame
-        }
-        PinType::Bundle { members } if is_a_bundle_of_tensors(members) => {
             DataChannelPayloadDescriptorKind::ArrayFrame
         }
         PinType::String {}
         | PinType::Menu { .. }
         | PinType::Asset { .. }
         | PinType::ListOf { .. }
-        | PinType::Bundle { .. }
         | PinType::Trigger {} => DataChannelPayloadDescriptorKind::RecordsMessage,
         PinType::Named { .. } => DataChannelPayloadDescriptorKind::Bytes,
         PinType::NodeReference { .. } | PinType::PinTypeChoice { .. } => return None,
@@ -183,7 +185,10 @@ pub fn pack_pin_value(
         PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
             the_array_frame_of_a_list_of_parts(pin_type, element_type, value)
         }
-        PinType::Bundle { members } if is_a_bundle_of_tensors(members) => {
+        PinType::Bundle { members }
+            if pin_type.the_message_a_bundle_travels_as()
+                == Some(BundleMessage::ArrayFrameOfTensors) =>
+        {
             the_array_frame_of_a_bundle_of_tensors(pin_type, members, value)
         }
         PinType::Bundle { .. } => the_records_message_of_a_bundle(pin_type, value),
@@ -218,7 +223,9 @@ pub fn unpack_pin_value(
         PinType::ListOf { element_type } if channel_count_of(element_type).is_some() => {
             the_list_of_parts_an_array_frame_carries(element_type, message)
         }
-        PinType::Bundle { members } if !is_a_bundle_of_tensors(members) => {
+        PinType::Bundle { .. }
+            if pin_type.the_message_a_bundle_travels_as() == Some(BundleMessage::RecordsMap) =>
+        {
             the_bundle_a_records_message_carries(pin_type, message)
         }
         PinType::String {}

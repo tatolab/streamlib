@@ -809,3 +809,75 @@ fn a_bundle_or_list_holding_a_heavy_member_travels_as_one_bundle_frame() {
         Some(DataChannelPayloadDescriptorKind::RecordsMessage)
     );
 }
+
+/// The family a view's port of a bundle is read on is the family of the message the runtime
+/// packs that bundle as, for a bundle of numbers, one with a List member, one of Tensors and one
+/// holding a Texture, which packs as no JSON value and travels as a Bundle frame on no family.
+///
+/// Mental-revert: a second rule for which family carries a whole bundle, one that asks that each
+/// member be a small type, names no family for the bundle with a List member that packs here as
+/// one Records message.
+#[test]
+fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as() {
+    let floats = PinType::ListOf {
+        element_type: Box::new(PinType::Float { exact_size: None }),
+    };
+    let bundles = [
+        (a_placement(), json!({ "x": 0.5, "y": 0.25 })),
+        (
+            PinType::Bundle {
+                members: vec![
+                    a_member("label", PinType::String {}),
+                    a_member("levels", floats),
+                ],
+            },
+            json!({ "label": "drop", "levels": [0.5, 1.0] }),
+        ),
+        (
+            PinType::Bundle {
+                members: vec![
+                    a_member("boxes", PinType::Tensor {}),
+                    a_member("scores", PinType::Tensor {}),
+                ],
+            },
+            json!({ "boxes": [1.0, 2.0], "scores": [0.5] }),
+        ),
+        (
+            PinType::Bundle {
+                members: vec![
+                    a_member("label", PinType::String {}),
+                    a_member(
+                        "picture",
+                        PinType::Texture {
+                            pixel_formats: vec![],
+                        },
+                    ),
+                ],
+            },
+            json!({ "label": "frame" }),
+        ),
+    ];
+    let family_of_the_kind = |kind| match kind {
+        DataChannelPayloadDescriptorKind::RecordsMessage => Some(PortFamily::Records),
+        DataChannelPayloadDescriptorKind::ArrayFrame => Some(PortFamily::Array),
+        _ => None,
+    };
+    for (bundle, value) in bundles {
+        bundle.validate().expect("a bundle pin type");
+        let kind = message_kind_of(&bundle).expect("a bundle takes a link");
+        let family = PortFamily::carrying_a_whole_value_of(&bundle);
+        assert_eq!(family, family_of_the_kind(kind), "{bundle}");
+        match pack_pin_value(&bundle, &value, 0) {
+            Ok(packed) => assert_eq!(
+                DataChannelPayloadDescriptorKind::from_wire(packed.payload_descriptor.kind),
+                Some(kind),
+                "{bundle}"
+            ),
+            Err(_) => assert_eq!(
+                kind,
+                DataChannelPayloadDescriptorKind::BundleFrame,
+                "{bundle}"
+            ),
+        }
+    }
+}

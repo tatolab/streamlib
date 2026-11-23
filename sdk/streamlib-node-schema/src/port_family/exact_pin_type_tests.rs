@@ -114,34 +114,52 @@ fn a_bundle_of_small_members_is_carried_whole_on_records() {
     );
 }
 
-/// A bundle holding a heavy member travels as a Bundle frame, and one holding a Tensor or a
-/// bundle as anything but one Records map, so neither is carried whole on a family.
+/// A whole bundle is carried on the family of the one message it travels as: a bundle with a
+/// List of numbers among its members is one Records map, a bundle of Tensors one Array frame,
+/// and a bundle holding a Texture a Bundle frame, carried on no family.
 ///
-/// Mental-revert: calling any bundle Records names a family for a Texture's Bundle frame,
-/// which no Records reader takes.
+/// Mental-revert: asking that every member be a small type finds no family for the bundle
+/// with a List member, which the runtime packs as one Records map.
 #[test]
-fn a_bundle_with_a_member_that_is_not_small_is_carried_whole_on_no_family() {
+fn a_whole_bundle_is_carried_on_the_family_of_the_message_it_travels_as() {
     let member = |name: &str, member_type| BundleMember {
         name: name.into(),
         member_type,
         meaning: None,
         default_value: None,
     };
-    for not_small in [
-        PinType::Texture {
-            pixel_formats: vec![],
-        },
-        PinType::Tensor {},
+    let bundle = |members| PinType::Bundle { members };
+    let with_a_list = bundle(vec![
+        member("label", PinType::String {}),
+        member(
+            "levels",
+            PinType::ListOf {
+                element_type: Box::new(PinType::Float { exact_size: None }),
+            },
+        ),
+    ]);
+    let of_tensors = bundle(vec![
+        member("boxes", PinType::Tensor {}),
+        member("scores", PinType::Tensor {}),
+    ]);
+    let with_a_texture = bundle(vec![
+        member("label", PinType::String {}),
+        member(
+            "picture",
+            PinType::Texture {
+                pixel_formats: vec![],
+            },
+        ),
+    ]);
+    for (bundle, family) in [
+        (&with_a_list, Some(PortFamily::Records)),
+        (&of_tensors, Some(PortFamily::Array)),
+        (&with_a_texture, None),
     ] {
-        let bundle = PinType::Bundle {
-            members: vec![
-                member("label", PinType::String {}),
-                member("payload", not_small),
-            ],
-        };
+        bundle.validate().expect("a bundle pin type");
         assert_eq!(
-            PortFamily::carrying_a_whole_value_of(&bundle),
-            None,
+            PortFamily::carrying_a_whole_value_of(bundle),
+            family,
             "{bundle}"
         );
     }
