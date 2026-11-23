@@ -19,12 +19,12 @@ tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.11.0"
 tracing.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.82" }
-streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.82" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.69.192" }
+streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.69.192" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.82" }
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.82" }
+streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.69.192" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.69.192" }
 rmp-serde.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
