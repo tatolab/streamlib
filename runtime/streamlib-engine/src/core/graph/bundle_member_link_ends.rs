@@ -147,9 +147,10 @@ pub(crate) fn refuse_a_member_its_port_does_not_hold(
     Ok(())
 }
 
-/// Refuse a link ending at a member of a bundle input `to` whose type travels only as messages,
-/// such as a Tensor: the input's port builds one bundle out of the value each member link
-/// carries, and a member of such a type holds no value to build it from.
+/// Refuse a link ending at a member of a bundle input `to` whose type travels only as messages
+/// and rides no row of a Bundle frame, such as a Tensor: the input's port builds one bundle out
+/// of what each member link carries, a value or a Texture, Audio or encoded member's message,
+/// and a member of such a type is neither.
 pub(crate) fn refuse_a_link_into_a_member_no_bundle_is_built_with(
     graph: &Graph,
     to: &InputLinkPortRef,
@@ -157,7 +158,7 @@ pub(crate) fn refuse_a_link_into_a_member_no_bundle_is_built_with(
     let Some((_, member)) = the_bundle_member_a_link_ends_at(graph, to) else {
         return Ok(());
     };
-    if member.member_type.holds_a_stored_value() {
+    if member.member_type.holds_a_stored_value() || member.member_type.is_a_heavy_type() {
         return Ok(());
     }
     Err(Error::InvalidLink(format!(

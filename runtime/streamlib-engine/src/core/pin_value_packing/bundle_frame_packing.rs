@@ -256,3 +256,32 @@ pub fn the_bundle_a_bundle_frame_carries<'message>(
         heavy_members,
     })
 }
+
+/// The message member `member` of `bundle` travels as on its own, taken from `message`, a Bundle
+/// frame of the whole bundle: a heavy member's row under the descriptor it states, its bytes
+/// copied, a Texture's naming its pool slot and holding none; a small member's value, or its
+/// default, packed as its own type travels. Refused as reading the frame as `bundle` is.
+pub(super) fn the_member_a_bundle_frame_carries(
+    bundle: &PinType,
+    member: &BundleMember,
+    message: PackedPinValueRef<'_>,
+) -> Result<PackedPinValue, String> {
+    let read = the_bundle_a_bundle_frame_carries(bundle, message)?;
+    if let Some(heavy_member) = read
+        .heavy_members
+        .iter()
+        .find(|heavy_member| heavy_member.name == member.name)
+    {
+        return Ok(PackedPinValue {
+            payload_descriptor: heavy_member.descriptor,
+            payload: heavy_member.payload.to_vec(),
+        });
+    }
+    let small_member = read.small_members.get(&member.name).ok_or_else(|| {
+        format!(
+            "a {bundle} has no member `{}` its Bundle frame carries",
+            member.name
+        )
+    })?;
+    super::pack_pin_value(&member.member_type, small_member, 0)
+}

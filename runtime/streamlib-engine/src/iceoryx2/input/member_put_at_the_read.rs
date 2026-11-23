@@ -4,17 +4,53 @@
 //! The member of a bundle input a link ends at, put into the bundle the input reads as each of
 //! its messages arrives. Every link ending at a member of one input is bound to that input's one
 //! port, which keeps the newest value each has carried, so the reader takes one message built
-//! from all of them, stamped and numbered as the message that arrived last.
+//! from all of them, stamped and numbered as the message that arrived last. A bundle holding a
+//! Texture, Audio or an encoded member is built as one Bundle frame, each such member the newest
+//! message its link carried, a Texture by the pool slot it names.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use streamlib_ipc_types::DataChannelSampleUserHeader;
+use streamlib_ipc_types::{DataChannelPayloadDescriptor, DataChannelSampleUserHeader};
 
 use super::MemberTakenAtTheRead;
 use crate::core::descriptors::{BundleMember, PinType};
 use crate::core::pin_value_packing::{
-    PackedPinValueRef, pack_pin_value, the_records_message_of_members_of_a_bundle, unpack_pin_value,
+    HeavyMemberOfABundleFrame, PackedPinValue, PackedPinValueRef, message_kind_of, pack_pin_value,
+    the_bundle_frame_of_a_bundle, the_records_message_of_members_of_a_bundle, unpack_pin_value,
 };
+
+/// The newest message a link into a Texture, Audio or encoded member of a bundle input carried:
+/// its descriptor and its bytes, none for a Texture, whose descriptor names its pool slot. A
+/// Texture held here claims nothing; its reader claims the slot when it reads the bundle, as it
+/// would a Texture off a wire of its own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeavyMemberMessageHeldAtTheRead {
+    /// The descriptor the member's message travelled under.
+    pub descriptor: DataChannelPayloadDescriptor,
+    /// The member's bytes.
+    pub payload: Vec<u8>,
+}
+
+/// The newest of each member the links into one bundle input have carried: each small member's
+/// value, and each Texture, Audio or encoded member's message, by member name. A newer message of
+/// a member replaces the one held, and a member whose link is removed is forgotten.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NewestOfEachMemberPutAtTheRead {
+    /// Each small member's newest value, by name.
+    pub small_members: Map<String, Value>,
+    /// Each Texture, Audio or encoded member's newest message, by name.
+    pub heavy_members: BTreeMap<String, HeavyMemberMessageHeldAtTheRead>,
+}
+
+impl NewestOfEachMemberPutAtTheRead {
+    /// Forget what the link into member `member` carried.
+    pub fn forget_the_member(&mut self, member: &str) {
+        self.small_members.remove(member);
+        self.heavy_members.remove(member);
+    }
+}
 
 /// What the members a port's links carry are built into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,28 +88,30 @@ impl MemberPutAtTheRead {
         &self,
         header: &DataChannelSampleUserHeader,
         payload: &[u8],
-        newest: &mut Map<String, Value>,
+        newest: &mut NewestOfEachMemberPutAtTheRead,
         set_on_the_input: Option<&Map<String, Value>>,
     ) -> Result<Option<(DataChannelSampleUserHeader, Vec<u8>)>, String> {
-        let value = unpack_pin_value(
-            &self.member.member_type,
-            PackedPinValueRef {
-                payload_descriptor: &header.payload_descriptor,
-                payload,
-            },
-        )?;
-        newest.insert(self.member.name.clone(), value);
+        self.hold_the_members_message(header, payload, newest)?;
         let packed = match self.put_into {
             WhatTheMembersArePutInto::TheWholeBundle => {
-                let whole =
-                    self.the_members_set_with_the_newest_over_them(newest, set_on_the_input);
-                if self.a_member_without_a_default_has_not_arrived(&whole) {
+                let small_members = self.the_small_members_set_with_the_newest_over_them(
+                    &newest.small_members,
+                    set_on_the_input,
+                );
+                if self.a_member_without_a_default_has_not_arrived(&small_members, newest) {
                     return Ok(None);
                 }
-                pack_pin_value(&self.bundle, &Value::Object(whole), 0)?
+                self.the_whole_bundle_packed(small_members, newest)?
             }
             WhatTheMembersArePutInto::TheMembersTheLinksCarried => {
-                the_records_message_of_members_of_a_bundle(&self.bundle, newest)?
+                if self.bundle.holds_a_heavy_member() {
+                    return Err(format!(
+                        "a {} holds a Texture, Audio or encoded member, and a function node's \
+                         island reads no such bundle",
+                        self.bundle
+                    ));
+                }
+                the_records_message_of_members_of_a_bundle(&self.bundle, &newest.small_members)?
             }
         };
         let payload_byte_len = u32::try_from(packed.payload.len()).map_err(|_| {
@@ -94,9 +132,72 @@ impl MemberPutAtTheRead {
         )))
     }
 
-    /// Each member of the bundle `set_on_the_input` holds, with `newest`, what the links have
-    /// carried, over them.
-    fn the_members_set_with_the_newest_over_them(
+    /// Hold `payload`, the member's message whose header is `header`, in `newest` over the one
+    /// held before: a small member's value, or a heavy member's message as it travelled. Fails
+    /// saying why the message carries no value of the member, holding nothing new.
+    fn hold_the_members_message(
+        &self,
+        header: &DataChannelSampleUserHeader,
+        payload: &[u8],
+        newest: &mut NewestOfEachMemberPutAtTheRead,
+    ) -> Result<(), String> {
+        let member_type = &self.member.member_type;
+        if !member_type.is_a_heavy_type() {
+            let value = unpack_pin_value(
+                member_type,
+                PackedPinValueRef {
+                    payload_descriptor: &header.payload_descriptor,
+                    payload,
+                },
+            )?;
+            newest.small_members.insert(self.member.name.clone(), value);
+            return Ok(());
+        }
+        let travels_as = message_kind_of(member_type);
+        let described_as = header.payload_descriptor.known_kind().ok();
+        if described_as != travels_as {
+            return Err(format!(
+                "member `{}` is {member_type}, which travels as {travels_as:?}, and the message \
+                 is described as {described_as:?}",
+                self.member.name
+            ));
+        }
+        newest.heavy_members.insert(
+            self.member.name.clone(),
+            HeavyMemberMessageHeldAtTheRead {
+                descriptor: header.payload_descriptor,
+                payload: payload.to_vec(),
+            },
+        );
+        Ok(())
+    }
+
+    /// The whole bundle of `small_members` and the heavy members `newest` holds, packed as the
+    /// bundle travels: one Bundle frame for a bundle holding a heavy member, else one message of
+    /// its small members.
+    fn the_whole_bundle_packed(
+        &self,
+        small_members: Map<String, Value>,
+        newest: &NewestOfEachMemberPutAtTheRead,
+    ) -> Result<PackedPinValue, String> {
+        if !self.bundle.holds_a_heavy_member() {
+            return pack_pin_value(&self.bundle, &Value::Object(small_members), 0);
+        }
+        let heavy_members: Vec<HeavyMemberOfABundleFrame<'_>> = newest
+            .heavy_members
+            .iter()
+            .map(|(name, held)| HeavyMemberOfABundleFrame {
+                name,
+                descriptor: held.descriptor,
+                payload: &held.payload,
+            })
+            .collect();
+        the_bundle_frame_of_a_bundle(&self.bundle, &Value::Object(small_members), &heavy_members)
+    }
+
+    /// Each small member of the bundle `set_on_the_input` holds, with `newest`, what the links
+    /// have carried, over them.
+    fn the_small_members_set_with_the_newest_over_them(
         &self,
         newest: &Map<String, Value>,
         set_on_the_input: Option<&Map<String, Value>>,
@@ -108,7 +209,10 @@ impl MemberPutAtTheRead {
             .into_iter()
             .flatten()
             .filter(|(name, value)| {
-                !value.is_null() && members.iter().any(|member| &member.name == *name)
+                !value.is_null()
+                    && members.iter().any(|member| {
+                        &member.name == *name && !member.member_type.is_a_heavy_type()
+                    })
             })
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
@@ -120,13 +224,19 @@ impl MemberPutAtTheRead {
         whole
     }
 
-    fn a_member_without_a_default_has_not_arrived(&self, newest: &Map<String, Value>) -> bool {
+    fn a_member_without_a_default_has_not_arrived(
+        &self,
+        small_members: &Map<String, Value>,
+        newest: &NewestOfEachMemberPutAtTheRead,
+    ) -> bool {
         let PinType::Bundle { members } = &self.bundle else {
             return false;
         };
-        members
-            .iter()
-            .any(|member| member.default_value.is_none() && !newest.contains_key(&member.name))
+        members.iter().any(|member| {
+            member.default_value.is_none()
+                && !small_members.contains_key(&member.name)
+                && !newest.heavy_members.contains_key(&member.name)
+        })
     }
 }
 
@@ -156,7 +266,7 @@ impl BundleMembersAtTheRead {
         &self,
         header: &DataChannelSampleUserHeader,
         payload: &[u8],
-        newest: &mut Map<String, Value>,
+        newest: &mut NewestOfEachMemberPutAtTheRead,
         set_on_the_input: Option<&Map<String, Value>>,
     ) -> Result<Option<(DataChannelSampleUserHeader, Vec<u8>)>, String> {
         let (header, payload) = match &self.taken_from_its_output {
