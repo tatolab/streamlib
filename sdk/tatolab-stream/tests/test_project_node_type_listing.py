@@ -358,6 +358,143 @@ def test_a_function_under_bare_node_is_listed_as_a_function_node_returning_one_o
     assert [port["name"] for port in tone["outputs"]] == ["result"]
 
 
+def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_field() -> None:
+    module_source = "\n".join(
+        [
+            "import typing",
+            "from dataclasses import dataclass",
+            "from typing import Annotated, NamedTuple",
+            "from tatolab.stream import Description, State, Stateful, Texture, named_pin_type, node",
+            "",
+            "@named_pin_type(description='A span.')",
+            "class Span(NamedTuple):",
+            "    start: float",
+            "",
+            "@node",
+            "def Measure(value: float = 0.0) -> Span:",
+            "    ...",
+            "",
+            "class Bounds(NamedTuple):",
+            "    low: Annotated[float, Description('The least value.')]",
+            "    high: float",
+            "    picture: Texture",
+            "",
+            "class Spread(typing.NamedTuple):",
+            "    width: float",
+            "",
+            "@dataclass(frozen=True)",
+            "class Counted:",
+            "    count: int = 0",
+            "",
+            "@node",
+            "def Limits(value: float = 0.0) -> Bounds:",
+            "    ...",
+            "",
+            "@node",
+            "def Widen(value: float = 0.0) -> 'Spread':",
+            "    ...",
+            "",
+            "@node",
+            "def Count(value: float, previous: State[Counted]) -> Stateful[Bounds, Counted]:",
+            "    ...",
+            "",
+            "@node",
+            "def Tally(value: float = 0.0) -> Counted:",
+            "    ...",
+            "",
+            "@node.function",
+            "def OldTally(value: float = 0.0) -> Counted:",
+            "    ...",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.limits", "nodes/limits.py", module_source)]
+    )
+
+    outputs_by_node_type = {
+        node_type["type"]: node_type["outputs"] for node_type in read["node_types"]
+    }
+    bounds_outputs = [
+        {
+            "name": "low",
+            "family": "channels",
+            "description": "The least value.",
+            "annotation": "Annotated[float, Description('The least value.')]",
+        },
+        {"name": "high", "family": "channels", "description": "", "annotation": "float"},
+        {"name": "picture", "family": "image", "description": "", "annotation": "Texture"},
+    ]
+    assert outputs_by_node_type["nodes.limits:Limits"] == bounds_outputs
+    assert outputs_by_node_type["nodes.limits:Count"] == bounds_outputs
+    assert outputs_by_node_type["nodes.limits:Widen"] == [
+        {"name": "width", "family": "channels", "description": "", "annotation": "float"}
+    ]
+    # A named pin type is one pin. Under bare `@node` a dataclass is one bundle pin; under
+    # `@node.function`, one output a field.
+    assert [port["name"] for port in outputs_by_node_type["nodes.limits:Measure"]] == ["result"]
+    assert [port["name"] for port in outputs_by_node_type["nodes.limits:Tally"]] == ["result"]
+    assert [port["name"] for port in outputs_by_node_type["nodes.limits:OldTally"]] == ["count"]
+
+
+def test_a_named_tuple_imported_from_another_module_is_listed_as_one_output() -> None:
+    # A module is read alone, so the fields of a named tuple it imports are not in its source.
+    module_source = "\n".join(
+        [
+            "from tatolab.stream import node",
+            "from nodes.shapes import Bounds",
+            "",
+            "@node",
+            "def Limits(value: float = 0.0) -> Bounds:",
+            "    ...",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.limits", "nodes/limits.py", module_source)]
+    )
+
+    (limits,) = read["node_types"]
+    assert limits["outputs"] == [
+        {"name": "result", "family": None, "description": "", "annotation": "Bounds"}
+    ]
+
+
+def test_the_core_separate_nodes_are_listed_with_a_float_output_per_component() -> None:
+    core_nodes_source_path = (
+        Path(__file__).resolve().parents[3]
+        / "packages"
+        / "tatolab-core-nodes"
+        / "core_nodes"
+        / "combine_and_separate.py"
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [
+            (
+                "core_nodes.combine_and_separate",
+                "core_nodes/combine_and_separate.py",
+                core_nodes_source_path.read_text(encoding="utf-8"),
+            )
+        ]
+    )
+
+    outputs_by_node_type = {
+        node_type["type"]: [
+            (port["name"], port["family"], port["annotation"]) for port in node_type["outputs"]
+        ]
+        for node_type in read["node_types"]
+    }
+    assert outputs_by_node_type["core_nodes.combine_and_separate:SeparateColor"] == [
+        (component, "channels", "float") for component in ("red", "green", "blue", "alpha")
+    ]
+    assert outputs_by_node_type["core_nodes.combine_and_separate:SeparateVector"] == [
+        (component, "channels", "float") for component in ("x", "y", "z", "w")
+    ]
+
+
 def test_a_class_under_bare_node_is_listed_with_its_fields_and_pins_and_no_state() -> None:
     module_source = "\n".join(
         [
