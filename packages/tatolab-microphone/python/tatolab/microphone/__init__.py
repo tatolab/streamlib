@@ -20,6 +20,7 @@ from tatolab.stream import (
     Audio,
     Description,
     OutputPin,
+    PinControl,
     RuntimeContextFullAccess,
     SettingOnly,
     log,
@@ -62,6 +63,7 @@ class MicrophoneSource:
     device_id: Annotated[
         str | None,
         SettingOnly(),
+        PinControl("audio_capture_device"),
         Description(
             "Backend-named capture device, as the runtime's `list_audio_capture_devices` lists "
             "it. Unset: the backend's default device. A name the backend cannot open raises "

@@ -19,6 +19,7 @@ from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource
 from tatolab.runtime import _engine
 from tatolab.stream import Channels, ChannelsBlock, Input, RuntimeContextFullAccess, log
 from tatolab.stream._class_node_construction import construct_class_node
+from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
 
 
 def a_microphone(**field_values: object) -> MicrophoneSource:
@@ -195,3 +196,20 @@ def test_the_distribution_declares_the_node_for_the_node_catalog():
     assert set(declared) == {"MicrophoneSource"}
     assert declared["MicrophoneSource"].value == "tatolab.microphone:MicrophoneSource"
     assert declared["MicrophoneSource"].load() is MicrophoneSource
+
+
+def test_the_device_is_a_setting_the_audio_capture_device_control_edits():
+    device_id = next(
+        port
+        for port in getattr(MicrophoneSource, NODE_DECLARATION_INPUT_PORTS_STAMP)
+        if port["name"] == "device_id"
+    )
+
+    assert device_id["pin_declaration"] == {
+        "pin_type": {"kind": "is", "pin_type": {"type": "string"}},
+        "flow": "value",
+        "annotations": {"control": "audio_capture_device"},
+        "may_be_unset": True,
+    }
+    assert device_id["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
+    assert device_id["pin_default"] is None
