@@ -24,7 +24,7 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType> |
 /// pin_type = from_setting("<setting>"), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
-/// <family key> = …]`.
+/// takes_a_value = true, <family key> = …]`.
 ///
 /// A port states `family = …`, `pin_type = …`, or both when they agree. A port declared by pin
 /// type serves the family its messages belong to, and its family keys apply to that family.
@@ -39,7 +39,8 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 /// whether a value set live on it is kept across Stop or reset there, kept when it is not stated.
 /// `former_names` lists the names a renamed port had, each of which still finds it, and
 /// `may_be_unset` lets an input hold no value; both are stated on a port with a pin, and
-/// `may_be_unset` on an input only.
+/// `may_be_unset` on an input only. `takes_a_value` lets an input take a value set on it as well
+/// as a wire, on an input only.
 pub(super) fn parse_port(
     input: ParseStream<'_>,
     direction: PortDirection,
@@ -84,6 +85,7 @@ pub(super) fn parse_port(
     let mut flow: Option<(proc_macro2::Span, PinFlow)> = None;
     let mut former_names: Option<(proc_macro2::Span, Vec<String>)> = None;
     let mut may_be_unset: Option<proc_macro2::Span> = None;
+    let mut takes_a_value = false;
     let mut family_keys = PortFamilyDeclaration::of_family(PortFamily::Records);
     let mut first_family_key_span: Option<proc_macro2::Span> = None;
 
@@ -194,6 +196,19 @@ pub(super) fn parse_port(
                     may_be_unset = Some(key_span);
                 }
             }
+            "takes_a_value" => {
+                let stated: syn::LitBool = content.parse()?;
+                if direction == PortDirection::Output {
+                    return Err(syn::Error::new(
+                        key_span,
+                        format!(
+                            "`takes_a_value` is declared by an input, not `output(\"{name}\", \
+                             ...)` — it says the input takes a value set on it"
+                        ),
+                    ));
+                }
+                takes_a_value = stated.value;
+            }
             family_key @ ("names" | "requires" | "codec" | "requires_codec" | "rate"
             | "frame_rate" | "dtype" | "formats" | "residency") => {
                 first_family_key_span.get_or_insert(key_span);
@@ -205,8 +220,8 @@ pub(super) fn parse_port(
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
                          `borrow_quota`, `description`, `audio_window`, `family`, `pin_type`, \
-                         `lifetime`, `flow`, `former_names`, `may_be_unset`, or one of \
-                         the family keys `names`, `requires`, `codec`, `requires_codec`, \
+                         `lifetime`, `flow`, `former_names`, `may_be_unset`, `takes_a_value`, or \
+                         one of the family keys `names`, `requires`, `codec`, `requires_codec`, \
                          `rate`, `frame_rate`, `dtype`, `formats`, `residency`"
                     ),
                 ));
@@ -347,6 +362,7 @@ pub(super) fn parse_port(
         flow: flow.map(|(_, flow)| flow),
         former_names: former_names.map(|(_, names)| names).unwrap_or_default(),
         may_be_unset: may_be_unset.is_some(),
+        takes_a_value,
     })
 }
 

@@ -214,6 +214,7 @@ fn schema_declaring_iceoryx2_input_and_output_ports() -> NodeSchema {
         flow: None,
         former_names: Vec::new(),
         may_be_unset: false,
+        takes_a_value: false,
     };
     NodeSchema {
         inputs: vec![port("video_in")],
@@ -804,6 +805,7 @@ fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
         flow: None,
         former_names: Vec::new(),
         may_be_unset: false,
+        takes_a_value: false,
     };
     let rendered = generate_port_marker_module(
         PortDirection::Output,

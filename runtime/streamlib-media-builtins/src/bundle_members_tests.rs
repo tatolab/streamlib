@@ -76,3 +76,20 @@ fn both_nodes_carry_the_bundle_their_bundle_type_setting_chooses() {
         );
     }
 }
+
+/// `MakeBundle`'s `members` takes a value set on it as well as a wire, for each member no wire
+/// reaches, and `BreakBundle`'s `bundle` takes a wire alone.
+///
+/// Mental-revert: an input stating no mode is read off its Channels alone, so a value set on the
+/// Records `members` is refused.
+#[test]
+fn make_bundles_members_takes_a_value_and_break_bundles_bundle_takes_only_a_wire() {
+    let make = the_registered(&MakeBundle::node_class_import_path());
+    let break_ = the_registered(&BreakBundle::node_class_import_path());
+
+    assert_eq!(
+        the_port(&make.inputs, "members").input_mode,
+        Some(NodeInputMode::WireOrValue)
+    );
+    assert_eq!(the_port(&break_.inputs, "bundle").input_mode, None);
+}

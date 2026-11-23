@@ -277,6 +277,9 @@ pub(crate) struct ParsedPort {
     /// Whether the input may hold no value, as `may_be_unset = true` states; always false on an
     /// output.
     pub may_be_unset: bool,
+    /// Whether the input takes a value set on it as well as a wire, as `takes_a_value = true`
+    /// states; always false on an output.
+    pub takes_a_value: bool,
 }
 
 pub(crate) struct ParsedNodeAttr {
@@ -322,6 +325,7 @@ impl ParsedNodeAttr {
             flow: p.flow,
             former_names: p.former_names.clone(),
             may_be_unset: p.may_be_unset,
+            takes_a_value: p.takes_a_value,
         };
 
         NodeSchema {

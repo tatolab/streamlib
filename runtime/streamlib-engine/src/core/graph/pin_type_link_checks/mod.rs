@@ -76,6 +76,12 @@ impl TypedLinkEnds<'_> {
         states_one_type_exactly(self.output_port) && states_one_type_exactly(self.input_port)
     }
 
+    /// Whether either end is at a member of a bundle, which its member's type judges, not the
+    /// family of the whole port it is a member of.
+    fn ends_at_a_member(&self) -> bool {
+        self.output_member.is_some() || self.input_member.is_some()
+    }
+
     /// The verdict on the link among `conversions`: [`verdict_between`] its two typed ends.
     fn verdict(&self, conversions: &[PinConversion]) -> PinLinkVerdict {
         verdict_between(
@@ -622,16 +628,17 @@ fn the_link_its_pin_types_or_families_take(
             families,
         });
     };
-    let families_judged_first = if ends.states_one_type_exactly_at_each_end() {
-        None
-    } else {
-        Some(refuse_a_link_between_ports_whose_families_do_not_match(
-            graph,
-            from,
-            to,
-            a_link_connected,
-        )?)
-    };
+    let families_judged_first =
+        if ends.states_one_type_exactly_at_each_end() || ends.ends_at_a_member() {
+            None
+        } else {
+            Some(refuse_a_link_between_ports_whose_families_do_not_match(
+                graph,
+                from,
+                to,
+                a_link_connected,
+            )?)
+        };
     let verdict = ends.verdict(&conversions);
     let TypedLinkEnds {
         from_node,
@@ -823,9 +830,9 @@ pub(crate) fn refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
             refuse_a_member_its_port_does_not_hold(graph, link.source(), link.to_port())
         {
             return Err(refused_under_it(format!(
-                "the wired link {} → {} is refused: {refusal}",
-                link.source(),
-                link.to_port(),
+                "the wired link {} is refused: {}",
+                the_link_named_by_its_nodes(graph, link.source(), link.to_port()),
+                the_refusal_without_its_fix(&refusal.to_string()),
             )));
         }
         let Some(ends) = the_typed_ends_of(graph, link.source(), link.to_port()) else {
@@ -836,9 +843,9 @@ pub(crate) fn refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
             .refusal_of_the_link_made_as_it_is()
         {
             return Err(refused_under_it(format!(
-                "the wired link {} → {} is refused: {refusal}",
-                link.source(),
-                link.to_port(),
+                "the wired link {} is refused: {}",
+                the_link_named_by_its_nodes(graph, link.source(), link.to_port()),
+                the_refusal_without_its_fix(&refusal.to_string()),
             )));
         }
     }
@@ -868,4 +875,36 @@ pub(crate) fn refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
         }
     }
     Ok(())
+}
+
+/// The link from `from` to `to` in `graph`, each end named by its node's name, its port and the
+/// member it is at, if any; an end whose node is gone is named by its run id.
+fn the_link_named_by_its_nodes(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> String {
+    let end = |node_run_id: &NodeRunId, port: &str, member: Option<&str>| {
+        let node = graph
+            .traversal()
+            .v(node_run_id)
+            .first()
+            .map_or_else(|| node_run_id.to_string(), |node| node.display_name.clone());
+        match member {
+            Some(member) => format!("{node}.{port}.{member}"),
+            None => format!("{node}.{port}"),
+        }
+    };
+    format!(
+        "{} → {}",
+        end(from.node_run_id(), from.port_name(), from.member()),
+        end(to.node_run_id(), to.port_name(), to.member()),
+    )
+}
+
+/// `refusal` with its own fix left out, for a refusal that names the fix of what it is under.
+fn the_refusal_without_its_fix(refusal: &str) -> &str {
+    refusal
+        .split_once(". To fix:")
+        .map_or(refusal, |(refused, _)| refused)
 }

@@ -39,6 +39,7 @@ const CHOSEN_BY_DEFAULT_SOURCE: &str = "FoundAnotherWayChosenByDefaultSource";
 const UNTYPED_PASS_ON: &str = "FoundAnotherWayUntypedPassOn";
 const IMAGE_STRING_SINK: &str = "FoundAnotherWayImageStringSink";
 const FAMILY_SET_IN_CONFIG_SOURCE: &str = "FoundAnotherWayFamilySetInConfigSource";
+const CHANNELS_FLOAT_SINK: &str = "FoundAnotherWayChannelsFloatSink";
 /// The output of a `PASS_ON` node, which takes the type of its input `value`.
 const PASSED_ON: &str = "passed_on";
 
@@ -171,6 +172,19 @@ fn register_the_fixture_node_types() {
                         PortFamilyDeclaration::of_family(PortFamily::Image),
                     )
                     .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
+                ],
+                Vec::new(),
+            ),
+            a_node_type(
+                CHANNELS_FLOAT_SINK,
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration::of_family(PortFamily::Channels),
+                    )
+                    .with_pin_declaration(PinDeclaration::exactly(float())),
                 ],
                 Vec::new(),
             ),
@@ -503,6 +517,46 @@ fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire
     assert!(
         words.contains("setting `kind`") && words.contains("pan"),
         "{words}"
+    );
+    assert!(
+        !words.contains(&chosen.to_string()) && !words.contains(&float_sink.to_string()),
+        "the wire is named by its nodes' names, not their run ids: {words}"
+    );
+    assert_eq!(
+        words.matches("To fix:").count(),
+        1,
+        "one fix is named: {words}"
+    );
+}
+
+/// A wire starting at a member of a port whose setting chooses a bundle is judged by the
+/// member's type, not by the family of the whole port it is a member of.
+///
+/// Mental-revert: judging the families first refuses a Float member of a Records port wired to a
+/// Channels Float input, though the member and the input carry one type.
+#[test]
+fn a_wire_at_a_member_of_a_port_a_setting_types_is_judged_by_the_member_not_the_ports_family() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(
+        &compiler,
+        CHOSEN_SOURCE,
+        choosing(a_bundle_of_floats(&["level"])),
+    );
+    let channels_float_sink = a_node_of(&compiler, CHANNELS_FLOAT_SINK);
+
+    connect_on_this_thread_waiting_for(
+        &compiler,
+        OutputLinkPortRef::new(chosen.clone(), "value").at_member(Some("level".to_owned())),
+        InputLinkPortRef::new(channels_float_sink.clone(), "value"),
+        InputValueChangesAConnectWaitsFor::TheStreamsOne(Default::default()),
+    )
+    .expect("the member `level` and the input both carry a Float");
+    let refused = connect(&compiler, &chosen, &channels_float_sink)
+        .expect_err("the whole Records bundle does not feed a Channels input");
+    assert!(
+        matches!(refused, Error::InvalidLink(_) | Error::PinLinkRefused(_)),
+        "{refused:?}"
     );
 }
 

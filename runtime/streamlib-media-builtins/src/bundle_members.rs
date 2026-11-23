@@ -39,7 +39,8 @@ pub struct BundleTypeSettings {
         description = "The bundle's members, each wired or set on its own",
         delivery_profile = "ordered",
         family = Records,
-        pin_type = from_setting("bundle_type")
+        pin_type = from_setting("bundle_type"),
+        takes_a_value = true
     ),
     output(
         "bundle",

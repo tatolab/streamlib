@@ -432,6 +432,10 @@ pub struct NodePortSchema {
     /// Whether this input may hold no value, and then reads as nothing; never on an output.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_be_unset: bool,
+    /// Whether this input takes a value set on it as well as a wire, its node reading the value
+    /// while no wire carries it; never on an output.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub takes_a_value: bool,
 }
 
 /// Config definition within a node schema.

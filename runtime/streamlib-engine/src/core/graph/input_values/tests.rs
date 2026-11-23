@@ -306,3 +306,72 @@ fn a_live_set_replaces_an_earlier_one_only_on_the_member_or_the_whole_input_it_s
     assert!(a_live_set_replaces_an_earlier_one(&[None], Some("level")));
     assert!(a_live_set_replaces_an_earlier_one(&[None], None));
 }
+
+/// A Records input taking a wire or a value, whose type its setting `kind` chooses, takes a
+/// value of the bundle `kind` holds and refuses one that bundle does not take; while `kind`
+/// holds nothing it takes no value, since no type says what one would be.
+///
+/// Mental-revert: judging the input by the pin it states, which is none, refuses every value
+/// set on it, as MakeBundle's `members` was on the rig.
+#[test]
+fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
+    use crate::core::descriptors::{
+        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType, PortFamilyDeclaration,
+    };
+    use crate::core::graph::PinTypeAsDeclared;
+    let members = PortInfo {
+        name: "members".to_owned(),
+        pin: None,
+        declared_pin_type: Some(PinTypeAsDeclared {
+            pin_type: DeclaredPinType::SetByInput {
+                input_name: "kind".to_owned(),
+            },
+            flow: PinFlow::Value,
+        }),
+        input_mode: Some(NodeInputMode::WireOrValue),
+        family: PortFamilyDeclaration::of_family(PortFamily::Records),
+        ..a_channels_input_typed(PinType::String {})
+    };
+    let kind = PortInfo {
+        name: "kind".to_owned(),
+        ..a_channels_input_typed(PinType::PinTypeChoice { among: Vec::new() })
+    };
+    let inputs = [members.clone(), kind];
+    let reading = PinType::Bundle {
+        members: vec![BundleMember {
+            name: "level".to_owned(),
+            member_type: PinType::Float { exact_size: None },
+            meaning: None,
+            default_value: None,
+        }],
+    };
+    let holding = |kind: Option<&PinType>| {
+        let mut values = Map::new();
+        if let Some(kind) = kind {
+            values.insert("kind".to_owned(), json!(kind));
+        }
+        values
+    };
+    let refusal_of = |kind: Option<&PinType>, value: Value| {
+        refuse_a_value_the_input_port_does_not_take(
+            "makebundle",
+            Some(NodeKind::Process),
+            &members.typed_by_its_setting_in(&inputs, &holding(kind)),
+            &value,
+        )
+    };
+
+    assert_eq!(refusal_of(Some(&reading), json!({"level": 0.5})), Ok(()));
+    assert_eq!(
+        refusal_of(Some(&reading), json!({"level": "loud"}))
+            .expect_err("`level` is a Float")
+            .code,
+        InputValueRefusalCode::InputValueNotValid
+    );
+    assert_eq!(
+        refusal_of(None, json!({"level": 0.5}))
+            .expect_err("no type is chosen")
+            .code,
+        InputValueRefusalCode::InputTakesNoValue
+    );
+}
