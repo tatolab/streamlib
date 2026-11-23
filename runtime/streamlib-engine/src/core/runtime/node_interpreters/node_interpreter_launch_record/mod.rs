@@ -218,26 +218,62 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             });
     }
 
+    /// Describe and register `node_types`, each view no node takes left out of the describe and
+    /// refused by name with why, so one such view refuses no other type.
     fn describe_and_register(
+        &self,
+        node_types: &[NodeClassImportPath],
+        lend_directory: Option<&Path>,
+    ) -> Result<()> {
+        let mut views_no_node_takes: Vec<NodeClassImportPath> = Vec::new();
+        let mut why_no_node_takes_each_view: Vec<String> = Vec::new();
+        let mut node_types_of_node_code: Vec<NodeClassImportPath> = Vec::new();
+        for node_type in node_types {
+            match self
+                .node_types_this_stream_resolves
+                .why_no_node_takes_the_view(node_type)
+            {
+                Some(why_no_node_takes_it) => {
+                    views_no_node_takes.push(node_type.clone());
+                    why_no_node_takes_each_view.push(why_no_node_takes_it);
+                }
+                None => node_types_of_node_code.push(node_type.clone()),
+            }
+        }
+        let described = self.describe_and_register_in_the_streams_interpreter(
+            &node_types_of_node_code,
+            lend_directory,
+        );
+        if views_no_node_takes.is_empty() {
+            return described;
+        }
+        match described {
+            Ok(()) => Err(Error::NodeTypesNotDescribed {
+                node_types: views_no_node_takes,
+                refusal: why_no_node_takes_each_view.join(" "),
+            }),
+            Err(Error::NodeTypesNotDescribed {
+                mut node_types,
+                refusal,
+            }) => {
+                node_types.extend(views_no_node_takes);
+                why_no_node_takes_each_view.insert(0, refusal);
+                Err(Error::NodeTypesNotDescribed {
+                    node_types,
+                    refusal: why_no_node_takes_each_view.join(" "),
+                })
+            }
+            Err(refusal) => Err(refusal),
+        }
+    }
+
+    fn describe_and_register_in_the_streams_interpreter(
         &self,
         node_types: &[NodeClassImportPath],
         lend_directory: Option<&Path>,
     ) -> Result<()> {
         if node_types.is_empty() {
             return Ok(());
-        }
-        let views_no_node_takes: Vec<String> = node_types
-            .iter()
-            .filter_map(|node_type| {
-                self.node_types_this_stream_resolves
-                    .why_no_node_takes_the_view(node_type)
-            })
-            .collect();
-        if !views_no_node_takes.is_empty() {
-            return Err(Error::NodeTypesNotDescribed {
-                node_types: node_types.to_vec(),
-                refusal: views_no_node_takes.join(" "),
-            });
         }
         let Some(stream_environment) = self.stream_environment.as_ref() else {
             return Err(Error::NodeTypesNotDescribed {

@@ -720,3 +720,4 @@ mod run_refusals;
 mod stream_action_queue;
 mod stream_records;
 mod streams_held_from_their_documents;
+mod views_that_do_not_open;
