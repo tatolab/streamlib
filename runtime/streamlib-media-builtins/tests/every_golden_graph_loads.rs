@@ -20,6 +20,9 @@ use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::runtime::Runner;
 use streamlib_media_builtins::register_media_builtin_node_types;
 
+mod golden_test_support;
+use golden_test_support::is_taken_out_before_a_load;
+
 /// Each golden graph's SHA-256, pinned as it was added: a golden is never
 /// edited, so a change to what a graph holds adds a golden and a line here,
 /// and only the breaking change retiring a shape a golden holds drops its line.
@@ -101,13 +104,6 @@ fn without_the_nodes(
     remaining
 }
 
-/// Each built-in node type a golden places that this runtime no longer has, with no typed form to
-/// be renamed to.
-const REMOVED_BUILT_IN_NODE_TYPES: &[&str] = &[
-    "tatolab.stream:ChannelsToRecords",
-    "tatolab.stream:RecordsToChannels",
-];
-
 /// Load `graph` as the one stream of a fresh engine, in a project directory of
 /// its own.
 fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Result<()> {
@@ -121,20 +117,19 @@ fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Resul
         .map(drop)
 }
 
-/// The names of the nodes in `graph_document` whose type a module declares, each run in its
-/// own helper process from an installed distribution, which a runtime with no interpreter cannot
-/// describe, or is a built-in type since removed.
-fn module_and_removed_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
+/// The names of the nodes in `graph_document` taken out before it loads, as
+/// [`is_taken_out_before_a_load`] says: a module's node runs in its own helper process from an
+/// installed distribution.
+fn node_names_taken_out_before_a_load_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
     graph_document["nodes"]
         .as_array()
         .expect("a graph holds nodes")
         .iter()
         .filter(|node| {
-            let node_type = node["type"].as_str().expect("a node has a type");
-            REMOVED_BUILT_IN_NODE_TYPES.contains(&node_type)
-                || !NodeClassImportPath::new(node_type)
-                    .expect("a type names a class")
-                    .names_a_built_in_node()
+            is_taken_out_before_a_load(
+                &NodeClassImportPath::new(node["type"].as_str().expect("a node has a type"))
+                    .expect("a type names a class"),
+            )
         })
         .map(|node| {
             node["name"]
@@ -145,8 +140,8 @@ fn module_and_removed_node_names_in(graph_document: &serde_json::Value) -> BTree
         .collect()
 }
 
-/// A golden reads whole, and with its module nodes and the nodes of a removed built-in type taken
-/// out, any built-ins left load on a runtime with no interpreter.
+/// A golden reads whole, and with its module nodes and its nodes of a built-in type this runtime
+/// does not register taken out, any built-ins left load on a runtime with no interpreter.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_node_types();
@@ -157,10 +152,10 @@ fn every_golden_graph_loads_on_this_floor() {
             .unwrap_or_else(|refusal| panic!("{path:?} no longer reads: {refusal}"));
         let graph_document = without_the_nodes(
             &recorded_graph_document,
-            &module_and_removed_node_names_in(&recorded_graph_document),
+            &node_names_taken_out_before_a_load_in(&recorded_graph_document),
         );
         let graph = GraphSnapshot::from_graph_document(graph_document).unwrap_or_else(|refusal| {
-            panic!("{path:?} without its module and removed nodes no longer reads: {refusal}")
+            panic!("{path:?} without the nodes taken out before a load no longer reads: {refusal}")
         });
         if graph.nodes.is_empty() {
             continue;
