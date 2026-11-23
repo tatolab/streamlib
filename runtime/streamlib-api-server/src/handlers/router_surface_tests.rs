@@ -4,9 +4,8 @@
 //! What [`build_router`] exposes.
 //!
 //! A change reaches the runtime only as a control operation, so the router
-//! serves none of the graph mutation routes it once had. And no route asks
-//! for a credential: file permission on the local API socket is the whole
-//! gate.
+//! serves no route of its own that mutates a graph. And no route asks for a
+//! credential: file permission on the local API socket is the whole gate.
 //!
 //! The router is the real one; only the `RuntimeOperations` backend is a
 //! stub.
@@ -168,10 +167,10 @@ async fn health_and_the_description_answer_ok() {
     }
 }
 
-/// The routes each read served before every REST route was an operation's
-/// are gone: no route answers but an operation's own.
+/// A REST route is an operation's own, so a path that names no operation is
+/// not served.
 #[tokio::test]
-async fn the_routes_of_the_reads_before_the_operations_are_not_served() {
+async fn a_get_of_a_route_no_operation_names_is_not_served() {
     for uri in [
         "/api/graph",
         "/api/graph?stream=stub-stream",

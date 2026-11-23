@@ -5,10 +5,14 @@
 //! document, one `POST` route per method, so REST lists no operation, input or answer the
 //! contract does not.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value, json};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_REVISION_HEADER_NAME,
-    CONTROL_CONTRACT_VERSION_HEADER_NAME, control_rest_operation_route_path,
+    CONTROL_CONTRACT_VERSION_HEADER_NAME, CONTROL_JSON_RPC_ROUTE_PATH,
+    CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET, MCP_STDIO_UPGRADE_REQUEST_TARGET,
+    control_rest_operation_route_path,
 };
 
 use crate::control_contract_document::{
@@ -17,42 +21,54 @@ use crate::control_contract_document::{
     JSON_RPC_INVALID_REQUEST_ERROR_CODE, JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE,
     JSON_RPC_PARSE_ERROR_CODE, control_contract_document,
 };
+use crate::control_operations::CONTROL_OPERATIONS;
 
 /// The OpenAPI version the REST description is written in.
 pub const OPENAPI_DOCUMENT_VERSION: &str = "3.1.0";
 
 const JSON_MEDIA_TYPE: &str = "application/json";
 
-/// The header parameters every route takes, each by its component name, header and description.
-const CONTROL_REST_HEADER_PARAMETERS: &[(&str, &str, &str)] = &[
+/// The header parameters every route takes, each by its component name, header, JSON Schema type
+/// and description.
+const CONTROL_REST_HEADER_PARAMETERS: &[(&str, &str, &str, &str)] = &[
     (
         "ControlContractVersion",
         CONTROL_CONTRACT_VERSION_HEADER_NAME,
+        "integer",
         "The contract version the client was built against; another version is refused with error 3.",
     ),
     (
         "ControlContractRevision",
         CONTROL_CONTRACT_REVISION_HEADER_NAME,
+        "integer",
         "The contract revision the client was built against, read as 0 when absent; a higher revision is refused with error 3.",
     ),
     (
         "ControlClientName",
         CONTROL_CLIENT_NAME_HEADER_NAME,
+        "string",
         "The client's name, which a change it makes with no author is recorded under.",
     ),
 ];
 
 /// The HTTP status a REST route answers a control error of `code` with; its body is the error
-/// itself, as `/control` carries it under `error`.
+/// itself, as `/control` carries it under `error`. A code no mapping names answers 500.
 pub fn the_http_status_of_a_control_error(code: i64) -> u16 {
+    the_http_status_mapped_to_a_control_error(code).unwrap_or(500)
+}
+
+/// The HTTP status the mapping names for a control error of `code`: a call the client can mend is
+/// a 4xx, an operation the runtime failed to carry out a 500.
+pub(crate) fn the_http_status_mapped_to_a_control_error(code: i64) -> Option<u16> {
     match code {
-        JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE => 404,
+        JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE => Some(404),
         JSON_RPC_INVALID_PARAMS_ERROR_CODE
         | JSON_RPC_PARSE_ERROR_CODE
-        | JSON_RPC_INVALID_REQUEST_ERROR_CODE => 400,
-        CONTROL_OPERATION_REFUSED_ERROR_CODE | CONTROL_OPERATION_FAILED_ERROR_CODE => 422,
-        CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE => 409,
-        _ => 500,
+        | JSON_RPC_INVALID_REQUEST_ERROR_CODE => Some(400),
+        CONTROL_OPERATION_REFUSED_ERROR_CODE => Some(422),
+        CONTROL_OPERATION_FAILED_ERROR_CODE => Some(500),
+        CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE => Some(409),
+        _ => None,
     }
 }
 
@@ -67,7 +83,9 @@ fn the_rest_description_of(contract: &Value) -> Value {
         .into_iter()
         .flatten()
         .map(|method| {
-            let method_name = method["name"].as_str().unwrap_or_default();
+            let method_name = method["name"]
+                .as_str()
+                .expect("the contract names each method");
             (
                 control_rest_operation_route_path(method_name),
                 json!({ "post": the_rest_operation_of(method) }),
@@ -76,7 +94,7 @@ fn the_rest_description_of(contract: &Value) -> Value {
         .collect();
     let parameters: Map<String, Value> = CONTROL_REST_HEADER_PARAMETERS
         .iter()
-        .map(|(component_name, header_name, description)| {
+        .map(|(component_name, header_name, schema_type, description)| {
             (
                 (*component_name).to_owned(),
                 json!({
@@ -84,7 +102,7 @@ fn the_rest_description_of(contract: &Value) -> Value {
                     "in": "header",
                     "required": false,
                     "description": description,
-                    "schema": { "type": "string" },
+                    "schema": { "type": schema_type },
                 }),
             )
         })
@@ -146,7 +164,7 @@ fn the_rest_operation_of(method: &Value) -> Value {
         "tags": [method["x-group"]],
         "parameters": CONTROL_REST_HEADER_PARAMETERS
             .iter()
-            .map(|(component_name, _, _)| {
+            .map(|(component_name, _, _, _)| {
                 json!({ "$ref": format!("#/components/parameters/{component_name}") })
             })
             .collect::<Vec<_>>(),
@@ -160,6 +178,15 @@ fn the_rest_operation_of(method: &Value) -> Value {
     if method.get("x-replaced-by").is_some() {
         operation["deprecated"] = json!(true);
     }
+    if needs_a_connection_that_stays_open(method) {
+        operation["x-needs-a-connection"] = json!(true);
+        operation["description"] = json!(format!(
+            "{} It answers only on a connection that stays open, `{CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET}` or `{MCP_STDIO_UPGRADE_REQUEST_TARGET}`; over REST it is refused, as over `POST {CONTROL_JSON_RPC_ROUTE_PATH}`.",
+            method["description"]
+                .as_str()
+                .expect("the contract describes each method")
+        ));
+    }
     for (key, value) in method.as_object().into_iter().flatten() {
         if key.starts_with("x-") {
             operation[key] = value.clone();
@@ -168,10 +195,17 @@ fn the_rest_operation_of(method: &Value) -> Value {
     operation
 }
 
+/// Whether the operation table declares `method` served only on a connection that stays open.
+fn needs_a_connection_that_stays_open(method: &Value) -> bool {
+    CONTROL_OPERATIONS.iter().any(|declaration| {
+        declaration.method_name == method["name"] && declaration.needs_a_connection_that_stays_open
+    })
+}
+
 /// The error bodies a route may answer, by the HTTP status each answers with: the method's own
 /// errors, then the two any request may meet before it names one call.
-fn the_error_schemas_by_status(method: &Value) -> std::collections::BTreeMap<u16, Vec<Value>> {
-    let mut by_status = std::collections::BTreeMap::<u16, Vec<Value>>::new();
+fn the_error_schemas_by_status(method: &Value) -> BTreeMap<u16, Vec<Value>> {
+    let mut by_status = BTreeMap::<u16, Vec<Value>>::new();
     let method_errors = method["errors"].as_array().into_iter().flatten().cloned();
     let request_errors = [
         json!({ "code": JSON_RPC_PARSE_ERROR_CODE, "message": "the body is not JSON" }),
@@ -181,7 +215,9 @@ fn the_error_schemas_by_status(method: &Value) -> std::collections::BTreeMap<u16
         }),
     ];
     for error in method_errors.chain(request_errors) {
-        let code = error["code"].as_i64().unwrap_or_default();
+        let code = error["code"]
+            .as_i64()
+            .expect("each error the contract states has a whole-number code");
         let mut properties = json!({
             "code": { "const": code },
             "message": { "type": "string", "description": error["message"] },

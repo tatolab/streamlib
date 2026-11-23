@@ -16,9 +16,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get, post};
 use serde_json::Value;
 use streamlib_control_contract::{
-    JSON_RPC_PARSE_ERROR_CODE, control_rest_openapi_document, the_http_status_of_a_control_error,
+    control_rest_openapi_document, the_http_status_of_a_control_error,
 };
-use streamlib_runtime_client_contract::local_api_wire_contract::CONTROL_REST_OPERATION_ROUTE_PATH_PREFIX;
+use streamlib_runtime_client_contract::local_api_wire_contract::control_rest_operation_route_path;
 
 use crate::control_operation_dispatcher::ControlOperationDispatcher;
 use crate::one_control_call_answered::{
@@ -31,7 +31,7 @@ static CONTROL_REST_OPENAPI_DOCUMENT: LazyLock<Value> =
 
 /// The route pattern every operation's route matches, the operation's method name captured.
 pub(crate) fn control_rest_operation_route_pattern() -> String {
-    format!("{CONTROL_REST_OPERATION_ROUTE_PATH_PREFIX}{{operation}}")
+    control_rest_operation_route_path("{operation}")
 }
 
 /// Each operation's route: the body is its params, answered in the response.
@@ -90,13 +90,7 @@ fn the_params_a_body_holds(request_body: &[u8]) -> Result<Option<Value>, Control
     }
     serde_json::from_slice(request_body)
         .map(Some)
-        .map_err(|not_json| {
-            ControlCallError::new(
-                JSON_RPC_PARSE_ERROR_CODE,
-                format!("the request body is not JSON: {not_json}"),
-                None,
-            )
-        })
+        .map_err(|not_json| ControlCallError::of_a_body_that_is_not_json(&not_json))
 }
 
 #[cfg(test)]

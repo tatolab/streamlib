@@ -50,18 +50,13 @@ use crate::notifications_sent_at_most_once_each_interval::{
     ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY,
 };
 use crate::one_control_call_answered::{
-    ControlCallError, the_origin_of_a_request_answered_once, the_outcome_of_one_control_call,
+    ControlCallError, the_client_name_a_request_sent, the_contract_a_request_names,
+    the_origin_of_a_request_answered_once, the_outcome_of_one_control_call,
 };
 use crate::stream_graph_drops_raises_and_link_states::{
     STREAM_GRAPH_DROPS_RAISES_AND_LINK_STATES_SAMPLED_EVERY,
     StreamGraphDropsRaisesAndLinkStatesLastSampled,
     the_drops_raises_and_link_states_of_a_stream_graph,
-};
-
-mod what_a_control_request_names;
-
-pub(crate) use what_a_control_request_names::{
-    the_client_name_a_request_sent, the_contract_a_request_names,
 };
 
 const JSON_RPC_VERSION: &str = "2.0";
@@ -119,11 +114,7 @@ async fn answer_one_control_json_rpc_post(
             }
             Err(not_json) => Some(a_json_rpc_error(
                 Value::Null,
-                ControlCallError::new(
-                    JSON_RPC_PARSE_ERROR_CODE,
-                    format!("the request body is not JSON: {not_json}"),
-                    None,
-                ),
+                ControlCallError::of_a_body_that_is_not_json(&not_json),
             )),
         },
     };

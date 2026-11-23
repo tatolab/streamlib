@@ -8,6 +8,5 @@ severity: hint
 message: This workflow calls the bounded-apt-install action, which bounded-apt-install-step-without-timeout keys on.
 files:
   - .github/workflows/ci.yml
-  - .github/workflows/control-plane-client.yml
 rule:
   matches: uses-the-bounded-apt-install-action

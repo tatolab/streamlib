@@ -35,6 +35,10 @@ pub trait ControlOperation {
     const EFFECT: ControlOperationEffect;
     /// How the agent surface offers it.
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing;
+    /// Whether it answers only on a connection that stays open, `/control/ws` or `/mcp/stdio`,
+    /// because what it opens lasts as long as that connection; a request answered in its own
+    /// response is refused it.
+    const NEEDS_A_CONNECTION_THAT_STAYS_OPEN: bool = false;
     /// The method name of the operation that replaces it, for one an agent no longer finds
     /// listed though it still answers.
     const REPLACED_BY: Option<&'static str> = None;
@@ -148,6 +152,8 @@ pub struct ControlOperationDeclaration {
     pub effect: ControlOperationEffect,
     /// How the agent surface offers it.
     pub agent_tool_listing: ControlOperationAgentToolListing,
+    /// Whether it answers only on a connection that stays open.
+    pub needs_a_connection_that_stays_open: bool,
     /// The method name of the operation that replaces it.
     pub replaced_by: Option<&'static str>,
     /// Its worked example.
@@ -190,6 +196,7 @@ impl ControlOperationDeclaration {
             exposures: Operation::EXPOSURES,
             effect: Operation::EFFECT,
             agent_tool_listing: Operation::AGENT_TOOL_LISTING,
+            needs_a_connection_that_stays_open: Operation::NEEDS_A_CONNECTION_THAT_STAYS_OPEN,
             replaced_by: Operation::REPLACED_BY,
             example: Operation::EXAMPLE,
             reads_back_as_its_result: the_value_reads_back_as::<Operation::Result>,

@@ -6,10 +6,15 @@
 
 use serde_json::{Value, json};
 use streamlib_control_contract::{
-    CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS,
-    the_http_status_of_a_control_error,
+    CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION,
+    CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, CONTROL_OPERATIONS,
+    JSON_RPC_INVALID_REQUEST_ERROR_CODE, JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE,
+    JSON_RPC_PARSE_ERROR_CODE, the_http_status_of_a_control_error,
 };
-use streamlib_runtime_client_contract::local_api_wire_contract::control_rest_operation_route_path;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    CONTROL_CONTRACT_REVISION_HEADER_NAME, CONTROL_CONTRACT_VERSION_HEADER_NAME,
+    control_rest_operation_route_path,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
@@ -174,7 +179,10 @@ async fn an_operation_no_contract_names_is_refused_with_404_naming_it() {
     let served = ControlServedWithAnMcpClient::over_the_stub().await;
     let (status, refused) = rest_post(&served, "no_such_operation", "{}").await;
     assert_eq!(status, 404, "{refused}");
-    assert_eq!(refused["code"], -32601, "{refused}");
+    assert_eq!(
+        refused["code"], JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE,
+        "{refused}"
+    );
     assert_eq!(
         refused["message"],
         "the runtime serves no operation named `no_such_operation`"
@@ -196,17 +204,78 @@ async fn an_empty_body_sends_no_params_and_a_body_that_is_not_json_is_refused() 
     let (status, refused) = rest_post(&served, "graph", "{ not json").await;
     assert_eq!(
         (status, &refused["code"]),
-        (400, &json!(-32700)),
+        (400, &json!(JSON_RPC_PARSE_ERROR_CODE)),
         "{refused}"
     );
+    let (_, over_control) = served.control_post_with_headers("", "{ not json").await;
+    assert_eq!(
+        refused, over_control["error"],
+        "a body that is not JSON is the same error over REST and over `/control`"
+    );
+}
+
+/// An operation the table serves only on a connection that stays open is refused over REST as
+/// over `POST /control`, in the same words.
+#[tokio::test]
+async fn an_operation_that_needs_a_connection_is_refused_over_rest_as_over_control() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let stream_id = crate::control_plane_stub_support::STUB_STREAM_ID;
+    let calls = [
+        (
+            "subscribe_project_changes",
+            json!({ "projects": [uuid::Uuid::nil()] }),
+        ),
+        (
+            "subscribe_project_log_records",
+            json!({ "project_directories": ["/tmp"] }),
+        ),
+        (
+            "subscribe_stream_graph_changes",
+            json!({ "streams": [stream_id] }),
+        ),
+        (
+            "subscribe_input_value_changes",
+            json!({ "streams": [stream_id] }),
+        ),
+        ("subscribe_stream_action_changes", json!({})),
+        (
+            "open_viewer",
+            json!({ "stream": stream_id, "node_id": "nobody", "port": "video" }),
+        ),
+        (
+            "close_viewer",
+            json!({ "viewer": "a viewer nobody opened" }),
+        ),
+    ];
+    let mut needing_a_connection: Vec<&str> = CONTROL_OPERATIONS
+        .iter()
+        .filter(|declaration| declaration.needs_a_connection_that_stays_open)
+        .map(|declaration| declaration.method_name)
+        .collect();
+    needing_a_connection.sort_unstable();
+    let mut called: Vec<&str> = calls.iter().map(|(method, _)| *method).collect();
+    called.sort_unstable();
+    assert_eq!(called, needing_a_connection);
+    for (method, params) in calls {
+        let over_rest = the_rest_answer(rest_post(&served, method, &params.to_string()).await);
+        let over_control = the_json_rpc_answer(&served.control_call(method, params).await);
+        assert_eq!(over_rest, over_control, "`{method}`");
+        let refused = over_rest.expect_err("refused over a request answered once");
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|words| words.contains("stays open")),
+            "`{method}`: {refused}"
+        );
+    }
 }
 
 #[tokio::test]
 async fn a_client_of_another_contract_is_refused_over_rest_as_over_control() {
     let served = ControlServedWithAnMcpClient::over_the_stub().await;
     let headers = format!(
-        "tatolab-control-contract-version: {CONTROL_CONTRACT_VERSION}\r\n\
-         tatolab-control-contract-revision: {}\r\n",
+        "{CONTROL_CONTRACT_VERSION_HEADER_NAME}: {CONTROL_CONTRACT_VERSION}\r\n\
+         {CONTROL_CONTRACT_REVISION_HEADER_NAME}: {}\r\n",
         CONTROL_CONTRACT_REVISION + 1
     );
     let (status, refused) = rest_post_with_headers(&served, "list_streams", &headers, "{}").await;
@@ -217,18 +286,22 @@ async fn a_client_of_another_contract_is_refused_over_rest_as_over_control() {
         )
         .await;
     assert_eq!(status, 409, "{refused}");
+    assert_eq!(
+        refused["code"],
+        CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE
+    );
     assert_eq!(refused, over_control["error"]);
 
     let (status, refused) = rest_post_with_headers(
         &served,
         "list_streams",
-        "tatolab-control-contract-revision: one\r\n",
+        &format!("{CONTROL_CONTRACT_REVISION_HEADER_NAME}: one\r\n"),
         "{}",
     )
     .await;
     assert_eq!(
         (status, &refused["code"]),
-        (400, &json!(-32600)),
+        (400, &json!(JSON_RPC_INVALID_REQUEST_ERROR_CODE)),
         "{refused}"
     );
 }

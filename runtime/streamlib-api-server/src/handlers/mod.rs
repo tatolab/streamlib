@@ -108,18 +108,14 @@ pub(crate) struct LocalApiRouters {
         ControlWebSocketRouteForTheLoopbackListener,
 }
 
-// ============================================================================
-// API Handlers
-// ============================================================================
-
 /// `ok`, from a local API that answers.
 async fn health() -> &'static str {
     "ok"
 }
 
-/// Every loaded stream's graph under the machine's name: what the `graph` operation
-/// and the `streamlib://graph` resource answer when no
-/// stream is named. A stream unloaded while this renders is left out.
+/// Every loaded stream's graph under the machine's name: what the `graph` operation and the
+/// `streamlib://graph` resource answer when no stream is named. A stream unloaded while this
+/// renders is left out.
 pub(crate) async fn machine_wide_graph_json(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
 ) -> Result<Value> {
@@ -191,10 +187,9 @@ pub(crate) fn give_the_stream_graph_its_listed_condition(
     }
 }
 
-/// The native node types every stream can add, then each loaded stream's
-/// types described in its own interpreter: what the
-/// `streamlib://node-catalog` resource answers. A
-/// stream unloaded while this renders is left out.
+/// The native node types every stream can add, then each loaded stream's types described in its
+/// own interpreter: what the `streamlib://node-catalog` resource answers. A stream unloaded while
+/// this renders is left out.
 pub(crate) fn machine_wide_registry_response(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
 ) -> MachineWideRegistryResponse {

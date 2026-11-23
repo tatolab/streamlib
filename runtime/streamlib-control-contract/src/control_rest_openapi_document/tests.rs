@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::control_operations::CONTROL_OPERATIONS;
 
 fn the_operation_at<'document>(document: &'document Value, method_name: &str) -> &'document Value {
     &document["paths"][control_rest_operation_route_path(method_name)]["post"]
@@ -47,11 +46,14 @@ fn each_route_takes_the_params_and_answers_the_result_its_contract_method_states
     let contract = control_contract_document();
     let document = the_rest_description_of(&contract);
     for method in contract["methods"].as_array().into_iter().flatten() {
-        let method_name = method["name"].as_str().unwrap_or_default();
+        let method_name = method["name"].as_str().expect("a method name");
         let operation = the_operation_at(&document, method_name);
         assert_eq!(operation["operationId"], method["name"]);
-        assert_eq!(
-            operation["description"], method["description"],
+        assert!(
+            operation["description"]
+                .as_str()
+                .is_some_and(|described| described
+                    .starts_with(method["description"].as_str().expect("a description"))),
             "{method_name}"
         );
         assert_eq!(
@@ -82,19 +84,80 @@ fn each_route_takes_the_params_and_answers_the_result_its_contract_method_states
 }
 
 #[test]
+fn each_control_error_code_answers_its_own_status() {
+    for (code, status) in [
+        (JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE, 404),
+        (JSON_RPC_INVALID_PARAMS_ERROR_CODE, 400),
+        (JSON_RPC_PARSE_ERROR_CODE, 400),
+        (JSON_RPC_INVALID_REQUEST_ERROR_CODE, 400),
+        (CONTROL_OPERATION_REFUSED_ERROR_CODE, 422),
+        (CONTROL_OPERATION_FAILED_ERROR_CODE, 500),
+        (CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, 409),
+    ] {
+        assert_eq!(the_http_status_of_a_control_error(code), status, "{code}");
+    }
+}
+
+#[test]
+fn every_error_code_the_contract_states_is_mapped_to_a_status_by_name() {
+    let contract = control_contract_document();
+    let stated_codes = contract["methods"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|method| method["errors"].as_array().into_iter().flatten())
+        .map(|error| error["code"].as_i64().expect("a whole-number code"))
+        .chain([
+            JSON_RPC_PARSE_ERROR_CODE,
+            JSON_RPC_INVALID_REQUEST_ERROR_CODE,
+        ]);
+    for code in stated_codes {
+        assert!(
+            the_http_status_mapped_to_a_control_error(code).is_some(),
+            "error {code} answers a status the mapping names, not its fallback"
+        );
+    }
+}
+
+#[test]
+fn each_operation_the_table_serves_only_on_a_connection_that_stays_open_is_marked_so() {
+    let document = control_rest_openapi_document();
+    let mut marked = 0;
+    for declaration in CONTROL_OPERATIONS {
+        let operation = the_operation_at(&document, declaration.method_name);
+        let is_marked = operation["x-needs-a-connection"] == json!(true);
+        assert_eq!(
+            is_marked, declaration.needs_a_connection_that_stays_open,
+            "`{}`",
+            declaration.method_name
+        );
+        if is_marked {
+            marked += 1;
+            assert!(
+                operation["description"].as_str().is_some_and(
+                    |described| described.contains(CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET)
+                ),
+                "`{}`: {operation}",
+                declaration.method_name
+            );
+        }
+    }
+    assert!(
+        marked > 0,
+        "the table names the operations that need a connection"
+    );
+}
+
+#[test]
 fn each_error_a_contract_method_states_is_described_at_the_status_its_code_gives() {
     let contract = control_contract_document();
     let document = the_rest_description_of(&contract);
     for method in contract["methods"].as_array().into_iter().flatten() {
-        let method_name = method["name"].as_str().unwrap_or_default();
+        let method_name = method["name"].as_str().expect("a method name");
         let responses = &the_operation_at(&document, method_name)["responses"];
         for error in method["errors"].as_array().into_iter().flatten() {
-            let code = error["code"].as_i64().unwrap_or_default();
+            let code = error["code"].as_i64().expect("a whole-number code");
             let status = the_http_status_of_a_control_error(code);
-            assert_ne!(
-                status, 500,
-                "`{method_name}`'s error {code} has a status of its own"
-            );
             let schema = &responses[status.to_string()]["content"][JSON_MEDIA_TYPE]["schema"];
             let error_schemas = match schema.get("oneOf") {
                 Some(Value::Array(several)) => several.clone(),

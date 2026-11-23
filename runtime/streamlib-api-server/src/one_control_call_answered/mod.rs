@@ -12,17 +12,20 @@ use streamlib_control_contract::{
     CONTROL_OPERATION_REFUSED_ERROR_CODE, ControlContractVersionMismatch, ControlOperationCall,
     ControlOperationCallParseRefusal, JSON_RPC_INVALID_PARAMS_ERROR_CODE,
     JSON_RPC_INVALID_REQUEST_ERROR_CODE, JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE,
+    JSON_RPC_PARSE_ERROR_CODE,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectActionRefusalOnTheWire, SuggestedOperationCall,
 };
 
-use crate::control_json_rpc_adapter::{
-    the_client_name_a_request_sent, the_contract_a_request_names,
-};
+mod what_a_control_request_names;
+
 use crate::control_operation_dispatcher::{
     ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
     ControlRequestOrigin,
+};
+pub(crate) use what_a_control_request_names::{
+    the_client_name_a_request_sent, the_contract_a_request_names,
 };
 
 /// Why a control call was not answered with a result: the error object `/control` carries under
@@ -49,6 +52,15 @@ impl ControlCallError {
             CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
             mismatch.to_string(),
             serde_json::to_value(mismatch).ok(),
+        )
+    }
+
+    /// The error of a request body that is not JSON.
+    pub(crate) fn of_a_body_that_is_not_json(not_json: &serde_json::Error) -> Self {
+        Self::new(
+            JSON_RPC_PARSE_ERROR_CODE,
+            format!("the request body is not JSON: {not_json}"),
+            None,
         )
     }
 
