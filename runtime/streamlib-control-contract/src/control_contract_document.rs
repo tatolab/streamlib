@@ -33,6 +33,12 @@ pub const CONTROL_OPERATION_REFUSED_ERROR_CODE: i64 = 1;
 /// runtime's own words and its `data` the refusal.
 pub const CONTROL_OPERATION_FAILED_ERROR_CODE: i64 = 2;
 
+/// JSON-RPC's error code of a request body that is not JSON.
+pub const JSON_RPC_PARSE_ERROR_CODE: i64 = -32700;
+
+/// JSON-RPC's error code of a request that is not one call, or whose contract headers do not read.
+pub const JSON_RPC_INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
 /// JSON-RPC's error code of a method no operation has, its `data` the refusal.
 pub const JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE: i64 = -32601;
 

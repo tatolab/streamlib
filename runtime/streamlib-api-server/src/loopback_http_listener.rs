@@ -272,7 +272,8 @@ pub(crate) mod tests {
         for path in [
             "/",
             "/watch/desk/camera",
-            "/api/graph",
+            "/api/operations/graph",
+            "/api/openapi.json",
             "/mcp",
             "/health",
             "/control",

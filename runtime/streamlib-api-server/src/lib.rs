@@ -20,6 +20,7 @@ mod control_operations_on_project_views;
 mod control_operations_on_stream_graph_history;
 #[cfg(test)]
 mod control_plane_stub_support;
+mod control_rest_adapter;
 mod control_subscriptions_of_one_connection;
 mod first_party_package_moves_recorded_in_the_open_projects;
 mod handlers;
@@ -38,11 +39,11 @@ mod new_node_file_template;
 mod node_type_groups_of_a_project;
 mod node_ui_element_template;
 mod notifications_sent_at_most_once_each_interval;
+mod one_control_call_answered;
 #[cfg(test)]
 mod project_asset_tools_tests;
 mod project_node_types_followed_for_changes;
 mod refusal_code_and_place;
-mod state;
 mod stream_graph_drops_raises_and_link_states;
 mod stream_graph_transaction_executor;
 #[cfg(test)]
@@ -50,7 +51,6 @@ mod stream_tools_over_a_real_engine_tests;
 #[cfg(test)]
 mod two_streams_in_one_engine_tests;
 
-pub use handlers::control_plane_openapi_spec;
 pub use local_api_served_for_an_engine::{
     LocalApiServedForAnEngine, serve_the_local_api_for_an_engine,
 };

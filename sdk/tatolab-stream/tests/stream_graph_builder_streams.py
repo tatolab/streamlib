@@ -35,7 +35,7 @@ class StandInMarker:
 
 
 class UndecoratedFilter:
-    """A class that never met `@node.process`."""
+    """A class that never met `@node`."""
 
 
 NESTED_CONFIG: "dict[str, Any]" = {
@@ -49,7 +49,7 @@ NESTED_CONFIG: "dict[str, Any]" = {
 
 @graph_generator
 def every_kind_of_node(stream_builder: StreamBuilder) -> None:
-    """A `@node.process` class, a nested one and a marker-shaped class.
+    """A class node, a nested one and a marker-shaped class.
 
     The second line of the description.
     """

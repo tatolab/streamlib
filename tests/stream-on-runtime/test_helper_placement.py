@@ -850,7 +850,7 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
     counts_read = tatolabd.await_marker("COUNTS_READ_IN_ORDER")
     local_api = tatolabd.local_api_client()
     graph = local_api.call_tool("graph", {"stream": stream_id})
-    registry = local_api.registry(stream_id)
+    node_catalog = local_api.node_catalog(stream_id)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
@@ -881,7 +881,7 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
             assert (graph_node.get("kind"), graph_node.get("language")) == ("function", "rust"), (
                 graph_node
             )
-    catalog_entries = {entry["type"]: entry for entry in registry["nodes"]}
+    catalog_entries = {entry["type"]: entry for entry in node_catalog["nodes"]}
     for rust_node_type in rust_node_types:
         entry = catalog_entries[rust_node_type]
         assert (entry["kind"], entry.get("language")) == ("function", "rust"), entry

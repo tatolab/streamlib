@@ -219,7 +219,7 @@ pub(super) async fn add_node_impl(
             .ok_or_else(|| Error::GraphError("Could not create node".into()))?;
 
         // Registry miss: `add_v` already attached `StateComponent(Error)` so
-        // the failed node is visible via `GET /api/graph`. Skip pending-op
+        // the failed node is visible to `graph`. Skip pending-op
         // logging so the compiler doesn't try to spawn it. Emit the
         // graph-changed events so subscribers see the new node, then surface
         // the typed error.

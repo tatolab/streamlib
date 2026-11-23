@@ -21,6 +21,7 @@ from stream_graph_builder_nodes import (
     BrightnessReader,
     FrameFilters,
     FrameInverter,
+    TintedLevel,
     remap_onto_a_range,
 )
 from tatolab.stream import (
@@ -377,9 +378,9 @@ def test_a_class_both_function_local_and_in_the_entry_file_gets_the_function_loc
 
 def test_a_function_node_is_added_by_its_import_path_under_its_cast_name() -> None:
     stream_builder = StreamBuilder("rig")
-    remap = stream_builder.add(remap_onto_a_range, config={})
-    reader = stream_builder.add(BrightnessReader)
-    stream_builder.connect(remap.output("result"), reader.input("video_from_upstream"))
+    remap = stream_builder.add(remap_onto_a_range)
+    reader = stream_builder.add(TintedLevel)
+    stream_builder.connect(remap.output("result"), reader.input("level"))
 
     graph = stream_builder._compiled_graph()
     assert [(node["name"], node["type"]) for node in graph["nodes"]][0] == (
@@ -433,9 +434,9 @@ def test_an_add_refused_for_its_config_records_nothing(config: Any) -> None:
     stream_builder = StreamBuilder("rig")
 
     with pytest.raises((TypeError, ValueError)):
-        stream_builder.add(FrameInverter, config=config)
+        stream_builder.add(StandInMarker, config=config)
     with pytest.raises((TypeError, ValueError)):
-        stream_builder.add(FrameInverter, name="Front Camera", config=config)
+        stream_builder.add(StandInMarker, name="Front Camera", config=config)
 
     assert stream_builder.add(FrameInverter).name == "frameinverter"
     assert stream_builder.add(BrightnessReader, name="Front Camera").name == "front-camera"
@@ -464,13 +465,12 @@ def test_a_node_with_no_config_records_an_empty_object() -> None:
 
 def test_a_config_that_is_not_a_mapping_is_refused() -> None:
     with pytest.raises(TypeError, match="config must be a mapping"):
-        StreamBuilder("rig").add(FrameInverter, config=[("gain", 2)])  # pyright: ignore[reportArgumentType]
+        StreamBuilder("rig").add(StandInMarker, config=[("gain", 2)])  # pyright: ignore[reportArgumentType]
 
 
 def test_a_config_value_json_cannot_carry_is_refused_naming_its_key_path() -> None:
     with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").add(
-            FrameInverter, config={"overlay": {"labels": ["left", {"right"}]}}
+        StreamBuilder("rig").add(StandInMarker, config={"overlay": {"labels": ["left", {"right"}]}}
         )
 
     message = str(refusal.value)
@@ -488,7 +488,7 @@ def test_a_config_value_of_a_type_outside_builtins_is_refused_naming_its_module(
     value: object, type_as_written: str
 ) -> None:
     with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").add(FrameInverter, config={"enabled": value})
+        StreamBuilder("rig").add(StandInMarker, config={"enabled": value})
 
     message = str(refusal.value)
     assert message.startswith(
@@ -502,7 +502,7 @@ def test_a_config_value_of_a_type_outside_builtins_is_refused_naming_its_module(
 
 def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
     with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").add(FrameInverter, config={"overlay": {1: "left"}})
+        StreamBuilder("rig").add(StandInMarker, config={"overlay": {1: "left"}})
 
     message = str(refusal.value)
     assert message.startswith("config must be JSON:")
@@ -512,7 +512,7 @@ def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
 
 def test_a_config_float_json_cannot_carry_is_refused_naming_its_key_path() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(FrameInverter, config={"gain": math.nan})
+        StreamBuilder("rig").add(StandInMarker, config={"gain": math.nan})
 
     assert str(refusal.value) == (
         "config must be JSON: `config['gain']` is nan, which JSON cannot carry — pass "
@@ -554,8 +554,7 @@ def test_config_keys_subclassing_str_are_recorded_as_plain_strings() -> None:
 
 def test_config_keys_equal_only_as_plain_strings_are_refused_naming_the_key() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(
-            FrameInverter,
+        StreamBuilder("rig").add(StandInMarker,
             config={"overlay": {"gain": 1, KeyComparedByIdentity("gain"): 2}},
         )
 
@@ -581,7 +580,7 @@ def test_a_config_integer_beyond_64_bits_is_refused_naming_its_key_path(
     integer: int,
 ) -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(FrameInverter, config={"limits": [0, integer]})
+        StreamBuilder("rig").add(StandInMarker, config={"limits": [0, integer]})
 
     assert str(refusal.value) == (
         "config integers must fit the graph's 64-bit range: `config['limits'][1]` is "
@@ -591,7 +590,7 @@ def test_a_config_integer_beyond_64_bits_is_refused_naming_its_key_path(
 
 def test_a_config_holding_itself_is_refused_naming_where_it_loops() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(FrameInverter, config=a_config_holding_itself())
+        StreamBuilder("rig").add(StandInMarker, config=a_config_holding_itself())
 
     message = str(refusal.value)
     assert message.startswith("config must be JSON:")
@@ -604,8 +603,7 @@ def test_a_config_holding_itself_is_refused_naming_where_it_loops() -> None:
 
 def test_a_list_holding_itself_is_refused_naming_where_it_loops() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(
-            FrameInverter, config=a_config_holding_a_list_holding_itself()
+        StreamBuilder("rig").add(StandInMarker, config=a_config_holding_a_list_holding_itself()
         )
 
     message = str(refusal.value)
@@ -636,8 +634,7 @@ def test_a_config_nested_one_past_what_a_graph_carries_is_refused_at_add_by_key_
     None
 ):
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(
-            FrameInverter,
+        StreamBuilder("rig").add(StandInMarker,
             config=a_config_nesting_containers_deep(
                 CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF + 1
             ),
@@ -657,7 +654,7 @@ def test_a_config_nested_one_past_what_a_graph_carries_is_refused_at_add_by_key_
 
 def test_a_config_nested_5000_deep_is_refused_by_name_rather_than_by_recursion() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(FrameInverter, config=a_config_nesting_containers_deep(5000))
+        StreamBuilder("rig").add(StandInMarker, config=a_config_nesting_containers_deep(5000))
 
     assert type(refusal.value) is ValueError
     assert str(refusal.value).startswith("config nests too deep for a graph: ")
@@ -767,9 +764,9 @@ def test_a_hand_built_reference_is_cast_like_a_minted_one() -> None:
 
     assert NodeReference("Frame Inverter").name == "frame-inverter"
     assert NodeReference("FrameInverter") == inverter
-    assert NodeOutputPortReference(
-        "FrameInverter", "Video To Downstream"
-    ) == inverter.output("video to downstream")
+    assert NodeOutputPortReference("FrameInverter", "Video To Downstream") == (
+        NodeOutputPortReference("frameinverter", "video to downstream")
+    )
     assert NodeInputPortReference("FRAMEINVERTER", "VIDEO_FROM_UPSTREAM") == (
         NodeInputPortReference("frameinverter", "video_from_upstream")
     )

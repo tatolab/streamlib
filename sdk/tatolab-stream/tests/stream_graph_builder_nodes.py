@@ -8,86 +8,80 @@ path of its class or function, `stream_graph_builder_nodes:<qualname>` — a nam
 process can import.
 """
 
-import dataclasses
 from typing import Annotated, Literal
 
 from tatolab.stream import (
     Color,
-    Input,
+    EncodedVideo,
+    InputPin,
     Int8,
     NumberRange,
-    Output,
-    Packets,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     node,
 )
 
 
-@node.function
-def remap_onto_a_range(x: float, low: float = 0.0, high: float = 1.0) -> float:
+@node
+def remap_onto_a_range(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:
     """Maps 0..1 onto low..high."""
     return low + x * (high - low)
 
 
-@node.process
+@node
 class FrameInverter:
     """Inverts each frame it reads."""
 
-    video_from_upstream = Input(Packets, delivery="newest")
+    strength: int = 1
 
-    video_to_downstream = Output(Packets)
+    video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
+
+    video_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream")
+        frame = self.video_from_upstream.read()
         if frame is not None:
-            ctx.outputs.write("video_to_downstream", frame)
+            self.video_to_downstream.write(frame)
 
 
-@node.process
+@node
 class BrightnessReader:
     """Reads each frame it receives and writes nothing."""
 
-    video_from_upstream = Input(Packets, delivery="newest")
+    video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read("video_from_upstream")
+        self.video_from_upstream.read()
 
 
 class FrameFilters:
     """A namespace, so a node's qualname differs from its short name."""
 
-    @node.process
+    @node
     class FrameDarkener:
         """Darkens each frame it reads."""
 
-        video_from_upstream = Input(Packets, delivery="newest")
+        video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
-        video_to_downstream = Output(Packets)
+        video_to_downstream: OutputPin[EncodedVideo]
 
         def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-            frame = ctx.inputs.read("video_from_upstream")
+            frame = self.video_from_upstream.read()
             if frame is not None:
-                ctx.outputs.write("video_to_downstream", frame)
+                self.video_to_downstream.write(frame)
 
 
-@dataclasses.dataclass
-class RigMonitorConfig:
-    """What a `RigMonitor` shows its picture under."""
-
-    name: "str | None" = None
-
-
-@node.process
+@node
 class RigMonitor:
-    """Shows each frame it reads under the name it is configured with."""
+    """Shows each frame it reads under the name it is set to."""
 
-    def __init__(self, config: RigMonitorConfig) -> None:
-        self._config = config
+    name: str = ""
 
-    video = Input(Packets, delivery="newest")
+    video: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read("video")
+        self.video.read()
 
 
 @node

@@ -7,7 +7,7 @@
 //!
 //! The unit coverage of the rule lives beside `add_v`; what this locks is the
 //! path an author meets: the add reports the assigned name a handle carries,
-//! and the graph JSON — the payload `tatolab graph` and `GET /api/graph`
+//! and the graph JSON — the payload `tatolab graph` and the `graph` operation
 //! serve — carries the assigned names, not the requested ones.
 
 use serial_test::serial;
