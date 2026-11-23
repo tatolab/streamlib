@@ -1,0 +1,38 @@
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""The `@graph_generator` function `test_bundle_member_wiring.py` runs from the suite project."""
+
+from tatolab.stream import BreakBundle, MakeBundle, PinTypeChoice, StreamBuilder, graph_generator
+
+from bundle_member_wiring_nodes import Reading, ReportsTheMembersItReads, WritesOneLevelSource
+
+#: The label set on `MakeBundle`'s `members`, which no wire reaches.
+LABEL_SET_ON_MAKE_BUNDLE = "set-on-make"
+
+
+@graph_generator
+def a_number_into_one_member_and_each_member_out(stream_builder: StreamBuilder) -> None:
+    """A level wired into `MakeBundle`'s `level` member, its `label` set, the bundle through
+    `BreakBundle` and each member wired out of it into one reporter."""
+    source = stream_builder.add(WritesOneLevelSource, name="source")
+    make = stream_builder.add(
+        MakeBundle,
+        name="make",
+        input_values={
+            "bundle_type": PinTypeChoice(Reading),
+            "members": Reading(level=0.0, label=LABEL_SET_ON_MAKE_BUNDLE),
+        },
+    )
+    take_apart = stream_builder.add(
+        BreakBundle, name="take-apart", input_values={"bundle_type": PinTypeChoice(Reading)}
+    )
+    reporter = stream_builder.add(ReportsTheMembersItReads, name="reporter")
+    stream_builder.connect(source.output("level"), make.input("members", member="level"))
+    stream_builder.connect(make.output("bundle"), take_apart.input("bundle"))
+    stream_builder.connect(
+        take_apart.output("members", member="level"), reporter.input("level")
+    )
+    stream_builder.connect(
+        take_apart.output("members", member="label"), reporter.input("label")
+    )

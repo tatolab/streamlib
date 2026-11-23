@@ -8,6 +8,7 @@ path of its class or function, `stream_graph_builder_nodes:<qualname>` — a nam
 process can import.
 """
 
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from tatolab.stream import (
@@ -95,3 +96,17 @@ def TintedLevel(
 ) -> float:
     """A typed node: its level, scaled by how bright its tint is."""
     return level * (tint.red + tint.green + tint.blue) / 3
+
+
+@dataclass(frozen=True)
+class Tone:
+    """A bundle of two members."""
+
+    frequency: float
+    gain: float = 1.0
+
+
+@node
+def LouderTone(tone: Tone = Tone(440.0)) -> Tone:
+    """A typed node taking and giving a bundle: its tone, its gain raised by one."""
+    return Tone(tone.frequency, tone.gain + 1)

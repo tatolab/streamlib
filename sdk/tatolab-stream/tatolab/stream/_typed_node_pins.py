@@ -29,6 +29,7 @@ from ._node_declaration import (
     NODE_DECLARATION_PIN_GROUPS_STAMP,
 )
 from ._pin_declaration import PinValueNotTaken, stored_form_of_a_pin_value
+from ._pin_type_choice import pin_type_in_words
 
 __all__ = ["TypedNodePins"]
 
@@ -81,6 +82,54 @@ class TypedNodePins:
     def port_named(self, name: str, direction: PortDirection) -> str:
         """The name of the port of `direction` that `name`, cast, finds; refused naming the ports declared."""
         return self._declared_port(name, direction).name
+
+    def member_named(
+        self,
+        port_name: str,
+        direction: PortDirection,
+        member: str,
+        input_values: Mapping[str, Any],
+    ) -> str:
+        """`member`, when the bundle the port of `direction` named `port_name` carries has it.
+
+        A port whose type another input chooses carries the bundle `input_values`, as recorded,
+        holds for that input. Refused naming the bundle's members, or the type the port carries
+        when it is no bundle.
+        """
+        port = self._declared_port(port_name, direction)
+        pin_type_declared = port.declaration["pin_type"]
+        if pin_type_declared["kind"] == "is":
+            pin_type: PinType = pin_type_declared["pin_type"]
+        elif pin_type_declared["kind"] == "set_by_input":
+            choosing_input = pin_type_declared["input_name"]
+            chosen = input_values.get(choosing_input)
+            if chosen is None:
+                raise ValueError(
+                    f"`{self.node}`'s {direction} `{port.name}` carries the bundle "
+                    f"`{choosing_input}` chooses, and `{choosing_input}` is not set, so it has no "
+                    f"member `{member}`. To fix: set `{choosing_input}` a `PinTypeChoice` of the "
+                    f"bundle"
+                )
+            pin_type = chosen
+        else:
+            raise TypeError(
+                f"`{self.node}`'s {direction} `{port.name}` finds its type from its graph, so no "
+                f"member `{member}` of it is checked here. To fix: wire the whole port"
+            )
+        if pin_type["type"] != "bundle":
+            raise TypeError(
+                f"`{self.node}`'s {direction} `{port.name}` carries the type "
+                f"{pin_type_in_words(pin_type)}, not a bundle, so it has no member `{member}`. To fix: "
+                f"wire the whole port"
+            )
+        member_names = [declared["name"] for declared in pin_type["members"]]
+        if member not in member_names:
+            listed = ", ".join(f"`{name}`" for name in member_names)
+            raise ValueError(
+                f"`{self.node}`'s {direction} `{port.name}` carries a bundle with no member "
+                f"`{member}`; its members are: {listed}"
+            )
+        return member
 
     def stored_input_values(self, input_values: Mapping[str, Any]) -> dict[str, Any]:
         """`input_values` keyed by the inputs they set, each in the stored form its pin type holds.

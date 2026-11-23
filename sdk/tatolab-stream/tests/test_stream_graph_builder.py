@@ -21,6 +21,7 @@ from stream_graph_builder_nodes import (
     BrightnessReader,
     FrameFilters,
     FrameInverter,
+    LouderTone,
     TintedLevel,
     remap_onto_a_range,
 )
@@ -93,6 +94,17 @@ def hand_built_references(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(
         NodeOutputPortReference("FrameInverter", "VIDEO_TO_DOWNSTREAM"),
         NodeInputPortReference("BrightnessReader", "VIDEO_FROM_UPSTREAM"),
+    )
+
+
+@graph_generator
+def hand_built_references_at_one_member(stream_builder: StreamBuilder) -> None:
+    """A wire from one member to one member, named through references built by hand."""
+    stream_builder.add(LouderTone, name="first")
+    stream_builder.add(LouderTone, name="second")
+    stream_builder.connect(
+        NodeOutputPortReference("first", "result", member_name="gain"),
+        NodeInputPortReference("second", "tone", member_name="frequency"),
     )
 
 
@@ -816,3 +828,61 @@ def test_references_are_immutable_values() -> None:
     assert repr(reference) == "NodeReference(name='frameinverter')"
     with pytest.raises(AttributeError):
         reference.name = "other"  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_a_typed_node_names_one_member_of_its_own_bundle_pin() -> None:
+    stream_builder = StreamBuilder("rig")
+    first = stream_builder.add(LouderTone, name="first")
+    second = stream_builder.add(LouderTone, name="second")
+
+    assert first.output("result", member="gain") == NodeOutputPortReference(
+        "first", "result", member_name="gain"
+    )
+    assert second.input("Tone", member="frequency") == NodeInputPortReference(
+        "second", "tone", member_name="frequency"
+    )
+
+
+def test_a_member_a_typed_node_s_bundle_pin_does_not_have_is_refused_naming_its_members() -> None:
+    louder = StreamBuilder("rig").add(LouderTone)
+
+    with pytest.raises(
+        ValueError,
+        match=r"`LouderTone`'s output `result` carries a bundle with no member `Gain`; its "
+        r"members are: `frequency`, `gain`",
+    ):
+        louder.output("result", member="Gain")
+
+
+def test_a_member_on_a_typed_node_s_port_that_is_no_bundle_is_refused_naming_its_type() -> None:
+    tinted = StreamBuilder("rig").add(TintedLevel)
+
+    with pytest.raises(
+        TypeError,
+        match=r"`TintedLevel`'s input `level` carries the type Float, not a bundle, so it has "
+        r"no member `low`",
+    ):
+        tinted.input("level", member="low")
+
+
+def test_a_node_that_declares_no_pin_types_records_the_member_named_as_given() -> None:
+    inverter = NodeReference("frameinverter")
+
+    assert inverter.output("video_to_downstream", member="level") == NodeOutputPortReference(
+        "frameinverter", "video_to_downstream", member_name="level"
+    )
+
+
+def test_a_hand_built_reference_at_one_member_reaches_the_graph_naming_the_member() -> None:
+    assert run_graph_generator(hand_built_references_at_one_member)["links"] == [
+        {
+            "source": {"node": "first", "port": "result", "member": "gain"},
+            "target": {"node": "second", "port": "tone", "member": "frequency"},
+        },
+    ]
+
+
+def test_a_member_name_that_is_not_a_string_is_refused() -> None:
+    with pytest.raises(TypeError, match="member name"):
+        NodeOutputPortReference("first", "result", member_name=7)  # pyright: ignore[reportArgumentType]
+
