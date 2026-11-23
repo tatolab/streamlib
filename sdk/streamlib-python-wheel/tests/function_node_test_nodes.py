@@ -18,8 +18,10 @@ from tatolab.runtime._function_node_compilation import (
 from tatolab.stream import State, Stateful, Time, node
 
 
-@node
-def remap(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:
+# Kept on `@node.function`: its `x` holds no default, which bare `@node` refuses, and the
+# island tests read what an input with no link, pin or default does.
+@node.function
+def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
     return low + x * (high - low)
 
 
