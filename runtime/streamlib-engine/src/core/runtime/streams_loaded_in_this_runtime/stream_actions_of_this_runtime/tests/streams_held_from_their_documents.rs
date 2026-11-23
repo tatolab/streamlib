@@ -931,6 +931,11 @@ fn a_saved_graph_placing_a_built_in_this_runtime_lacks_opens_holding_it_in_error
             .unwrap_or_else(|| panic!("`graph` shows no node `removed`: {render}"));
         assert_eq!(removed["type"], removed_node_type, "{removed}");
         assert_eq!(removed["components"]["state"], "Error", "{removed}");
+        assert_eq!(
+            removed["pins"],
+            serde_json::json!({"channel_names": ["level"]}),
+            "{removed}"
+        );
         let listed = runner
             .list_streams()
             .into_iter()
