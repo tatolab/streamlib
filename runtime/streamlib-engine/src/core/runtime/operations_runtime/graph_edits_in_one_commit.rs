@@ -261,6 +261,7 @@ impl LoadedStreamInThisRuntime {
                     self.restore_what_was_drawn_and_drop_the_events(held);
                     if failed.after_changing_what_runs {
                         self.announce_each_event_of_what_a_failed_commit_left_changed(events_held);
+                        self.leave_each_node_whose_pin_group_slots_changed_to_rebuild(held);
                     }
                     return Err(GraphEditBatchRefused {
                         refusal: failed.refusal,
@@ -284,7 +285,9 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Leave each node that held a pin group before `held` and holds another number of its
-    /// slots now to rebuild: a node is built for the slots its pin groups hold.
+    /// slots now to rebuild: a node is built for the slots its pin groups hold. Run once the
+    /// edits stand, and once a commit that failed after it changed what runs is taken back as
+    /// far as it can be, since the links it leaves wired may have changed a node's slots.
     fn leave_each_node_whose_pin_group_slots_changed_to_rebuild(
         &self,
         held: &GraphEditsHeldForOneCommit,
