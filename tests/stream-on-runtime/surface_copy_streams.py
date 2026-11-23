@@ -17,7 +17,7 @@ def _wire_a_test_pattern_into_probe(
 ) -> None:
     pattern = stream_builder.add(
         TestPatternSource,
-        config={
+        input_values={
             "width": surface_copy_probes.FRAME_WIDTH,
             "height": surface_copy_probes.FRAME_HEIGHT,
         },

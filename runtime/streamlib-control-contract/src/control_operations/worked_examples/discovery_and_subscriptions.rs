@@ -85,7 +85,7 @@ pub(in crate::control_operations) const GRAPH: ControlOperationExample = Control
                     "name": "compositor",
                     "ports": {
                         "inputs": [{
-                            "name": "layer_0",
+                            "name": "layers.0.picture",
                             "pin_type": { "type": "texture" },
                             "flow": "stream",
                         }],
@@ -106,7 +106,7 @@ pub(in crate::control_operations) const GRAPH: ControlOperationExample = Control
             "links": [{
                 "id": "0e5b9d3f-2c7a-4f1e-8b6d-4a9c1e3f5b70",
                 "source": { "node": SOURCE_NODE, "port": "video" },
-                "target": { "node": COMPOSITOR_NODE, "port": "layer_0" },
+                "target": { "node": COMPOSITOR_NODE, "port": "layers.0.picture" },
                 "state": "wired",
                 "components": {},
             }],

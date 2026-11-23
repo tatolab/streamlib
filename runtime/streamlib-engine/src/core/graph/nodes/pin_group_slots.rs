@@ -46,7 +46,7 @@ impl GraphNode {
     }
 
     /// How many slots each of its pin groups holds now, in the order they are declared.
-    fn slot_counts_held(&self) -> Vec<usize> {
+    pub(crate) fn slot_counts_held(&self) -> Vec<usize> {
         self.pin_groups
             .iter()
             .map(|group| {

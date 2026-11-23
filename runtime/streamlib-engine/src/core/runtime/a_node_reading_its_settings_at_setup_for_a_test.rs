@@ -4,7 +4,8 @@
 //! A node type for tests that reads three settings once, at setup, and records each setup it
 //! runs: what a test of a node rebuilt to take a setting read at setup runs; and a node type
 //! whose Integer output, which flows as a value, a test writes, to wire into one of them, with
-//! a setting read at setup of its own that another source's wire may feed.
+//! a setting read at setup of its own that another source's wire may feed; and a node type
+//! like the first whose pin group of Integer layers follows its wires.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Once};
@@ -16,7 +17,8 @@ use uuid::Uuid;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinDeclaration,
-    PinType, PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime,
+    PinGroupDescriptor, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    SettingReadTime,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -440,4 +442,62 @@ pub fn the_settings_each_setup_read(node: Uuid) -> Vec<Map<String, Value>> {
         .filter(|(set_up, _)| *set_up == node)
         .map(|(_, settings)| settings.clone())
         .collect()
+}
+
+fn the_layered_node_type() -> NodeClassImportPath {
+    NodeClassImportPath::new(format!("{}::NodeBuiltForItsLayers", module_path!()))
+        .expect("a module path and a type name make an import path")
+}
+
+/// The pin group of the layered node type, each slot one Integer `layer`.
+pub const THE_LAYERED_NODES_PIN_GROUP: &str = "layers";
+
+fn register_the_layered_node_type_once() {
+    static REGISTERED: Once = Once::new();
+    REGISTERED.call_once(|| {
+        let integer = PinType::Integer { exact_size: None };
+        let descriptor = NodeDescriptor::new(
+            NodeClassShortName::new("NodeBuiltForItsLayers").expect("a type name is a short name"),
+            the_layered_node_type(),
+            "a node built for the layers its pin group holds",
+        )
+        .with_pin_group(PinGroupDescriptor::new(
+            THE_LAYERED_NODES_PIN_GROUP,
+            "each layer",
+            vec![
+                PortDescriptor::new(
+                    "layer",
+                    "layer",
+                    false,
+                    PortFamilyDeclaration::of_family(
+                        PortFamily::carrying(&integer).unwrap_or(PortFamily::Records),
+                    ),
+                )
+                .with_pin_declaration(PinDeclaration::exactly(integer.clone()))
+                .with_input_mode(NodeInputMode::WireOrValue),
+            ],
+            Vec::new(),
+        ));
+        let described = descriptor.clone();
+        NODE_REGISTRY
+            .register_with_a_constructor_for_a_test(
+                descriptor,
+                Box::new(move |node: &GraphNode| {
+                    Ok(Box::new(NodeReadingItsSettingsAtSetup {
+                        node_uuid: node.node_uuid,
+                        descriptor: described.clone(),
+                        settings: Map::new(),
+                    }))
+                }),
+            )
+            .expect("register the layered node type");
+    });
+}
+
+/// The node type built for the layers its pin group of Integer `layer` inputs holds, a group
+/// following its wires, recording each setup it runs as the type reading its settings at setup
+/// does; registered once per process.
+pub fn the_node_type_built_for_its_layers() -> NodeClassImportPath {
+    register_the_layered_node_type_once();
+    the_layered_node_type()
 }

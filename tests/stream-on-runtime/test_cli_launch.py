@@ -69,7 +69,7 @@ from tatolab.testpattern import TestPatternSource
 
 @graph_generator
 def main(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
+    stream_builder.add(TestPatternSource, input_values={"width": 320, "height": 180})
 '''
 
 

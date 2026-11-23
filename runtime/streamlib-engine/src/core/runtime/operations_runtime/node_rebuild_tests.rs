@@ -15,11 +15,14 @@ use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
 use crate::core::error::Result;
+use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
 use crate::core::nodes::NodeSpec;
 use crate::core::runtime::Runner;
 use crate::core::runtime::a_node_reading_its_settings_at_setup_for_a_test::{
-    A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH, forget_every_setup_run,
-    the_node_type_reading_its_settings_at_setup, the_settings_each_setup_read,
+    A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH, THE_LAYERED_NODES_PIN_GROUP, THE_SOURCES_OUTPUT,
+    forget_every_setup_run, the_node_type_built_for_its_layers,
+    the_node_type_reading_its_settings_at_setup, the_node_type_whose_output_a_test_writes,
+    the_settings_each_setup_read,
 };
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::operations::RuntimeOperations;
@@ -286,5 +289,67 @@ fn a_node_left_to_rebuild_when_its_stream_stops_is_built_once_by_the_next_start(
     let setups = the_settings_each_setup_read(node);
     assert_eq!(setups.len(), 2, "one setup at each start: {setups:?}");
     assert_eq!(setups[1].get("kernel_size"), Some(&json!(5)));
+    stream.stop().expect("the stream stops");
+}
+
+/// Mental-revert: without a node left to rebuild when a link changes how many slots its pin
+/// groups hold, the rebuild after each link rebuilds nothing, and the node runs built for the
+/// layers it held before.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_link_changing_how_many_slots_a_running_node_holds_rebuilds_it() {
+    let project_directory = tempfile::tempdir().unwrap();
+    forget_every_setup_run();
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
+        .expect("an empty stream loads");
+    let layered = Uuid::new_v4();
+    let layered_run_id = stream
+        .add_node(
+            NodeSpec::new(the_node_type_built_for_its_layers(), Value::Null)
+                .with_node_uuid(layered),
+        )
+        .expect("the layered node is added");
+    let source_run_id = stream
+        .add_node(NodeSpec::new(
+            the_node_type_whose_output_a_test_writes(),
+            Value::Null,
+        ))
+        .expect("the source is added");
+    stream.start().expect("the stream starts");
+    stream
+        .wait_until_every_node_is_running(Duration::from_secs(30))
+        .expect("the nodes run");
+
+    let link = stream
+        .connect(
+            OutputLinkPortRef::new(source_run_id, THE_SOURCES_OUTPUT),
+            InputLinkPortRef::new(
+                layered_run_id,
+                format!("{THE_LAYERED_NODES_PIN_GROUP}.0.layer"),
+            ),
+        )
+        .expect("an Integer links into an Integer layer");
+    assert_eq!(
+        rebuild(&stream).expect("the node builds for two slots"),
+        vec![layered],
+        "a link into its empty slot gives it another"
+    );
+
+    stream.disconnect(&link).expect("the link is taken out");
+    assert_eq!(
+        rebuild(&stream).expect("the node builds for one slot"),
+        vec![layered],
+        "the last slot's link taken out gives its empty slot back"
+    );
+    assert_eq!(the_settings_each_setup_read(layered).len(), 3);
     stream.stop().expect("the stream stops");
 }
