@@ -7975,7 +7975,7 @@ export interface ControlOperations {
   /**
    * Create a node file in a project from the template, as one transaction.
    *
-   * Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a `@node.process` class in the current `tatolab.stream` idiom, named after the file, with one input `video_in` taking frames, which it hands on unchanged to one output `video_out`, each with its description. It loads as a node type of the project with no edits and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.
+   * Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.
    *
    * Since contract version 1, stable.
    */
@@ -8271,7 +8271,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 37;
+export declare const CONTROL_CONTRACT_REVISION: 38;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

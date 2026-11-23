@@ -47,13 +47,18 @@ else
 fi
 
 lint_config_directory="target/lint-config/${LINT_CONFIG_COMMIT}"
-if [[ ! -d "${lint_config_directory}" ]]; then
+# The Rust build cache restores target/ with the files it doesn't keep removed and
+# their directories left, so the download is checked by a file it wrote last.
+lint_config_download_finished="${lint_config_directory}/.download-finished"
+if [[ ! -f "${lint_config_download_finished}" ]]; then
+  rm -rf "${lint_config_directory}"
   mkdir -p target/lint-config
   download_directory="$(mktemp -d target/lint-config/download.XXXXXX)" || exit 1
   trap 'rm -rf "${download_directory}"' EXIT
   curl -sSfL --retry 3 "https://codeload.github.com/tatolab/lint-config/tar.gz/${LINT_CONFIG_COMMIT}" \
     | tar -xz --strip-components=1 -C "${download_directory}" || exit 1
   mv "${download_directory}" "${lint_config_directory}" || exit 1
+  touch "${lint_config_download_finished}" || exit 1
 fi
 ln -sfn "${LINT_CONFIG_COMMIT}" target/lint-config/pinned || exit 1
 
