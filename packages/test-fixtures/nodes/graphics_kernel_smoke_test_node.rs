@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#[cfg(target_os = "linux")]
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};

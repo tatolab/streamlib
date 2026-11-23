@@ -466,7 +466,7 @@ fn node_types_describing_a_display_with_an_input_named_source() -> NodeTypesOneS
 #[test]
 fn a_value_on_an_input_shaped_like_a_reference_to_a_get_is_left_as_it_is() {
     let mut graph = a_camera_variable_read_by_two_displays();
-    graph["nodes"][4]["pins"] = serde_json::json!({"source": {"node": "get-camera"}});
+    graph["nodes"][4]["input_values"] = serde_json::json!({"source": {"node": "get-camera"}});
     let resolution = GraphSnapshot::from_graph_document(graph)
         .expect("the graph parses")
         .with_graph_variables_resolved(
