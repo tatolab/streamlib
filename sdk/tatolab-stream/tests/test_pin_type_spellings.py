@@ -42,8 +42,8 @@ class ProbeReading:
         return bytes([self.level])
 
 
-@tatolab.stream.connection_type(description="A probe a reader reaches.")
-class ProbeConnection:
+@tatolab.stream.connection_type
+class ProbeConnection(tatolab.stream.Connection):
     pass
 
 
@@ -126,12 +126,14 @@ def test_each_spelling_the_typed_grammar_reads_resolves_and_names_its_pin_type(
             )
         return
 
+    # A connection is taken only on a class node's field, the one input its lowered wire reaches.
     declared = read_pin_declaration(
         "Probe",
         "value",
         written_type,
         default=A_VALUE_OF_EACH_SPELLING[spelling.written_form],
         direction="input",
+        form="field" if spelling.written_form == "connection_type" else "function",
     )
 
     declared_pin_type = declared.declaration["pin_type"]

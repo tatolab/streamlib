@@ -32,6 +32,7 @@ from ._pin_type_narrowing import AssetMedia as AssetMedia
 from ._pin_type_narrowing import EncodedCodecs as EncodedCodecs
 from ._pin_type_narrowing import FlowsAsValue as FlowsAsValue
 from ._pin_type_narrowing import TexturePixelFormats as TexturePixelFormats
+from ._connection_type_declaration import Connection as Connection
 from ._connection_type_declaration import SoleReferrer as SoleReferrer
 from ._connection_type_declaration import connection_type as connection_type
 from ._named_pin_type_declaration import NamedPinTypeValue as NamedPinTypeValue
@@ -211,6 +212,7 @@ __all__ = [
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
+    "Connection",
     "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
     "FloatToBoolean",
     "FloatToInteger",

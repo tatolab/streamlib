@@ -690,7 +690,8 @@ class _PinReading:
                     "field_typed_as_a_stream" if self._form == "field" else "pin_type_not_read_yet",
                 )
             return bundle
-        if (module_declared := the_pin_type_of_a_module_declared_type(written_type)) is not None:
+        module_declared = the_pin_type_of_a_module_declared_type(written_type, pin_named=self._pin_named, read_where_a_connection_goes=not as_an_element and self._member_of is None and (self._form, self._direction) in (("field", "input"), ("pin", "output")), refusal=self._refusal)  # pyright: ignore[reportArgumentType]
+        if module_declared is not None:
             return module_declared  # pyright: ignore[reportReturnType]
         if exact_size is None:
             pin_type: PinType = {"type": spelling.pin_type_name}  # pyright: ignore[reportAssignmentType]

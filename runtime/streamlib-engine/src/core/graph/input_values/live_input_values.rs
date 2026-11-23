@@ -489,9 +489,9 @@ pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<
         .collect()
 }
 
-/// The reference a wire into connection input `port` of `node` was lowered to,
-/// `{"node": "<source>"}`, which the node reads as the node its wire brings; `None` for any
-/// other input, and while no wire reaches it. A connection holds no stored value of its own,
+/// The node reference a wire into connection input `port` of `node` was lowered to, which the
+/// node reads as the node its wire brings; `None` for any other input, and while no wire
+/// reaches it. A connection holds no stored value of its own,
 /// so this is the one value it is handed.
 fn the_node_a_connection_wire_brings(node: &GraphNode, port: &PortInfo) -> Option<Value> {
     if !port.takes_a_connection() {

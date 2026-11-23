@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A class node's connection field holds the node its wire brings, as the `NodeReference` the builder hands out, and `None` while no wire reaches it.
+"""A class node's connection field holds the node its wire brings, as an instance of its connection class, and `None` while no wire reaches it.
 
 The runtime hands a connection input the reference its wire was lowered to, `{"node": name}`,
 among the node's unlinked input values; the field holds it in its Python form.
@@ -15,12 +15,12 @@ import pytest
 
 from tatolab.runtime._class_node_fields import ClassNodeFields
 from tatolab.runtime._node_hosting import class_node_members_of
-from tatolab.stream import NodeReference, SoleReferrer, connection_type, node
+from tatolab.stream import Connection, SoleReferrer, connection_type, node
 from tatolab.stream._class_node_construction import construct_class_node
 
 
-@connection_type(description="A hub a spoke reaches.")
-class HubConnection:
+@connection_type
+class HubConnection(Connection):
     pass
 
 
@@ -52,11 +52,11 @@ def the_fields_of_a_spoke_handed(stored_input_values: "dict[str, Any]") -> "tupl
 def test_a_connection_field_holds_the_node_its_wire_brings_and_none_with_no_wire():
     fields, spoke = the_fields_of_a_spoke_handed({"hub": {"node": "hub-a"}})
 
-    assert spoke.hub == NodeReference("hub-a")
+    assert spoke.hub == HubConnection("hub-a")
     assert spoke.only is None
 
     fields.take_set_values(spoke, {"hub": {"node": "hub-b"}, "only": {"node": "hub-a"}})
-    assert (spoke.hub, spoke.only) == (NodeReference("hub-b"), NodeReference("hub-a"))
+    assert (spoke.hub, spoke.only) == (HubConnection("hub-b"), HubConnection("hub-a"))
 
     fields.take_set_values(spoke, {})
     assert (spoke.hub, spoke.only) == (None, None), "a wire taken out leaves the field unset"

@@ -10,13 +10,13 @@ declared inside a pytest module would have the child import the test suite.
 
 import json
 
-from tatolab.stream import OutputPin, connection_type, log, node
+from tatolab.stream import Connection, OutputPin, connection_type, log, node
 
 REACHED_MARKER_PREFIX = "MARKER:CONNECTION_REACHED_"
 
 
-@connection_type(description="A hub a spoke reaches.")
-class HubConnection:
+@connection_type
+class HubConnection(Connection):
     """The kind of node a hub gives out."""
 
 
