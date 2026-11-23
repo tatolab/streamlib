@@ -5,6 +5,7 @@ mod bundle_member_link_ends;
 mod components;
 mod config_node_reference_edges;
 mod config_schema_value_checks;
+pub mod connection_wire_lowering;
 mod data_structure;
 
 mod edges;

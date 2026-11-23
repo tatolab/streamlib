@@ -214,6 +214,13 @@ impl PortInfo {
             .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting)
     }
 
+    /// Whether this port is a Connection, whose wire brings a node and carries no data.
+    pub fn takes_a_connection(&self) -> bool {
+        self.pin
+            .as_ref()
+            .is_some_and(|pin| pin.pin_type.is_a_connection())
+    }
+
     /// Whether this port is a Trigger, whose messages each carry an event and no value.
     pub fn is_a_trigger(&self) -> bool {
         self.pin

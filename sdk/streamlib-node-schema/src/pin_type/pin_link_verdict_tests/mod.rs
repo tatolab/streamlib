@@ -5,6 +5,7 @@ use super::*;
 use crate::NodeClassImportPath;
 
 mod bundle_tests;
+mod connection_tests;
 
 fn boolean() -> PinType {
     PinType::Boolean {}

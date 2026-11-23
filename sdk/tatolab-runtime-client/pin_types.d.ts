@@ -91,6 +91,17 @@ export type PinType = {
    */
   named_pin_type: NamedPinTypeImportPath;
   type: "named";
+} | {
+  /**
+   * The class a module declares the connection by; two ends connect only when it is the
+   * same.
+   */
+  connection_type: NamedPinTypeImportPath;
+  /**
+   * On an input, whether one input at most of its node type may take a given node.
+   */
+  one_referrer_per_referenced_node?: boolean;
+  type: "connection";
 } | ({
   /**
    * The node type the referenced node must be; absent, any node.
@@ -283,7 +294,7 @@ export interface PinProjectAssetAnnotation {
 /**
  * The name of a built-in pin type: the `type` tag of its pin type.
  */
-export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
+export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "connection" | "node_reference" | "pin_type_choice";
 
 /**
  * An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].

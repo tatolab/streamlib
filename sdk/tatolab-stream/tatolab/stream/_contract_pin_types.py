@@ -25,6 +25,7 @@ __all__ = [
     "ChannelsOutputPortSampleRate",
     "ChannelsOutputPortSampleType",
     "ColorPinType",
+    "ConnectionPinType",
     "DeclaredPinType",
     "EncodedAudioPinType",
     "EncodedVideoPinType",
@@ -239,6 +240,22 @@ class NamedPinType(TypedDict):
     type: Literal["named"]
 
 
+class ConnectionPinType(TypedDict):
+    """A node given out on a wire: an output gives out its own node, and an input takes
+    the node a wire brings it from. It carries no data and holds no stored value.
+    """
+
+    connection_type: NamedPinTypeImportPath
+    """The class a module declares the connection by; two ends connect only when it is
+    the same.
+    """
+
+    one_referrer_per_referenced_node: NotRequired[bool]
+    """On an input, whether one input at most of its node type may take a given node."""
+
+    type: Literal["connection"]
+
+
 class NodeReferencePinType(TypedDict):
     """A setting naming another node of the graph. It never takes a wire."""
 
@@ -282,6 +299,7 @@ type PinType = (
     | ListOfPinType
     | BundlePinType
     | NamedPinType
+    | ConnectionPinType
     | NodeReferencePinType
     | PinTypeChoicePinType
 )
@@ -497,6 +515,7 @@ type BuiltInPinTypeName = Literal[
     "list_of",
     "bundle",
     "named",
+    "connection",
     "node_reference",
     "pin_type_choice",
 ]
@@ -859,6 +878,21 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         flows=("stream", "value"),
         annotations=("meaning",),
         python_forms=("named_pin_type",),
+        value_component=None,
+        since=3,
+        stability="experimental",
+    ),
+    PinTypeDescription(
+        name="connection",
+        label="Connection",
+        documentation=(
+            "A node given out on a wire, a module's class naming its kind: an output "
+            "gives out its own node, and an input takes the node its wire comes from. "
+            "It carries no data."
+        ),
+        flows=("value",),
+        annotations=(),
+        python_forms=("connection_type",),
         value_component=None,
         since=3,
         stability="experimental",

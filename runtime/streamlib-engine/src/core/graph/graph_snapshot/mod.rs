@@ -450,7 +450,10 @@ impl GraphSnapshot {
         let variables = fragments
             .graph_the_runtime_runs
             .with_graph_variables_resolved(&fragments.fragments_as_drawn, node_types)?;
-        let top_level = &variables.graph_the_runtime_runs;
+        let (top_level, connection_wires_as_drawn) = variables
+            .graph_the_runtime_runs
+            .with_connection_wires_lowered(node_types)?;
+        let top_level = &top_level;
         let interface = top_level.with_graph_interface_resolved(
             GraphInterfaceLevel::TheStreamsTopLevel,
             &|linked_port, direction| {
@@ -467,6 +470,7 @@ impl GraphSnapshot {
             graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn {
                 fragments_as_drawn: fragments.fragments_as_drawn,
                 variables_as_drawn: variables.variables_as_drawn,
+                connection_wires_as_drawn,
                 interface_as_drawn: interface.interface_as_drawn,
                 groups_as_drawn: self.groups.clone(),
                 studio_as_drawn: self.studio.clone(),

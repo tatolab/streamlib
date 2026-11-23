@@ -743,6 +743,16 @@ fn holds_what_the_input_asks_for(output: &PinType, input: &PinType) -> bool {
                 element_type: input,
             },
         ) => holds_what_the_input_asks_for(output, input),
+        (
+            PinType::Connection {
+                connection_type: output,
+                ..
+            },
+            PinType::Connection {
+                connection_type: input,
+                ..
+            },
+        ) => output == input,
         _ => output == input,
     }
 }
