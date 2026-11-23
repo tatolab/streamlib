@@ -793,11 +793,11 @@ pub(crate) fn a_view_of_a_project_reading_records(
     }
 }
 
-/// Write into `project_directory`'s `views/` the view `view_folder_name`, reading records on
-/// `in1`, which the project then brings as a node type that runs in the app process.
-pub(crate) fn a_view_reading_records_in(
+/// Write into `project_directory`'s `views/` the view `view_folder_name`, of `manifest`.
+pub(crate) fn a_view_in(
     project_directory: &std::path::Path,
     view_folder_name: &str,
+    manifest: &serde_json::Value,
 ) {
     let folder = project_directory
         .join(streamlib_project_repository::PROJECT_VIEWS_DIRECTORY)
@@ -809,9 +809,41 @@ pub(crate) fn a_view_reading_records_in(
     .expect("the view's folder");
     std::fs::write(
         folder.join(streamlib_project_repository::TATOLAB_VIEW_MANIFEST_FILE_NAME),
-        serde_json::to_vec(&a_view_manifest_reading_records()).expect("the manifest serializes"),
+        serde_json::to_vec(manifest).expect("the manifest serializes"),
     )
     .expect("the view's manifest");
+}
+
+/// Write into `project_directory`'s `views/` the view `view_folder_name`, reading records on
+/// `in1`, which the project then brings as a node type that runs in the app process.
+pub(crate) fn a_view_reading_records_in(
+    project_directory: &std::path::Path,
+    view_folder_name: &str,
+) {
+    a_view_in(
+        project_directory,
+        view_folder_name,
+        &a_view_manifest_reading_records(),
+    );
+}
+
+/// The phrase the refusal of a view whose port is declared by the older `family` field holds.
+pub(crate) const THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY: &str = "older `family` field";
+
+/// Write into `project_directory`'s `views/` the view `view_folder_name`, whose `video` input is
+/// still declared by the older `family` field, so it does not open.
+pub(crate) fn a_view_that_does_not_open_in(
+    project_directory: &std::path::Path,
+    view_folder_name: &str,
+) {
+    a_view_in(
+        project_directory,
+        view_folder_name,
+        &serde_json::json!({
+            "contract": "1.1", "title": "Stage", "entry": "index.html", "placement": "node",
+            "inputs": [{ "name": "video", "family": "image" }]
+        }),
+    );
 }
 
 fn a_view_manifest_reading_records() -> serde_json::Value {
