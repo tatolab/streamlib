@@ -446,3 +446,60 @@ fn a_long_description_wraps_before_the_column_and_list_items_hang() {
     assert!(docstring.contains("\n        `fit`: item"), "{docstring}");
     assert!(docstring.contains("\n            item"), "{docstring}");
 }
+
+/// A built-in whose ports carry the type its `bundle_type` setting chooses renders each as a pin
+/// of `object` typed by that setting, and the setting as a pin type choice holding none until it
+/// is set.
+///
+/// Mental-revert: reading only ports that state one type renders the built-in untyped, with an
+/// empty config class and no pins.
+#[test]
+fn a_port_typed_by_a_setting_renders_as_a_pin_typed_by_that_setting() {
+    let typed_by_the_setting = json!({"kind": "set_by_input", "input_name": "bundle_type"});
+    let rendered = render_built_in_node_classes_module(&[descriptor_from(json!({
+        "type": "tatolab.stream:Carrier",
+        "description": "Carries a bundle",
+        "inputs": [
+            {"name": "carried", "description": "What is carried", "delivery_profile": "ordered",
+             "pin_type": typed_by_the_setting, "flow": "value"},
+            {"name": "bundle_type", "description": "The bundle carried",
+             "pin_type": {"kind": "is", "pin_type": {"type": "pin_type_choice"}}, "flow": "value",
+             "input_mode": {"mode": "setting_only", "read": "at_setup"}}
+        ],
+        "outputs": [
+            {"name": "passed", "description": "What passes on", "pin_type": typed_by_the_setting,
+             "flow": "value"}
+        ]
+    }))])
+    .unwrap();
+
+    assert!(
+        rendered.contains("class Carrier(BuiltInNode[InputValuesOfATypedBuiltInNode]):"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "    carried: InputPin[\n        Annotated[\n            object,\n            \
+             PinTypeFromSetting(\"bundle_type\"),\n"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "    bundle_type: Annotated[\n        PinTypeChoice | None,\n        SettingOnly(),\n"
+        ),
+        "{rendered}"
+    );
+    assert!(rendered.contains("    ] = None\n"), "{rendered}");
+    assert!(
+        rendered.contains(
+            "    passed: OutputPin[\n        Annotated[\n            object,\n            \
+             PinTypeFromSetting(\"bundle_type\"),\n"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting\n"),
+        "{rendered}"
+    );
+}

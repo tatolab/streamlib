@@ -391,6 +391,7 @@ pub(crate) fn the_value_an_input_reads(
     port: &PortInfo,
     fed: &WhatTheLinksIntoAnInputFeed,
 ) -> Option<InputValueReadOnTheWire> {
+    let port = &*port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
     if let Some(members) = the_bundle_members_of(port)
         && !node.is_an_exposed_config_field_input(&port.name)
     {
@@ -448,6 +449,7 @@ fn the_value_an_unlinked_input_is_handed(
     node: &GraphNode,
     port: &PortInfo,
 ) -> Option<Value> {
+    let port = &*port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
     if let Some(members) = the_bundle_members_of(port) {
         if !the_input_port_takes_a_value(node.node_kind(), port) {
             return None;

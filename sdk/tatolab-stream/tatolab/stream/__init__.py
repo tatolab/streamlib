@@ -76,10 +76,12 @@ from ._project_asset_uuid import ProjectAssetUuid as ProjectAssetUuid
 from ._built_in_nodes import AudioToTensor as AudioToTensor
 from ._built_in_nodes import BooleanToFloat as BooleanToFloat
 from ._built_in_nodes import BooleanToInteger as BooleanToInteger
+from ._built_in_nodes import BreakBundle as BreakBundle
 from ._built_in_nodes import FloatToBoolean as FloatToBoolean
 from ._built_in_nodes import FloatToInteger as FloatToInteger
 from ._built_in_nodes import IntegerToBoolean as IntegerToBoolean
 from ._built_in_nodes import IntegerToFloat as IntegerToFloat
+from ._built_in_nodes import MakeBundle as MakeBundle
 from ._built_in_nodes import TensorToAudio as TensorToAudio
 from ._built_in_nodes import TensorToTexture as TensorToTexture
 from ._built_in_nodes import TextureFormatConvert as TextureFormatConvert
@@ -200,6 +202,7 @@ __all__ = [
     "AudioWindowContract",
     "BooleanToFloat",
     "BooleanToInteger",
+    "BreakBundle",
     "CastFromMessagePayloadBytes",
     "Channels",
     "ChannelsBlock",
@@ -229,6 +232,7 @@ __all__ = [
     "KernelDispatchBatch",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
+    "MakeBundle",
     "Message",
     "ModelInputTensor",
     "ModelInputTensorChannelOrder",

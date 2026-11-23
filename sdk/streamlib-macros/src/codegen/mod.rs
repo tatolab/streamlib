@@ -589,6 +589,7 @@ fn generate_descriptor_from_schema(
             let family_tokens = port_family_declaration_tokens(&p.family);
             let pin_declaration_tokens = pin_declaration_tokens(
                 p.pin_type.as_ref(),
+                p.pin_type_from_setting.as_deref(),
                 p.flow,
                 &p.former_names,
                 p.may_be_unset,
@@ -598,6 +599,15 @@ fn generate_descriptor_from_schema(
                 None => quote! { ::std::option::Option::None },
             };
             let lifetime_tokens = node_value_lifetime_tokens(p.lifetime);
+            let input_mode_tokens = if p.takes_a_value {
+                quote! {
+                    ::std::option::Option::Some(
+                        __streamlib_sdk::descriptors::NodeInputMode::WireOrValue
+                    )
+                }
+            } else {
+                quote! { ::std::option::Option::None }
+            };
             quote! {
                 .with_input(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -610,7 +620,7 @@ fn generate_descriptor_from_schema(
                     pin_default: ::std::option::Option::None,
                     pin_declaration: #pin_declaration_tokens,
                     lifetime: #lifetime_tokens,
-                    input_mode: ::std::option::Option::None,
+                    input_mode: #input_mode_tokens,
                 })
             }
         })
@@ -628,6 +638,7 @@ fn generate_descriptor_from_schema(
             let family_tokens = port_family_declaration_tokens(&p.family);
             let pin_declaration_tokens = pin_declaration_tokens(
                 p.pin_type.as_ref(),
+                p.pin_type_from_setting.as_deref(),
                 p.flow,
                 &p.former_names,
                 p.may_be_unset,

@@ -88,6 +88,14 @@ impl BuiltInNodePortDescriptor {
             .then(|| declared.get("pin_type"))
             .flatten()
     }
+
+    /// The setting whose chosen type the port carries; `None` when it is typed another way.
+    fn the_setting_choosing_its_type(&self) -> Option<&str> {
+        let declared = self.pin_type.as_ref()?;
+        (declared.get("kind").and_then(Value::as_str) == Some("set_by_input"))
+            .then(|| declared.get("input_name").and_then(Value::as_str))
+            .flatten()
+    }
 }
 
 /// The part of a port's family declaration a built-in's docstring renders.

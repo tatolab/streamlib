@@ -235,6 +235,44 @@ impl PortInfo {
             .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_at_setup)
     }
 
+    /// This port as it is typed while its node holds `input_values`, beside `inputs`, its node's
+    /// inputs: a port whose type a setting chooses carries the type that setting holds, else its
+    /// default; any other port, or one whose setting chooses nothing yet, as it is.
+    pub fn typed_by_its_setting_in(
+        &self,
+        inputs: &[PortInfo],
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> std::borrow::Cow<'_, PortInfo> {
+        let Some(PinTypeAsDeclared {
+            pin_type: crate::core::descriptors::DeclaredPinType::SetByInput { input_name },
+            flow,
+        }) = &self.declared_pin_type
+        else {
+            return std::borrow::Cow::Borrowed(self);
+        };
+        let chosen = inputs
+            .iter()
+            .find(|setting| &setting.name == input_name)
+            .and_then(|setting| {
+                input_values
+                    .get(&setting.name)
+                    .or(setting.pin_default.as_ref())
+            })
+            .and_then(|held| {
+                serde_json::from_value::<crate::core::descriptors::PinType>(held.clone()).ok()
+            });
+        match chosen {
+            Some(pin_type) => std::borrow::Cow::Owned(PortInfo {
+                pin: Some(crate::core::descriptors::ResolvedPin {
+                    pin_type,
+                    flow: *flow,
+                }),
+                ..self.clone()
+            }),
+            None => std::borrow::Cow::Borrowed(self),
+        }
+    }
+
     /// The value `value` taken as this input's stored value, or what it takes instead, by the
     /// pin it declares; `None` for a port that names no pin type.
     pub fn check_value(

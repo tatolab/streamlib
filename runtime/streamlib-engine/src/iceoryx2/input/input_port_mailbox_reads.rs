@@ -120,10 +120,12 @@ impl InputMailboxesInner {
                             continue;
                         }
                     };
+                    let set_on_the_input = self.bundle_values_set_on_its_inputs.read();
                     match members_at_the_read.the_message_the_port_reads(
                         &channel_user_header,
                         whole_payload,
                         &mut port_config.newest_value_of_each_member_put_at_the_read,
+                        set_on_the_input.get(&bound.local_port),
                     ) {
                         Ok(Some((member_header, member_payload))) => {
                             channel_user_header = member_header;

@@ -58,7 +58,7 @@ pub trait NodeSettings: Default + Serialize + DeserializeOwned + Send + 'static 
 /// The pin type a setting holding a value of this Rust type is declared with.
 #[diagnostic::on_unimplemented(
     message = "a setting of type `{Self}` has no pin type",
-    note = "a setting is a bool, a String, an integer of 8, 16 or 32 bits, an f32 or f64, or a Vec of one; a String chosen from a list is marked `#[options(\"…\", …)]`"
+    note = "a setting is a bool, a String, an integer of 8, 16 or 32 bits, an f32 or f64, a Vec of one, or an `Option<PinType>` choosing a pin type; a String chosen from a list is marked `#[options(\"…\", …)]`"
 )]
 pub trait SettingPinType {
     /// The pin type a setting of this type holds.
@@ -110,6 +110,14 @@ integer_setting_pin_type! {
     u32 => UInt32,
 }
 
+/// A setting choosing a pin type, such as the bundle a node makes, which holds none until one
+/// is chosen.
+impl SettingPinType for Option<PinType> {
+    fn setting_pin_type() -> PinType {
+        PinType::PinTypeChoice { among: Vec::new() }
+    }
+}
+
 impl<Element: SettingPinType> SettingPinType for Vec<Element> {
     fn setting_pin_type() -> PinType {
         PinType::ListOf {
@@ -134,7 +142,8 @@ pub fn the_menu_of_a_setting<T: SettingChosenFromOptions>(option_names: &[&str])
 }
 
 /// The input setting `name` is declared as: described by `description`, of `pin_type`, holding
-/// `default` until it is set, taking no wire and read when its node is set up.
+/// `default` until it is set, taking no wire and read when its node is set up. A setting whose
+/// default is `null` holds nothing until it is set, so it may be unset.
 pub fn the_input_of_a_setting(
     name: &str,
     description: &str,
@@ -142,17 +151,25 @@ pub fn the_input_of_a_setting(
     default: Value,
 ) -> PortDescriptor {
     let family = PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records);
-    let mut setting = PortDescriptor::new(
+    let may_be_unset = default.is_null();
+    let setting = PortDescriptor::new(
         name,
         description,
         false,
         PortFamilyDeclaration::of_family(family),
     )
-    .with_pin_declaration(PinDeclaration::exactly(pin_type))
+    .with_pin_declaration(PinDeclaration {
+        may_be_unset,
+        ..PinDeclaration::exactly(pin_type)
+    })
     .with_input_mode(NodeInputMode::SettingOnly {
         read: SettingReadTime::AtSetup,
-    })
-    .with_pin_default(default);
+    });
+    let mut setting = if may_be_unset {
+        setting
+    } else {
+        setting.with_pin_default(default)
+    };
     // The engine reads a wire into a setting in the node's place, so no message is delivered
     // to it.
     setting.delivery_profile = None;
