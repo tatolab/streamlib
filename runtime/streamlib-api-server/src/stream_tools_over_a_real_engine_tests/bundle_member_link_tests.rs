@@ -99,7 +99,7 @@ fn a_project_whose_main_stream_holds(
     the_bundle_member_link_node_types_registered();
     let nodes: Vec<Value> = nodes
         .iter()
-        .map(|(id, name, node_type)| json!({ "id": id, "name": name, "type": node_type, "config": {} }))
+        .map(|(id, name, node_type)| json!({ "id": id, "name": name, "type": node_type }))
         .collect();
     ProjectWithGraphDocuments::holding(json!({ "stream": "main", "nodes": nodes, "links": links }))
 }

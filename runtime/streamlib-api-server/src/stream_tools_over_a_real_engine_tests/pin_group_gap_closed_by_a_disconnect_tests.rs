@@ -65,13 +65,10 @@ fn the_pin_group_gap_node_types_registered() {
 /// Three sources, each linked into one slot of the mixer's `layers`.
 fn a_project_whose_mixer_has_three_linked_slots() -> ProjectWithGraphDocuments {
     the_pin_group_gap_node_types_registered();
-    let mut nodes =
-        vec![json!({ "id": MIXER_UUID, "name": "mixer", "type": MIXER_TYPE, "config": {} })];
+    let mut nodes = vec![json!({ "id": MIXER_UUID, "name": "mixer", "type": MIXER_TYPE })];
     let mut links = Vec::new();
     for (slot, source) in SOURCE_UUIDS.iter().enumerate() {
-        nodes.push(
-            json!({ "id": source, "name": format!("s{slot}"), "type": SOURCE_TYPE, "config": {} }),
-        );
+        nodes.push(json!({ "id": source, "name": format!("s{slot}"), "type": SOURCE_TYPE }));
         links.push(json!({
             "source": { "node": source, "port": "value" },
             "target": { "node": MIXER_UUID, "port": format!("layers.{slot}.layer") },

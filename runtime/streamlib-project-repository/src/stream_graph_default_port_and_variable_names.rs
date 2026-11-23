@@ -161,11 +161,11 @@ mod tests {
     fn a_default_name_takes_the_first_number_no_node_of_its_kind_holds() {
         let level = a_level_holding(json!([
             {"id": "00000000-0000-0000-0000-000000000001", "name": "graphinput",
-             "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "input1", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input1", "family": "image"}},
             {"id": "00000000-0000-0000-0000-000000000002", "name": "graphinput-2",
-             "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "Input3", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "Input3", "family": "image"}},
             {"id": "00000000-0000-0000-0000-000000000003", "name": "graphoutput",
-             "type": GRAPH_OUTPUT_NODE_TYPE, "config": {"port": "input2", "family": "image"}},
+             "type": GRAPH_OUTPUT_NODE_TYPE, "input_values": {"port": "input2", "family": "image"}},
         ]));
         assert_eq!(
             the_default_named(GRAPH_INPUT_NODE_TYPE, json!({}), &level),
@@ -173,9 +173,9 @@ mod tests {
         );
         let level = a_level_holding(json!([
             {"id": "00000000-0000-0000-0000-000000000001", "name": "graphinput",
-             "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "input1", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input1", "family": "image"}},
             {"id": "00000000-0000-0000-0000-000000000002", "name": "graphinput-2",
-             "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "input2", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input2", "family": "image"}},
         ]));
         assert_eq!(
             the_default_named(GRAPH_INPUT_NODE_TYPE, json!({"port": ""}), &level),
@@ -209,9 +209,9 @@ mod tests {
         );
         let level = a_level_holding(json!([
             {"id": "00000000-0000-0000-0000-000000000001", "name": "setvariable",
-             "type": SET_VARIABLE_NODE_TYPE, "config": {"variable": "var1"}},
+             "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "var1"}},
             {"id": "00000000-0000-0000-0000-000000000002", "name": "setvariable-2",
-             "type": SET_VARIABLE_NODE_TYPE, "config": {"variable": "blur"}},
+             "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "blur"}},
         ]));
         assert_eq!(
             the_default_named(SET_VARIABLE_NODE_TYPE, json!({}), &level),

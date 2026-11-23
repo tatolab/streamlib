@@ -166,7 +166,7 @@ fn a_retype_refused_after_a_set_left_a_node_to_rebuild_answers_and_builds_it_bac
               "type": the_node_type_reading_its_settings_at_setup().as_str(),
               "input_values": { "kernel_size": 3 } },
             { "id": LEVEL_NODE_UUID, "name": "level", "type": "tatolab.stream:GraphInput",
-              "config": { "port": "level", "pin_type": { "type": "float" }, "value": 0.1,
+              "input_values": { "port": "level", "pin_type": { "type": "float" }, "value": 0.1,
                           "range": [0, 1] } },
         ],
         "links": [],

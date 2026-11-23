@@ -140,7 +140,6 @@ fn a_document_of(nodes: &[(&str, &str)], links: &[((&str, &str), (&str, &str))])
                 "id": Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()),
                 "name": name,
                 "type": node_type,
-                "config": {},
             }))
             .collect::<Vec<_>>(),
         "links": links
@@ -372,7 +371,6 @@ fn a_document_node(name: &str, node_type: &str) -> StreamGraphDocumentNode {
         "id": the_uuid_of(name),
         "name": name,
         "type": node_type,
-        "config": {},
     }))
     .unwrap()
 }

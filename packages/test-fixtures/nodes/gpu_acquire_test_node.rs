@@ -14,10 +14,11 @@
 //!      the host-allocated mapped memory is reachable, then drops the
 //!      `PixelBuffer`.
 //!   3. Writes "OK\n<width>x<height>\nsentinel_addr=0x<hex>" or
-//!      "ERR:<message>" to the configured `output_path` so the
+//!      "ERR:<message>" to the `output_path` its setting names so the
 //!      integration test can verify the round-trip.
 //!   4. `teardown()` — drops the stashed `GpuContextLimitedAccess`.
 
+use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
@@ -25,9 +26,22 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::nodes::ManualNode;
 use streamlib::sdk::rhi::PixelFormat;
 
+/// The settings [`GpuAcquireTest`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpuAcquireTestSettings {
+    #[description = "The height of the pixel buffer acquired, in pixels."]
+    pub height: u32,
+    #[description = "The file the node writes its result to."]
+    pub output_path: String,
+    #[description = "The width of the pixel buffer acquired, in pixels."]
+    pub width: u32,
+}
+
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::test_fixture_node_configs::GpuAcquireTestNodeConfig,
+    settings = crate::gpu_acquire_test_node::GpuAcquireTestSettings,
 )]
 #[meta(
     description = "GPU integration test fixture — exercises acquire_pixel_buffer, plane_base_address_pixel_buffer, and the pixel-buffer lifecycle through GpuContextLimitedAccess"
@@ -46,9 +60,9 @@ impl ManualNode for GpuAcquireTest::Node {
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.config.output_path.clone();
-        let width = self.config.width;
-        let height = self.config.height;
+        let output_path = self.settings.output_path.clone();
+        let width = self.settings.width;
+        let height = self.settings.height;
 
         let result: Result<(u32, u32, *mut u8)> = (|| {
             let gpu = self

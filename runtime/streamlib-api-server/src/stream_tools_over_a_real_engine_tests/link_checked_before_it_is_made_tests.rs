@@ -28,7 +28,7 @@ fn a_project_whose_main_stream_holds_a_mixer_and_a_graph_input() -> ProjectWithG
     let mut graph = project.the_graph_document_of("main");
     graph["nodes"].as_array_mut().expect("nodes").push(json!({
         "id": VOLUME_GRAPH_INPUT_NODE_UUID, "name": "volume", "type": "tatolab.stream:GraphInput",
-        "config": { "port": "volume", "family": "channels" },
+        "input_values": { "port": "volume", "family": "channels" },
     }));
     project.write_the_graph_document(graph);
     project
@@ -464,7 +464,7 @@ pub(super) fn register_the_link_check_node_types_once() {
 /// `seconds` and one taking Integer `frames`.
 pub(super) fn a_project_whose_main_stream_holds_function_nodes() -> ProjectWithGraphDocuments {
     register_the_link_check_node_types_once();
-    let node = |id: &str, name: &str, node_type: &str| json!({ "id": id, "name": name, "type": node_type, "config": {} });
+    let node = |id: &str, name: &str, node_type: &str| json!({ "id": id, "name": name, "type": node_type });
     let link = |source: (&str, &str), target: (&str, &str)| {
         json!({ "source": { "node": source.0, "port": source.1 },
                 "target": { "node": target.0, "port": target.1 } })
@@ -753,9 +753,9 @@ async fn check_link_refuses_unchecked_a_link_reaching_a_fragment_node() {
         "stream": "left",
         "nodes": [
             { "id": FRAGMENT_NODE_UUID, "name": "main", "type": STREAM_FRAGMENT_NODE_TYPE,
-              "config": { "stream": { "asset": project.stream_asset_of("main") } } },
+              "input_values": { "stream": { "asset": project.stream_asset_of("main") } } },
             { "id": SOURCE_NODE_UUID, "name": "monitor",
-              "type": StreamToolsTestSink::node_class_import_path().as_str(), "config": {} },
+              "type": StreamToolsTestSink::node_class_import_path().as_str() },
         ],
         "links": [],
     }));

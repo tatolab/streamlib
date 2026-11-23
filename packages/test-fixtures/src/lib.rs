@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-pub mod test_fixture_node_configs;
-
 #[path = "../nodes/compute_kernel_test_node.rs"]
 pub mod compute_kernel_test_node;
 #[path = "../nodes/concurrent_escalate_test_node.rs"]

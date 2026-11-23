@@ -5855,7 +5855,6 @@ name = "streamlib-test-fixtures"
 version = "0.68.82"
 dependencies = [
  "serde",
- "serde_json",
  "streamlib",
  "streamlib-slang-shader-compiler",
 ]

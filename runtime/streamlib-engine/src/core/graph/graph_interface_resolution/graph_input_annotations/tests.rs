@@ -106,7 +106,7 @@ fn the_family_no_linked_port_states(
 /// `settings`.
 fn the_refusal_of_a_top_level_graph_input_saved_with(settings: serde_json::Value) -> String {
     GraphSnapshot::from_graph_document(json!({
-        "nodes": [{"name": "lines", "type": GRAPH_INPUT_NODE_TYPE, "config": settings}],
+        "nodes": [{"name": "lines", "type": GRAPH_INPUT_NODE_TYPE, "input_values": settings}],
         "links": [],
     }))
     .and_then(|graph| {

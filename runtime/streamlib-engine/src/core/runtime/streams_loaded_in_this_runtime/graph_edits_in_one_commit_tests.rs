@@ -92,7 +92,6 @@ fn a_document_of(nodes: &[(&str, &str)], links: &[((&str, &str), (&str, &str))])
                 "id": the_uuid_of(name),
                 "name": name,
                 "type": node_type,
-                "config": {},
             }))
             .collect::<Vec<_>>(),
         "links": links

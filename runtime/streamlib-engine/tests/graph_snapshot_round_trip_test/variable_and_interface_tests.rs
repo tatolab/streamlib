@@ -47,9 +47,12 @@ fn an_image_variable_read_by_two_readers(
         "stream": "image-variable",
         "nodes": [
             {"name": "camera", "type": camera.as_str()},
-            {"name": "set-camera", "type": "tatolab.stream:SetVariable", "config": {"variable": "camera"}},
-            {"name": "get-camera", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}},
-            {"name": "get-camera-2", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}},
+            {"name": "set-camera", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "camera"}},
+            {"name": "get-camera", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "camera"}},
+            {"name": "get-camera-2", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "camera"}},
             {"name": "front", "type": camera.as_str().replace("VariableCamera", "VariableDisplay")},
             {"name": "back", "type": second_reader.as_str()}
         ],
@@ -174,11 +177,11 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
         "nodes": [
             {"name": "cloudflare", "type": gateway.as_str()},
             {"name": "set-connection", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
+             "input_values": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
             {"name": "get-connection", "type": "tatolab.stream:GetVariable",
-             "config": {"variable": "connection"}},
+             "input_values": {"variable": "connection"}},
             {"name": "camera-track", "type": track_import_path.as_str(),
-             "config": {"gateway": {"node": "get-connection"}}}
+             "input_values": {"gateway": {"node": "get-connection"}}}
         ]
     });
 
@@ -207,11 +210,11 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
         "nodes": [
             {"name": "cloudflare", "type": track_import_path.as_str()},
             {"name": "set-connection", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
+             "input_values": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
             {"name": "get-connection", "type": "tatolab.stream:GetVariable",
-             "config": {"variable": "connection"}},
+             "input_values": {"variable": "connection"}},
             {"name": "camera-track", "type": track_import_path.as_str(),
-             "config": {"gateway": {"node": "get-connection"}}}
+             "input_values": {"gateway": {"node": "get-connection"}}}
         ]
     });
     let refusal = the_refusal_of(
@@ -272,9 +275,9 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
             "nodes": [
                 {"name": "camera", "type": camera.as_str()},
                 {"name": "camera-out", "type": "tatolab.stream:GraphOutput",
-                 "config": {"port": "Camera", "family": output_family}},
+                 "input_values": {"port": "Camera", "family": output_family}},
                 {"name": "overlay-in", "type": "tatolab.stream:GraphInput",
-                 "config": {"port": "overlay", "family": "image"}},
+                 "input_values": {"port": "overlay", "family": "image"}},
                 {"name": "display", "type": display.as_str()}
             ],
             "links": [
@@ -393,9 +396,10 @@ fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port
         serde_json::json!({
             "stream": "interface-live-update",
             "nodes": [
-                {"name": "receive", "type": import_path.as_str(), "config": {"family": "packets"}},
+                {"name": "receive", "type": import_path.as_str(),
+                 "input_values": {"family": "packets"}},
                 {"name": "received", "type": "tatolab.stream:GraphOutput",
-                 "config": {"port": "received", "family": "packets"}}
+                 "input_values": {"port": "received", "family": "packets"}}
             ],
             "links": [
                 {"source": {"node": "receive", "port": "content"},

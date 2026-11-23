@@ -356,7 +356,7 @@ pub(crate) fn a_stream_graph_crashing_while(stream_id: &str, trigger: &Path) -> 
         "nodes": [{
             "name": "crasher",
             "type": CRASH_ON_DEMAND_TEST_NODE_TYPE,
-            "config": {"crash_while_this_file_exists": trigger, "crash_with": "SIGSEGV"},
+            "input_values": {"crash_while_this_file_exists": trigger, "crash_with": "SIGSEGV"},
         }],
     })
 }

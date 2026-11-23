@@ -136,16 +136,16 @@ fn every_operation_and_its_inverse_leave_the_document_as_it_was() {
 fn a_look_fragment_run(blur_radius: u32, with_tint: bool) -> Value {
     let mut nodes = vec![
         json!({"name": "graphinput", "type": "tatolab.stream:GraphInput",
-               "config": {"port": "video", "family": "packets"}}),
-        json!({"name": "soft", "type": "generators.soft:soft", "config": {},
+               "input_values": {"port": "video", "family": "packets"}}),
+        json!({"name": "soft", "type": "generators.soft:soft",
         "fragment": {
             "nodes": [{"name": "blur", "type": "nodes.blur:Blur",
-                       "config": {"radius": blur_radius}}],
+                       "input_values": {"radius": blur_radius}}],
             "links": [],
         }}),
     ];
     if with_tint {
-        nodes.push(json!({"name": "tint", "type": "nodes.tint:Tint", "config": {}}));
+        nodes.push(json!({"name": "tint", "type": "nodes.tint:Tint"}));
     }
     json!({
         "nodes": nodes,
@@ -560,8 +560,8 @@ fn a_generators_group_takes_a_uuid_kept_by_its_title_and_marks_each_node_it_name
     let a_run_grouping = |title: &str| {
         json!({
             "nodes": [
-                {"name": "blur", "type": "nodes.blur:Blur", "config": {}},
-                {"name": "tint", "type": "nodes.tint:Tint", "config": {}},
+                {"name": "blur", "type": "nodes.blur:Blur"},
+                {"name": "tint", "type": "nodes.tint:Tint"},
             ],
             "links": [],
             "groups": [{"title": title, "colour": "#f97316", "nodes": ["blur", "tint"]}],

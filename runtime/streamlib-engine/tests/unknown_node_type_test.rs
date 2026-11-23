@@ -103,8 +103,7 @@ fn graph_snapshot_validate_rejects_unknown_node_type() {
         "nodes": [
             {
                 "name": "ghost",
-                "type": "ghost_package::DefinitelyNotARegisteredNode",
-                "config": {}
+                "type": "ghost_package::DefinitelyNotARegisteredNode"
             }
         ]
     }"#;

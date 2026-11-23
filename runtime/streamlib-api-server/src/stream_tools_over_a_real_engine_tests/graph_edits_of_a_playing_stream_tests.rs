@@ -83,7 +83,6 @@ fn a_project_of_audio_nodes(
                 "id": Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()),
                 "name": name,
                 "type": node_type,
-                "config": {},
             }))
             .collect::<Vec<_>>(),
         "links": links

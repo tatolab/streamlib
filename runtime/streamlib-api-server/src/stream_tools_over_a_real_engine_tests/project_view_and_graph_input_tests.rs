@@ -143,7 +143,7 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
     let mut graph = the_graph_of_a_stream_named("main");
     graph["nodes"].as_array_mut().unwrap().push(json!({
         "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
-        "config": { "bpm": 128 },
+        "input_values": { "bpm": 128 },
     }));
     let project = ProjectWithGraphDocuments::holding(graph);
     a_view_folder_in(
@@ -208,7 +208,7 @@ async fn a_view_node_renders_its_manifest_settings_as_inputs_reading_its_config(
     let mut graph = the_graph_of_a_stream_named("main");
     graph["nodes"].as_array_mut().unwrap().push(json!({
         "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
-        "config": { "bpm": 128, "curve": { "ease": "in" } },
+        "input_values": { "bpm": 128, "curve": { "ease": "in" } },
     }));
     let project = ProjectWithGraphDocuments::holding(graph);
     a_view_folder_in(
@@ -306,9 +306,9 @@ fn the_graph_of_a_stream_whose_cue_input_two_nodes_read(default: Value) -> Value
         "stream": "main",
         "nodes": [
             { "id": CUE_GRAPH_INPUT_NODE_UUID, "name": "cue", "type": "tatolab.stream:GraphInput",
-              "config": { "port": "cue", "family": "records", "default": default } },
-            { "name": "left", "type": reader_type.as_str(), "config": {} },
-            { "name": "right", "type": reader_type.as_str(), "config": {} },
+              "input_values": { "port": "cue", "family": "records", "default": default } },
+            { "name": "left", "type": reader_type.as_str() },
+            { "name": "right", "type": reader_type.as_str() },
         ],
         "links": [
             { "source": { "node": "cue", "port": "value" }, "target": { "node": "left", "port": "cue" } },

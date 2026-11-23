@@ -78,7 +78,8 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
         "streams/reader.graph.json",
         &json!({
             "asset": Uuid::new_v4().to_string(),
-            "nodes": [{"name": "player", "config": {"stream": {"asset": stream_asset.to_string()}}}],
+            "nodes": [{"name": "player",
+                       "input_values": {"stream": {"asset": stream_asset.to_string()}}}],
         }),
     );
     match repository.apply_asset_changes(

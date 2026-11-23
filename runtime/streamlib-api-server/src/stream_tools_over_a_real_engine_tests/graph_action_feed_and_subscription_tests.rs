@@ -435,7 +435,6 @@ async fn a_stream_graph_subscriber_is_sent_a_raise_no_graph_event_reports() {
             "id": SOURCE_NODE_UUID,
             "name": "source",
             "type": StreamToolsTestSourceWhoseProcessRaises::node_class_import_path().as_str(),
-            "config": {},
         }],
         "links": [],
     }));
