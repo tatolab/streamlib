@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pytest
@@ -21,6 +22,7 @@ from tatolab.stream import (
     TexturePixelFormats,
     node,
 )
+from tatolab.stream._class_node_declaration import read_class_node_ports_and_members
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -68,6 +70,33 @@ def test_an_output_pin_typed_by_the_parameter_follows_the_input_it_types_declare
             "flow": "stream",
         },
     }
+
+
+@dataclass(frozen=True)
+class Framed:
+    picture: Texture
+
+
+class HandsOnAFramedPicture[Picture: Framed]:
+    framed_in: InputPin[Picture]
+    framed_out: OutputPin[Picture]
+
+
+def test_a_pin_typed_by_a_parameter_bound_to_a_bundle_is_read_and_written_as_that_bundle() -> None:
+    _, _, members = read_class_node_ports_and_members(HandsOnAFramedPicture)
+
+    assert [member.bundle_class for member in members] == [Framed, Framed]
+
+
+class ReadsThroughAClassLocalAlias:
+    _Picture = Texture
+    picture_in: InputPin[_Picture]
+
+
+def test_a_class_with_no_type_parameter_still_resolves_its_class_local_names() -> None:
+    picture_in = the_one_port(node(ReadsThroughAClassLocalAlias), NODE_DECLARATION_INPUT_PORTS_STAMP)
+
+    assert picture_in["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "texture"}}
 
 
 class Unbound[Frame]:

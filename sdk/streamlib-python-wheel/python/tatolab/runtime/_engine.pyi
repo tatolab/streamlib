@@ -234,6 +234,13 @@ def hand_an_unread_message_on(
 ) -> None:
     """Write `message` on `output_port` exactly as it arrived, its descriptor, stamp and group boundary unchanged."""
 
+def an_unread_message_carries_what_another_does(
+    *,
+    message: _stream_protocols.UnreadMessage,
+    other: _stream_protocols.UnreadMessage,
+) -> bool:
+    """Whether `message` carries what `other` does: the same payload, described the same way, whatever each was stamped with."""
+
 def read_each_unlinked_input_port_as_its_pin_value(
     *,
     link_data_access: _stream_protocols.NodeLinkDataAccess,

@@ -173,7 +173,9 @@ class _ClassNodeReading:
                         else NO_DEFAULT
                     ),
                     bundle_class=dataclass_a_bundle_pin_is_written_as(
-                        annotation if pin_form is None else pin_type_annotation
+                        annotation
+                        if pin_form is None
+                        else _with_a_type_parameter_read_as_its_bound(pin_type_annotation)
                     ),
                 )
             )
@@ -242,7 +244,9 @@ class _ClassNodeReading:
         }
         try:
             return typing.get_type_hints(
-                self._node_class, localns=type_parameters, include_extras=True
+                self._node_class,
+                localns={**vars(self._node_class), **type_parameters} if type_parameters else None,
+                include_extras=True,
             )
         except Exception as unresolvable:
             raise TypeError(
@@ -568,6 +572,12 @@ def _the_type_parameter_typing(pin_type_annotation: Any) -> Optional[typing.Type
     while typing.get_origin(written) is typing.Annotated:
         written = typing.get_args(written)[0]
     return written if isinstance(written, typing.TypeVar) else None
+
+
+def _with_a_type_parameter_read_as_its_bound(pin_type_annotation: Any) -> Any:
+    """A pin's type with a type parameter of the class read as the type it is bound to."""
+    type_parameter = _the_type_parameter_typing(pin_type_annotation)
+    return pin_type_annotation if type_parameter is None else type_parameter.__bound__
 
 
 def _is_a_class_variable(annotation: Any) -> bool:

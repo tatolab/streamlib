@@ -14,6 +14,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     HowALinkIsWired, how_a_link_is_wired, wire_a_link_from_a_function_node_island_into_its_reader,
 };
 use crate::core::graph::{FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode};
+use crate::core::test_support::make_in1_a_setting_read_at_setup;
 
 const NOTHING_REMOVED: WhatTheCompileCarryingAPromotionRemoves<'static> =
     WhatTheCompileCarryingAPromotionRemoves {
@@ -481,6 +482,53 @@ fn a_stateful_node_two_readers_read_moves_out_of_the_islands_with_what_it_feeds(
         how_a_link_is_wired(&graph, &counter_into_the_first_reader).unwrap(),
         HowALinkIsWired::ThroughAChannel
     );
+}
+
+fn is_evaluated_at_setup(graph: &Graph, node_id: &NodeRunId) -> Option<bool> {
+    graph
+        .traversal()
+        .v(node_id)
+        .first()
+        .and_then(|node| node.get::<FunctionNodePromotedToItsOwnProcessComponent>())
+        .map(|promotion| promotion.evaluated_at_setup)
+}
+
+/// A stateful node two readers read is promoted evaluated at its setup when one reader reads it
+/// through a setting read at setup, so that reader is built with its value, and not otherwise.
+///
+/// Mental-revert: promoting every node unevaluated at setup builds the setting's node with the
+/// setting's own value.
+#[test]
+fn a_stateful_node_two_readers_read_is_evaluated_at_setup_only_when_it_feeds_a_setting() {
+    for feeds_a_setting in [true, false] {
+        let mut graph = a_graph_resolving_two_stateful_function_node_types();
+        let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
+        let reading_a_setting = a_helper_reader_before_its_setup(&mut graph);
+        let second_reader = a_helper_reader_before_its_setup(&mut graph);
+        if feeds_a_setting {
+            make_in1_a_setting_read_at_setup(&mut graph, reading_a_setting.as_str());
+        }
+        link(
+            &mut graph,
+            (&counter, "result"),
+            (&reading_a_setting, "in1"),
+        );
+        link(&mut graph, (&counter, "result"), (&second_reader, "in1"));
+        let added = every_node_of(&graph);
+
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph,
+            &added,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            is_evaluated_at_setup(&graph, &counter),
+            Some(feeds_a_setting),
+            "feeds a setting: {feeds_a_setting}"
+        );
+    }
 }
 
 fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &NodeRunId) -> Option<bool> {

@@ -7,42 +7,18 @@
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use uuid::Uuid;
 
 use super::*;
-use crate::core::descriptors::{NodeInputMode, PinFlow, PinType, ResolvedPin, SettingReadTime};
+use crate::core::descriptors::PinType;
 use crate::core::graph::input_values::ValueAWireCarriedIntoASetting;
 use crate::core::pin_value_packing::pack_pin_value;
-use crate::core::test_support::MockOutputOnlyNode;
+use crate::core::test_support::{MockOutputOnlyNode, make_in1_a_setting_read_at_setup};
 
 /// The longest a test waits for the engine's reader to hand a value over.
 const A_VALUE_IS_HANDED_OVER_WITHIN: Duration = Duration::from_secs(5);
 
 fn gain() -> PinType {
     PinType::Float { exact_size: None }
-}
-
-/// Make input `in1` of `node_id` a Float setting read at setup, and answer the node's UUID.
-fn make_in1_a_setting_read_at_setup(graph: &mut Graph, node_id: &str) -> Uuid {
-    let node = graph
-        .traversal_mut()
-        .v(node_id)
-        .first_mut()
-        .expect("the node is in the graph");
-    let in1 = node
-        .ports
-        .inputs
-        .iter_mut()
-        .find(|port| port.name == "in1")
-        .expect("the mock has an input `in1`");
-    in1.pin = Some(ResolvedPin {
-        pin_type: gain(),
-        flow: PinFlow::Value,
-    });
-    in1.input_mode = Some(NodeInputMode::SettingOnly {
-        read: SettingReadTime::AtSetup,
-    });
-    node.node_uuid
 }
 
 fn write_a_gain(

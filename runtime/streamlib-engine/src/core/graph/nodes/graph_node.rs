@@ -243,34 +243,6 @@ impl GraphNode {
         )
     }
 
-    /// Refuse a link from this node into input `input` of `reader`, a setting read at setup,
-    /// when this node is a function or shader node: its value is worked out inside the read
-    /// of each node it feeds, and a setting is read by no run.
-    pub(crate) fn refuse_a_link_from_it_into_a_setting_of(
-        &self,
-        reader: &GraphNode,
-        input: &str,
-    ) -> crate::core::Result<()> {
-        let into_a_setting_read_at_setup = reader
-            .input_port(input)
-            .is_some_and(PortInfo::is_a_setting_read_at_setup);
-        match self.node_kind() {
-            Some(kind @ (NodeKind::Function { .. } | NodeKind::Shader))
-                if into_a_setting_read_at_setup =>
-            {
-                Err(crate::core::Error::PinLinkRefused(Box::new(
-                    crate::core::descriptors::PinLinkRefusal::ComputedValueIntoASetting {
-                        output_node_name: self.display_name.clone(),
-                        output_node_kind: kind,
-                        node_name: reader.display_name.clone(),
-                        input_name: input.to_owned(),
-                    },
-                )))
-            }
-            _ => Ok(()),
-        }
-    }
-
     /// Whether this node is a `GraphInput`; one in a graph that runs is at its stream's top
     /// level, since a fragment's own are flattened away.
     pub fn is_a_graph_input(&self) -> bool {

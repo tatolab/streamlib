@@ -26,10 +26,9 @@ pub(super) fn refuse_a_source_this_graph_cannot_take(
 }
 
 /// Refuse `to` when the graph holds no node of its id, or none with an input of its name, or
-/// the input is a setting that takes no wire, or one the node of `from` cannot feed.
+/// the input is a setting that takes no wire.
 pub(super) fn refuse_a_destination_this_graph_cannot_take(
     graph: &crate::core::graph::Graph,
-    from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
 ) -> Result<()> {
     let to_node = graph
@@ -44,11 +43,5 @@ pub(super) fn refuse_a_destination_this_graph_cannot_take(
             direction: PortDirection::Input,
         });
     }
-    to_node.refuse_a_link_into_a_setting(to.port_name())?;
-    match graph.traversal().v(from.node_run_id()).first() {
-        Some(from_node) => {
-            from_node.refuse_a_link_from_it_into_a_setting_of(to_node, to.port_name())
-        }
-        None => Ok(()),
-    }
+    to_node.refuse_a_link_into_a_setting(to.port_name())
 }
