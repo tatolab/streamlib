@@ -476,6 +476,7 @@ def test_the_builder_modules_import_nothing_native() -> None:
                 (1, "_typed_node_pins"),
                 (1, "_contract_pin_types"),
                 (1, "_pin_declaration"),
+                (1, "_class_node_pin_group"),
             }, module_name
 
 
