@@ -97,17 +97,11 @@ async fn a_retype_casting_through_a_function_node_conversion_with_the_project_un
         json!(0.1),
         json!({}),
     );
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    if started {
-        let running = engine
-            .engine
-            .loaded_stream_of_the_id(&stream_id)
-            .expect("the stream is loaded");
-        running.start().expect("the stream starts");
-        running
-            .wait_until_every_node_is_running(Duration::from_secs(30))
-            .expect("every node runs");
-    }
+    let stream_id = if started {
+        engine.a_stream_started_from_its_graph_document(&project, "main")
+    } else {
+        engine.a_stream_loaded_from_its_graph_document(&project, "main")
+    };
     let handler = crate::mcp::LocalApiMcpServerHandler::new(
         engine.operations_on_the_loaded_streams(),
         tokio_util::sync::CancellationToken::new(),
@@ -163,10 +157,14 @@ async fn a_function_node_conversion_casts_a_retyped_value_with_the_project_unloc
 }
 
 /// On a running stream, a module's conversion casts a retyped value with the project's lock free
-/// and no edit batch of the stream open.
+/// and no edit batch of the stream open, and the transaction answers: the Input, still built
+/// for its Float, is not handed `"10%"` before its rebuild.
 ///
 /// Mental-revert: as on a stream not started, and casting once the stream's batch is open runs
-/// the conversion beside it.
+/// the conversion beside it. Handing the running Input `"10%"` before its rebuild refuses it
+/// for the Channels its output still carries; and when the retype's own reversal also rebuilds
+/// it while the batch is open, that waits for ever on the stream's writer, holding the
+/// project's lock.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),

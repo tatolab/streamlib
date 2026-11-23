@@ -45,6 +45,11 @@ impl StreamATransactionEdits {
             graph_edit_batch,
         })
     }
+
+    /// Whether this stream's batch of graph edits is still open.
+    pub(super) fn holds_an_open_batch(&self) -> bool {
+        matches!(self.graph_edit_batch, GraphEditBatchState::Open(_))
+    }
 }
 
 /// The batch of graph edits open on the stream `stream_id` of `streams`, to apply a graph edit
@@ -486,7 +491,7 @@ impl StreamGraphTransactionExecutor<'_> {
         // holds open keeps: a stream whose batch is open rebuilds once the transaction takes it
         // back and reverses what it applied, as every refusal does.
         for (stream_id, stream) in streams {
-            if the_open_batch_of(streams, stream_id).is_ok() {
+            if stream.holds_an_open_batch() {
                 continue;
             }
             self.rebuild_each_node_a_reversal_put_its_settings_back_on(
@@ -527,7 +532,7 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Rebuild each node of the running stream `stream_operations` serves whose settings read
     /// at setup a reversal put back, logging a node its earlier values no longer build, which
     /// reads `Error` with `components.failed_because`.
-    pub(super) fn rebuild_each_node_a_reversal_put_its_settings_back_on(
+    fn rebuild_each_node_a_reversal_put_its_settings_back_on(
         &self,
         stream_id: &str,
         stream_operations: &dyn RuntimeOperations,

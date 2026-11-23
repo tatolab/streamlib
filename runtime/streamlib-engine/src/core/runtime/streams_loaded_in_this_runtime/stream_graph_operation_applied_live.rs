@@ -23,7 +23,7 @@ use crate::core::graph::{
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
+    KeptNodesLeftToRebuild, LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
 };
 use crate::core::compiler::compiler_ops::node_interpreter_describe::a_node_interpreter_describes;
 use crate::core::nodes::NodeTypesOneStreamResolves;
@@ -271,12 +271,14 @@ impl LoadedStreamInThisRuntime {
         self.reconcile_the_live_graph_to_the_graph_document(
             graph_as_drawn,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
+            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         )
         .await
     }
 
     /// Apply `graph_operation` to this stream's graph as drawn and reconcile the live graph to
     /// the result, the live graph reconciled back to what it was drawn as when that is refused.
+    /// Each node either reconcile leaves to rebuild is left to the caller's rebuild.
     async fn apply_a_stream_graph_operation_by_reconciling_the_live_graph(
         &self,
         mut graph_operation: StreamGraphOperation,
@@ -311,6 +313,7 @@ impl LoadedStreamInThisRuntime {
             .reconcile_the_live_graph_to_the_graph_document(
                 graph_document.to_value(),
                 LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+                KeptNodesLeftToRebuild::RebuiltByTheCaller,
             )
             .await
         {
@@ -318,6 +321,7 @@ impl LoadedStreamInThisRuntime {
                 .reconcile_the_live_graph_to_the_graph_document(
                     graph_as_drawn,
                     LinksAReconcileMakes::EachAsASavedGraphsLink,
+                    KeptNodesLeftToRebuild::RebuiltByTheCaller,
                 )
                 .await
             {

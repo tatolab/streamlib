@@ -28,6 +28,8 @@ use streamlib_project_repository::{
     StreamGraphDocumentNode,
 };
 
+use serde::Deserialize;
+
 use super::*;
 
 /// The saved value a retype of a `GraphInput` carries: the stream asset and node the request
@@ -36,7 +38,7 @@ use super::*;
 struct SavedValueARetypeCarries {
     stream: Uuid,
     node: String,
-    held_under: String,
+    held_under: &'static str,
     answered: GraphTransactionSavedValueRetyped,
 }
 
@@ -65,24 +67,24 @@ struct ASavedValueRetypeWorkedOut {
 }
 
 /// What became of each saved value a transaction retypes, worked out before it took any lock,
-/// by the stream and node: the first retype of each node the transaction names, found in the
-/// documents as they stood then.
+/// by the stream asset and node: the first retype of each node the transaction names, found in
+/// the documents as they stood then.
 #[derive(Default)]
 pub(super) struct SavedValueRetypesWorkedOutBeforeTheEdit {
-    by_stream_and_node: HashMap<(String, Uuid), ASavedValueRetypeWorkedOut>,
+    by_stream_and_node: HashMap<(Uuid, Uuid), ASavedValueRetypeWorkedOut>,
 }
 
 impl SavedValueRetypesWorkedOutBeforeTheEdit {
-    /// What became of the retype of `node` in `stream_id` carrying `carried`, if one carrying
-    /// the same was worked out.
+    /// What became of the retype of `node` in the stream asset `stream` carrying `carried`, if
+    /// one carrying the same was worked out.
     fn of(
         &self,
-        stream_id: &str,
+        stream: Uuid,
         node: Uuid,
         carried: &WhatARetypeCarries,
     ) -> Option<SavedValueRetyped> {
         self.by_stream_and_node
-            .get(&(stream_id.to_owned(), node))
+            .get(&(stream, node))
             .filter(|worked_out| worked_out.carried == *carried)
             .map(|worked_out| worked_out.retyped.clone())
     }
@@ -136,7 +138,7 @@ fn the_retype_of_what_a_node_saves(
             .filter(|saved| !saved.is_null())
             .map(|saved| (key, saved.clone()))
     })?;
-    let pin_type_of = |value: &Value| serde_json::from_value::<PinType>(value.clone()).ok();
+    let pin_type_of = |value: &Value| PinType::deserialize(value).ok();
     let from = pin_type_of(retyped.input_values.get(GRAPH_INTERFACE_PIN_TYPE_SETTING)?)?;
     let into = pin_type_of(chosen)?;
     if from == into {
@@ -202,11 +204,11 @@ impl StreamGraphTransactionExecutor<'_> {
             &streamlib_project_repository::ProjectRepositoryOneWriterAtATime,
         >,
     ) -> SavedValueRetypesWorkedOutBeforeTheEdit {
-        let retypes: Vec<(&str, &str, &Value)> = requests_and_the_stream_id_each_names
+        let retypes: Vec<(&str, Uuid, &str, &Value)> = requests_and_the_stream_id_each_names
             .iter()
             .filter_map(|(request, stream_id)| {
-                let (_, node, chosen) = what_a_retype_names(request)?;
-                Some((stream_id.as_str(), node, chosen))
+                let (stream, node, chosen) = what_a_retype_names(request)?;
+                Some((stream_id.as_str(), stream, node, chosen))
             })
             .collect();
         if retypes.is_empty() {
@@ -231,8 +233,8 @@ impl StreamGraphTransactionExecutor<'_> {
             }
         }
         let mut worked_out = SavedValueRetypesWorkedOutBeforeTheEdit::default();
-        for (stream_id, node, chosen) in retypes {
-            let Some(node) = Uuid::parse_str(node).ok() else {
+        for (stream_id, stream, node, chosen) in retypes {
+            let Ok(node) = Uuid::parse_str(node) else {
                 continue;
             };
             let Some(retype) = documents
@@ -243,17 +245,16 @@ impl StreamGraphTransactionExecutor<'_> {
             else {
                 continue;
             };
-            let Some(conversions) = self
+            let Ok(conversions) = self
                 .operations_on_the_loaded_streams
                 .pin_conversions_of_the_stream_a_call_names(stream_id)
-                .ok()
             else {
                 continue;
             };
             let retyped = what_becomes_of_the_saved_value(&retype.carried, &conversions);
             worked_out
                 .by_stream_and_node
-                .entry((stream_id.to_owned(), node))
+                .entry((stream, node))
                 .or_insert(ASavedValueRetypeWorkedOut {
                     carried: retype.carried,
                     retyped,
@@ -286,16 +287,18 @@ impl StreamGraphTransactionExecutor<'_> {
             member: None,
             value,
         };
-        let mut sets = vec![set(&carried.held_under, None), request];
+        let mut sets: Vec<(&str, StreamGraphAction)> = vec![
+            (carried.held_under, set(carried.held_under, None)),
+            (GRAPH_INTERFACE_PIN_TYPE_SETTING, request),
+        ];
         if let Some(value) = &carried.answered.value {
-            sets.push(set(GRAPH_INTERFACE_VALUE_PORT_NAME, Some(value.clone())));
+            sets.push((
+                GRAPH_INTERFACE_VALUE_PORT_NAME,
+                set(GRAPH_INTERFACE_VALUE_PORT_NAME, Some(value.clone())),
+            ));
         }
         let mut applied_by_the_retype: Vec<OneGraphRequestApplied> = Vec::with_capacity(sets.len());
-        for one_set in sets {
-            let input_set = match &one_set {
-                StreamGraphAction::SetNodeInputValue { input, .. } => input.clone(),
-                _ => String::new(),
-            };
+        for (input_set, one_set) in sets {
             match self.apply_one_request(one_set, stream_id, staged, InputValueCheck::MadeOnApply) {
                 Ok(applied) => applied_by_the_retype.push(applied),
                 Err(refusal) => {
@@ -355,7 +358,7 @@ impl StreamGraphTransactionExecutor<'_> {
             .ok()?;
         let retype = the_retype_of_what_a_node_saves(&retyped, chosen)?;
         let what_became_of_it = match staged.saved_value_retypes_worked_out_before_the_edit.of(
-            stream_id,
+            stream,
             node_uuid,
             &retype.carried,
         ) {
@@ -398,7 +401,7 @@ impl StreamGraphTransactionExecutor<'_> {
         Some(SavedValueARetypeCarries {
             stream,
             node: node.to_owned(),
-            held_under: retype.held_under.to_owned(),
+            held_under: retype.held_under,
             answered,
         })
     }

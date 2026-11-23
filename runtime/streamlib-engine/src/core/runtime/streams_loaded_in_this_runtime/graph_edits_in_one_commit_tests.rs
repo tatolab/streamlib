@@ -19,7 +19,9 @@ use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::graph::{GraphNodeWithComponents, NodeInstanceComponent};
 use crate::core::nodes::NODE_REGISTRY;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
-use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
+use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
+    KeptNodesLeftToRebuild, LinksAReconcileMakes,
+};
 use crate::core::runtime::{
     GraphEditBatch, HowFarARefusedBatchWasTakenBack, LoadedStreamInThisRuntime, Runner,
     RuntimeOperations, RuntimeStatus,
@@ -301,6 +303,7 @@ fn a_reconcile_swapping_the_source_of_a_windowed_port_sets_nothing_aside() {
                 &[(("two", AUDIO), ("windowed", AUDIO))],
             ),
             LinksAReconcileMakes::EachAsASavedGraphsLink,
+            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         )
         .expect("the reconcile swaps the source");
 

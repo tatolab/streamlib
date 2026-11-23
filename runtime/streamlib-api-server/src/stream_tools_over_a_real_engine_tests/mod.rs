@@ -498,6 +498,25 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         )
     }
 
+    /// Load `project`'s stream `stream_name` from its graph document on disk, start it and wait
+    /// until each of its nodes runs; returns its id.
+    fn a_stream_started_from_its_graph_document(
+        &self,
+        project: &ProjectWithGraphDocuments,
+        stream_name: &str,
+    ) -> String {
+        let stream_id = self.a_stream_loaded_from_its_graph_document(project, stream_name);
+        let stream = self
+            .engine
+            .loaded_stream_of_the_id(&stream_id)
+            .expect("the stream is loaded");
+        stream.start().expect("the stream starts");
+        stream
+            .wait_until_every_node_is_running(Duration::from_secs(30))
+            .expect("every node runs");
+        stream_id
+    }
+
     /// Load `project`'s stream `stream_name`, whose graph document holds the stream asset
     /// `stream_asset`, as its library host would, not started; returns its id.
     fn a_stream_loaded_from_the_graph_document_of_the_stream_asset(

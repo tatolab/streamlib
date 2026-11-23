@@ -484,63 +484,6 @@ pub(super) fn as_a_percentage(value: &Value) -> std::result::Result<Value, Saved
     )))
 }
 
-/// On a running stream, a Float `GraphInput` saving 0.1 that chooses a String through a
-/// project's function node conversion saves the value its body gives, as on a stream not
-/// started, and the transaction answers.
-///
-/// Mental-revert: checking the value set after the retype against the type the running node
-/// still holds refuses `"10%"`, and reversing it with the transaction's batch open waits on the
-/// stream's writer for ever.
-#[tokio::test(flavor = "multi_thread")]
-#[cfg_attr(
-    not(feature = "hardware-tests"),
-    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
-)]
-async fn a_retype_on_a_running_stream_saves_what_the_function_node_conversion_gives() {
-    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = a_project_whose_main_stream_holds_an_input_saving(
-        json!({ "type": "float" }),
-        json!(0.1),
-        json!({}),
-    );
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    let running = engine
-        .engine
-        .loaded_stream_of_the_id(&stream_id)
-        .expect("the stream is loaded");
-    running.start().expect("the stream starts");
-    running
-        .wait_until_every_node_is_running(std::time::Duration::from_secs(30))
-        .expect("every node runs");
-    a_function_node_conversions_body_standing_in_as(&engine, &stream_id, as_a_percentage);
-    a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsPercent");
-    let stream = project.stream_asset_of("main");
-
-    let retyped = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        transact_by_alice(
-            &engine,
-            json!([set_on_warmth_base(
-                stream,
-                "pin_type",
-                json!({ "type": "string" })
-            )]),
-        ),
-    )
-    .await
-    .expect("the transaction answers")
-    .expect("the retype casts the saved value");
-    assert_eq!(
-        retyped["saved_values_retyped"][0]["value"],
-        json!("10%"),
-        "{retyped}"
-    );
-    assert_eq!(
-        what_warmth_base_holds(&engine, &project, &stream_id),
-        (json!("10%"), json!("10%"), json!({ "type": "string" }))
-    );
-}
-
 /// On a running stream, a `set_node_config` choosing a String for a Float `GraphInput` and saving
 /// `"x"` saves both, the node rebuilt for its new type, and the next value set takes.
 ///
@@ -558,15 +501,7 @@ async fn a_config_retyping_a_running_graph_input_saves_its_new_value_and_the_nex
         json!(0.1),
         json!({}),
     );
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    let running = engine
-        .engine
-        .loaded_stream_of_the_id(&stream_id)
-        .expect("the stream is loaded");
-    running.start().expect("the stream starts");
-    running
-        .wait_until_every_node_is_running(std::time::Duration::from_secs(30))
-        .expect("every node runs");
+    let stream_id = engine.a_stream_started_from_its_graph_document(&project, "main");
     let stream = project.stream_asset_of("main");
     let answered_within_a_minute = |operations: Value| {
         tokio::time::timeout(

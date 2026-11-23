@@ -87,6 +87,7 @@ fn reconcile(stream: &LoadedStreamInThisRuntime, graph_document: Value) -> Resul
         .block_on(stream.reconcile_the_live_graph_to_the_graph_document(
             graph_document,
             LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         ))
 }
 
@@ -232,9 +233,11 @@ fn reconcile_making(
         .enable_all()
         .build()
         .expect("a current-thread runtime")
-        .block_on(
-            stream.reconcile_the_live_graph_to_the_graph_document(graph_document, links_it_makes),
-        )
+        .block_on(stream.reconcile_the_live_graph_to_the_graph_document(
+            graph_document,
+            links_it_makes,
+            KeptNodesLeftToRebuild::HandedTheirValuesLive,
+        ))
 }
 
 /// A saved link its pin types refuse and its families take, a picture of two formats into an

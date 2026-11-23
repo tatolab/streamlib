@@ -6,8 +6,6 @@
 //! `nodes_rebuilt`, and one setting a value the node cannot build with is refused in the node's
 //! words, the node built again from the value it had and the document left holding it.
 
-use std::time::Duration;
-
 use super::input_value_set_tests::the_input_values_of;
 use super::*;
 
@@ -33,15 +31,7 @@ fn the_stream_main_running_a_node_reading_its_settings_at_setup(
         ],
         "links": [],
     }));
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    let stream = engine
-        .engine
-        .loaded_stream_of_the_id(&stream_id)
-        .expect("the stream is loaded");
-    stream.start().expect("the stream starts");
-    stream
-        .wait_until_every_node_is_running(Duration::from_secs(30))
-        .expect("the node runs");
+    let stream_id = engine.a_stream_started_from_its_graph_document(&project, "main");
     (project, stream_id)
 }
 
@@ -145,4 +135,86 @@ async fn a_setting_its_node_cannot_build_with_is_refused_and_the_node_runs_on_wi
         Some(json!(3)),
         "the node is built again from the kernel size it had"
     );
+}
+
+const LEVEL_NODE_UUID: &str = "8d8d8d8d-8d8d-4d8d-8d8d-8d8d8d8d8d8d";
+
+/// A transaction that sets the running `blur`'s kernel size, which leaves it to rebuild while
+/// the transaction's batch is open, and then retypes a Float `GraphInput` saving 0.1 within
+/// `[0, 1]` to a String, refused partway for the range a String does not take, answers with
+/// that refusal within a minute: the reversal of the retype's first set leaves the rebuild to
+/// the refusal, which takes the batch back and builds `blur` again from its kernel size 3; the
+/// next transaction answers too.
+///
+/// Mental-revert: rebuilding `blur` in the retype's own reversal, while the batch still holds
+/// the stream's one writer, waits for ever, holding the project's lock.
+#[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial(nodes_reading_their_settings_at_setup)]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+async fn a_retype_refused_after_a_set_left_a_node_to_rebuild_answers_and_builds_it_back() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    streamlib_media_builtins::register_the_conversion_node_types();
+    forget_every_setup_run();
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [
+            { "id": BLUR_NODE_UUID, "name": "blur",
+              "type": the_node_type_reading_its_settings_at_setup().as_str(),
+              "input_values": { "kernel_size": 3 } },
+            { "id": LEVEL_NODE_UUID, "name": "level", "type": "tatolab.stream:GraphInput",
+              "config": { "port": "level", "pin_type": { "type": "float" }, "value": 0.1,
+                          "range": [0, 1] } },
+        ],
+        "links": [],
+    }));
+    let stream_id = engine.a_stream_started_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let answered_within_a_minute = |operations: Value| {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            engine.the_answer_or_the_refusal_of(
+                "transact",
+                json!({ "author": an_agent_named("alice"), "operations": operations }),
+            ),
+        )
+    };
+
+    let refusal = answered_within_a_minute(json!([
+        set_on_the_blur(stream_asset, "kernel_size", json!(5)),
+        { "operation": "set_node_input_value", "stream": stream_asset, "node": LEVEL_NODE_UUID,
+          "input": "pin_type", "value": { "type": "string" } },
+    ]))
+    .await
+    .expect("the transaction answers")
+    .expect_err("a String holding a range is refused");
+
+    assert!(refusal.runtime_words.contains("`range`"), "{refusal:?}");
+    assert_eq!(
+        the_settings_each_setup_read(blur())
+            .last()
+            .and_then(|settings| settings.get("kernel_size").cloned()),
+        Some(json!(3)),
+        "`blur` is built again from the kernel size it had"
+    );
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(
+        the_node_named(&live, "blur")["components"]["state"],
+        "Running"
+    );
+    assert_eq!(
+        the_node_named(&live, "level")["components"]["graph_interface"]["pin_type"],
+        json!({ "type": "float" })
+    );
+
+    answered_within_a_minute(json!([set_on_the_blur(
+        stream_asset,
+        "kernel_size",
+        json!(7)
+    )]))
+    .await
+    .expect("the next transaction answers")
+    .expect("the next kernel size is set");
 }

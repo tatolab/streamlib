@@ -137,7 +137,9 @@ impl LoadedStreamInThisRuntime {
 
     /// Rebuild, once each, every running node a set on a setting read at setup has left to
     /// rebuild since the last rebuild, and wait for each to finish its setup; the UUID of each
-    /// rebuilt, in the order first set. A stream not started rebuilds none and answers none.
+    /// rebuilt, in the order first set. A stream not started rebuilds none and answers none. A
+    /// started stream asked where nothing commits inline, a node's own thread, rebuilds none and
+    /// keeps each for the next rebuild, since a node left to rebuild was not handed its values.
     ///
     /// Refused, naming the node and in its own words, when a node rebuilt does not finish its
     /// setup: it stays as its setup left it, reading `Error` with `components.failed_because`,
@@ -146,6 +148,9 @@ impl LoadedStreamInThisRuntime {
     pub(crate) async fn rebuild_each_node_a_setting_read_at_setup_changed(
         &self,
     ) -> Result<Vec<Uuid>> {
+        if self.live_commit_context().is_none() && *self.status.lock() == RuntimeStatus::Started {
+            return Ok(Vec::new());
+        }
         let node_run_ids = std::mem::take(&mut *self.nodes_a_setting_read_at_setup_rebuilds.lock());
         let rebuilt = self.rebuild_the_nodes(node_run_ids).await?;
         if let Some(refusal) = rebuilt.iter().find_map(|node| node.built.as_ref().err()) {

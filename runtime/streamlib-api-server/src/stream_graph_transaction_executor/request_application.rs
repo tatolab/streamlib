@@ -613,15 +613,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 .staged_graph
                 .apply(&applied);
             if let Err(why) = staged {
+                // Its rebuild is left to the refusal, which takes the open batch back first: a
+                // rebuild waits for the stream's one writer, which the batch holds.
                 self.reverse_one_operation_applied_live(
                     stream_id,
                     stream_operations.as_ref(),
                     the_open_batch_of(streams, stream_id).ok(),
                     &applied_on_the_running_stream,
-                );
-                self.rebuild_each_node_a_reversal_put_its_settings_back_on(
-                    stream_id,
-                    stream_operations.as_ref(),
                 );
                 return Err(format!(
                     "stream `{stream_id}`'s graph document does not hold what its running graph \

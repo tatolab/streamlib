@@ -600,8 +600,9 @@ pub(in crate::core::runtime) struct SavedValuesOfAKeptNode {
 
 /// Set the saved values and the studio fields of each of `kept_nodes`, nodes a reconcile keeps,
 /// in the graph `graph` locks, and hand each node what its inputs read now: each island
-/// evaluating it under the write lock, its helper or itself with the lock released. Its caller
-/// holds the stream's one input value change at a time. Every node is set and handed its values
+/// evaluating it under the write lock, its helper or itself with the lock released; a node not
+/// to be handed them now, left to the rebuild that reads them, is only set. Its caller holds
+/// the stream's one input value change at a time. Every node is set and handed its values
 /// even when one is refused, and the refusals are answered together after the last, so the
 /// graph holds the document's values and the reconcile does not report a refusal as done.
 pub(in crate::core::runtime) fn set_the_saved_values_of_each_kept_node_and_hand_them_over(
