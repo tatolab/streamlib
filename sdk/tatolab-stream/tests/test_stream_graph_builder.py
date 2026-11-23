@@ -22,6 +22,7 @@ from stream_graph_builder_nodes import (
     FrameFilters,
     FrameInverter,
     LouderTone,
+    PassesItsValue,
     TintedLevel,
     remap_onto_a_range,
 )
@@ -886,3 +887,13 @@ def test_a_member_name_that_is_not_a_string_is_refused() -> None:
     with pytest.raises(TypeError, match="member name"):
         NodeOutputPortReference("first", "result", member_name=7)  # pyright: ignore[reportArgumentType]
 
+
+def test_a_member_on_a_port_typed_by_its_graph_is_recorded_for_the_runtime_to_judge() -> None:
+    passes = StreamBuilder("rig").add(PassesItsValue)
+
+    assert passes.input("value", member="level") == NodeInputPortReference(
+        "passesitsvalue", "value", member_name="level"
+    )
+    assert passes.output("result", member="level") == NodeOutputPortReference(
+        "passesitsvalue", "result", member_name="level"
+    )

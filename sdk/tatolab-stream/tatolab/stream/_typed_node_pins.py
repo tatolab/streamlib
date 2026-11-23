@@ -93,8 +93,9 @@ class TypedNodePins:
         """`member`, when the bundle the port of `direction` named `port_name` carries has it.
 
         A port whose type another input chooses carries the bundle `input_values`, as recorded,
-        holds for that input. Refused naming the bundle's members, or the type the port carries
-        when it is no bundle.
+        holds for that input; a port typed by its graph keeps `member` unchecked, for the runtime
+        to judge at load. Refused naming the bundle's members, or the type the port carries when
+        it is no bundle.
         """
         port = self._declared_port(port_name, direction)
         pin_type_declared = port.declaration["pin_type"]
@@ -112,10 +113,7 @@ class TypedNodePins:
                 )
             pin_type = chosen
         else:
-            raise TypeError(
-                f"`{self.node}`'s {direction} `{port.name}` finds its type from its graph, so no "
-                f"member `{member}` of it is checked here. To fix: wire the whole port"
-            )
+            return member
         if pin_type["type"] != "bundle":
             raise TypeError(
                 f"`{self.node}`'s {direction} `{port.name}` carries the type "

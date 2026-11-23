@@ -110,3 +110,9 @@ class Tone:
 def LouderTone(tone: Tone = Tone(440.0)) -> Tone:
     """A typed node taking and giving a bundle: its tone, its gain raised by one."""
     return Tone(tone.frequency, tone.gain + 1)
+
+
+@node
+def PassesItsValue[PinValue](value: PinValue) -> PinValue:
+    """A typed node whose pins take the type linked into `value`."""
+    return value

@@ -30,9 +30,8 @@ def test_a_number_wired_into_one_member_comes_out_of_that_member_on_a_running_st
     """The level read off `BreakBundle`'s `level` member is the one wired into `MakeBundle`'s,
     not the 0.0 set on it, and its `label` member carries the label set on `MakeBundle`.
 
-    Fail-without-fix: the builder cannot name a member, so the stream is not built; a link end
-    written without its `member` is a wire of the whole bundle into a Float input, refused at
-    load.
+    Fail-without-fix: a link end written without its `member` is a wire of the whole bundle into
+    a Float input, refused at load.
     """
     tatolabd = start_tatolabd_running_stream(a_number_into_one_member_and_each_member_out)
     read = tatolabd.await_marker("BUNDLE_MEMBERS_READ", timeout=MEMBERS_READ_TIMEOUT_SECONDS)

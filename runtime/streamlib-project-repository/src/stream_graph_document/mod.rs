@@ -162,8 +162,7 @@ pub struct StreamGraphDocumentLinkEnd {
     pub node: Uuid,
     /// The port's name.
     pub port: String,
-    /// The member of a bundle port the link starts at; `None` for the whole port. Only a link's
-    /// source names one.
+    /// The member of a bundle port the link starts or ends at; `None` for the whole port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
 }

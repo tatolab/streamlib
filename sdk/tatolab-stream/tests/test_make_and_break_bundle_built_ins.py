@@ -11,7 +11,14 @@ from dataclasses import dataclass
 
 import pytest
 
-from tatolab.stream import BreakBundle, FloatToInteger, MakeBundle, PinTypeChoice, StreamBuilder
+from tatolab.stream import (
+    BreakBundle,
+    FloatToInteger,
+    IntegerToFloat,
+    MakeBundle,
+    PinTypeChoice,
+    StreamBuilder,
+)
 
 
 @dataclass(frozen=True)
@@ -70,7 +77,7 @@ def test_members_that_are_not_the_bundle_chosen_are_refused_naming_the_input() -
 
 def test_a_wire_at_one_member_carries_the_member_on_that_end_of_the_link() -> None:
     stream_builder = StreamBuilder("rig")
-    level = stream_builder.add(FloatToInteger, name="level")
+    level = stream_builder.add(IntegerToFloat, name="level")
     make = stream_builder.add(MakeBundle, input_values={"bundle_type": PinTypeChoice(Reading)})
     take_apart = stream_builder.add(BreakBundle, input_values={"bundle_type": PinTypeChoice(Reading)})
     rounded = stream_builder.add(FloatToInteger, name="rounded")
