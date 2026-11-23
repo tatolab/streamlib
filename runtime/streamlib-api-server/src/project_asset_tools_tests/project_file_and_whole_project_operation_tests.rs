@@ -246,7 +246,7 @@ async fn a_node_file_created_from_the_template_names_its_node_type_and_undoes() 
     let content = std::fs::read_to_string(&node_file).unwrap();
     assert!(content.contains("@node.meta(description="), "{content}");
     assert!(
-        content.contains("@node.process\nclass EdgeGlow:\n"),
+        content.contains("@node\nclass EdgeGlow[Frame: Texture]:\n"),
         "{content}"
     );
 

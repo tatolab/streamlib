@@ -4,23 +4,31 @@
 //! A new node file's starting content, rendered from the template the SDK carries beside the
 //! new project scaffold.
 
-/// The node file template, a `@node.process` class in the current `tatolab.stream` idiom.
+/// The node file template, a class under bare `@node` in the current `tatolab.stream` idiom.
 const NEW_NODE_FILE_TEMPLATE: &str =
     include_str!("../../../sdk/tatolab-stream/node_file_template/new_node.py");
 
-/// The template's class statement, renamed on render after the file's name.
-const NEW_NODE_FILE_TEMPLATE_CLASS_STATEMENT: &str = "class NewNode:";
+/// The template's class statement, its class renamed on render after the file's name.
+const NEW_NODE_FILE_TEMPLATE_CLASS_STATEMENT: &str = "class NewNode[Frame: Texture]:";
+
+/// The template's type parameter, which the node's class cannot be named either.
+const NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER: &str = "Frame";
 
 /// The repository's licence header the template carries, which a person's file never does.
 const NEW_NODE_FILE_TEMPLATE_LICENCE_HEADER: &str =
     "# Copyright (c) 2025 Tatolab LLC\n# SPDX-License-Identifier: GPL-3.0-only\n\n";
 
-/// The names the template imports from `tatolab.stream`, which the node's class cannot take.
+/// The names the template imports, in the order it imports them, which the node's class
+/// cannot take.
 const NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS: &[&str] = &[
-    "Image",
-    "Input",
-    "Output",
+    "Annotated",
+    "Description",
+    "InputPin",
+    "NumberRange",
+    "OutputPin",
     "RuntimeContextLimitedAccess",
+    "StreamDelivery",
+    "Texture",
     "node",
 ];
 
@@ -95,6 +103,7 @@ pub(crate) fn render_the_new_node_file_template_for(
     let class_name = class_name_for_a_module_named(module_file_stem);
     if !is_a_python_identifier(&class_name)
         || NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS.contains(&class_name.as_str())
+        || class_name == NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER
     {
         return Err(format!(
             "`{path_in_project}` would name its node `{class_name}`, which the file cannot \
@@ -106,7 +115,7 @@ pub(crate) fn render_the_new_node_file_template_for(
         .unwrap_or(NEW_NODE_FILE_TEMPLATE)
         .replace(
             NEW_NODE_FILE_TEMPLATE_CLASS_STATEMENT,
-            &format!("class {class_name}:"),
+            &format!("class {class_name}[{NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER}: Texture]:"),
         );
     Ok(NewNodeFileRenderedFromTheTemplate {
         node_type: format!("{}:{class_name}", module_path_segments.join(".")),
@@ -131,13 +140,19 @@ mod tests {
 
     #[test]
     fn the_template_imports_exactly_the_names_its_class_cannot_take() {
-        let import_line = NEW_NODE_FILE_TEMPLATE
+        let (imports, _) = NEW_NODE_FILE_TEMPLATE
+            .strip_prefix(NEW_NODE_FILE_TEMPLATE_LICENCE_HEADER)
+            .and_then(|template| template.split_once("\n\n\n"))
+            .expect("the template's imports are one block after its licence header");
+        let imported: Vec<&str> = imports
             .lines()
-            .find(|line| line.starts_with("from tatolab.stream import "))
-            .expect("the template imports from tatolab.stream");
-        let imported: Vec<&str> = import_line["from tatolab.stream import ".len()..]
-            .split(',')
-            .map(str::trim)
+            .flat_map(|line| {
+                line.split_once(" import ")
+                    .map_or(line, |(_, names)| names)
+                    .split(',')
+            })
+            .map(|name| name.trim().trim_matches(['(', ')']))
+            .filter(|name| !name.is_empty())
             .collect();
         assert_eq!(imported, NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS);
     }
@@ -147,10 +162,18 @@ mod tests {
         let rendered = render_the_new_node_file_template_for("nodes/edge_glow.py").unwrap();
 
         assert_eq!(rendered.node_type, "nodes.edge_glow:EdgeGlow");
-        assert!(rendered.content.contains("class EdgeGlow:\n"));
+        assert!(
+            rendered
+                .content
+                .contains("class EdgeGlow[Frame: Texture]:\n")
+        );
         assert!(!rendered.content.contains("NewNode"));
         assert!(!rendered.content.contains("SPDX-License-Identifier"));
-        assert!(rendered.content.starts_with("from tatolab.stream import "));
+        assert!(
+            rendered
+                .content
+                .starts_with("from typing import Annotated\n")
+        );
     }
 
     #[test]
@@ -173,7 +196,8 @@ mod tests {
             "my nodes/invert.py",
             "nodes/class.py",
             "nodes/__init__.py",
-            "nodes/image.py",
+            "nodes/texture.py",
+            "nodes/frame.py",
             "nodes/none.py",
             "nodes/___.py",
         ] {
