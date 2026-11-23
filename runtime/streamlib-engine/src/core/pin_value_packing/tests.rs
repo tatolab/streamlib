@@ -811,8 +811,9 @@ fn a_bundle_or_list_holding_a_heavy_member_travels_as_one_bundle_frame() {
 }
 
 /// The family a view's port of a bundle is read on is the family of the message the runtime
-/// packs that bundle as, for a bundle of numbers, one with a List member, one of Tensors and one
-/// holding a Texture, which packs as no JSON value and travels as a Bundle frame on no family.
+/// packs that bundle as, for a bundle of numbers, one of no members, one with a List member, one
+/// of Tensors and one holding a Texture, which packs as no JSON value and travels as a Bundle
+/// frame on no family.
 ///
 /// Mental-revert: a second rule for which family carries a whole bundle, one that asks that each
 /// member be a small type, names no family for the bundle with a List member that packs here as
@@ -824,6 +825,7 @@ fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as()
     };
     let bundles = [
         (a_placement(), json!({ "x": 0.5, "y": 0.25 })),
+        (PinType::Bundle { members: vec![] }, json!({})),
         (
             PinType::Bundle {
                 members: vec![
@@ -873,11 +875,14 @@ fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as()
                 Some(kind),
                 "{bundle}"
             ),
-            Err(_) => assert_eq!(
-                kind,
-                DataChannelPayloadDescriptorKind::BundleFrame,
-                "{bundle}"
-            ),
+            Err(why) => {
+                assert_eq!(
+                    kind,
+                    DataChannelPayloadDescriptorKind::BundleFrame,
+                    "{bundle}"
+                );
+                assert!(why.contains("Bundle frame"), "{why}");
+            }
         }
     }
 }

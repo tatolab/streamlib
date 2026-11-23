@@ -147,8 +147,8 @@ pub fn check_a_projects_view_manifests(
 
 /// What a port declared by `family` alone writes in its place: the one pin type the family's
 /// messages carry where there is one, as an Image port's Texture; else the types it may become,
-/// none picked, since a guessed type can refuse a link that works today, with a bundle of small
-/// members among them on Records, whose map of members a record of named numbers is.
+/// none picked, since a guessed type can refuse a link that works today. A Records port may also
+/// be a bundle of small members, as a record of named numbers is.
 fn the_words_of_a_port_declared_by_family(port: &TatolabViewDeclaredPort) -> String {
     let family = port.family.wire_name();
     let to_write = format!(
@@ -161,6 +161,13 @@ fn the_words_of_a_port_declared_by_family(port: &TatolabViewDeclaredPort) -> Str
         .into_iter()
         .map(the_quoted_wire_name_of)
         .collect();
+    let bundle_advice = if BundleMessage::RecordsMap.its_family() == Some(port.family) {
+        ", or a `bundle` of small members, as a record of named numbers is, written \
+         `{\"type\": \"bundle\", \"members\": [{\"name\": \"<name>\", \
+         \"member_type\": {\"type\": \"float\"}}, ...]}`"
+    } else {
+        ""
+    };
     match pin_types.as_slice() {
         [pin_type] => format!(
             "port `{}` is declared by the older `family` field; write `\"pin_type\": \
@@ -169,7 +176,7 @@ fn the_words_of_a_port_declared_by_family(port: &TatolabViewDeclaredPort) -> Str
         ),
         _ => format!(
             "port `{}` is declared by the older `family` field; a `{family}` port carries one \
-             of {}{}: write the one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, \
+             of {}{bundle_advice}: write the one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, \
              {to_write}",
             port.name,
             pin_types
@@ -177,13 +184,6 @@ fn the_words_of_a_port_declared_by_family(port: &TatolabViewDeclaredPort) -> Str
                 .map(|pin_type| format!("`{}`", pin_type.trim_matches('"')))
                 .collect::<Vec<_>>()
                 .join(", "),
-            if BundleMessage::RecordsMap.its_family() == Some(port.family) {
-                ", or a `bundle` of small members, as a record of named numbers is, written \
-                 `{\"type\": \"bundle\", \"members\": [{\"name\": \"<name>\", \
-                 \"member_type\": {\"type\": \"float\"}}, ...]}`"
-            } else {
-                ""
-            }
         ),
     }
 }

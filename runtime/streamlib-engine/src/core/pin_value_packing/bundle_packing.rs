@@ -133,8 +133,17 @@ pub fn the_member_a_bundle_message_carries(
     let Some(travels_as) = bundle.the_message_a_bundle_travels_as() else {
         return Err(format!("a {bundle} is no bundle, so it holds no member"));
     };
-    if travels_as == BundleMessage::ArrayFrameOfTensors {
-        return the_tensor_member_an_array_frame_carries(&member.name, message);
+    match travels_as {
+        BundleMessage::RecordsMap => {}
+        BundleMessage::ArrayFrameOfTensors => {
+            return the_tensor_member_an_array_frame_carries(&member.name, message);
+        }
+        BundleMessage::BundleFrame => {
+            return Err(format!(
+                "a {bundle} travels as a Bundle frame, and a member is not taken from one at \
+                 the read yet"
+            ));
+        }
     }
     if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)
         != Some(DataChannelPayloadDescriptorKind::RecordsMessage)

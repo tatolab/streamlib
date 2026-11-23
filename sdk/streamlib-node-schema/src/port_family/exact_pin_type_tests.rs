@@ -7,6 +7,16 @@ use crate::pin_type::{
     BundleMember, DeclaredPinType, PinDeclaration, PinFlow, PinType, TexturePixelFormat,
 };
 
+/// A member of a bundle named `name`, of `member_type`, with no meaning and no default.
+fn a_member(name: &str, member_type: PinType) -> BundleMember {
+    BundleMember {
+        name: name.into(),
+        member_type,
+        meaning: None,
+        default_value: None,
+    }
+}
+
 fn image() -> PortFamilyDeclaration {
     PortFamilyDeclaration::of_family(PortFamily::Image)
 }
@@ -91,16 +101,10 @@ fn a_typed_port_serves_the_family_its_messages_belong_to() {
 /// port of a record of named numbers does not open.
 #[test]
 fn a_bundle_of_small_members_is_carried_whole_on_records() {
-    let member = |name: &str, member_type| BundleMember {
-        name: name.into(),
-        member_type,
-        meaning: None,
-        default_value: None,
-    };
     let yaw_and_burst = PinType::Bundle {
         members: vec![
-            member("yaw", PinType::Float { exact_size: None }),
-            member("burst", PinType::Integer { exact_size: None }),
+            a_member("yaw", PinType::Float { exact_size: None }),
+            a_member("burst", PinType::Integer { exact_size: None }),
         ],
     };
     assert_eq!(PortFamily::carrying(&yaw_and_burst), None);
@@ -122,16 +126,10 @@ fn a_bundle_of_small_members_is_carried_whole_on_records() {
 /// with a List member, which the runtime packs as one Records map.
 #[test]
 fn a_whole_bundle_is_carried_on_the_family_of_the_message_it_travels_as() {
-    let member = |name: &str, member_type| BundleMember {
-        name: name.into(),
-        member_type,
-        meaning: None,
-        default_value: None,
-    };
     let bundle = |members| PinType::Bundle { members };
     let with_a_list = bundle(vec![
-        member("label", PinType::String {}),
-        member(
+        a_member("label", PinType::String {}),
+        a_member(
             "levels",
             PinType::ListOf {
                 element_type: Box::new(PinType::Float { exact_size: None }),
@@ -139,12 +137,12 @@ fn a_whole_bundle_is_carried_on_the_family_of_the_message_it_travels_as() {
         ),
     ]);
     let of_tensors = bundle(vec![
-        member("boxes", PinType::Tensor {}),
-        member("scores", PinType::Tensor {}),
+        a_member("boxes", PinType::Tensor {}),
+        a_member("scores", PinType::Tensor {}),
     ]);
     let with_a_texture = bundle(vec![
-        member("label", PinType::String {}),
-        member(
+        a_member("label", PinType::String {}),
+        a_member(
             "picture",
             PinType::Texture {
                 pixel_formats: vec![],

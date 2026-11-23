@@ -258,6 +258,50 @@
       }
     },
     {
+      "named": "a port of a bundle of only Tensors, carried whole as Array",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Detections",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "detections",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "boxes", "member_type": { "type": "tensor" } },
+                { "name": "scores", "member_type": { "type": "tensor" } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Detections",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "detections",
+            "family": "array",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "boxes", "member_type": { "type": "tensor" } },
+                { "name": "scores", "member_type": { "type": "tensor" } }
+              ]
+            }
+          }
+        ],
+        "outputs": [],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
+    },
+    {
       "named": "a port of no known pin type",
       "manifest": {
         "contract": "1.1",
