@@ -57,6 +57,7 @@ mod graph_answer_read_through_the_contract_tests;
 mod graph_edit_transaction_and_undo_tests;
 mod graph_edits_of_a_playing_stream_tests;
 mod graph_generator_fragment_tests;
+mod graph_input_retype_worked_out_before_the_edit_tests;
 mod graph_input_retyped_through_transact_tests;
 mod imported_and_nested_stream_fragment_tests;
 mod input_value_lifetime_tests;
@@ -495,6 +496,25 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             stream_name,
             project.stream_asset_of(stream_name),
         )
+    }
+
+    /// Load `project`'s stream `stream_name` from its graph document on disk, start it and wait
+    /// until each of its nodes runs; returns its id.
+    fn a_stream_started_from_its_graph_document(
+        &self,
+        project: &ProjectWithGraphDocuments,
+        stream_name: &str,
+    ) -> String {
+        let stream_id = self.a_stream_loaded_from_its_graph_document(project, stream_name);
+        let stream = self
+            .engine
+            .loaded_stream_of_the_id(&stream_id)
+            .expect("the stream is loaded");
+        stream.start().expect("the stream starts");
+        stream
+            .wait_until_every_node_is_running(Duration::from_secs(30))
+            .expect("every node runs");
+        stream_id
     }
 
     /// Load `project`'s stream `stream_name`, whose graph document holds the stream asset

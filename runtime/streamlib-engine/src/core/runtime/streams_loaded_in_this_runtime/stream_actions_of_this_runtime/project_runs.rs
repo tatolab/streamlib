@@ -295,6 +295,7 @@ impl Runner {
             .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
                 graph_document,
                 LinksAReconcileMakes::EachAsASavedGraphsLink,
+                KeptNodesLeftToRebuild::HandedTheirValuesLive,
             )
         {
             tracing::info!(

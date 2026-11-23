@@ -209,6 +209,40 @@
       "id": "7b5d2e91-4c3f-4a8e-9b1d-6f0e2c8a5d47",
       "name": "sweep_position",
       "type": "nodes.sweep:SweepPosition"
+    },
+    {
+      "id": "9e2c4b71-3a5d-4f86-b0c9-7d1e5a8f2b34",
+      "input_values": {
+        "pin_type": {
+          "type": "float"
+        },
+        "port": "level_saved",
+        "value": 0.1
+      },
+      "name": "level_saved",
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "4a7f1d38-c26e-4b95-8e03-1f6b9d2c7a50",
+      "name": "level_as_percent",
+      "type": "nodes.level_as_percent:LevelAsPercent"
+    },
+    {
+      "id": "c81b5e2f-7d49-4a63-9f1e-2b0d8c6a4e95",
+      "input_values": {
+        "pin_type": {
+          "type": "boolean"
+        },
+        "port": "accent_saved",
+        "value": true
+      },
+      "name": "accent_saved",
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "6d3e9a15-b84c-4f27-a1d6-5c8f0e3b9a72",
+      "name": "accent_at_the_moment",
+      "type": "nodes.accent_at_the_moment:AccentAtTheMoment"
     }
   ]
 }

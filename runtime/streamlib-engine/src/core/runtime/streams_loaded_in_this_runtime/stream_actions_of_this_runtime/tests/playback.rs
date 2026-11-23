@@ -679,3 +679,72 @@ fn an_edit_a_playing_stream_did_not_take_shows_not_live_and_lands_when_its_playb
         StreamHealthOnTheWire::Healthy
     );
 }
+
+const LEVEL_NODE_UUID: &str = "9e9e9e9e-9e9e-4e9e-8e9e-9e9e9e9e9e9e";
+
+/// The graph of a stream `levels` holding one `GraphInput`, `level`, of `pin_type` saving
+/// `value`.
+fn the_graph_of_a_stream_holding_a_graph_input_saving(
+    pin_type: serde_json::Value,
+    value: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "stream": "levels",
+        "nodes": [{ "id": LEVEL_NODE_UUID, "name": "level", "type": "tatolab.stream:GraphInput",
+                    "config": { "port": "level", "pin_type": pin_type, "value": value } }],
+        "links": [],
+    })
+}
+
+/// A reload keeping a running stream whose document now gives its Graph Input another type and
+/// a value of it leaves no node waiting on a rebuild nobody runs: the stream holds the new type
+/// and value, its Input not left to rebuild.
+///
+/// Mental-revert: leaving every kept node a setting read at setup leaves to rebuild unhanded,
+/// as a transaction's reconcile does, keeps the running Input built for its Float, waiting on a
+/// rebuild the reload never runs.
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+)]
+#[test]
+#[serial]
+fn a_reload_retyping_a_running_graph_input_leaves_no_node_waiting_on_a_rebuild() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project =
+        ProjectWithGraphDocuments::holding(the_graph_of_a_stream_holding_a_graph_input_saving(
+            serde_json::json!({ "type": "float" }),
+            serde_json::json!(0.1),
+        ));
+    let levels = project.stream_id_of("levels");
+    runner
+        .load_the_project_off_its_queue(project.run_request())
+        .unwrap();
+    let playing = runner.loaded_stream_of_the_id(&levels).unwrap();
+    assert_eq!(playing.status(), RuntimeStatus::Started);
+
+    project.write_the_graph_document(the_graph_of_a_stream_holding_a_graph_input_saving(
+        serde_json::json!({ "type": "string" }),
+        serde_json::json!("x"),
+    ));
+    the_project_reloaded(&runner, &project);
+
+    let reloaded = runner.loaded_stream_of_the_id(&levels).unwrap();
+    let level = reloaded
+        .the_live_nodes()
+        .into_iter()
+        .find(|node| node.display_name == "level")
+        .expect("the stream holds its Input");
+    assert!(
+        !reloaded.is_left_to_rebuild(&level.node_run_id),
+        "the Input is left waiting on a rebuild nobody runs"
+    );
+    assert_eq!(
+        (level.pins.get("pin_type"), level.pins.get("value")),
+        (
+            Some(&serde_json::json!({ "type": "string" })),
+            Some(&serde_json::json!("x"))
+        )
+    );
+}

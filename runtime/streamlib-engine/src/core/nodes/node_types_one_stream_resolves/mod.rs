@@ -10,7 +10,9 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_function_node_pool_type,
 };
 use crate::core::compiler::compiler_ops::shader_node_program::ShaderNodeProgram;
-use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinConversion};
+use crate::core::descriptors::{
+    FunctionNodeLanguage, NodeClassImportPath, NodeKind, PinConversion, PinConversionSavedValueCast,
+};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
@@ -111,7 +113,17 @@ pub struct NodeTypesOneStreamResolves {
     placeholder_of_each_node_type_not_described:
         RwLock<HashMap<NodeClassImportPath, PlaceholderOfANodeTypeNotDescribed>>,
     why_every_node_type_is_held_as_a_placeholder: RwLock<Option<String>>,
+    /// What casts a saved value through a function node conversion this stream's interpreter
+    /// describes: its body run once out of stream; `None` until the stream has an interpreter
+    /// to run it in.
+    saved_value_cast_of_a_function_node_conversion:
+        RwLock<Option<Arc<SavedValueCastOfAFunctionNodeConversion>>>,
 }
+
+/// For a conversion a function node type states, the cast its body makes of a saved value run
+/// once out of stream.
+pub(crate) type SavedValueCastOfAFunctionNodeConversion =
+    dyn Fn(&PinConversion) -> PinConversionSavedValueCast + Send + Sync;
 
 /// A node type a stream's graph document names and its node code did not describe, held as a
 /// placeholder so the stream's graph stays readable and editable: ports drawn from the
@@ -293,6 +305,18 @@ impl NodeTypesOneStreamResolves {
         Ok(())
     }
 
+    /// Cast a saved value through each conversion a function node type this stream describes
+    /// from now on states with the cast `cast_of` gives for it, standing in for its body's run
+    /// out of stream in place of the one the stream's interpreter gives, for a test in another
+    /// crate.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn cast_a_saved_value_through_each_function_node_conversion_for_a_test(
+        &self,
+        cast_of: impl Fn(&PinConversion) -> PinConversionSavedValueCast + Send + Sync + 'static,
+    ) {
+        *self.saved_value_cast_of_a_function_node_conversion.write() = Some(Arc::new(cast_of));
+    }
+
     /// Register `descriptor`, which `installed_module` declares and this stream's interpreter
     /// described, its nodes run as `how_its_nodes_run`, with the conversion it states, and
     /// record the module declaring it.
@@ -311,8 +335,51 @@ impl NodeTypesOneStreamResolves {
         Ok(())
     }
 
+    /// Cast a saved value through each conversion a function node type this stream describes
+    /// from now on states with the cast the factory `cast_of` builds gives for it, built and
+    /// installed only the first time: a later call leaves the one installed and builds nothing.
+    pub(crate) fn install_once_the_saved_value_cast_of_each_function_node_conversion<CastOf>(
+        &self,
+        cast_of: impl FnOnce() -> CastOf,
+    ) where
+        CastOf: Fn(&PinConversion) -> PinConversionSavedValueCast + Send + Sync + 'static,
+    {
+        let mut installed = self.saved_value_cast_of_a_function_node_conversion.write();
+        if installed.is_none() {
+            *installed = Some(Arc::new(cast_of()));
+        }
+    }
+
+    /// The cast of a saved value through `conversion`, which a function node type whose body is
+    /// in `language` states: a Python body's run out of stream as
+    /// [`Self::install_once_the_saved_value_cast_of_each_function_node_conversion`] gives it;
+    /// one that does not run, saying why, for a Rust body, and for any body while the stream
+    /// gives no such run.
+    fn the_saved_value_cast_of_a_function_node(
+        &self,
+        conversion: &PinConversion,
+        language: FunctionNodeLanguage,
+    ) -> PinConversionSavedValueCast {
+        match (
+            language,
+            self.saved_value_cast_of_a_function_node_conversion
+                .read()
+                .as_ref(),
+        ) {
+            (FunctionNodeLanguage::Rust, _) => PinConversionSavedValueCast::that_does_not_run(
+                "its body is Rust, which runs only through its evaluate entry inside a started \
+                 stream",
+            ),
+            (FunctionNodeLanguage::Python, Some(cast_of)) => cast_of(conversion),
+            (FunctionNodeLanguage::Python, None) => PinConversionSavedValueCast::that_does_not_run(
+                "this stream has no interpreter to run its body in out of stream",
+            ),
+        }
+    }
+
     /// Register `descriptor`, which this stream's interpreter described, its nodes run as
-    /// `how_its_nodes_run`, with the conversion it states.
+    /// `how_its_nodes_run`, with the conversion it states: a function node's casting a saved
+    /// value as [`Self::the_saved_value_cast_of_a_function_node`] gives it.
     pub(crate) fn register_a_type_described_in_this_streams_node_interpreter(
         &self,
         descriptor: NodeDescriptor,
@@ -320,8 +387,14 @@ impl NodeTypesOneStreamResolves {
     ) -> Result<()> {
         let NodeTypeAsRegistered {
             descriptor,
-            conversion,
+            mut conversion,
         } = the_node_type_as_registered(descriptor)?;
+        if let (Some(conversion), NodeKind::Function { language }) =
+            (conversion.as_mut(), descriptor.node_kind)
+        {
+            conversion.saved_value_cast =
+                Some(self.the_saved_value_cast_of_a_function_node(conversion, language));
+        }
         let node_type = descriptor.node_class_import_path.clone();
         if self.is_a_natively_compiled_node_type(&node_type) {
             return Err(Error::Configuration(format!(

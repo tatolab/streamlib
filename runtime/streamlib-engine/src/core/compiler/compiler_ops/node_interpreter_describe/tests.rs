@@ -457,7 +457,7 @@ fn a_describe_its_host_interrupts_is_killed_and_refuses_every_type_saying_so() {
         "the describe held its host's interrupt for its whole bound"
     );
     assert!(
-        refusal.contains(DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL),
+        refusal.contains(&interrupted_by_the_host_refusal("describe")),
         "{refusal}"
     );
 }

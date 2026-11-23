@@ -11,6 +11,7 @@ pub(crate) mod function_node_promotion;
 pub(crate) mod graph_generator_run_in_the_projects_interpreter;
 pub(crate) mod input_port_pin_values;
 pub(crate) mod node_interpreter_describe;
+pub(crate) mod node_interpreter_saved_value_cast;
 pub(crate) mod node_interpreter_shutdown_ladder;
 pub(crate) mod node_interpreter_spawn_host;
 mod open_iceoryx2_service_op;
