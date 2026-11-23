@@ -133,7 +133,7 @@ pub(crate) fn node_interpreter_describe_command(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
 ) -> Result<Command> {
-    node_interpreter_describe_command_with_arguments(
+    node_interpreter_out_of_stream_command_with_arguments(
         std::iter::once(DESCRIBE_ARGUMENT)
             .chain(import_paths.iter().map(NodeClassImportPath::as_str)),
         stream_environment,
@@ -147,27 +147,27 @@ pub(crate) fn node_interpreter_describe_installed_modules_command(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
 ) -> Result<Command> {
-    node_interpreter_describe_command_with_arguments(
+    node_interpreter_out_of_stream_command_with_arguments(
         [DESCRIBE_INSTALLED_MODULES_ARGUMENT],
         stream_environment,
         lend_directory,
     )
 }
 
-/// The command that runs the stream's node interpreter out of stream with `describe_arguments`,
-/// as a describe runs it: holding a pipe on its standard input, its standard output and error
-/// read, and no per-node variable or descriptor beyond its standard streams.
-pub(crate) fn node_interpreter_describe_command_with_arguments<'a>(
-    describe_arguments: impl IntoIterator<Item = &'a str>,
+/// The command that runs the stream's node interpreter out of stream with `bootstrap_arguments`,
+/// as a describe or a cast runs it: holding a pipe on its standard input, its standard output
+/// and error read, and no per-node variable or descriptor beyond its standard streams.
+pub(crate) fn node_interpreter_out_of_stream_command_with_arguments<'a>(
+    bootstrap_arguments: impl IntoIterator<Item = &'a str>,
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
 ) -> Result<Command> {
     let mut command = node_interpreter_bootstrap_command(stream_environment, lend_directory)?;
-    // A pipe this process holds open for the describe's whole life: the
-    // bootstrap reads its end-of-file as the app gone, which is the only
-    // parent-death signal a describe has where `PR_SET_PDEATHSIG` does not exist.
+    // A pipe this process holds open for the run's whole life: the bootstrap
+    // reads its end-of-file as the app gone, which is the only parent-death
+    // signal a run out of stream has where `PR_SET_PDEATHSIG` does not exist.
     command
-        .args(describe_arguments)
+        .args(bootstrap_arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -521,7 +521,7 @@ pub(crate) fn run_the_node_interpreter_out_of_stream_reading_its_document<
         )
     });
 
-    let describe_exit = wait_for_a_stream_interpreter_to_exit(
+    let run_exit = wait_for_a_stream_interpreter_to_exit(
         &child,
         run_bound,
         &|| {
@@ -531,9 +531,9 @@ pub(crate) fn run_the_node_interpreter_out_of_stream_reading_its_document<
         },
         is_interrupted_by_the_host,
     );
-    // Killed whether or not the leader already exited: nothing a describe
-    // starts outlives it, and a descendant left holding its standard streams
-    // would hold the readers open.
+    // Killed whether or not the leader already exited: nothing a run out of
+    // stream starts outlives it, and a descendant left holding its standard
+    // streams would hold the readers open.
     let exit_status =
         kill_the_process_group_and_reap_its_leader(&mut child, format!("the {run_name}"));
     let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(
@@ -544,7 +544,7 @@ pub(crate) fn run_the_node_interpreter_out_of_stream_reading_its_document<
             .unwrap_or_default(),
     );
 
-    match describe_exit {
+    match run_exit {
         StreamInterpreterExitAwaited::Exited => {}
         StreamInterpreterExitAwaited::BoundElapsed => {
             return Err(refuse(format!(
@@ -583,19 +583,19 @@ pub(crate) fn run_the_node_interpreter_out_of_stream_reading_its_document<
              {exit_status_rendered}. {quoted_standard_error}"
         )));
     }
-    let describe_document = match serde_json::from_slice::<Document>(&standard_output_bytes) {
-        Ok(describe_document) => describe_document,
-        Err(not_a_describe_document) => {
+    let document = match serde_json::from_slice::<Document>(&standard_output_bytes) {
+        Ok(document) => document,
+        Err(not_the_document) => {
             return Err(refuse(format!(
                 "the stream's interpreter `{interpreter}` exited with {exit_status_rendered}, and \
-                 its standard output is not a {document_name} ({not_a_describe_document}); it began \
+                 its standard output is not a {document_name} ({not_the_document}); it began \
                  {}. What a `sitecustomize`, `usercustomize` or `.pth` hook in the stream's \
                  environment prints lands ahead of the document. {quoted_standard_error}",
                 standard_output_head_as_a_refusal_quotes_it(&standard_output_bytes)
             )));
         }
     };
-    Ok((describe_document, quoted_standard_error))
+    Ok((document, quoted_standard_error))
 }
 
 pub(crate) fn describe_the_node_types_installed_modules_declare_within(

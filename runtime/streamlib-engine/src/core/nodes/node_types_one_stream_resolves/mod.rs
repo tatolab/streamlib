@@ -336,21 +336,25 @@ impl NodeTypesOneStreamResolves {
     }
 
     /// Cast a saved value through each conversion a function node type this stream describes
-    /// from now on states with the cast `cast_of` gives for it, unless one is already given.
-    pub(crate) fn cast_a_saved_value_through_each_function_node_conversion_by(
+    /// from now on states with the cast the factory `cast_of` builds gives for it, built and
+    /// installed only the first time: a later call leaves the one installed and builds nothing.
+    pub(crate) fn install_once_the_saved_value_cast_of_each_function_node_conversion<CastOf>(
         &self,
-        cast_of: impl Fn(&PinConversion) -> PinConversionSavedValueCast + Send + Sync + 'static,
-    ) {
-        self.saved_value_cast_of_a_function_node_conversion
-            .write()
-            .get_or_insert_with(|| Arc::new(cast_of));
+        cast_of: impl FnOnce() -> CastOf,
+    ) where
+        CastOf: Fn(&PinConversion) -> PinConversionSavedValueCast + Send + Sync + 'static,
+    {
+        let mut installed = self.saved_value_cast_of_a_function_node_conversion.write();
+        if installed.is_none() {
+            *installed = Some(Arc::new(cast_of()));
+        }
     }
 
     /// The cast of a saved value through `conversion`, which a function node type whose body is
     /// in `language` states: a Python body's run out of stream as
-    /// [`Self::cast_a_saved_value_through_each_function_node_conversion_by`] gives it; one that
-    /// does not run, saying why, for a Rust body, and for any body while the stream gives no
-    /// such run.
+    /// [`Self::install_once_the_saved_value_cast_of_each_function_node_conversion`] gives it;
+    /// one that does not run, saying why, for a Rust body, and for any body while the stream
+    /// gives no such run.
     fn the_saved_value_cast_of_a_function_node(
         &self,
         conversion: &PinConversion,
@@ -364,12 +368,11 @@ impl NodeTypesOneStreamResolves {
         ) {
             (FunctionNodeLanguage::Rust, _) => PinConversionSavedValueCast::that_does_not_run(
                 "its body is Rust, which runs only through its evaluate entry inside a started \
-                 stream"
-                    .to_owned(),
+                 stream",
             ),
             (FunctionNodeLanguage::Python, Some(cast_of)) => cast_of(conversion),
             (FunctionNodeLanguage::Python, None) => PinConversionSavedValueCast::that_does_not_run(
-                "this stream has no interpreter to run its body in out of stream".to_owned(),
+                "this stream has no interpreter to run its body in out of stream",
             ),
         }
     }

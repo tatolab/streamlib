@@ -16,6 +16,26 @@ pub(super) struct TheRequestsOfATransaction<'worked_out> {
 }
 
 impl StreamGraphTransactionExecutor<'_> {
+    /// The graph document of the stream asset `stream_asset`, whose loaded stream
+    /// `stream_operations` runs, as it stands: the one `project_repository` holds, or, with no
+    /// repository, the one the stream's live graph renders.
+    pub(super) fn the_stream_graph_document_as_it_stands(
+        &self,
+        project_repository: Option<&ProjectRepository>,
+        stream_asset: Uuid,
+        stream_operations: &dyn RuntimeOperations,
+    ) -> Result<StreamGraphDocument, GraphTransactionRefusal> {
+        match project_repository {
+            Some(project_repository) => Ok(project_repository.stream_graph_document(stream_asset)?),
+            None => StreamGraphDocument::from_value(
+                self.async_runtime
+                    .block_on(stream_operations.to_json_async())
+                    .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
+            )
+            .map_err(GraphTransactionRefusal::of_the_whole_transaction),
+        }
+    }
+
     /// Apply each request, to the loaded stream it names, as one transaction by `author`, to the
     /// project `project_repository_held` holds when the transaction is committed.
     pub(super) fn apply_the_requests(
@@ -79,8 +99,11 @@ impl StreamGraphTransactionExecutor<'_> {
                             project_repository.project_file().project
                         )));
                     }
-                    let mut staged_graph =
-                        project_repository.stream_graph_document(stream_location.stream_asset)?;
+                    let mut staged_graph = self.the_stream_graph_document_as_it_stands(
+                        Some(&**project_repository),
+                        stream_location.stream_asset,
+                        stream_operations.as_ref(),
+                    )?;
                     move_each_former_port_name(
                         stream_location.stream_asset,
                         &mut staged_graph,
@@ -89,12 +112,11 @@ impl StreamGraphTransactionExecutor<'_> {
                     )?;
                     staged_graph
                 }
-                _ => StreamGraphDocument::from_value(
-                    self.async_runtime
-                        .block_on(stream_operations.to_json_async())
-                        .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
-                )
-                .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
+                None => self.the_stream_graph_document_as_it_stands(
+                    None,
+                    stream_location.stream_asset,
+                    stream_operations.as_ref(),
+                )?,
             };
             streams.insert(
                 stream_id.clone(),

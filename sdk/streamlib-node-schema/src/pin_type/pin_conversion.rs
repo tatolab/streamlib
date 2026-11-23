@@ -103,6 +103,7 @@ pub enum SavedValueNotCast {
 #[derive(Clone)]
 pub struct PinConversionSavedValueCast {
     cast: std::sync::Arc<SavedValueCastFunction>,
+    starts_a_process: bool,
 }
 
 impl PinConversionSavedValueCast {
@@ -116,13 +117,34 @@ impl PinConversionSavedValueCast {
     ) -> Self {
         Self {
             cast: std::sync::Arc::new(cast),
+            starts_a_process: false,
+        }
+    }
+
+    /// The cast `cast` makes, as [`Self::new`] does, by starting a process: a module's body run
+    /// in the stream's interpreter, which a caller holding a lock is not to wait on.
+    pub fn that_starts_a_process(
+        cast: impl Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, SavedValueNotCast>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            starts_a_process: true,
+            ..Self::new(cast)
         }
     }
 
     /// A cast that never runs, for a conversion the stream cannot run out of stream: why, in
     /// words.
-    pub fn that_does_not_run(why: String) -> Self {
+    pub fn that_does_not_run(why: impl Into<String>) -> Self {
+        let why = why.into();
         Self::new(move |_value, _into| Err(SavedValueNotCast::DidNotRun(why.clone())))
+    }
+
+    /// Whether the cast starts a process, as [`Self::that_starts_a_process`] makes one.
+    pub fn starts_a_process(&self) -> bool {
+        self.starts_a_process
     }
 
     /// `value`, a value the conversion's input takes, cast into a value of `into`; why not when

@@ -482,7 +482,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 );
             }
         }
+        // A rebuild commits holding the stream's one writer, which a batch the transaction still
+        // holds open keeps: a stream whose batch is open rebuilds once the transaction takes it
+        // back and reverses what it applied, as every refusal does.
         for (stream_id, stream) in streams {
+            if the_open_batch_of(streams, stream_id).is_ok() {
+                continue;
+            }
             self.rebuild_each_node_a_reversal_put_its_settings_back_on(
                 stream_id,
                 stream.stream_operations.as_ref(),

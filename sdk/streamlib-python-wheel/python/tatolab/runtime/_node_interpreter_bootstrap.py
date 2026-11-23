@@ -24,7 +24,7 @@ OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 12)
 DESCRIBE_ARGUMENT = "--describe"
 DESCRIBE_INSTALLED_MODULES_ARGUMENT = "--describe-installed-modules"
 CAST_A_SAVED_VALUE_ARGUMENT = "--cast-a-saved-value"
-DESCRIBE_ARGUMENTS = (
+OUT_OF_STREAM_RUN_ARGUMENTS = (
     DESCRIBE_ARGUMENT,
     DESCRIBE_INSTALLED_MODULES_ARGUMENT,
     CAST_A_SAVED_VALUE_ARGUMENT,
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     # Before the lent runtime and `tatolab.stream` import, so nothing their
     # imports print reaches the document; only the interpreter's own site hooks
     # run earlier.
-    if sys.argv[1:2] and sys.argv[1] in DESCRIBE_ARGUMENTS:
+    if sys.argv[1:2] and sys.argv[1] in OUT_OF_STREAM_RUN_ARGUMENTS:
         _reserve_stdout_for_the_described_document()
     _import_the_lent_runtime_or_refuse()
 
@@ -181,13 +181,14 @@ from tatolab.runtime._node_class_description import (
 )
 
 
-def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> NoReturn:
+def _end_the_run_out_of_stream_without_finalizing_the_interpreter(exit_status: int) -> NoReturn:
     """Exit at once, the document already written.
 
     Finalizing would join every non-daemon thread and run every atexit handler
-    a described module left, and the parent refuses a describe that has not
-    exited within its bound however complete its document. The parent kills
-    the describe's process group, so nothing the module started outlives it.
+    a module the run imported left, and the parent refuses a describe or a cast
+    that has not exited within its bound however complete its document. The
+    parent kills the run's process group, so nothing the module started
+    outlives it.
     """
     for standard_stream in (sys.__stdout__, sys.stderr):
         if standard_stream is not None:
@@ -195,14 +196,14 @@ def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> No
     os._exit(exit_status)
 
 
-def _end_the_describe_once_its_parent_closes_stdin() -> None:
-    """End the describe and its process group when the stdin pipe its parent
-    holds open reaches end-of-file: the parent is gone, and on macOS nothing
-    else ends a describe whose module blocks at import.
+def _end_the_run_out_of_stream_once_its_parent_closes_stdin() -> None:
+    """End the describe or cast and its process group when the stdin pipe its
+    parent holds open reaches end-of-file: the parent is gone, and on macOS
+    nothing else ends a run whose module blocks at import.
 
-    Armed only on a pipe, so a describe run by hand with stdin on a terminal or
-    `/dev/null` is not ended at once. Only a describe leading its own process
-    group, as the engine starts it, takes the group down with it.
+    Armed only on a pipe, so a run by hand with stdin on a terminal or
+    `/dev/null` is not ended at once. Only a run leading its own process group,
+    as the engine starts it, takes the group down with it.
     """
     try:
         if not stat.S_ISFIFO(os.fstat(0).st_mode):
@@ -434,32 +435,32 @@ def main(arguments: "list[str]") -> int:
                 f"`{DESCRIBE_ARGUMENT}` takes one or more import paths, `module:qualname`"
             )
             return 1
-        _end_the_describe_once_its_parent_closes_stdin()
+        _end_the_run_out_of_stream_once_its_parent_closes_stdin()
         log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
         try:
             describe_exit_status = describe_node_classes_onto_stdout(arguments[1:])
         except BaseException:
             traceback.print_exc()
             describe_exit_status = 1
-        _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
+        _end_the_run_out_of_stream_without_finalizing_the_interpreter(describe_exit_status)
     if arguments == [DESCRIBE_INSTALLED_MODULES_ARGUMENT]:
-        _end_the_describe_once_its_parent_closes_stdin()
+        _end_the_run_out_of_stream_once_its_parent_closes_stdin()
         log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
         try:
             describe_exit_status = describe_installed_modules_onto_stdout()
         except BaseException:
             traceback.print_exc()
             describe_exit_status = 1
-        _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
+        _end_the_run_out_of_stream_without_finalizing_the_interpreter(describe_exit_status)
     if arguments[:1] == [CAST_A_SAVED_VALUE_ARGUMENT] and len(arguments) == 3:
-        _end_the_describe_once_its_parent_closes_stdin()
+        _end_the_run_out_of_stream_once_its_parent_closes_stdin()
         log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
         try:
             cast_exit_status = cast_a_saved_value_onto_stdout(arguments[1], arguments[2])
         except BaseException:
             traceback.print_exc()
             cast_exit_status = 1
-        _end_the_describe_without_finalizing_the_interpreter(cast_exit_status)
+        _end_the_run_out_of_stream_without_finalizing_the_interpreter(cast_exit_status)
     if arguments:
         _write_a_bootstrap_fatal_to_raw_stderr(
             f"a node interpreter takes no arguments, `{DESCRIBE_ARGUMENT}` and "

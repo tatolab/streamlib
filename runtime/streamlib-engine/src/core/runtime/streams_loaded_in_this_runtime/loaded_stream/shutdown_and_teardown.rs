@@ -262,10 +262,10 @@ impl LoadedStreamInThisRuntime {
         self.compiler.node_threads_abandoned_and_still_running()
     }
 
-    /// Kill any describe this stream is running and refuse every later one —
-    /// its host's user interrupted the load that started it.
-    pub fn interrupt_every_node_interpreter_describe(&self) {
+    /// Kill any describe or cast this stream's interpreter is running out of stream and refuse
+    /// every later one — its host's user interrupted the load that started it.
+    pub fn interrupt_every_node_interpreter_run_out_of_stream(&self) {
         self.node_interpreter_launch_record
-            .interrupt_every_describe();
+            .interrupt_every_run_out_of_stream();
     }
 }

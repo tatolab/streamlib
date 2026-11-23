@@ -17,6 +17,7 @@ time or keeps state gives no one value out of stream, and is refused saying so.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from tatolab.stream._function_node_declaration import FunctionNode
@@ -76,7 +77,8 @@ def the_saved_value_a_function_node_casts(
 
     Refused as `SavedValueCastDidNotRun`, saying why, when the conversion is no Python function
     node, takes the stream's time or keeps state; as `SavedValueNotCast` when the value is not
-    one its input takes, or its body raises or gives no value a Graph Input saves.
+    one its input takes, or its body raises or gives no value a Graph Input saves, among them
+    a number JSON does not hold, NaN or an infinity.
     """
     if isinstance(function_node, RustFunctionNode):
         raise SavedValueCastDidNotRun(
@@ -124,7 +126,15 @@ def the_saved_value_a_function_node_casts(
         raise SavedValueNotCast(
             f"`{import_path}`'s body raised {type(raised).__name__}: {raised}"
         ) from raised
-    return _the_stored_value_of_an_output(the_output, answered, import_path)
+    stored_value = _the_stored_value_of_an_output(the_output, answered, import_path)
+    try:
+        json.dumps(stored_value, allow_nan=False)
+    except (TypeError, ValueError) as not_saved:
+        raise SavedValueNotCast(
+            f"`{import_path}`'s output `{the_output['port']}` gave {stored_value!r}, which no "
+            f"saved value holds: {not_saved}"
+        ) from not_saved
+    return stored_value
 
 
 def _the_stored_value_of_an_output(

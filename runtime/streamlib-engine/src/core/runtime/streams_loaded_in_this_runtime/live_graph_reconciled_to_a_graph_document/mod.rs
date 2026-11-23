@@ -405,6 +405,7 @@ impl LoadedStreamInThisRuntime {
                     node_run_id: live_node.node_run_id.clone(),
                     pins: document_pins,
                     studio: document_node.studio.clone(),
+                    handed_over_now: !self.is_left_to_rebuild(&live_node.node_run_id),
                 });
             }
         }

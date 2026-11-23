@@ -346,11 +346,13 @@ fn why_it_does_not_run(cast: Option<PinConversionSavedValueCast>) -> String {
 #[test]
 fn a_python_function_node_conversion_casts_a_saved_value_and_no_other_conversion_does() {
     let node_types = NodeTypesOneStreamResolves::new();
-    node_types.cast_a_saved_value_through_each_function_node_conversion_by(|conversion| {
-        let named = format!("{} on {}", conversion.node_type, conversion.input_port_name);
-        PinConversionSavedValueCast::new(move |value, _into| {
-            Ok(serde_json::json!(format!("{value} by {named}")))
-        })
+    node_types.install_once_the_saved_value_cast_of_each_function_node_conversion(|| {
+        |conversion: &PinConversion| {
+            let named = format!("{} on {}", conversion.node_type, conversion.input_port_name);
+            PinConversionSavedValueCast::new(move |value, _into| {
+                Ok(serde_json::json!(format!("{value} by {named}")))
+            })
+        }
     });
     let python_body = "node_types_one_stream_resolves_tests.project:ConvertsByItsBody";
     let rust_body = "node_types_one_stream_resolves_tests.project:ConvertsByItsRustBody";

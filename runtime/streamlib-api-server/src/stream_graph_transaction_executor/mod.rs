@@ -545,10 +545,13 @@ impl StreamGraphTransactionExecutor<'_> {
                     .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             ),
         };
+        let requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)> = requests
+            .into_iter()
+            .zip(stream_id_of_each_request.iter().cloned())
+            .collect();
         let saved_value_retypes_worked_out_before_the_edit = self
             .the_saved_value_retypes_worked_out_before_the_edit(
-                &requests,
-                stream_id_of_each_request,
+                &requests_and_the_stream_id_each_names,
                 stream_locations,
                 project_repository.as_ref(),
             );
@@ -564,10 +567,7 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let applied = self.apply_the_requests(
             request_application::TheRequestsOfATransaction {
-                requests_and_the_stream_id_each_names: requests
-                    .into_iter()
-                    .zip(stream_id_of_each_request.iter().cloned())
-                    .collect(),
+                requests_and_the_stream_id_each_names,
                 saved_value_retypes_worked_out_before_the_edit:
                     &saved_value_retypes_worked_out_before_the_edit,
             },

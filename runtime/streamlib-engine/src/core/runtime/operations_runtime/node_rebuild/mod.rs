@@ -114,6 +114,14 @@ impl LoadedStreamInThisRuntime {
             .scope(|graph, _tx| graph.is_a_setting_read_at_setup(node_run_id, input))
     }
 
+    /// Whether the node `node_run_id` is left to rebuild at the next
+    /// [`Self::rebuild_each_node_a_setting_read_at_setup_changed`].
+    pub(crate) fn is_left_to_rebuild(&self, node_run_id: &NodeRunId) -> bool {
+        self.nodes_a_setting_read_at_setup_rebuilds
+            .lock()
+            .contains(node_run_id)
+    }
+
     /// Leave the node `node_run_id` to rebuild at the next
     /// [`Self::rebuild_each_node_a_setting_read_at_setup_changed`], while this stream is
     /// started. A stopped stream builds the node from the values saved at its next start.

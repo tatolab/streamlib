@@ -11,9 +11,9 @@
 use super::*;
 
 use super::input_value_set_tests::{InputValueTestNode, register_the_input_value_test_node_once};
-use streamlib::sdk::descriptors::SavedValueNotCast;
+use streamlib::sdk::descriptors::{PinConversionSavedValueCast, SavedValueNotCast};
 
-const WARMTH_BASE_NODE_UUID: &str = "7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c";
+pub(super) const WARMTH_BASE_NODE_UUID: &str = "7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c";
 const WARMTH_NODE_UUID: &str = "8d8d8d8d-8d8d-4d8d-8d8d-8d8d8d8d8d8d";
 
 /// A project whose stream `main` holds a Float `GraphInput` `warmth_base`, saving 0.1 within
@@ -42,7 +42,7 @@ fn a_project_whose_main_stream_holds_a_float_input(linked: bool) -> ProjectWithG
 }
 
 /// The `set_node_input_value` operation setting `input` of `warmth_base` in `stream` to `value`.
-fn set_on_warmth_base(stream: Uuid, input: &str, value: Value) -> Value {
+pub(super) fn set_on_warmth_base(stream: Uuid, input: &str, value: Value) -> Value {
     json!({ "operation": "set_node_input_value", "stream": stream,
             "node": WARMTH_BASE_NODE_UUID, "input": input, "value": value })
 }
@@ -174,7 +174,7 @@ async fn a_linked_graph_input_retyped_with_its_value_cleared_is_refused_naming_t
 /// A project whose stream `main` holds the `GraphInput` `warmth_base` of `pin_type`, saving
 /// `value` with the settings `annotations`, by [`WARMTH_BASE_NODE_UUID`], the built-in
 /// conversions registered.
-fn a_project_whose_main_stream_holds_an_input_saving(
+pub(super) fn a_project_whose_main_stream_holds_an_input_saving(
     pin_type: Value,
     value: Value,
     annotations: Value,
@@ -194,7 +194,7 @@ fn a_project_whose_main_stream_holds_an_input_saving(
 
 /// The value `warmth_base` saves and the pin type it chooses, as `stream_id`'s live graph and
 /// `project`'s graph document of `main` hold them.
-fn what_warmth_base_holds(
+pub(super) fn what_warmth_base_holds(
     engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
     project: &ProjectWithGraphDocuments,
     stream_id: &str,
@@ -212,7 +212,7 @@ fn what_warmth_base_holds(
 }
 
 /// The answer of a `transact` by alice in `engine` of `operations`, or its refusal.
-async fn transact_by_alice(
+pub(super) async fn transact_by_alice(
     engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
     operations: Value,
 ) -> std::result::Result<Value, String> {
@@ -385,7 +385,7 @@ async fn a_retype_no_conversion_reaches_gives_way_to_the_default_saying_why() {
 
 /// The Python node type `node_type`, a conversion from a Float into a String, which the stream
 /// `stream_id` resolves as its interpreter would describe it.
-fn a_projects_float_to_string_conversion(
+pub(super) fn a_projects_float_to_string_conversion(
     engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
     stream_id: &str,
     node_type: &str,
@@ -457,22 +457,140 @@ async fn a_retype_only_a_modules_conversion_reaches_gives_way_to_the_default_nam
 }
 
 /// The stream `stream_id` casting a saved value through each function node conversion it
-/// describes from now on with `cast`, standing in for its body's one run out of stream.
-fn a_function_node_conversions_body_standing_in_as(
+/// describes from now on with `cast`, standing in for its body's one run out of stream: a cast
+/// that starts a process, as the body's does.
+pub(super) fn a_function_node_conversions_body_standing_in_as(
     engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
     stream_id: &str,
-    cast: fn(&Value) -> std::result::Result<Value, SavedValueNotCast>,
+    cast: impl Fn(&Value) -> std::result::Result<Value, SavedValueNotCast> + Send + Sync + 'static,
 ) {
+    let cast = Arc::new(cast);
     engine
         .engine
         .loaded_stream_of_the_id(stream_id)
         .expect("the stream is loaded")
         .node_types_this_stream_resolves()
         .cast_a_saved_value_through_each_function_node_conversion_for_a_test(move |_conversion| {
-            streamlib::sdk::descriptors::PinConversionSavedValueCast::new(move |value, _into| {
-                cast(value)
-            })
+            let cast = Arc::clone(&cast);
+            PinConversionSavedValueCast::that_starts_a_process(move |value, _into| cast(value))
         });
+}
+
+/// The value 0.1 a level saves as a percentage, `"10%"`.
+pub(super) fn as_a_percentage(value: &Value) -> std::result::Result<Value, SavedValueNotCast> {
+    Ok(json!(format!(
+        "{}%",
+        (value.as_f64().unwrap_or_default() * 100.0).round()
+    )))
+}
+
+/// On a running stream, a Float `GraphInput` saving 0.1 that chooses a String through a
+/// project's function node conversion saves the value its body gives, as on a stream not
+/// started, and the transaction answers.
+///
+/// Mental-revert: checking the value set after the retype against the type the running node
+/// still holds refuses `"10%"`, and reversing it with the transaction's batch open waits on the
+/// stream's writer for ever.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+async fn a_retype_on_a_running_stream_saves_what_the_function_node_conversion_gives() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let running = engine
+        .engine
+        .loaded_stream_of_the_id(&stream_id)
+        .expect("the stream is loaded");
+    running.start().expect("the stream starts");
+    running
+        .wait_until_every_node_is_running(std::time::Duration::from_secs(30))
+        .expect("every node runs");
+    a_function_node_conversions_body_standing_in_as(&engine, &stream_id, as_a_percentage);
+    a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsPercent");
+    let stream = project.stream_asset_of("main");
+
+    let retyped = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        transact_by_alice(
+            &engine,
+            json!([set_on_warmth_base(
+                stream,
+                "pin_type",
+                json!({ "type": "string" })
+            )]),
+        ),
+    )
+    .await
+    .expect("the transaction answers")
+    .expect("the retype casts the saved value");
+    assert_eq!(
+        retyped["saved_values_retyped"][0]["value"],
+        json!("10%"),
+        "{retyped}"
+    );
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id),
+        (json!("10%"), json!("10%"), json!({ "type": "string" }))
+    );
+}
+
+/// On a running stream, a `set_node_config` choosing a String for a Float `GraphInput` and saving
+/// `"x"` saves both, the node rebuilt for its new type, and the next value set takes.
+///
+/// Mental-revert: handing `"x"` to the running node before it is rebuilt refuses it for the
+/// Channels its output still carries.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+async fn a_config_retyping_a_running_graph_input_saves_its_new_value_and_the_next_set_takes() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let running = engine
+        .engine
+        .loaded_stream_of_the_id(&stream_id)
+        .expect("the stream is loaded");
+    running.start().expect("the stream starts");
+    running
+        .wait_until_every_node_is_running(std::time::Duration::from_secs(30))
+        .expect("every node runs");
+    let stream = project.stream_asset_of("main");
+    let answered_within_a_minute = |operations: Value| {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            transact_by_alice(&engine, operations),
+        )
+    };
+
+    let retyped = answered_within_a_minute(json!([
+        { "operation": "set_node_config", "stream": stream, "node": WARMTH_BASE_NODE_UUID,
+          "config": { "port": "warmth_base", "pin_type": { "type": "string" }, "value": "x" } },
+    ]))
+    .await
+    .expect("the transaction answers");
+    retyped.expect("the running Input takes its new type and value");
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id),
+        (json!("x"), json!("x"), json!({ "type": "string" }))
+    );
+
+    answered_within_a_minute(json!([set_on_warmth_base(stream, "value", json!("y"))]))
+        .await
+        .expect("the next transaction answers")
+        .expect("the next value is set");
 }
 
 /// A Float `GraphInput` saving 0.1 that chooses a String, which only a project's function node
@@ -489,12 +607,7 @@ async fn a_retype_only_a_function_node_conversion_reaches_saves_what_its_body_gi
         json!({}),
     );
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
-    a_function_node_conversions_body_standing_in_as(&engine, &stream_id, |value| {
-        Ok(json!(format!(
-            "{}%",
-            (value.as_f64().unwrap_or_default() * 100.0).round()
-        )))
-    });
+    a_function_node_conversions_body_standing_in_as(&engine, &stream_id, as_a_percentage);
     a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsPercent");
     let stream = project.stream_asset_of("main");
 

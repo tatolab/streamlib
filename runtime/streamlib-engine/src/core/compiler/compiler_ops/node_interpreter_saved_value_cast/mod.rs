@@ -14,7 +14,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::node_interpreter_describe::{
-    NodeInterpreterRunOutOfStream, node_interpreter_describe_command_with_arguments,
+    INSTALLED_MODULES_DESCRIBE_BOUND, NodeInterpreterRunOutOfStream,
+    node_interpreter_out_of_stream_command_with_arguments,
     run_the_node_interpreter_out_of_stream_reading_its_document,
 };
 use super::node_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
@@ -28,8 +29,9 @@ use crate::core::runtime::StreamEnvironment;
 const CAST_A_SAVED_VALUE_ARGUMENT: &str = "--cast-a-saved-value";
 
 /// How long one cast may run before its process group is killed and the cast refused: the
-/// edit retyping the Graph Input waits on it, so it is far shorter than a describe's bound.
-pub(crate) const SAVED_VALUE_CAST_BOUND: Duration = Duration::from_secs(5);
+/// edit retyping the Graph Input waits on it, so it is the bound of the describe the stream
+/// starts with, long enough for a cold import of a module's numeric libraries.
+pub(crate) const SAVED_VALUE_CAST_BOUND: Duration = INSTALLED_MODULES_DESCRIBE_BOUND;
 
 /// A cast, in the words its refusals name it by.
 const A_SAVED_VALUE_CAST: NodeInterpreterRunOutOfStream = NodeInterpreterRunOutOfStream {
@@ -50,13 +52,11 @@ struct SavedValueCastRequest<'a> {
 /// value, or why the body did not run. The bootstrap writes these keys as
 /// `SAVED_VALUE_CAST_DOCUMENT_*_KEY` names them.
 #[derive(serde::Deserialize)]
-struct SavedValueCastDocument {
-    #[serde(default)]
-    cast: Option<Value>,
-    #[serde(default)]
-    not_cast_because: Option<String>,
-    #[serde(default)]
-    not_run_because: Option<String>,
+#[serde(rename_all = "snake_case")]
+enum SavedValueCastDocument {
+    Cast(Value),
+    NotCastBecause(String),
+    NotRunBecause(String),
 }
 
 /// Where a function node conversion's body runs out of stream: the stream's interpreter, the
@@ -89,7 +89,7 @@ pub(crate) fn saved_value_cast_command(
              {not_written}"
         ))
     })?;
-    node_interpreter_describe_command_with_arguments(
+    node_interpreter_out_of_stream_command_with_arguments(
         [CAST_A_SAVED_VALUE_ARGUMENT, conversion.as_str(), &request],
         stream_environment,
         lend_directory,
@@ -105,7 +105,7 @@ pub(crate) fn the_saved_value_cast_of_a_function_node_conversion(
     input_port: String,
     where_it_runs: WhereAConversionRunsOutOfStream,
 ) -> PinConversionSavedValueCast {
-    PinConversionSavedValueCast::new(move |saved_value, _into| {
+    PinConversionSavedValueCast::that_starts_a_process(move |saved_value, _into| {
         cast_a_saved_value_in_the_streams_node_interpreter(
             &conversion,
             &input_port,
@@ -127,7 +127,7 @@ fn cast_a_saved_value_in_the_streams_node_interpreter(
         the_stream_it_belongs_to,
         interrupted_by_the_host,
     } = where_it_runs;
-    let (document, quoted_standard_error): (SavedValueCastDocument, String) =
+    let (document, _): (SavedValueCastDocument, String) =
         run_the_node_interpreter_out_of_stream_reading_its_document(
             || {
                 saved_value_cast_command(
@@ -149,22 +149,9 @@ fn cast_a_saved_value_in_the_streams_node_interpreter(
             SavedValueNotCast::DidNotRun(format!("its body did not run out of stream: {refused}"))
         })?;
     match document {
-        SavedValueCastDocument {
-            cast: Some(cast), ..
-        } => Ok(cast),
-        SavedValueCastDocument {
-            not_cast_because: Some(why),
-            ..
-        } => Err(SavedValueNotCast::RefusedTheValue(why)),
-        SavedValueCastDocument {
-            not_run_because: Some(why),
-            ..
-        } => Err(SavedValueNotCast::DidNotRun(why)),
-        SavedValueCastDocument { .. } => Err(SavedValueNotCast::DidNotRun(format!(
-            "the stream's interpreter `{}` printed a cast document naming neither the value nor \
-             why. {quoted_standard_error}",
-            stream_environment.interpreter.display()
-        ))),
+        SavedValueCastDocument::Cast(cast) => Ok(cast),
+        SavedValueCastDocument::NotCastBecause(why) => Err(SavedValueNotCast::RefusedTheValue(why)),
+        SavedValueCastDocument::NotRunBecause(why) => Err(SavedValueNotCast::DidNotRun(why)),
     }
 }
 

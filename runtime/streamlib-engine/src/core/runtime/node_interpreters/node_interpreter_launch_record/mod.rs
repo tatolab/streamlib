@@ -15,7 +15,7 @@ use crate::core::compiler::compiler_ops::node_interpreter_saved_value_cast::{
     WhereAConversionRunsOutOfStream, the_saved_value_cast_of_a_function_node_conversion,
 };
 use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
-use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassImportPath, PinConversion};
 use crate::core::error::{Error, Result};
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -28,7 +28,7 @@ pub(crate) struct NodeInterpreterLaunchRecordOfOneStream {
     stream_environment: Option<StreamEnvironment>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
     the_stream_its_helpers_belong_to: LoadedStreamAHelperProcessBelongsTo,
-    describes_interrupted_by_the_host: Arc<AtomicBool>,
+    runs_out_of_stream_interrupted_by_the_host: Arc<AtomicBool>,
 }
 
 impl NodeInterpreterLaunchRecordOfOneStream {
@@ -45,7 +45,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             stream_environment,
             node_types_this_stream_resolves,
             the_stream_its_helpers_belong_to,
-            describes_interrupted_by_the_host: Arc::new(AtomicBool::new(false)),
+            runs_out_of_stream_interrupted_by_the_host: Arc::new(AtomicBool::new(false)),
         };
         launch_record.resolve_the_views_the_streams_project_brings_as_they_are_on_disk();
         launch_record
@@ -85,8 +85,8 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         self.stream_environment.as_ref()
     }
 
-    pub(crate) fn interrupt_every_describe(&self) {
-        self.describes_interrupted_by_the_host
+    pub(crate) fn interrupt_every_run_out_of_stream(&self) {
+        self.runs_out_of_stream_interrupted_by_the_host
             .store(true, Ordering::SeqCst);
     }
 
@@ -151,7 +151,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         else {
             return;
         };
-        self.cast_saved_values_through_each_python_function_node_conversion_in(
+        self.install_once_the_cast_of_each_python_function_node_conversion(
             stream_environment,
             lend_directory,
         );
@@ -161,7 +161,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             INSTALLED_MODULES_DESCRIBE_BOUND,
             &self.the_stream_its_helpers_belong_to,
             &|| {
-                self.describes_interrupted_by_the_host
+                self.runs_out_of_stream_interrupted_by_the_host
                     .load(Ordering::SeqCst)
             },
         );
@@ -190,27 +190,31 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         }
     }
 
-    /// Cast a saved value through each Python function node conversion this stream registers
-    /// by running its body once in `stream_environment`'s interpreter, which the host's
-    /// interrupt kills as it kills a describe.
-    fn cast_saved_values_through_each_python_function_node_conversion_in(
+    /// Install, the first time only, the cast of a saved value through each Python function
+    /// node conversion this stream registers: its body run once in `stream_environment`'s
+    /// interpreter, which the host's interrupt kills as it kills a describe.
+    fn install_once_the_cast_of_each_python_function_node_conversion(
         &self,
         stream_environment: &StreamEnvironment,
         lend_directory: &Path,
     ) {
-        let where_a_conversion_runs_out_of_stream = WhereAConversionRunsOutOfStream {
-            stream_environment: stream_environment.clone(),
-            lend_directory: Arc::new(lend_directory.to_path_buf()),
-            the_stream_it_belongs_to: self.the_stream_its_helpers_belong_to.clone(),
-            interrupted_by_the_host: Arc::clone(&self.describes_interrupted_by_the_host),
-        };
         self.node_types_this_stream_resolves
-            .cast_a_saved_value_through_each_function_node_conversion_by(move |conversion| {
-                the_saved_value_cast_of_a_function_node_conversion(
-                    conversion.node_type.clone(),
-                    conversion.input_port_name.clone(),
-                    where_a_conversion_runs_out_of_stream.clone(),
-                )
+            .install_once_the_saved_value_cast_of_each_function_node_conversion(|| {
+                let where_a_conversion_runs_out_of_stream = WhereAConversionRunsOutOfStream {
+                    stream_environment: stream_environment.clone(),
+                    lend_directory: Arc::new(lend_directory.to_path_buf()),
+                    the_stream_it_belongs_to: self.the_stream_its_helpers_belong_to.clone(),
+                    interrupted_by_the_host: Arc::clone(
+                        &self.runs_out_of_stream_interrupted_by_the_host,
+                    ),
+                };
+                move |conversion: &PinConversion| {
+                    the_saved_value_cast_of_a_function_node_conversion(
+                        conversion.node_type.clone(),
+                        conversion.input_port_name.clone(),
+                        where_a_conversion_runs_out_of_stream.clone(),
+                    )
+                }
             });
     }
 
@@ -253,7 +257,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
                     .to_string(),
             });
         };
-        self.cast_saved_values_through_each_python_function_node_conversion_in(
+        self.install_once_the_cast_of_each_python_function_node_conversion(
             stream_environment,
             lend_directory,
         );
@@ -267,7 +271,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
                 lend_directory,
                 &self.the_stream_its_helpers_belong_to,
                 &|| {
-                    self.describes_interrupted_by_the_host
+                    self.runs_out_of_stream_interrupted_by_the_host
                         .load(Ordering::SeqCst)
                 },
             )?;

@@ -53,6 +53,12 @@ def LevelChecked(level: float = 0.0) -> str:
 
 @node.meta(conversion=True)
 @node
+def TextAsALevel(text: str = "") -> float:
+    return float(text)
+
+
+@node.meta(conversion=True)
+@node
 def LevelAtTheTime(now: Time, level: float = 0.0) -> int:
     return int(level) + now
 
@@ -135,3 +141,12 @@ def test_a_node_class_conversion_is_refused_since_its_body_runs_only_in_a_stream
 def test_a_value_a_number_input_does_not_take_is_refused_naming_it():
     with pytest.raises(SavedValueNotCast, match=r"input `level` does not take 'x'"):
         cast(LevelAsPercent, "level", "x")
+
+
+@pytest.mark.parametrize("text", ["nan", "inf", "-inf"])
+def test_a_number_no_saved_value_holds_is_a_refused_value(text: str):
+    """Mental-revert: leaving NaN to the document's writer fails outside the cast, and reads
+    as a body that did not run."""
+    with pytest.raises(SavedValueNotCast, match="which no saved value holds") as refused:
+        cast(TextAsALevel, "text", text)
+    assert not isinstance(refused.value, SavedValueCastDidNotRun)

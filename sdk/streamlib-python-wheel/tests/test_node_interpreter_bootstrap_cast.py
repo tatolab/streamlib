@@ -79,3 +79,34 @@ def test_a_cast_by_a_module_that_will_not_import_names_why(tmp_path: Path):
     assert set(document) == {not_run_because}, document
     assert "`no_such_module:LevelAsPercent` did not load" in document[not_run_because]
     assert "No module named 'no_such_module'" in document[not_run_because]
+
+
+def test_a_body_giving_a_number_no_saved_value_holds_is_a_refused_value(tmp_path: Path):
+    """A body giving NaN is answered `not_cast_because`, the document still one JSON value.
+
+    Mental-revert: writing NaN into the document fails after the cast, and the engine reads
+    the missing document as a body that did not run."""
+    (tmp_path / "levels.py").write_text(
+        "from tatolab.stream import node\n\n\n"
+        "@node.meta(conversion=True)\n"
+        "@node\n"
+        "def TextAsALevel(text: str = '') -> float:\n"
+        "    return float(text)\n"
+    )
+
+    cast = run_the_bootstrap(
+        tmp_path,
+        node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
+        "levels:TextAsALevel",
+        json.dumps(
+            {
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_INPUT_KEY: "text",
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_VALUE_KEY: "nan",
+            }
+        ),
+    )
+
+    document = cast_document(cast)
+    not_cast_because = node_interpreter_bootstrap.SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY
+    assert set(document) == {not_cast_because}, document
+    assert "which no saved value holds" in document[not_cast_because], document

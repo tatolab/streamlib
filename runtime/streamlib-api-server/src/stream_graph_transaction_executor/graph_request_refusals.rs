@@ -191,6 +191,11 @@ pub(crate) struct GraphRequestRefusal {
 }
 
 impl GraphRequestRefusal {
+    /// The runtime's own words of why the action was refused.
+    pub(super) fn runtime_words(&self) -> &str {
+        &self.runtime_words
+    }
+
     /// A refusal coded and placed by `code_and_place`, in `runtime_words`.
     pub(crate) fn coded(code_and_place: RefusalCodeAndPlace, runtime_words: String) -> Self {
         Self {

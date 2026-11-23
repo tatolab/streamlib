@@ -588,11 +588,14 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
     Err(not_handed_over)
 }
 
-/// The saved values and the studio fields a reconcile sets on one node it keeps.
+/// The saved values and the studio fields a reconcile sets on one node it keeps, and whether
+/// the running node is handed them now: a node left to rebuild is not, since the ports it was
+/// built with may carry another type than its values now choose, and its rebuild reads them.
 pub(in crate::core::runtime) struct SavedValuesOfAKeptNode {
     pub(in crate::core::runtime) node_run_id: NodeRunId,
     pub(in crate::core::runtime) pins: serde_json::Map<String, serde_json::Value>,
     pub(in crate::core::runtime) studio: serde_json::Map<String, serde_json::Value>,
+    pub(in crate::core::runtime) handed_over_now: bool,
 }
 
 /// Set the saved values and the studio fields of each of `kept_nodes`, nodes a reconcile keeps,
@@ -642,6 +645,9 @@ fn set_the_saved_values_of_a_kept_node_and_hand_them_over(
     ) else {
         return Ok(());
     };
+    if !kept_node.handed_over_now {
+        return Ok(());
+    }
     let put_the_former_values_back = |graph: &mut Graph| {
         set_the_pins_and_studio_fields(
             graph,
