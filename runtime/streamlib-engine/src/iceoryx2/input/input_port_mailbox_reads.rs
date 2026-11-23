@@ -124,7 +124,7 @@ impl InputMailboxesInner {
                     match members_at_the_read.the_message_the_port_reads(
                         &channel_user_header,
                         whole_payload,
-                        &mut port_config.newest_value_of_each_member_put_at_the_read,
+                        &mut port_config.newest_of_each_member_put_at_the_read,
                         set_on_the_input.get(&bound.local_port),
                     ) {
                         Ok(Some((member_header, member_payload))) => {

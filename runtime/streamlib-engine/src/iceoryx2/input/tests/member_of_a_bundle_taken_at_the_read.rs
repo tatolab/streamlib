@@ -8,7 +8,10 @@ use serde_json::json;
 
 use super::*;
 use crate::core::descriptors::{BundleMember, PinType};
-use crate::core::pin_value_packing::{PackedPinValueRef, pack_pin_value, unpack_pin_value};
+use crate::core::pin_value_packing::{
+    HeavyMemberOfABundleFrame, PackedPinValueRef, pack_pin_value, the_bundle_frame_of_a_bundle,
+    unpack_pin_value,
+};
 
 fn a_reading() -> PinType {
     let member = |name: &str, member_type: PinType, default_value| BundleMember {
@@ -30,10 +33,19 @@ fn a_port_reading_a_member(
     mailboxes: &InputMailboxesInner,
     member: &str,
 ) -> TestChannelPublisherNumberingItsSends {
+    a_port_reading_a_member_of(mailboxes, &a_reading(), member)
+}
+
+/// A port fed by one link that takes `member` of `bundle` at the read, and its publisher.
+fn a_port_reading_a_member_of(
+    mailboxes: &InputMailboxesInner,
+    bundle: &PinType,
+    member: &str,
+) -> TestChannelPublisherNumberingItsSends {
     let (publisher, subscriber) = open_channel_for_one_link(&format!("member/{member}"), 4);
     mailboxes.add_port("in", 16, ReadMode::ReadNextInOrder);
     let bundle_members_at_the_read = BundleMembersAtTheRead {
-        taken_from_its_output: Some(MemberTakenAtTheRead::of(&a_reading(), member).unwrap()),
+        taken_from_its_output: Some(MemberTakenAtTheRead::of(bundle, member).unwrap()),
         put_into_its_input: None,
     };
     mailboxes.add_channel_subscriber(
@@ -120,4 +132,102 @@ fn a_message_holding_no_bundle_is_dropped_and_counted() {
             .is_none()
     );
     assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-member"), Some(&1));
+}
+
+/// A picture with the level metered off it and the sound recorded with it.
+fn a_metered_picture() -> PinType {
+    PinType::Bundle {
+        members: vec![
+            a_bundle_member("picture", a_texture(), None),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
+            a_bundle_member("sound", PinType::Audio {}, None),
+        ],
+    }
+}
+
+/// Publish one Bundle frame of a metered picture: level 0.5, the picture and the sound.
+fn publish_a_metered_picture(publisher: &TestChannelPublisherNumberingItsSends) {
+    let samples = the_sound_samples();
+    let packed = the_bundle_frame_of_a_bundle(
+        &a_metered_picture(),
+        &json!({ "level": 0.5 }),
+        &[
+            HeavyMemberOfABundleFrame {
+                name: "picture",
+                descriptor: an_image_frame(4, 19),
+                payload: &[],
+            },
+            HeavyMemberOfABundleFrame {
+                name: "sound",
+                descriptor: a_sound_block(),
+                payload: &samples,
+            },
+        ],
+    )
+    .unwrap();
+    publisher.send_numbered(&TestChannelSample {
+        payload_descriptor: packed.payload_descriptor,
+        ..TestChannelSample::carrying(11, &packed.payload)
+    });
+}
+
+/// A link from the Texture member of a Bundle frame reads the picture's own Image frame, naming
+/// the pool slot the frame did, with the frame's stamp.
+///
+/// Mental-revert: a frame refused at the read drops every message, so the reader reads nothing.
+#[test]
+fn a_texture_member_link_reads_the_pictures_own_image_frame() {
+    let mailboxes = InputMailboxesInner::new();
+    let publisher = a_port_reading_a_member_of(&mailboxes, &a_metered_picture(), "picture");
+
+    publish_a_metered_picture(&publisher);
+
+    let (message, _) = mailboxes
+        .read_raw_from_inbound_link("in")
+        .unwrap()
+        .expect("the picture arrives");
+    assert_eq!(message.timestamp_ns, 11);
+    assert_eq!(message.payload_descriptor, an_image_frame(4, 19));
+    assert!(message.payload.is_empty());
+}
+
+/// A number member of a frame holding a Texture is taken as it is from a bundle of small members.
+///
+/// Mental-revert: refusing a Bundle frame at the read drops the number with the picture.
+#[test]
+fn a_number_member_link_of_a_frame_holding_a_texture_reads_the_number() {
+    let mailboxes = InputMailboxesInner::new();
+    let publisher = a_port_reading_a_member_of(&mailboxes, &a_metered_picture(), "level");
+
+    publish_a_metered_picture(&publisher);
+
+    let (message, _) = mailboxes
+        .read_raw_from_inbound_link("in")
+        .unwrap()
+        .expect("the level arrives");
+    let read = unpack_pin_value(
+        &PinType::Float { exact_size: None },
+        PackedPinValueRef {
+            payload_descriptor: &message.payload_descriptor,
+            payload: &message.payload,
+        },
+    )
+    .unwrap();
+    assert_eq!(read, json!(0.5));
+    assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-member"), Some(&0));
+}
+
+#[test]
+fn an_audio_member_link_reads_the_block_with_its_samples() {
+    let mailboxes = InputMailboxesInner::new();
+    let publisher = a_port_reading_a_member_of(&mailboxes, &a_metered_picture(), "sound");
+
+    publish_a_metered_picture(&publisher);
+
+    let (message, _) = mailboxes
+        .read_raw_from_inbound_link("in")
+        .unwrap()
+        .expect("the sound arrives");
+    assert_eq!(message.payload_descriptor, a_sound_block());
+    assert_eq!(message.payload.bytes(), the_sound_samples().as_slice());
 }

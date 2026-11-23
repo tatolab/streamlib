@@ -15,6 +15,7 @@ use streamlib_ipc_types::{
 };
 use streamlib_node_schema::pin_type::{BundleMember, BundleMessage};
 
+use super::bundle_frame_packing::the_member_a_bundle_frame_carries;
 use super::{
     PackedPinValue, PackedPinValueRef, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
     the_array_attribute_of_a_value, the_array_frame_of_attributes, the_records_message_of_a_record,
@@ -124,7 +125,8 @@ pub(super) fn the_array_frame_of_a_bundle_of_tensors(
 /// The message member `member` of the bundle `bundle` travels as on its own, taken from
 /// `message`, a message of the whole bundle: a small member's value, or its default, packed as
 /// its own type travels; a Tensor member's attribute as an Array frame of that one attribute,
-/// renamed `values`. Fails saying why the message holds no such member.
+/// renamed `values`; a Texture, Audio or encoded member's row of a Bundle frame as the message it
+/// is on a wire of its own. Fails saying why the message holds no such member.
 pub fn the_member_a_bundle_message_carries(
     bundle: &PinType,
     member: &BundleMember,
@@ -139,10 +141,7 @@ pub fn the_member_a_bundle_message_carries(
             return the_tensor_member_an_array_frame_carries(&member.name, message);
         }
         BundleMessage::BundleFrame => {
-            return Err(format!(
-                "a {bundle} travels as a Bundle frame, and a member is not taken from one at \
-                 the read yet"
-            ));
+            return the_member_a_bundle_frame_carries(bundle, member, message);
         }
     }
     if DataChannelPayloadDescriptorKind::from_wire(message.payload_descriptor.kind)
