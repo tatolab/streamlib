@@ -34,7 +34,7 @@
 //!      compare each element to the CPU reference (`input[i] *
 //!         2`). Any mismatch is a hard fail.
 //!      h. Write `OK\n<element_count>` or `ERR:<message>` to the
-//!      configured `output_path` so the integration test can
+//!      `output_path` its setting names so the integration test can
 //!      assert the round-trip succeeded.
 //!   3. `teardown()` — nothing; the kernel + storage buffers drop
 //!      naturally via their handle Drop impls.
@@ -51,6 +51,7 @@
 //!     e.g. a binding-handle mismatch routed the wrong buffer
 //!     pointer to the wrong slot).
 
+use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::nodes::ManualNode;
@@ -81,9 +82,20 @@ const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
     },
 ];
 
+/// The settings [`ComputeKernelTest`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeKernelTestSettings {
+    #[description = "The number of elements in the buffer the kernel doubles."]
+    pub element_count: u32,
+    #[description = "The file the node writes its result to."]
+    pub output_path: String,
+}
+
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::test_fixture_node_configs::ComputeKernelTestNodeConfig,
+    settings = crate::compute_kernel_test_node::ComputeKernelTestSettings,
 )]
 #[meta(
     description = "Compute-kernel CPU-reference integration test fixture — creates a kernel via FullAccess, allocates input + output storage buffers via LimitedAccess, dispatches output[i] = input[i] * 2, and asserts CPU-reference match"
@@ -96,8 +108,8 @@ impl ManualNode for ComputeKernelTest::Node {
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.config.output_path.clone();
-        let element_count = self.config.element_count;
+        let output_path = self.settings.output_path.clone();
+        let element_count = self.settings.element_count;
 
         let outcome = run_compute_kernel_round_trip(ctx, element_count);
 

@@ -17,6 +17,7 @@ pub mod graph_snapshot;
 pub mod graph_variable_resolution;
 pub mod input_values;
 pub(crate) mod legacy_config_of_a_node;
+mod node_health_with_its_links;
 mod node_state_ecs_component;
 mod nodes;
 mod pin_type_link_checks;

@@ -15,7 +15,10 @@ use crate::error::{SchemaError, SchemaResult};
 #[cfg_attr(
     feature = "contract-json-schema",
     derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
+    schemars(
+        crate = "schemars_1",
+        transform = crate::pin_type::bundle_members_json_schema::state_what_a_bundle_member_may_be
+    )
 )]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PinType {

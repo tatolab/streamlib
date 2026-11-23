@@ -17,7 +17,7 @@ use streamlib_control_contract::CONTROL_CONTRACT_FILE_WORKSPACE_PATH;
 
 use crate::contract_component_references::{
     component_name_of_a_reference, component_names_reached_from, component_schemas_of,
-    property_names_of, tags_of_a_tagged_union,
+    property_names_of, tags_of_a_tagged_union, the_union_a_schema_is,
 };
 use crate::contract_pin_types::{
     BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME, BuiltInPinTypeRow, PIN_ANNOTATIONS_COMPONENT_NAME,
@@ -338,17 +338,15 @@ impl PythonPinTypesModule<'_> {
                 python_string_literal(constant, nested_class_name)?
             ));
         }
-        for union_keyword in ["oneOf", "anyOf"] {
-            if let Some(members) = schema[union_keyword].as_array() {
-                let mut alternatives = Vec::new();
-                for member in members {
-                    push_unique(
-                        &mut alternatives,
-                        self.python_type_of(member, nested_class_name, nested_class_doc)?,
-                    );
-                }
-                return Ok(union_of(alternatives));
+        if let Some(members) = the_union_a_schema_is(schema) {
+            let mut alternatives = Vec::new();
+            for member in members {
+                push_unique(
+                    &mut alternatives,
+                    self.python_type_of(member, nested_class_name, nested_class_doc)?,
+                );
             }
+            return Ok(union_of(alternatives));
         }
         if schema.get("properties").is_some() {
             match self.nested_classes.get(nested_class_name) {

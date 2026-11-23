@@ -1,5 +1,5 @@
 {
-  "contract": "1.0",
+  "contract": "1.1",
   "title": "Gulf Stream Neon stage",
   "description": "The ocean off Miami, live: real NOAA bathymetry, the real Gulf Stream and Virginia Key's readings. Slide the real chart into neon, drag the time of day, orbit, fly, and click the water to drop an eddy the current carries north.",
   "entry": "index.html",
@@ -7,19 +7,45 @@
   "inputs": [
     {
       "name": "video",
-      "family": "image",
+      "pin_type": { "type": "texture" },
       "description": "The finished picture to show and steer."
     },
     {
       "name": "station",
-      "family": "records",
+      "pin_type": {
+        "type": "bundle",
+        "members": [
+          { "name": "station", "member_type": { "type": "float" } },
+          { "name": "observed_at_unix", "member_type": { "type": "float" } },
+          { "name": "water_level_m", "member_type": { "type": "float" } },
+          { "name": "wind_speed_mps", "member_type": { "type": "float" } },
+          { "name": "wind_from_degrees", "member_type": { "type": "float" } },
+          { "name": "wind_gust_mps", "member_type": { "type": "float" } },
+          { "name": "air_temperature_c", "member_type": { "type": "float" } },
+          { "name": "water_temperature_c", "member_type": { "type": "float" } },
+          { "name": "air_pressure_hpa", "member_type": { "type": "float" } },
+          { "name": "live", "member_type": { "type": "float" } }
+        ]
+      },
       "description": "NOAA Virginia Key's readings, from NoaaStationFeed, for the live data panel."
     }
   ],
   "outputs": [
     {
       "name": "camera",
-      "family": "records",
+      "pin_type": {
+        "type": "bundle",
+        "members": [
+          { "name": "target_x", "member_type": { "type": "float" } },
+          { "name": "target_y", "member_type": { "type": "float" } },
+          { "name": "distance", "member_type": { "type": "float" } },
+          { "name": "yaw_degrees", "member_type": { "type": "float" } },
+          { "name": "pitch_degrees", "member_type": { "type": "float" } },
+          { "name": "bursts", "member_type": { "type": "integer" } },
+          { "name": "burst_x", "member_type": { "type": "float" } },
+          { "name": "burst_y", "member_type": { "type": "float" } }
+        ]
+      },
       "description": "Where the stage has been orbited, zoomed and flown to, and where it was last clicked to drop an eddy."
     }
   ]

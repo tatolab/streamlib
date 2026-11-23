@@ -737,8 +737,7 @@ pub struct ProjectViewDeclaredPort {
     /// `pin_type`.
     #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
     pub family: String,
-    /// The pin type the port carries; absent on a port its manifest declares by its older field
-    /// alone.
+    /// The pin type the port carries, which every port of a manifest that opens names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type: Option<PinType>,
     /// What the port carries.

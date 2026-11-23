@@ -507,3 +507,52 @@ fn a_helper_placed_windowed_port_is_handed_the_windowed_ring_depth() {
         serde_json::json!(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH),
     );
 }
+
+/// A source feeding a windowed reader that a rebuild restarts opens its channel again as deep
+/// as the reader's ring, the old channel gone with its build: the link it wires again counts.
+///
+/// Fail-without-fix: the link is left disconnected as it is unwired, so the channel is created
+/// at the ordered depth and the windowed reader's subscriber is refused as larger than it.
+#[test]
+fn a_restarted_source_feeding_a_windowed_reader_opens_its_channel_at_the_windowed_depth_again() {
+    use crate::core::compiler::compiler_ops::running_node_restart::{
+        hold_each_link_to_wire_again_as_pending, the_running_nodes_a_rebuild_restarts,
+        unwire_each_link_of_the_nodes_restarted,
+    };
+    use crate::core::test_support::MockOutputOnlyNode;
+
+    let mut graph = Graph::new();
+    let source_id = add_mock_output_only(&mut graph);
+    attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
+    let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
+    open_iceoryx2_service(
+        &mut graph,
+        &windowed.link_id,
+        &Iceoryx2Node::for_this_test_process(),
+    )
+    .expect("the windowed link wires");
+
+    let restarted = the_running_nodes_a_rebuild_restarts(
+        &graph,
+        &[NodeRunId::from(source_id.as_str())],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("the source restarts");
+    assert_eq!(restarted.links, std::slice::from_ref(&windowed.link_id));
+    unwire_each_link_of_the_nodes_restarted(&mut graph, &restarted).expect("the link unwires");
+    hold_each_link_to_wire_again_as_pending(&mut graph, &restarted, &restarted.links);
+    attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
+
+    open_iceoryx2_service(
+        &mut graph,
+        &windowed.link_id,
+        &Iceoryx2Node::for_this_test_process(),
+    )
+    .expect("the windowed link wires again onto the rebuilt source");
+    assert_eq!(
+        creation_depth_of_the_channel_held_by(&graph, &windowed.link_id),
+        WINDOWED_PORT_SUBSCRIBER_RING_DEPTH
+    );
+}

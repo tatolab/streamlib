@@ -42,7 +42,6 @@ pub const AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE: &str = "source";
 /// half-declared contract leaves the read-side stage guessing at exactly the
 /// values a model asserts on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(tag = "resolved_from", deny_unknown_fields)]
 pub enum AudioWindowContract {
     /// The values as the port itself declared them.
@@ -76,7 +75,6 @@ pub enum AudioWindowContract {
 
 /// The values an `audio_window` declaration states.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AudioWindowContractDeclaredValues {
     /// Output sample rate in hertz.
@@ -91,10 +89,6 @@ pub struct AudioWindowContractDeclaredValues {
     /// on mono — declares one and is converted to it.
     #[serde(default, with = "channel_count_declared_or_following_the_source")]
     #[schemars(schema_with = "audio_window_channels_json_schema")]
-    #[cfg_attr(
-        feature = "utoipa",
-        schema(schema_with = audio_window_channels_openapi_schema)
-    )]
     pub channels: Option<u32>,
     /// The sample type an emitted window's Channels block carries — `"f32"`
     /// or `"f64"`.
@@ -254,37 +248,6 @@ fn audio_window_channels_json_schema(
         })),
         ..Default::default()
     })
-}
-
-/// The OpenAPI rendering of `channels`, matching what the field actually
-/// writes.
-///
-/// The counterpart to [`audio_window_channels_json_schema`], and needed for the
-/// same reason: the derive would publish an integer-or-null, which the control
-/// plane's `/api/registry` never emits and which cannot express `"source"`.
-#[cfg(feature = "utoipa")]
-fn audio_window_channels_openapi_schema() -> utoipa::openapi::schema::Schema {
-    use utoipa::openapi::schema::{ObjectBuilder, OneOfBuilder, Schema, SchemaType, Type};
-
-    Schema::OneOf(
-        OneOfBuilder::new()
-            .item(Schema::Object(
-                ObjectBuilder::new()
-                    .schema_type(SchemaType::Type(Type::Integer))
-                    .minimum(Some(1))
-                    .build(),
-            ))
-            .item(Schema::Object(
-                ObjectBuilder::new()
-                    .schema_type(SchemaType::Type(Type::String))
-                    .enum_values(Some([AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE]))
-                    .build(),
-            ))
-            .description(Some(
-                "Output channel count, or `source` to carry whatever count the source sends.",
-            ))
-            .build(),
-    )
 }
 
 /// A declaration vocabulary as a quoted, comma-joined list, for the refusal
@@ -693,37 +656,6 @@ mod tests {
             arms.iter().any(|arm| arm["enum"]
                 == serde_json::json!([AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE])),
             "the source arm must admit {following}; got {json_schema}"
-        );
-    }
-
-    /// The OpenAPI rendering is published on `/api/registry`, and the derive
-    /// would have it advertise an integer-or-null the server never emits.
-    #[cfg(feature = "utoipa")]
-    #[test]
-    fn the_openapi_schema_for_the_channel_count_offers_the_same_two_arms() {
-        use utoipa::PartialSchema;
-
-        let rendered =
-            serde_json::to_value(<AudioWindowContractDeclaredValues as PartialSchema>::schema())
-                .expect("the OpenAPI schema renders")["properties"]["channels"]
-                .clone();
-
-        let arms = rendered["oneOf"]
-            .as_array()
-            .expect("the schema offers both arms");
-        assert!(
-            arms.iter().any(|arm| arm["type"] == "integer"),
-            "the count arm is missing; got {rendered}"
-        );
-        assert!(
-            arms.iter().any(|arm| arm["enum"]
-                == serde_json::json!([AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE])),
-            "the source arm is missing; got {rendered}"
-        );
-        assert!(
-            !rendered.to_string().contains("null"),
-            "the derive's integer-or-null is exactly what this override exists to \
-             replace; got {rendered}"
         );
     }
 

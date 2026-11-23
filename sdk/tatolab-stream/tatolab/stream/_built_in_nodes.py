@@ -9,26 +9,25 @@
 
 from __future__ import annotations
 
-from typing import Annotated, ClassVar, Literal, TypedDict
+from typing import Annotated, ClassVar, Literal
 
 from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
 from ._class_node_pins import InputPin, OutputPin
 from ._description import Description
 from ._input_declaration_annotations import SettingOnly, StreamDelivery
+from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
 from ._pin_types import Audio, Tensor, Texture, UInt32
 
 __all__ = [
     "AudioToTensor",
     "BooleanToFloat",
     "BooleanToInteger",
-    "ChannelsToRecords",
-    "ChannelsToRecordsConfig",
+    "BreakBundle",
     "FloatToBoolean",
     "FloatToInteger",
     "IntegerToBoolean",
     "IntegerToFloat",
-    "RecordsToChannels",
-    "RecordsToChannelsConfig",
+    "MakeBundle",
     "TensorToAudio",
     "TensorToTexture",
     "TextureFormatConvert",
@@ -126,34 +125,42 @@ class BooleanToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class ChannelsToRecordsConfig(TypedDict, total=False):
-    """`ChannelsToRecords`'s config: the keys `stream_builder.add` takes."""
-
-    channel_names: list[str]
-    """The key each channel's value is written under, in the block's channel order.
-
-    Default: `["value"]`.
-    """
-
-
-class ChannelsToRecords(BuiltInNode[ChannelsToRecordsConfig]):
-    """Converts each Channels block on `channels` into one Records message on `records`
-    holding the block's last sample of each channel as a float, keyed by that channel's
-    name in `channel_names`: latest-value control, such as a sensor's reading or a
-    fader's position, read by a node that takes Records. A block whose channel count is
-    not the number of names is refused and writes nothing; a block of no samples writes
-    nothing.
+class BreakBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Breaks each bundle of `bundle_type` on `bundle` into its members. A wire starts
+    at each member of `members` and carries that member alone, typed as it, so several
+    nodes each read the member they take. A Texture or Audio member is carried by
+    reference, as a node's own bundle pin carries one.
 
     Inputs:
-        `channels` (newest): The Channels blocks whose latest values are read.
+        `bundle` (ordered): The bundle to break into its members.
 
     Outputs:
-        `records`: One record per block: each channel's last sample under its name.
-
-    Config: `ChannelsToRecordsConfig`.
+        `members`: The bundle's members, a wire starting at each.
     """
 
-    type: ClassVar[str] = "tatolab.stream:ChannelsToRecords"
+    type: ClassVar[str] = "tatolab.stream:BreakBundle"
+
+    bundle: InputPin[
+        Annotated[
+            object,
+            PinTypeFromSetting("bundle_type"),
+            Description("The bundle to break into its members"),
+        ]
+    ]
+
+    bundle_type: Annotated[
+        PinTypeChoice | None,
+        SettingOnly(),
+        Description("The bundle the node carries: one a module of the stream declares."),
+    ] = None
+
+    members: OutputPin[
+        Annotated[
+            object,
+            PinTypeFromSetting("bundle_type"),
+            Description("The bundle's members, a wire starting at each"),
+        ]
+    ]
 
 
 class FloatToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
@@ -273,43 +280,44 @@ class IntegerToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class RecordsToChannelsConfig(TypedDict, total=False):
-    """`RecordsToChannels`'s config: the keys `stream_builder.add` takes."""
-
-    channel_names: list[str]
-    """The record keys read, one channel each, in channel order.
-
-    Default: `["value"]`.
-    """
-
-    sample_rate: int
-    """The sample rate `channels` states, in samples per second per channel.
-
-    Default: `48000`.
-    """
-
-
-class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
-    """Converts each Records message on `records` into a Channels block of one `f64`
-    sample per channel on `channels`, one channel per key in `channel_names`:
-    latest-value control, such as a parameter an agent or a UI sets, read by a node that
-    takes Channels. A key the record leaves out keeps its channel's latest value, 0
-    until a record names it; a key not in `channel_names` is ignored. A value is an
-    integer or a float, or a boolean read as 1 or 0; a record that is not a map of
-    string keys, or that holds another value under a name, is refused and writes
-    nothing. Each block's start sample is the record's stamp since the first record's,
-    counted at `sample_rate`, and always past the block before it.
+class MakeBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+    """Makes one bundle of `bundle_type` from its members. A wire ends at each member of
+    `members`, and a member no wire reaches reads the value set on it. Each message a
+    member wire carries sends one bundle on `bundle`, built from the newest value of
+    every member and stamped as that message; none is sent while a member that declares
+    no default holds no value. A bundle wired whole into `members` passes through as it
+    is, a Texture or Audio member by reference.
 
     Inputs:
-        `records` (newest): The records whose named values are read.
+        `members` (ordered): The bundle's members, each wired or set on its own.
 
     Outputs:
-        `channels`: One sample per record of each channel in `channel_names`.
-
-    Config: `RecordsToChannelsConfig`.
+        `bundle`: One bundle built from the newest value of each member.
     """
 
-    type: ClassVar[str] = "tatolab.stream:RecordsToChannels"
+    type: ClassVar[str] = "tatolab.stream:MakeBundle"
+
+    members: InputPin[
+        Annotated[
+            object,
+            PinTypeFromSetting("bundle_type"),
+            Description("The bundle's members, each wired or set on its own"),
+        ]
+    ]
+
+    bundle_type: Annotated[
+        PinTypeChoice | None,
+        SettingOnly(),
+        Description("The bundle the node carries: one a module of the stream declares."),
+    ] = None
+
+    bundle: OutputPin[
+        Annotated[
+            object,
+            PinTypeFromSetting("bundle_type"),
+            Description("One bundle built from the newest value of each member"),
+        ]
+    ]
 
 
 class TensorToAudio(BuiltInNode[InputValuesOfATypedBuiltInNode]):

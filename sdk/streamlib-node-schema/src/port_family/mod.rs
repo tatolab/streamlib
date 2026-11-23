@@ -13,7 +13,6 @@ use crate::stated_lists::{the_ones_not_held, the_ones_not_taken};
 
 /// The memory layout a port carries; a link joins two ports of one family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PortFamily {
     Image,
@@ -93,7 +92,6 @@ impl fmt::Display for PortFamily {
 /// The names an output port states: written on the class, or read from one
 /// key of its node's config when `connect` resolves them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum OutputPortDeclaredNames {
     Stated(Vec<String>),
@@ -103,7 +101,6 @@ pub enum OutputPortDeclaredNames {
 /// The sample rate a Channels output states, written on the class or read
 /// from its node's config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelsOutputPortSampleRate {
     Stated(u32),
@@ -113,7 +110,6 @@ pub enum ChannelsOutputPortSampleRate {
 /// The frame rate an Image output states, written on the class or read from
 /// its node's config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOutputPortFrameRate {
     Stated(crate::ImageStreamFrameRate),
@@ -122,7 +118,6 @@ pub enum ImageOutputPortFrameRate {
 
 /// The sample type of a Channels output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelsOutputPortSampleType {
     F32,
@@ -131,7 +126,6 @@ pub enum ChannelsOutputPortSampleType {
 
 /// Where an Array output's attributes live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ArrayOutputPortResidency {
     Gpu,
@@ -145,7 +139,6 @@ pub enum ArrayOutputPortResidency {
 /// `requires_codec` and `formats`. [`Self::refusal_of_its_keys`] names a key
 /// the family or the direction does not take.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct PortFamilyDeclaration {
     pub family: PortFamily,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -596,8 +589,6 @@ pub(crate) fn node_placed_between_families(from: PortFamily, to: PortFamily) -> 
         (Array, Image) => one_node("place a TensorToTexture node between them"),
         (Channels, Array) => one_node("place an AudioToTensor node between them"),
         (Array, Channels) => one_node("place a TensorToAudio node between them"),
-        (Channels, Records) => one_node("place a ChannelsToRecords node between them"),
-        (Records, Channels) => one_node("place a RecordsToChannels node between them"),
         (Image, Packets) => codec_nodes(EncodedMedia::Video, CodecDirection::Encode),
         (Packets, Image) => codec_nodes(EncodedMedia::Video, CodecDirection::Decode),
         (Channels, Packets) => codec_nodes(EncodedMedia::Audio, CodecDirection::Encode),

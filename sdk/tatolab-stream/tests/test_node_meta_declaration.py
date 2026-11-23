@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
-from tatolab.stream import Image, ImageFrame, Input, node
+from tatolab.stream import ImageFrame, InputPin, StreamDelivery, Texture, node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
@@ -25,26 +25,26 @@ def _slang_passing_the_image_on(function_name: str) -> str:
 
 
 @node.meta(category="Effects/Stylize", description=HALFTONE_DESCRIPTION)
-@node.process
+@node
 class HalftoneWithItsMetaAbove:
-    video = Input(Image, delivery="newest")
+    video: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
 
-@node.process
+@node
 @node.meta(category="Effects/Stylize", description=HALFTONE_DESCRIPTION)
 class HalftoneWithItsMetaBelow:
-    video = Input(Image, delivery="newest")
+    video: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
 
 @node.meta(category="Effects/Stylize", description=HALFTONE_DESCRIPTION)
-@node.function
-def halftone_level_with_its_meta_above(level: float) -> float:
+@node
+def halftone_level_with_its_meta_above(level: float = 0.0) -> float:
     return level
 
 
-@node.function
+@node
 @node.meta(category="Effects/Stylize", description=HALFTONE_DESCRIPTION)
-def halftone_level_with_its_meta_below(level: float) -> float:
+def halftone_level_with_its_meta_below(level: float = 0.0) -> float:
     return level
 
 
@@ -79,19 +79,19 @@ def test_every_kind_carries_its_meta_whether_written_above_or_below_its_kind_dec
 
 def test_a_node_that_declares_only_a_description_has_no_category():
     @node.meta(description="Passes frames on.")
-    @node.process
+    @node
     class DescribedOnly:
-        video = Input(Image, delivery="newest")
+        video: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     assert getattr(DescribedOnly, NODE_DECLARATION_CATEGORY_STAMP) is None
     assert getattr(DescribedOnly, NODE_DECLARATION_DESCRIPTION_STAMP) == "Passes frames on."
 
 
 def test_a_node_that_declares_only_a_category_is_described_by_the_empty_string():
-    @node.process
+    @node
     @node.meta(category="Effects")
     class CategorizedOnly:
-        video = Input(Image, delivery="newest")
+        video: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     assert getattr(CategorizedOnly, NODE_DECLARATION_CATEGORY_STAMP) == "Effects"
     assert getattr(CategorizedOnly, NODE_DECLARATION_DESCRIPTION_STAMP) == ""
@@ -99,11 +99,11 @@ def test_a_node_that_declares_only_a_category_is_described_by_the_empty_string()
 
 def test_two_metas_on_one_node_join_and_the_one_written_above_wins_a_key_both_declare():
     @node.meta(category="Effects/Stylize")
-    @node.process
+    @node
     @node.meta(description="Dots.")
     @node.meta(category="Effects")
     class DeclaredInThreeMetas:
-        video = Input(Image, delivery="newest")
+        video: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     assert getattr(DeclaredInThreeMetas, NODE_DECLARATION_CATEGORY_STAMP) == "Effects/Stylize"
     assert getattr(DeclaredInThreeMetas, NODE_DECLARATION_DESCRIPTION_STAMP) == "Dots."
@@ -112,9 +112,9 @@ def test_two_metas_on_one_node_join_and_the_one_written_above_wins_a_key_both_de
 def test_a_class_never_takes_the_meta_of_the_class_it_extends():
     @node.meta(category="Effects")
     class NotYetANode:
-        video = Input(Image, delivery="newest")
+        video: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
-    @node.process
+    @node
     class ExtendsIt(NotYetANode):
         pass
 

@@ -4,7 +4,7 @@
     {
       "named": "a node view declaring every field",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Stage rig",
         "description": "Fixtures on a stage, with a master fader.",
         "icon": "icon.svg",
@@ -15,12 +15,12 @@
         "inputs": [
           {
             "name": "fixtures",
-            "family": "records",
+            "pin_type": { "type": "string" },
             "description": "Each fixture and where it hangs."
           }
         ],
         "outputs": [
-          { "name": "master_intensity", "family": "array", "range": [0, 1] }
+          { "name": "master_intensity", "pin_type": { "type": "tensor" }, "range": [0, 1] }
         ],
         "settings": {
           "type": "object",
@@ -72,16 +72,14 @@
       }
     },
     {
-      "named": "a 1.1 node view whose ports name their pin types, one stating the family it agrees with",
+      "named": "a 1.1 node view whose ports name their pin types, each read with the family it is carried as",
       "manifest": {
         "contract": "1.1",
         "title": "Monitor",
         "entry": "index.html",
         "placement": "node",
         "inputs": [{ "name": "picture", "pin_type": { "type": "texture" } }],
-        "outputs": [
-          { "name": "level", "family": "channels", "pin_type": { "type": "float" } }
-        ]
+        "outputs": [{ "name": "level", "pin_type": { "type": "float" } }]
       },
       "opens": true,
       "reads_as": {
@@ -98,7 +96,7 @@
       }
     },
     {
-      "named": "a 1.1 node view whose port is declared by family alone",
+      "named": "a port declared by the older family alone",
       "manifest": {
         "contract": "1.1",
         "title": "Fader",
@@ -106,7 +104,32 @@
         "placement": "node",
         "outputs": [{ "name": "fader", "family": "array", "range": [0, 1] }]
       },
-      "opens": true
+      "opens": false,
+      "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a 1.0 view whose port is declared by the older family alone",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Deck",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [{ "name": "waveform", "family": "channels" }]
+      },
+      "opens": false,
+      "refused_at": "inputs[0]"
+    },
+    {
+      "named": "a port stating the older family beside its pin type, even the family it is carried as",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Agree",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "family": "channels", "pin_type": { "type": "float" } }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0]"
     },
     {
       "named": "a port naming neither its pin type nor its family",
@@ -145,6 +168,161 @@
       },
       "opens": false,
       "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a port of a bundle of numbers, carried whole as Records",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Stage",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [
+          {
+            "name": "camera",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "yaw", "member_type": { "type": "float" } },
+                { "name": "bursts", "member_type": { "type": "integer" } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Stage",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "camera",
+            "family": "records",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "yaw", "member_type": { "type": "float" } },
+                { "name": "bursts", "member_type": { "type": "integer" } }
+              ]
+            }
+          }
+        ],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
+    },
+    {
+      "named": "a port of a bundle holding a Texture, which no Records message carries",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Framed",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [
+          {
+            "name": "framed",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "label", "member_type": { "type": "string" } },
+                { "name": "picture", "member_type": { "type": "texture" } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": false,
+      "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a port of a bundle with a List of Float member, carried whole as Records",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Meters",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "levels",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "label", "member_type": { "type": "string" } },
+                { "name": "peaks", "member_type": { "type": "list_of", "element_type": { "type": "float" } } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Meters",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "levels",
+            "family": "records",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "label", "member_type": { "type": "string" } },
+                { "name": "peaks", "member_type": { "type": "list_of", "element_type": { "type": "float" } } }
+              ]
+            }
+          }
+        ],
+        "outputs": [],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
+    },
+    {
+      "named": "a port of a bundle of only Tensors, carried whole as Array",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Detections",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "detections",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "boxes", "member_type": { "type": "tensor" } },
+                { "name": "scores", "member_type": { "type": "tensor" } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Detections",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "detections",
+            "family": "array",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "boxes", "member_type": { "type": "tensor" } },
+                { "name": "scores", "member_type": { "type": "tensor" } }
+              ]
+            }
+          }
+        ],
+        "outputs": [],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
     },
     {
       "named": "a port of no known pin type",
@@ -368,11 +546,11 @@
     {
       "named": "an area view declaring ports",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Area",
         "entry": "index.html",
         "placement": "area",
-        "inputs": [{ "name": "level", "family": "array" }]
+        "inputs": [{ "name": "level", "pin_type": { "type": "float" } }]
       },
       "opens": false,
       "refused_at": "placement"
@@ -392,11 +570,11 @@
     {
       "named": "a port name out of shape",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Name",
         "entry": "index.html",
         "placement": "node",
-        "inputs": [{ "name": "Deck A", "family": "channels" }]
+        "inputs": [{ "name": "Deck A", "pin_type": { "type": "float" } }]
       },
       "opens": false,
       "refused_at": "inputs[0].name"
@@ -404,29 +582,29 @@
     {
       "named": "a port named twice",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Twice",
         "entry": "index.html",
         "placement": "node",
         "inputs": [
-          { "name": "deck", "family": "channels" },
-          { "name": "deck", "family": "image" }
+          { "name": "deck", "pin_type": { "type": "float" } },
+          { "name": "deck", "pin_type": { "type": "texture" } }
         ]
       },
       "opens": false,
       "refused_at": "inputs[1].name"
     },
     {
-      "named": "an output named after one of its inputs, of any family, since the two are one name on the view node",
+      "named": "an output named after one of its inputs, of any type, since the two are one name on the view node",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Deck",
         "entry": "index.html",
         "placement": "node",
-        "inputs": [{ "name": "deck", "family": "channels" }],
+        "inputs": [{ "name": "deck", "pin_type": { "type": "float" } }],
         "outputs": [
-          { "name": "level", "family": "array" },
-          { "name": "deck", "family": "image" }
+          { "name": "level", "pin_type": { "type": "tensor" } },
+          { "name": "deck", "pin_type": { "type": "texture" } }
         ]
       },
       "opens": false,
@@ -435,11 +613,11 @@
     {
       "named": "an output a panel writes named after one of its settings, since its value is set on the view node's input of its name",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Deck",
         "entry": "index.html",
         "placement": "node",
-        "outputs": [{ "name": "level", "family": "records" }],
+        "outputs": [{ "name": "level", "pin_type": { "type": "string" } }],
         "settings": {
           "type": "object",
           "properties": { "level": { "type": "number", "default": 0.5 } }
@@ -451,11 +629,11 @@
     {
       "named": "an Image output named after one of its settings, since no input of its name is made",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Deck",
         "entry": "index.html",
         "placement": "node",
-        "outputs": [{ "name": "preview", "family": "image" }],
+        "outputs": [{ "name": "preview", "pin_type": { "type": "texture" } }],
         "settings": {
           "type": "object",
           "properties": { "preview": { "type": "boolean", "default": true } }
@@ -466,11 +644,11 @@
     {
       "named": "a range on a port that is not Array",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Range",
         "entry": "index.html",
         "placement": "node",
-        "outputs": [{ "name": "level", "family": "image", "range": [0, 1] }]
+        "outputs": [{ "name": "level", "pin_type": { "type": "texture" }, "range": [0, 1] }]
       },
       "opens": false,
       "refused_at": "outputs[0].range"
@@ -478,11 +656,11 @@
     {
       "named": "a range highest first",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Backwards",
         "entry": "index.html",
         "placement": "node",
-        "outputs": [{ "name": "level", "family": "array", "range": [1, 0] }]
+        "outputs": [{ "name": "level", "pin_type": { "type": "tensor" }, "range": [1, 0] }]
       },
       "opens": false,
       "refused_at": "outputs[0].range"
@@ -589,11 +767,11 @@
     {
       "named": "a port range written as null",
       "manifest": {
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "Null",
         "entry": "index.html",
         "placement": "node",
-        "outputs": [{ "name": "level", "family": "array", "range": null }]
+        "outputs": [{ "name": "level", "pin_type": { "type": "tensor" }, "range": null }]
       },
       "opens": false,
       "refused_at": "outputs[0].range"

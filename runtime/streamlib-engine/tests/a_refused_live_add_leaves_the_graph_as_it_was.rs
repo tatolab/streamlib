@@ -7,25 +7,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use serial_test::serial;
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeOperations};
-use streamlib::sdk::schemars::JsonSchema;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 use streamlib_project_repository::{StreamGraphDocumentNode, StreamGraphOperation};
 use uuid::Uuid;
 
-#[streamlib::sdk::node_config]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "streamlib::sdk::schemars")]
-pub struct RefusedLiveAddTestNodeConfig {}
-
-#[streamlib::sdk::node(
-    execution = manual,
-    config = crate::RefusedLiveAddTestNodeConfig,
-)]
+#[streamlib::sdk::node(execution = manual)]
 pub struct RefusedLiveAddTestNode;
 
 impl streamlib_engine::ManualNode for RefusedLiveAddTestNode::Node {
@@ -108,7 +98,7 @@ fn an_add_whose_node_the_running_stream_cannot_build_leaves_no_node() {
             "id": Uuid::new_v4(),
             "name": "leak_probe",
             "type": "tatolab.stream:GraphInput",
-            "config": {"port": "leak_probe", "family": "Channels"},
+            "input_values": {"port": "leak_probe", "family": "Channels"},
         }),
     )
     .expect_err("a GraphInput naming no family is refused")

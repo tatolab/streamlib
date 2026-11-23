@@ -108,7 +108,7 @@ class LiveAddedEffect:
 
 # A native built-in is named over the control plane by the type `graph`
 # reports for one, its class in `tatolab.stream`.
-LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:ChannelsToRecords"
+LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:FloatToInteger"
 
 
 def test_the_live_added_effect_written_as_a_source_string_still_declares():
@@ -374,17 +374,16 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     tatolabd.await_marker("DOWNSTREAM_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
     assert bags_written_on(local_api, stream_id, "effect", "video_to_downstream") > 0
 
-    live_added_channels_to_records = add_node_live(
+    live_added_float_to_integer = add_node_live(
         local_api,
         stream_id,
         {
             "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
-            "config": {"channel_names": ["level"]},
-            "name": "live-added-channels-to-records",
+            "name": "live-added-float-to-integer",
         },
     )
     assert (
-        await_node_state(local_api, stream_id, live_added_channels_to_records["name"], "Running")
+        await_node_state(local_api, stream_id, live_added_float_to_integer["name"], "Running")
         == "Running"
     )
 

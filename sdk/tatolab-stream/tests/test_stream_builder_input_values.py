@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from stream_graph_builder_nodes import FrameInverter, RigMonitor, TintedLevel
+from stream_graph_builder_nodes import TintedLevel
+from stream_graph_builder_streams import StandInMarker
 from tatolab.stream import (
     Color,
     InputPin,
@@ -61,13 +62,13 @@ def test_input_values_are_recorded_under_the_documents_one_key_for_them() -> Non
 def test_config_records_the_same_values_as_input_values_on_a_node_declaring_no_pin_types() -> None:
     values = {"name": "Rig Monitor"}
 
-    assert the_values_recorded_for(RigMonitor, config=values) == values
-    assert the_values_recorded_for(RigMonitor, input_values=values) == values
+    assert the_values_recorded_for(StandInMarker, config=values) == values
+    assert the_values_recorded_for(StandInMarker, input_values=values) == values
 
 
 def test_a_node_given_both_spellings_is_refused_naming_input_values() -> None:
     with pytest.raises(TypeError, match=r"pass them as `input_values=\{\.\.\.\}` alone"):
-        StreamBuilder("rig").add(RigMonitor, input_values={"name": "a"}, config={"name": "b"})
+        StreamBuilder("rig").add(StandInMarker, input_values={"name": "a"}, config={"name": "b"})
 
 
 def test_a_typed_node_given_config_is_refused_naming_input_values() -> None:
@@ -144,7 +145,7 @@ def test_a_typed_nodes_port_names_are_checked_against_its_declaration() -> None:
 
 
 def test_a_node_declaring_no_pin_types_names_any_port_unchecked() -> None:
-    inverter = StreamBuilder("rig").add(FrameInverter)
+    inverter = StreamBuilder("rig").add(StandInMarker)
 
     assert inverter.output("anything").port_name == "anything"
     assert inverter.input("whatever").port_name == "whatever"

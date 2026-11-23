@@ -36,7 +36,7 @@ pub(super) struct InputValueTestNodeConfig {
     execution = manual,
     config = crate::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNodeConfig,
     input("gain", delivery_profile = "newest", pin_type = Float),
-    input("video", delivery_profile = "newest", family = Image),
+    input("video", delivery_profile = "newest", pin_type = Texture),
     output("level", pin_type = Float),
     output("count", pin_type = Integer),
 )]
@@ -65,9 +65,9 @@ pub(super) fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDoc
         "stream": "main",
         "nodes": [
             { "id": MIXER_NODE_UUID, "name": "mixer",
-              "type": InputValueTestNode::node_class_import_path().as_str(), "config": {} },
+              "type": InputValueTestNode::node_class_import_path().as_str() },
             { "id": SOURCE_NODE_UUID, "name": "monitor",
-              "type": StreamToolsTestSink::node_class_import_path().as_str(), "config": {} },
+              "type": StreamToolsTestSink::node_class_import_path().as_str() },
         ],
         "links": [],
     }))
@@ -964,7 +964,7 @@ async fn an_undo_setting_a_value_the_input_does_not_take_points_into_no_params()
         "stream": "main",
         "nodes": [
             { "id": MIXER_NODE_UUID, "name": "mixer",
-              "type": InputValueTestNode::node_class_import_path().as_str(), "config": {},
+              "type": InputValueTestNode::node_class_import_path().as_str(),
               "input_values": { "gain": "loud" } },
         ],
         "links": [],

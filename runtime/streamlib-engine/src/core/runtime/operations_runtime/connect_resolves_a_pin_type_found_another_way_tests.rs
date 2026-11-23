@@ -39,6 +39,9 @@ const CHOSEN_BY_DEFAULT_SOURCE: &str = "FoundAnotherWayChosenByDefaultSource";
 const UNTYPED_PASS_ON: &str = "FoundAnotherWayUntypedPassOn";
 const IMAGE_STRING_SINK: &str = "FoundAnotherWayImageStringSink";
 const FAMILY_SET_IN_CONFIG_SOURCE: &str = "FoundAnotherWayFamilySetInConfigSource";
+const CHANNELS_FLOAT_SINK: &str = "FoundAnotherWayChannelsFloatSink";
+/// A node whose input `value`, typed by its setting `kind`, takes a wire or a value.
+const CHOSEN_SINK_TAKING_A_VALUE: &str = "FoundAnotherWayChosenSinkTakingAValue";
 /// The output of a `PASS_ON` node, which takes the type of its input `value`.
 const PASSED_ON: &str = "passed_on";
 
@@ -171,6 +174,33 @@ fn register_the_fixture_node_types() {
                         PortFamilyDeclaration::of_family(PortFamily::Image),
                     )
                     .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
+                ],
+                Vec::new(),
+            ),
+            a_node_type(
+                CHOSEN_SINK_TAKING_A_VALUE,
+                vec![
+                    a_type_choice(),
+                    a_port(
+                        "value",
+                        DeclaredPinType::SetByInput {
+                            input_name: "kind".to_owned(),
+                        },
+                    )
+                    .with_input_mode(NodeInputMode::WireOrValue),
+                ],
+                Vec::new(),
+            ),
+            a_node_type(
+                CHANNELS_FLOAT_SINK,
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration::of_family(PortFamily::Channels),
+                    )
+                    .with_pin_declaration(PinDeclaration::exactly(float())),
                 ],
                 Vec::new(),
             ),
@@ -455,6 +485,97 @@ fn a_setting_choosing_a_type_a_wired_link_does_not_take_is_refused_naming_the_li
     );
 }
 
+/// A bundle of one Float member for each of `member_names`.
+fn a_bundle_of_floats(member_names: &[&str]) -> PinType {
+    PinType::Bundle {
+        members: member_names
+            .iter()
+            .map(|name| crate::core::descriptors::BundleMember {
+                name: (*name).to_owned(),
+                member_type: float(),
+                meaning: None,
+                default_value: None,
+            })
+            .collect(),
+    }
+}
+
+/// A new choice keeps a wire whose member it still holds as that member's type, and refuses one
+/// whose member it no longer holds, naming the wire.
+///
+/// Mental-revert: a check reading only links between two typed ends passes over the wire at a
+/// member the bundle no longer holds, and the choice is taken with the wire left dangling.
+#[test]
+fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(
+        &compiler,
+        CHOSEN_SOURCE,
+        choosing(a_bundle_of_floats(&["level", "pan"])),
+    );
+    let float_sink = a_node_of(&compiler, FLOAT_SINK);
+    connect_on_this_thread_waiting_for(
+        &compiler,
+        OutputLinkPortRef::new(chosen.clone(), "value").at_member(Some("pan".to_owned())),
+        InputLinkPortRef::new(float_sink.clone(), "value"),
+        InputValueChangesAConnectWaitsFor::TheStreamsOne(Default::default()),
+    )
+    .expect("the bundle chosen holds a Float `pan`");
+
+    choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["pan", "width"]))
+        .expect("the bundle still holds `pan`");
+    let refused = choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["level"]));
+
+    let words = refused
+        .expect_err("the bundle holds no `pan` for the wire to start at")
+        .to_string();
+    assert!(
+        words.contains("setting `kind`") && words.contains("pan"),
+        "{words}"
+    );
+    assert!(
+        !words.contains(&chosen.to_string()) && !words.contains(&float_sink.to_string()),
+        "the wire is named by its nodes' names, not their run ids: {words}"
+    );
+    assert_eq!(
+        words.matches("To fix:").count(),
+        1,
+        "one fix is named: {words}"
+    );
+}
+
+/// A wire starting at a member of a port whose setting chooses a bundle is judged by the
+/// member's type, not by the family of the whole port it is a member of.
+///
+/// Mental-revert: judging the families first refuses a Float member of a Records port wired to a
+/// Channels Float input, though the member and the input carry one type.
+#[test]
+fn a_wire_at_a_member_of_a_port_a_setting_types_is_judged_by_the_member_not_the_ports_family() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(
+        &compiler,
+        CHOSEN_SOURCE,
+        choosing(a_bundle_of_floats(&["level"])),
+    );
+    let channels_float_sink = a_node_of(&compiler, CHANNELS_FLOAT_SINK);
+
+    connect_on_this_thread_waiting_for(
+        &compiler,
+        OutputLinkPortRef::new(chosen.clone(), "value").at_member(Some("level".to_owned())),
+        InputLinkPortRef::new(channels_float_sink.clone(), "value"),
+        InputValueChangesAConnectWaitsFor::TheStreamsOne(Default::default()),
+    )
+    .expect("the member `level` and the input both carry a Float");
+    let refused = connect(&compiler, &chosen, &channels_float_sink)
+        .expect_err("the whole Records bundle does not feed a Channels input");
+    assert!(
+        matches!(refused, Error::InvalidLink(_) | Error::PinLinkRefused(_)),
+        "{refused:?}"
+    );
+}
+
 #[test]
 fn an_output_whose_setting_chooses_no_type_yet_is_judged_by_its_family() {
     register_the_fixture_node_types();
@@ -633,4 +754,48 @@ fn a_connect_waits_while_an_input_value_change_is_made() {
         .join()
         .expect("the connect does not panic")
         .expect("a String to a String connects once the change is made");
+}
+
+/// A value set on an input whose setting chooses a bundle is handed to its node as that bundle,
+/// each member it leaves out reading its own default.
+///
+/// Mental-revert: reading the input by the pin it states, which is none, hands its node nothing,
+/// so MakeBundle's set `label` read as its default on the rig.
+#[test]
+fn a_value_set_on_an_input_a_setting_types_as_a_bundle_is_handed_to_its_node() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let reading = PinType::Bundle {
+        members: vec![
+            crate::core::descriptors::BundleMember {
+                name: "level".to_owned(),
+                member_type: float(),
+                meaning: None,
+                default_value: None,
+            },
+            crate::core::descriptors::BundleMember {
+                name: "label".to_owned(),
+                member_type: PinType::String {},
+                meaning: None,
+                default_value: Some(json!("unnamed")),
+            },
+        ],
+    };
+    let mut pins = choosing(reading);
+    pins.insert("value".to_owned(), json!({"level": 0.5, "label": "set"}));
+    let sink = a_node_holding(&compiler, CHOSEN_SINK_TAKING_A_VALUE, pins);
+
+    let handed = compiler.scope(|graph, _tx| {
+        let node = graph
+            .traversal()
+            .v(&sink)
+            .first()
+            .expect("the node is held");
+        crate::core::graph::input_values::the_unlinked_input_values(graph, node)
+    });
+
+    assert_eq!(
+        handed.get("value"),
+        Some(&json!({"level": 0.5, "label": "set"}))
+    );
 }

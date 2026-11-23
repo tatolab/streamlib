@@ -19,8 +19,7 @@ fn the_node_uuids_a_project_holds_take_each_placed_streams_nodes_under_their_pla
     std::fs::write(
         streams_directory.join("held.graph.json"),
         serde_json::json!({ "asset": held_stream_asset, "links": [], "nodes": [{
-            "id": node_inside_the_placed_stream, "name": "lfo", "type": "nodes.lfo:Lfo",
-            "config": {} }] })
+            "id": node_inside_the_placed_stream, "name": "lfo", "type": "nodes.lfo:Lfo" }] })
         .to_string(),
     )
     .expect("the held stream's document");
@@ -29,7 +28,7 @@ fn the_node_uuids_a_project_holds_take_each_placed_streams_nodes_under_their_pla
         serde_json::json!({ "asset": main.stream_asset, "links": [], "nodes": [{
             "id": placement_of_the_held_stream, "name": "held",
             "type": streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE,
-            "config": { "stream": { "asset": held_stream_asset } } }] })
+            "input_values": { "stream": { "asset": held_stream_asset } } }] })
         .to_string(),
     )
     .expect("the placing stream's document");
@@ -88,7 +87,7 @@ fn a_graph_document_holding_an_integer_wider_than_64_bits_is_recorded_failed_nam
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
     let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
     let mut graph = the_graph_of_a_stream_named("camera");
-    graph["nodes"][0]["config"] = serde_json::json!({ "value": "the wide integer" });
+    graph["nodes"][0]["input_values"] = serde_json::json!({ "value": "the wide integer" });
     project.write_the_graph_document(graph);
     let document_path = project.graph_document_path_of("camera");
     let document_text = std::fs::read_to_string(&document_path).unwrap();
@@ -173,7 +172,7 @@ fn a_stream_placed_twice_in_one_stream_and_again_in_another_shares_no_node_uuid(
         serde_json::json!({
             "name": placement_name,
             "type": streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE,
-            "config": { "stream": { "asset": project.stream_asset_of("look") } },
+            "input_values": { "stream": { "asset": project.stream_asset_of("look") } },
         })
     };
     for (stream_name, placement_names) in [
@@ -210,7 +209,7 @@ fn the_graph_of_a_stream_reading_the_image_asset(
         "nodes": [{
             "name": "overlay",
             "type": crate::core::test_support::MockSourceReadingAnImageAsset::Node::node_class_import_path().as_str(),
-            "config": { "image": { "asset": image } },
+            "input_values": { "image": { "asset": image } },
         }],
         "links": [],
     })
@@ -381,7 +380,7 @@ fn a_stream_another_stream_of_the_project_places_runs_only_inside_it() {
         .push(serde_json::json!({
             "name": "look",
             "type": streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE,
-            "config": { "stream": { "asset": project.stream_asset_of("look") } },
+            "input_values": { "stream": { "asset": project.stream_asset_of("look") } },
         }));
     project.write_the_graph_document(main_placing_look);
     let rerun = runner

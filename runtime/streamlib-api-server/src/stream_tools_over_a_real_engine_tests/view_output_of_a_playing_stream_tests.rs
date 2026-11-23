@@ -22,12 +22,11 @@ const ARRIVES_WITHIN: Duration = Duration::from_secs(10);
 /// The UUID the graph document gives its `deck`.
 const DECK_NODE_UUID: &str = "d0ecd0ec-d0ec-4d0e-8d0e-d0ecd0ecd0ec";
 
-/// A project whose stream `main` holds a node of its view `deck`, with a Records output `cue`
-/// and an Array output `fader`.
+/// A project whose stream `main` holds a node of its view `deck`, with a String output `cue`
+/// and a Tensor output `fader`.
 fn a_project_whose_stream_holds_the_deck() -> ProjectWithGraphDocuments {
     a_project_bringing_the_deck_whose_stream_holds(json!([
-        { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
-          "config": {} },
+        { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck") },
     ]))
 }
 
@@ -41,9 +40,9 @@ fn a_project_bringing_the_deck_whose_stream_holds(nodes: Value) -> ProjectWithGr
     std::fs::write(
         folder.join("tatolab_view.json"),
         json!({
-            "contract": "1.0", "title": "Deck", "entry": "index.html", "placement": "node",
-            "outputs": [{ "name": "cue", "family": "records" },
-                        { "name": "fader", "family": "array" }],
+            "contract": "1.1", "title": "Deck", "entry": "index.html", "placement": "node",
+            "outputs": [{ "name": "cue", "pin_type": { "type": "string" } },
+                        { "name": "fader", "pin_type": { "type": "tensor" } }],
         })
         .to_string(),
     )
@@ -129,26 +128,26 @@ async fn a_write_onto_a_view_output_is_its_inputs_live_value_and_reaches_a_viewe
     let project = a_project_whose_stream_holds_the_deck();
     engine.playing(&project).await;
     let document_before = project.the_graph_document_of("main");
-    let cue = json!({ "track": "drop", "beat": 64 });
+    let cue = json!("drop");
 
     let answer = engine
         .write_onto_the_deck(&project, "cue", cue.clone())
         .await
-        .expect("a playing view node's output takes a record");
+        .expect("a playing view node's output takes a string");
     assert_eq!(answer["port"], "cue", "{answer}");
     let (_viewer, mut reader) = engine.a_viewer_of_the_deck(&project, "cue").await;
     assert_eq!(
         the_record_of(&the_next_message_read(&mut reader).await),
-        cue,
+        json!({ "value": cue }),
         "a viewer opened after the write reads the value the output keeps"
     );
     engine
         .write_onto_the_deck(&project, "cue", cue.clone())
         .await
-        .expect("the same record is taken again");
+        .expect("the same string is taken again");
     assert_eq!(
         the_record_of(&the_next_message_read(&mut reader).await),
-        cue,
+        json!({ "value": cue }),
         "each write is published, the same as a new one"
     );
 
@@ -162,7 +161,7 @@ async fn a_write_onto_a_view_output_is_its_inputs_live_value_and_reaches_a_viewe
         .await;
 }
 
-/// A value the output's family does not take is refused as a value its input does not take, at
+/// A value the output's pin type does not take is refused as a value its input does not take, at
 /// `/value`; `null` is refused in the words of the output's family; and a value saved on the
 /// input of an output, by a `commit`, is refused by name, since it holds no saved value.
 #[tokio::test(flavor = "multi_thread")]
@@ -207,7 +206,7 @@ async fn a_write_no_panel_makes_or_a_saved_value_on_a_view_outputs_input_is_refu
         .the_answer_or_the_refusal_of(
             "set_node_input_value",
             json!({ "stream": project.stream_asset_of("main"), "node": DECK_NODE_UUID,
-                    "input": "cue", "value": { "track": "intro" }, "mode": "commit" }),
+                    "input": "cue", "value": "intro", "mode": "commit" }),
         )
         .await
         .expect_err("the input of a view's output holds no saved value");
@@ -244,7 +243,7 @@ async fn an_add_node_saving_a_value_on_a_view_outputs_input_is_refused() {
             "add_node",
             json!({ "stream": project.stream_asset_of("main"),
                     "type": format!("{TEST_PROJECT_NAME}:deck"), "name": "deck",
-                    "pins": { "cue": { "track": "intro" } } }),
+                    "pins": { "cue": "intro" } }),
         )
         .await
         .expect_err("the input of a view's output holds no saved value");
@@ -272,7 +271,7 @@ async fn a_document_saving_a_value_on_a_view_outputs_input_loads_with_the_value_
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_bringing_the_deck_whose_stream_holds(json!([
         { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
-          "config": {}, "pins": { "cue": { "track": "intro" } } },
+          "input_values": { "cue": "intro" } },
     ]));
     engine.playing(&project).await;
 
@@ -304,7 +303,7 @@ async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_val
         .clone();
 
     let mut document = project.the_graph_document_of("main");
-    document["nodes"][0]["pins"] = json!({ "cue": { "track": "intro" } });
+    document["nodes"][0]["input_values"]["cue"] = json!("intro");
     project.write_the_graph_document(document);
     engine
         .the_project_action_done("reload_project", &project)
@@ -329,7 +328,7 @@ async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_val
 /// never be published.
 ///
 /// Mental-revert: checking the sets on the path that sets values apart from the graph alone lets
-/// the second and third transactions through, the deck handed the second record alone.
+/// the second and third transactions through, the deck handed the second value alone.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_is_applied() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -340,8 +339,8 @@ async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_i
         json!({ "operation": "set_node_input_value", "stream": stream_asset,
                 "node": node, "input": "cue", "value": record })
     };
-    let intro = json!({ "track": "intro" });
-    let drop = json!({ "track": "drop" });
+    let intro = json!("intro");
+    let drop = json!("drop");
     let configuring_the_deck = json!({ "operation": "set_node_config", "stream": stream_asset,
                                        "node": DECK_NODE_UUID, "config": {} });
     let adding_a_second_deck = json!({ "operation": "add_node", "stream": stream_asset,

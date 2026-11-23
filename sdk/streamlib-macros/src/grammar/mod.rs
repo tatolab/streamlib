@@ -262,6 +262,9 @@ pub(crate) struct ParsedPort {
     /// The pin type the port declares with `pin_type = …`; `None` when it
     /// declares only a family.
     pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
+    /// The setting whose chosen pin type the port carries, as `pin_type = from_setting("…")`
+    /// states it; `None` when the port states its type itself or declares only a family.
+    pub pin_type_from_setting: Option<String>,
     /// How long a value set live on the input lives, as `lifetime = …` declares it; kept when
     /// it declares none, and always kept on an output.
     pub lifetime: streamlib_node_schema::NodeValueLifetime,
@@ -274,6 +277,9 @@ pub(crate) struct ParsedPort {
     /// Whether the input may hold no value, as `may_be_unset = true` states; always false on an
     /// output.
     pub may_be_unset: bool,
+    /// Whether the input takes a value set on it as well as a wire, as `takes_a_value = true`
+    /// states; always false on an output.
+    pub takes_a_value: bool,
 }
 
 pub(crate) struct ParsedNodeAttr {
@@ -314,10 +320,12 @@ impl ParsedNodeAttr {
             audio_window: p.audio_window.clone(),
             family: p.family.clone(),
             pin_type: p.pin_type.clone(),
+            pin_type_from_setting: p.pin_type_from_setting.clone(),
             lifetime: p.lifetime,
             flow: p.flow,
             former_names: p.former_names.clone(),
             may_be_unset: p.may_be_unset,
+            takes_a_value: p.takes_a_value,
         };
 
         NodeSchema {

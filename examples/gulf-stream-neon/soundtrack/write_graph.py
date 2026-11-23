@@ -13,7 +13,7 @@ Every graph runs at FPS frames a second (60): a take steps 1/FPS s at a time, so
 `live` is the take's graph on a real-time clock, the picture into Program.
 `stage` is the one to play with in Tato Studio: the picture into the
 Gulf Stream Neon stage view, whose camera and sliders steer it live. It also
-writes `views/stage/stage_graph.js`, the node ids the view's sliders set. `take` records one frame-exact take: a stepped clock that stops
+writes `views/stage/stage_graph.ts`, the node ids the view's sliders set. `take` records one frame-exact take: a stepped clock that stops
 after STEPS steps (1440 is 24 s at 60 fps), the picture into FrameRecorder too,
 or any NODE.PORT of the graph instead, to look at one stage.
 """
@@ -232,10 +232,10 @@ def write_the_stage_view_ids(document: dict) -> None:
         f"export const STREAM_ASSET = {json.dumps(document['asset'])};",
         "export const STAGE_FOV_DEGREES = 50;",
         f"export const STAGE_HOME = {json.dumps({k: round(v, 5) for k, v in STAGE_HOME.items()})};",
-        f"export const NODE_IDS = {json.dumps(ids, indent=2)};",
+        f"export const NODE_IDS: Readonly<Record<string, string>> = {json.dumps(ids, indent=2)};",
         "",
     ]
-    (PROJECT / "views" / "stage" / "stage_graph.js").write_text("\n".join(lines))
+    (PROJECT / "views" / "stage" / "stage_graph.ts").write_text("\n".join(lines))
 
 
 def main(arguments: list[str]) -> None:

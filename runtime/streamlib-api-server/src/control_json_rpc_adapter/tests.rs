@@ -45,7 +45,7 @@ impl ControlServedWithAnMcpClient {
         Self { served, mcp_client }
     }
 
-    pub(super) async fn over_the_stub() -> Self {
+    pub(crate) async fn over_the_stub() -> Self {
         Self::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await
     }
 
@@ -56,7 +56,7 @@ impl ControlServedWithAnMcpClient {
     }
 
     /// One `POST /control` with `extra_headers`: its status line and its body, `Null` when empty.
-    pub(super) async fn control_post_with_headers(
+    pub(crate) async fn control_post_with_headers(
         &self,
         extra_headers: &str,
         body: &str,

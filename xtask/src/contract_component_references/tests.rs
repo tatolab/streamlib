@@ -105,3 +105,19 @@ fn a_reference_names_its_component_and_an_object_component_lists_its_keys() {
     );
     assert!(property_names_of(&schemas, "PinFlow").is_err());
 }
+
+#[test]
+fn a_union_whose_alternatives_state_no_type_only_narrows_the_type_around_it() {
+    let narrowing = json!({
+        "type": "array",
+        "items": { "$ref": "#/components/schemas/BundleMember" },
+        "anyOf": [{ "items": { "properties": {} } }, { "items": { "properties": {} } }],
+    });
+    assert_eq!(the_union_a_schema_is(&narrowing), None);
+    let tagged = json!({ "oneOf": [{ "type": "object" }, { "const": "a" }] });
+    assert_eq!(
+        the_union_a_schema_is(&tagged).map(Vec::len),
+        Some(2),
+        "a union of types is the schema's type"
+    );
+}

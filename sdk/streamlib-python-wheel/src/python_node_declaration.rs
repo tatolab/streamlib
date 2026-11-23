@@ -356,9 +356,9 @@ class AudioConsumer:
         assert_eq!(document["additionalProperties"], false);
     }
 
-    /// What `/api/registry` actually serializes for a Python class.
+    /// What the MCP node catalog actually serializes for a Python class.
     ///
-    /// The endpoint's own test registers a descriptor by hand, and the test
+    /// The catalog's own test registers a descriptor by hand, and the test
     /// above stops at the descriptor, so without this nothing in a GPU-free CI
     /// run carries a Python class's schema as far as the served shape — and the
     /// end-to-end proof needs a running graph, which needs a GPU.
@@ -466,7 +466,7 @@ class AudioConsumer:
                 window_size = 512,
                 hop = 160
             ),
-            family = Channels,
+            pin_type = Audio,
         ),
     )]
     struct RustDeclaredAudioConsumer;
@@ -484,7 +484,7 @@ class AudioConsumer:
     /// the same port the Python class below declares.
     #[streamlib::sdk::node(
         execution = manual,
-        output("video", family = Image, frame_rate = from_config("frames_per_second")),
+        output("video", pin_type = Texture, frame_rate = from_config("frames_per_second")),
     )]
     struct RustDeclaredFrameRateSource;
 

@@ -7,6 +7,9 @@
 //! the schemars the contract renders.
 
 mod built_in_pin_types;
+#[cfg(feature = "contract-json-schema")]
+mod bundle_members_json_schema;
+mod bundle_message;
 mod pin_conversion;
 mod pin_declaration;
 mod pin_flows;
@@ -23,6 +26,9 @@ pub use built_in_pin_types::{
     BuiltInPinTypeName, PinAnnotationName, PinTypeDescription, built_in_pin_type,
     built_in_pin_types,
 };
+#[cfg(feature = "contract-json-schema")]
+pub use bundle_members_json_schema::ITEMS_UNIQUE_BY_KEYWORD;
+pub use bundle_message::BundleMessage;
 pub use pin_conversion::{
     PinConversion, PinConversionOutputPick, PinConversionOutputPicked, PinConversionRefusal,
     PinConversionSavedValueCast, SavedValueNotCast,

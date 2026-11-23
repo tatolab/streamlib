@@ -505,7 +505,7 @@ fn an_asset_a_graph_document_references_cannot_be_deleted() {
     std::fs::write(
         fixture.project_directory.join("streams/main.graph.json"),
         serde_json::to_vec(
-            &json!({"nodes": [{"config": {"overlay": {"asset": image_asset.to_string()}}}]}),
+            &json!({"nodes": [{"input_values": {"overlay": {"asset": image_asset.to_string()}}}]}),
         )
         .unwrap(),
     )

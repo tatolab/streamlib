@@ -8,7 +8,37 @@
 //! member or an element, as it has no value. A single pin holds a whole number exact to 2^53 at
 //! most, so a 64-bit Integer types only an element.
 
-use super::{BundleMember, IntegerSize, PinType};
+use super::bundle_message::is_a_bundle_of_only_tensors;
+use super::{BuiltInPinTypeName, BundleMember, IntegerSize, PinType};
+
+impl BuiltInPinTypeName {
+    /// Whether a type of this name is a small type, a value that rides a message that exists:
+    /// Boolean, Integer, Float, String, Menu, Color, Vector, Rectangle, Transform or Asset.
+    pub fn is_a_small_type(self) -> bool {
+        matches!(
+            self,
+            Self::Boolean
+                | Self::Integer
+                | Self::Float
+                | Self::String
+                | Self::Menu
+                | Self::Color
+                | Self::Vector
+                | Self::Rectangle
+                | Self::Transform
+                | Self::Asset
+        )
+    }
+
+    /// Whether a type of this name is a heavy type, one a bundle or a List holds by reference in
+    /// a Bundle frame: a Texture, Audio, Encoded video or Encoded audio.
+    pub fn is_a_heavy_type(self) -> bool {
+        matches!(
+            self,
+            Self::Texture | Self::Audio | Self::EncodedVideo | Self::EncodedAudio
+        )
+    }
+}
 
 impl PinType {
     /// Refuse a type no port may declare, saying why: a List of a List, a List element or a
@@ -37,31 +67,13 @@ impl PinType {
     /// Whether this is a small type, a value that rides a message that exists: Boolean,
     /// Integer, Float, String, Menu, Color, Vector, Rectangle, Transform or Asset.
     pub fn is_a_small_type(&self) -> bool {
-        matches!(
-            self,
-            Self::Boolean {}
-                | Self::Integer { .. }
-                | Self::Float { .. }
-                | Self::String {}
-                | Self::Menu { .. }
-                | Self::Color {}
-                | Self::Vector { .. }
-                | Self::Rectangle {}
-                | Self::Transform {}
-                | Self::Asset { .. }
-        )
+        self.built_in_name().is_a_small_type()
     }
 
     /// Whether this is a heavy type, one a bundle or a List holds by reference in a Bundle
     /// frame: a Texture, Audio, Encoded video or Encoded audio.
     pub fn is_a_heavy_type(&self) -> bool {
-        matches!(
-            self,
-            Self::Texture { .. }
-                | Self::Audio {}
-                | Self::EncodedVideo { .. }
-                | Self::EncodedAudio { .. }
-        )
+        self.built_in_name().is_a_heavy_type()
     }
 
     /// Whether this is a List or a bundle holding a heavy type, which travels as one Bundle
@@ -109,11 +121,7 @@ fn validate_a_bundle(members: &[BundleMember]) -> Result<(), String> {
              has a name of its own"
         ));
     }
-    if !members.is_empty()
-        && members
-            .iter()
-            .all(|member| matches!(member.member_type, PinType::Tensor {}))
-    {
+    if is_a_bundle_of_only_tensors(members) {
         return Ok(());
     }
     members.iter().try_for_each(validate_a_bundle_member)

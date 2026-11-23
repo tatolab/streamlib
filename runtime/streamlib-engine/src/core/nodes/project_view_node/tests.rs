@@ -26,10 +26,10 @@ fn a_view_read_from(view_type: &str, manifest_json: JsonValue) -> ProjectViewFol
 
 fn the_deck_manifest() -> JsonValue {
     json!({
-        "contract": "1.0", "title": "DJ Deck", "description": "Two turntables and a crossfader.",
+        "contract": "1.1", "title": "DJ Deck", "description": "Two turntables and a crossfader.",
         "entry": "index.html", "placement": "node",
-        "inputs": [{ "name": "waveform", "family": "channels", "description": "What plays." }],
-        "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1],
+        "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" }, "description": "What plays." }],
+        "outputs": [{ "name": "crossfader", "pin_type": { "type": "tensor" }, "range": [-1, 1],
                       "description": "Left to right." }],
         "settings": { "type": "object",
                       "properties": { "bpm": { "type": "number", "default": 120 } } }
@@ -185,8 +185,8 @@ fn a_view_that_does_not_open_or_is_placed_in_an_area_is_no_node_type_and_says_wh
 fn an_image_or_packets_output_has_no_input_of_its_name_and_is_no_value() {
     let mut manifest = the_deck_manifest();
     manifest["outputs"] = json!([
-        { "name": "preview", "family": "image" },
-        { "name": "crossfader", "family": "array" }
+        { "name": "preview", "pin_type": { "type": "texture" } },
+        { "name": "crossfader", "pin_type": { "type": "tensor" } }
     ]);
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", manifest))
         .expect("a node view that opens is a node type");
@@ -226,13 +226,13 @@ fn the_monitor_manifest() -> JsonValue {
     json!({
         "contract": "1.1", "title": "Monitor", "entry": "index.html", "placement": "node",
         "inputs": [{ "name": "picture", "pin_type": { "type": "texture" } },
-                   { "name": "gain", "family": "channels" }],
+                   { "name": "gain", "pin_type": { "type": "float" } }],
         "outputs": [{ "name": "caption", "pin_type": { "type": "string" } }]
     })
 }
 
 #[test]
-fn a_port_whose_view_names_its_pin_type_is_exactly_that_type_and_one_by_family_alone_is_untyped() {
+fn a_port_of_a_view_is_exactly_the_pin_type_it_names() {
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
         "acme-dj:monitor",
         the_monitor_manifest(),
@@ -274,11 +274,18 @@ fn a_port_whose_view_names_its_pin_type_is_exactly_that_type_and_one_by_family_a
                 }),
                 Some(PinFlow::Stream),
             ),
-            ("gain".to_string(), vec![PortFamily::Channels], None, None),
+            (
+                "gain".to_string(),
+                vec![PortFamily::Channels],
+                Some(DeclaredPinType::Is {
+                    pin_type: PinType::Float { exact_size: None }
+                }),
+                Some(PinFlow::Value),
+            ),
             (
                 "caption".to_string(),
                 vec![PortFamily::Records],
-                Some(DeclaredPinType::Any),
+                Some(string()),
                 Some(PinFlow::Value)
             ),
         ]
@@ -339,10 +346,10 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
         "acme-dj:board",
         json!({
-            "contract": "1.0", "title": "Board", "entry": "index.html", "placement": "node",
-            "outputs": [{ "name": "beat", "family": "channels" },
-                        { "name": "cue", "family": "records" },
-                        { "name": "fader", "family": "array" }]
+            "contract": "1.1", "title": "Board", "entry": "index.html", "placement": "node",
+            "outputs": [{ "name": "beat", "pin_type": { "type": "audio" } },
+                        { "name": "cue", "pin_type": { "type": "string" } },
+                        { "name": "fader", "pin_type": { "type": "tensor" } }]
         }),
     ))
     .expect("a node view that opens is a node type");
@@ -369,7 +376,7 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
         "beat".into(),
         json!({ "samples": [[0.0, 0.0, 0.0]], "sample_rate": 48000 }),
     );
-    input_values.insert("cue".into(), json!({ "track": "drop" }));
+    input_values.insert("cue".into(), json!("drop"));
     input_values.insert("fader".into(), json!([[1], [2, 3]]));
 
     let refusal = board
@@ -384,4 +391,66 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
     );
     assert!(board.current_value_of_each_output.is_empty());
     assert!(board.next_start_sample_of_each_channels_output.is_empty());
+}
+
+/// A record of named numbers a panel writes onto an output of a bundle of numbers is one Records
+/// map of its members: the bytes the same record makes on an output declared by `family`
+/// `records` alone, which an untyped Records input of a node reads as it always has.
+///
+/// Mental-revert: packing the bundle as `{"value": ...}`, as a String travels, hands the node a
+/// map of one entry in which it finds no `yaw`.
+#[test]
+fn a_record_a_panel_writes_onto_a_bundle_output_is_the_records_map_a_family_output_makes() {
+    let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
+        "acme-dj:stage",
+        json!({
+            "contract": "1.1", "title": "Stage", "entry": "index.html", "placement": "node",
+            "outputs": [{ "name": "camera", "pin_type": { "type": "bundle", "members": [
+                { "name": "burst", "member_type": { "type": "float" } },
+                { "name": "yaw", "member_type": { "type": "float" } },
+            ] } }]
+        }),
+    ))
+    .expect("a node view of a bundle of numbers is a node type");
+    assert_eq!(
+        descriptor.outputs[0].family.families_an_input_takes(),
+        vec![PortFamily::Records]
+    );
+    let node = GraphNode::new(
+        descriptor.node_class_import_path.clone(),
+        None,
+        "stage",
+        Some(json!({})),
+        descriptor
+            .inputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+        descriptor
+            .outputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+    );
+    let stage = ValueSourceNode::for_the_node(&node, descriptor);
+
+    let camera = json!({ "burst": 2.0, "yaw": 0.25 });
+    let message = stage
+        .the_message_to_publish("camera", &camera)
+        .expect("a bundle of numbers carries the record");
+
+    let as_a_family_output_writes_it =
+        the_message_a_value_written_onto_an_output_is(PortFamily::Records, &camera, 0)
+            .expect("a record is a Records value");
+    assert_eq!(
+        message.payload_descriptor.kind,
+        as_a_family_output_writes_it.payload_descriptor.kind
+    );
+    assert_eq!(message.payload, as_a_family_output_writes_it.payload);
+    assert!(
+        stage
+            .the_message_to_publish("camera", &json!({ "yaw": "left" }))
+            .is_err(),
+        "a bundle of numbers carries no text"
+    );
 }

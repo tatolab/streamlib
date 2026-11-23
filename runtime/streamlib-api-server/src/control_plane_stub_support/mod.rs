@@ -902,20 +902,25 @@ pub(crate) async fn response_head_over_the_socket(
     String::from_utf8(head).unwrap()
 }
 
-/// One HTTP/1.1 GET over the socket at `local_api_socket_path`: its status
-/// line and body.
+/// One HTTP/1.1 POST of `request_body` over the socket at
+/// `local_api_socket_path`: its status line and body.
 #[cfg(feature = "machine-directories-under-a-test-root")]
-pub(crate) async fn http_get_over_the_local_api_socket(
+pub(crate) async fn http_post_over_the_local_api_socket(
     local_api_socket_path: &std::path::Path,
     request_target: &str,
+    request_body: &str,
 ) -> (String, String) {
     let mut connection = tokio::net::UnixStream::connect(local_api_socket_path)
         .await
         .expect("the local API socket accepts a connection");
     ::tokio::io::AsyncWriteExt::write_all(
         &mut connection,
-        format!("GET {request_target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .as_bytes(),
+        format!(
+            "POST {request_target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+             Content-Length: {}\r\n\r\n{request_body}",
+            request_body.len()
+        )
+        .as_bytes(),
     )
     .await
     .unwrap();

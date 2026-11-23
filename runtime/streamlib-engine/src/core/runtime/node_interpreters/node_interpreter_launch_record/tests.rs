@@ -6,12 +6,15 @@ use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PortDescripto
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::runtime::a_project_on_disk_for_a_test::{
-    options_loading_a_stream_of_the_test_project_at,
+    THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST, options_loading_a_stream_of_the_test_project_at,
     options_loading_a_stream_of_the_test_project_in,
 };
 use crate::core::runtime::{
     LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, StreamLoadObservingInterrupts,
     TheMachinesShutdownEscalationClearedOnDrop,
+};
+use crate::core::test_support::{
+    THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY, a_view_that_does_not_open_in,
 };
 use serial_test::serial;
 
@@ -361,6 +364,51 @@ fn a_load_after_one_a_machine_shutdown_interrupted_describes_normally() {
     assert_eq!(
         input_port_names_the_stream_resolves_for(&stream, &later_type),
         ["video"]
+    );
+}
+
+/// A load naming a view that does not open beside a type its node code cannot describe refuses
+/// each by name, each refusal on a line of its own after the type it refuses.
+///
+/// Mental-revert: refusing the view alone drops why the other type was not described.
+#[test]
+#[serial]
+fn a_view_that_does_not_open_beside_a_type_not_described_refuses_both_with_each_refusal() {
+    let python_type = import_path("my_app.beside_a_view_that_does_not_open:Blur");
+    let view_type = import_path(&format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:stage"));
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let options = a_stream_with_no_environment(project_directory.path());
+    a_view_that_does_not_open_in(project_directory.path(), "stage");
+
+    let refusal = the_refusal_of(
+        Runner::new()
+            .unwrap()
+            .load_stream_from_graph_snapshot(&a_graph_of(&[&view_type, &python_type]), options),
+        "neither type is described",
+    );
+
+    let (node_types, refusal) = refused_node_types(refusal);
+    assert_eq!(node_types, [python_type.clone(), view_type.clone()]);
+    let lines: Vec<&str> = refusal.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "each refusal on a line of its own: {refusal}"
+    );
+    assert!(
+        lines[0].starts_with(&format!("`{}`: ", python_type.as_str()))
+            && lines[0].contains("no stream environment")
+            && !lines[0].contains(THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY),
+        "{refusal}"
+    );
+    assert!(
+        lines[1].starts_with(&format!(
+            "`{}`: the view `{}`",
+            view_type.as_str(),
+            view_type.as_str()
+        )) && lines[1].contains(THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY)
+            && !lines[1].contains("no stream environment"),
+        "{refusal}"
     );
 }
 

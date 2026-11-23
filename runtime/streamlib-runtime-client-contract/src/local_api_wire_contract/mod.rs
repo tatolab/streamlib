@@ -39,7 +39,8 @@ pub use graph_answer_wire_types::{
     FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire, GraphNodeKindOnTheWire,
     GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphToolResult,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
-    MachineWideGraphOnTheWire, PinGroupSlotOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+    MachineWideGraphOnTheWire, PinGroupSlotOnTheWire, PortKindOnTheWire, PortStreamFactsOnTheWire,
+    StreamGraphOnTheWire,
 };
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
@@ -132,6 +133,19 @@ pub const CONTROL_JSON_RPC_ROUTE_PATH: &str = "/control";
 /// The request target a client opens a WebSocket on that carries one JSON-RPC 2.0 message per
 /// text frame both ways, and stays open for notifications.
 pub const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET: &str = "/control/ws";
+
+/// The route prefix each control operation is served under over REST: `POST` to it followed by
+/// the operation's method name, the operation's params as the JSON body.
+pub const CONTROL_REST_OPERATION_ROUTE_PATH_PREFIX: &str = "/api/operations/";
+
+/// The route the REST description of the control operations is served on, generated from the
+/// control contract.
+pub const CONTROL_REST_OPENAPI_DOCUMENT_ROUTE_PATH: &str = "/api/openapi.json";
+
+/// The REST route the control operation `method_name` is served on.
+pub fn control_rest_operation_route_path(method_name: &str) -> String {
+    format!("{CONTROL_REST_OPERATION_ROUTE_PATH_PREFIX}{method_name}")
+}
 
 /// The header a control client names the contract version it was built against in; another
 /// version than the runtime's is refused before any call is served.

@@ -356,7 +356,7 @@ impl LoadedStreamInThisRuntime {
                 .traversal()
                 .v(())
                 .iter()
-                .filter_map(|node| node.health_and_diagnostics())
+                .filter_map(|node| graph.the_health_and_diagnostics_of(node))
                 .flat_map(|(_, diagnostics)| diagnostics)
                 .collect()
         })

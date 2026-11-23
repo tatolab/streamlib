@@ -92,8 +92,7 @@ async fn a_project_whose_interpreter_is_not_made_is_answered_not_fully_checked()
 }
 
 #[tokio::test]
-async fn a_views_port_declared_by_family_is_a_warning_naming_the_pin_type_and_the_verdict_still_passes()
- {
+async fn a_views_port_declared_by_family_fails_the_verdict_naming_the_port_and_the_pin_type() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
     the_projects_interpreter_prints(
         &served.project_directory(),
@@ -110,27 +109,68 @@ async fn a_views_port_declared_by_family_is_a_warning_naming_the_pin_type_and_th
 
     let checked = served.answered("check_project_code", json!({})).await;
 
-    assert_eq!(checked["verdict"], "passed", "{checked}");
+    assert_eq!(checked["verdict"], "failed", "{checked}");
     assert_eq!(
         checked["checks"][1],
-        json!({ "check": "extension_manifest", "state": "passed" })
+        json!({ "check": "extension_manifest", "state": "failed" })
     );
     let finding = &checked["findings"][0];
     assert_eq!(finding["check"], "extension_manifest");
-    assert_eq!(finding["finding_code"], "port_declared_by_family");
-    assert_eq!(finding["severity"], "warning");
+    assert_eq!(finding["finding_code"], "view_manifest_refused");
+    assert_eq!(finding["severity"], "error");
     assert_eq!(finding["path"], "views/monitor/tatolab_view.json");
-    assert_eq!(finding["port"], "picture");
+    let words = finding["words"].as_str().unwrap();
     assert!(
-        finding["words"]
-            .as_str()
-            .unwrap()
-            .contains(r#"write `"pin_type": {"type": "texture"}`"#),
+        words.contains("port `picture` is declared by the older `family` field")
+            && words.contains(r#"write `"pin_type": {"type": "texture"}`"#),
         "{finding}"
     );
     assert_eq!(
         checked["files_checked"][0]["path"],
         "views/monitor/tatolab_view.json"
+    );
+}
+
+#[tokio::test]
+async fn a_view_made_of_js_files_fails_the_verdict_naming_each_file_and_ts() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    the_projects_interpreter_prints(
+        &served.project_directory(),
+        &[r#"{"modules":[],"checked_with":["tatolab-stream 1.0"]}"#],
+    );
+    let view_folder = served.project_directory().join("views/monitor");
+    std::fs::create_dir_all(view_folder.join("vendor")).unwrap();
+    std::fs::write(
+        view_folder.join("tatolab_view.json"),
+        r#"{"contract": "1.1", "title": "Monitor", "entry": "index.html", "placement": "node",
+            "inputs": [{"name": "picture", "pin_type": {"type": "texture"}}]}"#,
+    )
+    .unwrap();
+    std::fs::write(view_folder.join("monitor.js"), "export {};\n").unwrap();
+    std::fs::write(view_folder.join("vendor/lib.js"), "export {};\n").unwrap();
+
+    let checked = served.answered("check_project_code", json!({})).await;
+
+    assert_eq!(checked["verdict"], "failed", "{checked}");
+    let not_ts: Vec<&Value> = checked["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|finding| finding["finding_code"] == "not_written_in_ts")
+        .collect();
+    assert_eq!(
+        not_ts.len(),
+        1,
+        "a library under vendor/ is not reported: {checked}"
+    );
+    assert_eq!(not_ts[0]["severity"], "error", "{checked}");
+    assert_eq!(not_ts[0]["path"], "views/monitor/monitor.js", "{checked}");
+    assert!(
+        not_ts[0]["words"]
+            .as_str()
+            .unwrap()
+            .contains("`monitor.js` is refused: write it as .ts"),
+        "{checked}"
     );
 }
 

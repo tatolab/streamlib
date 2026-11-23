@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,9 +9,7 @@ use serial_test::serial;
 use streamlib_ipc_types::{
     DataChannelPayloadDescriptorKind, MessageReadFromAReservedSlot, OutputPortViewerReader,
 };
-use streamlib_project_repository::{
-    PROJECT_FILE_NAME, PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME, TatolabProjectFile,
-};
+use streamlib_project_repository::{PROJECT_FILE_NAME, TatolabProjectFile};
 
 use super::*;
 use crate::core::descriptors::{NodeClassImportPath, PortFamily};
@@ -24,7 +21,8 @@ use crate::core::nodes::NodeSpec;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::{Runner, RuntimeOperations};
 use crate::core::test_support::{
-    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, a_view_in,
+    ensure_test_mocks_registered,
 };
 use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
@@ -37,11 +35,11 @@ const DECK_VIEW_TYPE: &str = "acme-dj:deck";
 
 fn the_deck_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Deck", "description": "Cues a track at the drop.",
+        "contract": "1.1", "title": "Deck", "description": "Cues a track at the drop.",
         "entry": "index.html", "placement": "node",
-        "inputs": [{ "name": "cue_in", "family": "records", "description": "Cues to show." }],
-        "outputs": [{ "name": "cue", "family": "records", "description": "The cue played." },
-                    { "name": "fader", "family": "array", "range": [0, 1] }]
+        "inputs": [{ "name": "cue_in", "pin_type": { "type": "string" }, "description": "Cues to show." }],
+        "outputs": [{ "name": "cue", "pin_type": { "type": "string" }, "description": "The cue played." },
+                    { "name": "fader", "pin_type": { "type": "tensor" }, "range": [0, 1] }]
     })
 }
 
@@ -49,8 +47,9 @@ const PULSE_VIEW_TYPE: &str = "acme-dj:pulse";
 
 fn the_pulse_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Pulse", "entry": "index.html", "placement": "node",
-        "outputs": [{ "name": "beat", "family": "channels" }]
+        "contract": "1.1", "title": "Pulse", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "beat", "pin_type": { "type": "audio" } },
+                    { "name": "tempo", "pin_type": { "type": "float" } }]
     })
 }
 
@@ -58,10 +57,10 @@ const BOARD_VIEW_TYPE: &str = "acme-dj:board";
 
 fn the_board_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Board", "entry": "index.html", "placement": "node",
-        "outputs": [{ "name": "beat", "family": "channels" },
-                    { "name": "cue", "family": "records" },
-                    { "name": "fader", "family": "array" }]
+        "contract": "1.1", "title": "Board", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "beat", "pin_type": { "type": "audio" } },
+                    { "name": "cue", "pin_type": { "type": "string" } },
+                    { "name": "fader", "pin_type": { "type": "tensor" } }]
     })
 }
 
@@ -69,23 +68,11 @@ const LEVEL_VIEW_TYPE: &str = "acme-dj:level";
 
 fn the_level_manifest() -> Value {
     json!({
-        "contract": "1.0", "title": "Level", "entry": "index.html", "placement": "node",
-        "outputs": [{ "name": "level", "family": "array" }],
+        "contract": "1.1", "title": "Level", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "level", "pin_type": { "type": "tensor" } }],
         "settings": { "type": "object",
                       "properties": { "gain": { "type": "number", "default": 1 } } }
     })
-}
-
-fn a_view_folder_in(project_directory: &Path, view_folder_name: &str, manifest: &Value) {
-    let folder = project_directory
-        .join(PROJECT_VIEWS_DIRECTORY)
-        .join(view_folder_name);
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(
-        folder.join(TATOLAB_VIEW_MANIFEST_FILE_NAME),
-        serde_json::to_vec(manifest).unwrap(),
-    )
-    .unwrap();
 }
 
 /// A stream `a` of the project `acme-dj`, whose `views/` holds `deck` and a `broken` view that
@@ -108,11 +95,11 @@ impl AStreamOfAProjectBringingViews {
                 .unwrap(),
         )
         .unwrap();
-        a_view_folder_in(project_directory.path(), "deck", &the_deck_manifest());
-        a_view_folder_in(project_directory.path(), "level", &the_level_manifest());
-        a_view_folder_in(project_directory.path(), "pulse", &the_pulse_manifest());
-        a_view_folder_in(project_directory.path(), "board", &the_board_manifest());
-        a_view_folder_in(
+        a_view_in(project_directory.path(), "deck", &the_deck_manifest());
+        a_view_in(project_directory.path(), "level", &the_level_manifest());
+        a_view_in(project_directory.path(), "pulse", &the_pulse_manifest());
+        a_view_in(project_directory.path(), "board", &the_board_manifest());
+        a_view_in(
             project_directory.path(),
             "broken",
             &json!({ "contract": "1.0", "entry": "index.html", "placement": "node" }),

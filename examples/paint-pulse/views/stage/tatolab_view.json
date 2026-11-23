@@ -1,5 +1,5 @@
 {
-  "contract": "1.0",
+  "contract": "1.1",
   "title": "Paint Pulse stage",
   "description": "The painted ball, live, with its controls. Drag to orbit, scroll to zoom, click or press space to burst; the sliders change the music, ball, paint and colour live.",
   "entry": "index.html",
@@ -7,19 +7,27 @@
   "inputs": [
     {
       "name": "video",
-      "family": "image",
+      "pin_type": { "type": "texture" },
       "description": "The finished picture to show and steer."
     },
     {
       "name": "audio",
-      "family": "channels",
+      "pin_type": { "type": "audio" },
       "description": "The music, played on the default output device."
     }
   ],
   "outputs": [
     {
       "name": "camera",
-      "family": "records",
+      "pin_type": {
+        "type": "bundle",
+        "members": [
+          { "name": "yaw", "member_type": { "type": "float" } },
+          { "name": "pitch", "member_type": { "type": "float" } },
+          { "name": "zoom", "member_type": { "type": "float" } },
+          { "name": "burst", "member_type": { "type": "integer" } }
+        ]
+      },
       "description": "Where the stage has been dragged and zoomed to, and how many bursts it has asked for."
     }
   ]

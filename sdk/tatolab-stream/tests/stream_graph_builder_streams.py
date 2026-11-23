@@ -10,7 +10,6 @@ A stream's identity is the import path of its function,
 from types import MappingProxyType
 from typing import Any
 
-import tatolab.stream
 from stream_graph_builder_nodes import (
     FrameFilters,
     FrameInverter,
@@ -21,8 +20,8 @@ from tatolab.stream import (
 )
 
 
-CHANNELS_TO_RECORDS_TYPE = "tatolab.stream:ChannelsToRecords"
-RIG_CHANNELS_TO_RECORDS: tatolab.stream.ChannelsToRecordsConfig = {"channel_names": ["level"]}
+TENSOR_TO_AUDIO_TYPE = "tatolab.stream:TensorToAudio"
+RIG_CHANNEL_NAMES: "dict[str, Any]" = {"channel_names": ["level"]}
 
 
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"
@@ -36,7 +35,7 @@ class StandInMarker:
 
 
 class UndecoratedFilter:
-    """A class that never met `@node.process`."""
+    """A class that never met `@node`."""
 
 
 NESTED_CONFIG: "dict[str, Any]" = {
@@ -50,7 +49,7 @@ NESTED_CONFIG: "dict[str, Any]" = {
 
 @graph_generator
 def every_kind_of_node(stream_builder: StreamBuilder) -> None:
-    """A `@node.process` class, a nested one and a marker-shaped class.
+    """A class node, a nested one and a marker-shaped class.
 
     The second line of the description.
     """

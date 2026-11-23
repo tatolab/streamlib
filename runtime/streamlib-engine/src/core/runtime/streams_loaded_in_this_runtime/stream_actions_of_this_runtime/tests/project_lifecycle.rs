@@ -677,7 +677,6 @@ fn a_stream_whose_project_is_preparing_is_held_from_its_document_alone_and_loads
         .push(serde_json::json!({
             "name": "second_source",
             "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
-            "config": {},
         }));
     project.write_the_graph_document(edited);
     std::fs::write(&gate, "").unwrap();
@@ -724,7 +723,6 @@ fn a_load_waits_for_an_edit_made_through_a_stream_held_from_its_document() {
         .push(serde_json::json!({
             "name": "second_source",
             "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
-            "config": {},
         }));
     project.write_the_graph_document(edited);
     drop(streams_being_edited);

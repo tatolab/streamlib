@@ -262,7 +262,9 @@ fn the_graph_of_a_stream_holding_fragments_of(
                 "id": Uuid::new_v4(),
                 "name": held_stream_name,
                 "type": STREAM_FRAGMENT_NODE_TYPE,
-                "config": { "stream": { "asset": project.stream_asset_of(held_stream_name) } },
+                "input_values": {
+                    "stream": { "asset": project.stream_asset_of(held_stream_name) }
+                },
             })
         })
         .collect();

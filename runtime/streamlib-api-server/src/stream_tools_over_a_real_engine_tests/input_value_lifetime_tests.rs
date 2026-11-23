@@ -46,7 +46,7 @@ fn a_project_whose_main_stream_holds_a_dimmer() -> ProjectWithGraphDocuments {
         "nodes": [
             { "id": DIMMER_NODE_UUID, "name": "dimmer",
               "type": InputLifetimeTestNode::node_class_import_path().as_str(),
-              "config": {}, "pins": { "flash": 0.1 } },
+              "input_values": { "flash": 0.1 } },
         ],
         "links": [],
     }))
@@ -347,11 +347,10 @@ async fn a_kept_value_that_no_longer_fits_its_input_is_forgotten_as_the_stream_l
         "nodes": [
             { "id": DIMMER_NODE_UUID, "name": "dimmer",
               "type": InputLifetimeTestNode::node_class_import_path().as_str(),
-              "config": {}, "pins": { "flash": 0.1 } },
+              "input_values": { "flash": 0.1 } },
             { "id": mixer, "name": "mixer",
               "type": super::input_value_set_tests::InputValueTestNode::node_class_import_path()
-                  .as_str(),
-              "config": {} },
+                  .as_str() },
         ],
         "links": [],
     }));

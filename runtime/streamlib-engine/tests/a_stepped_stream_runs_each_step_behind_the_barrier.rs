@@ -38,7 +38,7 @@ static TICKS_THE_SINK_TOOK: Mutex<Vec<(u64, i64)>> = Mutex::new(Vec::new());
 
 #[streamlib::sdk::node(
     execution = continuous(interval_ms = 50),
-    output("ticks", family = Records),
+    output("ticks", pin_type = String, flow = Stream),
 )]
 pub struct SteppedTickSource {
     next_tick: u64,
@@ -54,8 +54,8 @@ impl streamlib_engine::ContinuousNode for SteppedTickSource::Node {
 
 #[streamlib::sdk::node(
     execution = reactive,
-    input("ticks", delivery_profile = "ordered", family = Records),
-    output("relayed", family = Records),
+    input("ticks", delivery_profile = "ordered", pin_type = String, flow = Stream),
+    output("relayed", pin_type = String, flow = Stream),
 )]
 pub struct SlowSteppedRelay;
 
@@ -73,7 +73,7 @@ impl streamlib_engine::ReactiveNode for SlowSteppedRelay::Node {
 
 #[streamlib::sdk::node(
     execution = reactive,
-    input("relayed", delivery_profile = "ordered", family = Records),
+    input("relayed", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
 pub struct SteppedTickSink;
 
@@ -95,7 +95,7 @@ static TICK_BATCHES_THE_SLOW_SINK_TOOK: Mutex<Vec<Vec<u64>>> = Mutex::new(Vec::n
 
 #[streamlib::sdk::node(
     execution = continuous(interval_ms = 150),
-    input("ticks", delivery_profile = "ordered", family = Records),
+    input("ticks", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
 pub struct EveryThirdStepTickSink;
 
@@ -113,7 +113,7 @@ impl streamlib_engine::ContinuousNode for EveryThirdStepTickSink::Node {
     }
 }
 
-#[streamlib::sdk::node(execution = manual, output("frames", family = Image))]
+#[streamlib::sdk::node(execution = manual, output("frames", pin_type = Texture))]
 pub struct SelfPacedSource;
 
 impl streamlib_engine::ManualNode for SelfPacedSource::Node {
@@ -125,7 +125,7 @@ impl streamlib_engine::ManualNode for SelfPacedSource::Node {
 #[streamlib::sdk::node(
     execution = manual,
     paced_by_real_time,
-    output("frames", family = Image),
+    output("frames", pin_type = Texture),
 )]
 pub struct RealTimePacedManualSource;
 
@@ -141,7 +141,7 @@ const REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL: Duration = Duration::from_mill
 #[streamlib::sdk::node(
     execution = continuous(interval_ms = 50),
     paced_by_real_time,
-    output("ticks", family = Records),
+    output("ticks", pin_type = String, flow = Stream),
 )]
 pub struct SlowRealTimePacedTickSource;
 
@@ -158,7 +158,7 @@ static TICKS_THE_REAL_TIME_SINK_TOOK: AtomicU64 = AtomicU64::new(0);
 
 #[streamlib::sdk::node(
     execution = reactive,
-    input("ticks", delivery_profile = "ordered", family = Records),
+    input("ticks", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
 pub struct RealTimePacedTickSink;
 

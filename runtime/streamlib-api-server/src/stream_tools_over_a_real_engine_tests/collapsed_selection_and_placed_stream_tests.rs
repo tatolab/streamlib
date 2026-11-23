@@ -614,13 +614,12 @@ async fn an_unlocked_placement_of_an_imports_stream_keeps_each_stream_it_places_
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let arm = ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
-        "nodes": [{ "id": Uuid::new_v4(), "name": "grain", "type": STREAM_FRAGMENT_NODE_TYPE,
-                    "config": {} }],
+        "nodes": [{ "id": Uuid::new_v4(), "name": "grain", "type": STREAM_FRAGMENT_NODE_TYPE }],
         "links": [],
     }));
     let grain_asset = arm.stream_asset_of("grain");
     let mut arm_main = arm.the_graph_document_of("main");
-    arm_main["nodes"][0]["config"] = json!({ "stream": { "asset": grain_asset } });
+    arm_main["nodes"][0]["input_values"] = json!({ "stream": { "asset": grain_asset } });
     arm.write_the_graph_document_text("main", &arm_main.to_string());
     let mut grain = the_graph_of_a_stream_named("grain");
     grain["nodes"][0]["id"] = json!(Uuid::new_v4());

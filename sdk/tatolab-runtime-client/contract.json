@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 41
+    "x-contract-revision": 45
   },
   "methods": [
     {
@@ -5434,7 +5434,7 @@
     {
       "name": "check_project_code",
       "summary": "Check a project's code on disk without running a stream, answering each finding as data.",
-      "description": "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), and each port still declared by its older field is a `warning` whose words name the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` a `warning` coded `not_written_in_ts`. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.",
+      "description": "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), as is one with a port still declared by its older field, its words naming the port and the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` an `error` coded `not_written_in_ts`, its words naming the file and `.ts` as what to write. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, is a `warning` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -6523,7 +6523,7 @@
     {
       "name": "open_viewer",
       "summary": "Open a viewer of a node's output port, held open for the connection that opened it.",
-      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. The answer's `viewer_reads` says which messages the viewer reads: `every_message` for a port carrying samples, such as audio, in order as far back as the channel holds them for it, so a viewer can play the sound, and `latest_message` for every other port, skipping what it falls behind on; either way the channel overwrites what the viewer has not read, so it never slows the stream; a Texture message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
+      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. The answer's `pin_type` is the port's pin type, resolved as `graph` serves it on the port, absent on a port with none, and `viewer_reads` says which messages the viewer reads: `every_message` for a port carrying samples, an Audio port or one with no pin type whose messages are sample blocks, in order as far back as the channel holds them for it, so a viewer can play the sound, and `latest_message` for every other port, a port of a number type included, skipping what it falls behind on; either way the channel overwrites what the viewer has not read, so it never slows the stream; a Texture message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -8795,6 +8795,11 @@
           },
           {
             "type": "string",
+            "const": "link_not_wired",
+            "description": "A link the running graph holds that could not be wired, so its reader reads nothing\nfrom it: the words say why, in the words of the end that refused it."
+          },
+          {
+            "type": "string",
             "const": "other",
             "description": "A problem of a kind this client does not know; the runtime never sends it. Its `words`\nsay what it is, and its `recovery` what recovers from it."
           }
@@ -9391,7 +9396,7 @@
             "description": "The window contract an audio input port declares, tagged by `resolved_from`; absent on\na port that declares none."
           },
           "stream_facts": {
-            "description": "The stream facts this output port carries now; absent on a port that states none."
+            "description": "The stream facts this output port carries now, with the name of the port's pin type as\n`type` on a port whose pin type they describe; absent on a port that states none."
           },
           "values_checked": {
             "type": [
@@ -9804,7 +9809,506 @@
                 "items": {
                   "$ref": "#/components/schemas/BundleMember"
                 },
-                "description": "The members, in declared order."
+                "description": "The members, in declared order.",
+                "x-unique-by": "name",
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/BundleMember",
+                      "properties": {
+                        "member_type": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "boolean"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "True or false."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "exact_size": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/components/schemas/IntegerSize"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "The size the number must fit; absent, any whole number exact to 2^53."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "integer"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A whole number."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "exact_size": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/components/schemas/FloatSize"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "The size the number is held in; absent, a 64-bit float."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "float"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A number."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "Text."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "option_names": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "The options, spelled as declared."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "menu"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "option_names"
+                              ],
+                              "description": "One of a fixed list of option names."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "color"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "An sRGB colour with alpha."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "component_count": {
+                                  "$ref": "#/components/schemas/VectorComponentCount",
+                                  "description": "How many numbers it holds."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "vector"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "component_count"
+                              ],
+                              "description": "Two, three or four numbers."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "rectangle"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A rectangle by its left and top edges, width and height."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "transform"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A 4 by 4 matrix."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "media": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/components/schemas/ProjectAssetMedia"
+                                  },
+                                  "description": "The media the asset must hold one of; empty takes any asset."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "asset"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "One of the project's assets."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "pixel_formats": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/components/schemas/TexturePixelFormat"
+                                  },
+                                  "description": "The formats it may hold; on an input, empty takes any."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "texture"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A GPU picture."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "audio"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "A stream of audio samples."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "codecs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "The codecs it may hold; empty takes any."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "encoded_video"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "Encoded video, one access unit per message."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "codecs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "The codecs it may hold; empty takes any."
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "encoded_audio"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "Encoded audio, one packet per message."
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "element_type": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "True or false."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "exact_size": {
+                                          "anyOf": [
+                                            {
+                                              "$ref": "#/components/schemas/IntegerSize"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ],
+                                          "description": "The size the number must fit; absent, any whole number exact to 2^53."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A whole number."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "exact_size": {
+                                          "anyOf": [
+                                            {
+                                              "$ref": "#/components/schemas/FloatSize"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ],
+                                          "description": "The size the number is held in; absent, a 64-bit float."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "float"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A number."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "Text."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "option_names": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "description": "The options, spelled as declared."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "menu"
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "option_names"
+                                      ],
+                                      "description": "One of a fixed list of option names."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "color"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "An sRGB colour with alpha."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "component_count": {
+                                          "$ref": "#/components/schemas/VectorComponentCount",
+                                          "description": "How many numbers it holds."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "vector"
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "component_count"
+                                      ],
+                                      "description": "Two, three or four numbers."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "rectangle"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A rectangle by its left and top edges, width and height."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "const": "transform"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "A 4 by 4 matrix."
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "media": {
+                                          "type": "array",
+                                          "items": {
+                                            "$ref": "#/components/schemas/ProjectAssetMedia"
+                                          },
+                                          "description": "The media the asset must hold one of; empty takes any asset."
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "const": "asset"
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "description": "One of the project's assets."
+                                    }
+                                  ]
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "const": "list_of"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "element_type"
+                              ],
+                              "description": "A list of values of one type."
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/BundleMember",
+                      "properties": {
+                        "member_type": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "tensor"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "description": "An array of numbers with a shape."
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
               },
               "type": {
                 "type": "string",
@@ -19479,7 +19983,7 @@
                 "type": "null"
               }
             ],
-            "description": "The pin type the port carries; absent on a port its manifest declares by its older field\nalone."
+            "description": "The pin type the port carries, which every port of a manifest that opens names."
           },
           "description": {
             "type": [
@@ -20039,6 +20543,17 @@
             "type": "string",
             "description": "The iceoryx2 notify service the port's node notifies on each write, whose one listener the\nviewer takes, so it waits for a message rather than reading on a timer."
           },
+          "pin_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pin type the port carries, resolved, as `graph` serves it on the port; absent on a\nport with none."
+          },
           "viewer_reads": {
             "$ref": "#/components/schemas/OutputPortViewerReads",
             "description": "Which of the port's messages the viewer reads, by what the port carries."
@@ -20069,12 +20584,12 @@
           {
             "type": "string",
             "const": "latest_message",
-            "description": "The latest message the node wrote; the viewer's ring is one message deep, so the channel\noverwrites what the viewer falls behind on. Every port but one carrying samples."
+            "description": "The latest message the node wrote; the viewer's ring is one message deep, so the channel\noverwrites what the viewer falls behind on. Every port but one carrying samples, a port\nof a number type included."
           },
           {
             "type": "string",
             "const": "every_message",
-            "description": "Every message, in order, as far back as the channel's depth holds them for a reader; the\nchannel overwrites the oldest past that. A port carrying samples, such as audio, so a\nviewer can play its sound."
+            "description": "Every message, in order, as far back as the channel's depth holds them for a reader; the\nchannel overwrites the oldest past that. A port carrying samples, an Audio port or one\nwith no pin type whose messages are sample blocks, so a viewer can play its sound."
           }
         ],
         "description": "Which messages of an output port a viewer reads off the channel's reserved slot."

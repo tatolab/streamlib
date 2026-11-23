@@ -46,7 +46,7 @@ machine-directories-under-a-test-root = [
 # published frame id grammar, shared with the helper-process clients.
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.82" }
 # Node schema types (shared with macros for code generation)
-streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.68.82", features = ["utoipa"] }
+streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.68.82" }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
@@ -110,9 +110,6 @@ toml.workspace = true
 schemars = "0.8"  # JSON Schema generation from Rust types
 jsonschema = { version = "0.60", default-features = false }
 
-
-# OpenAPI schema derives on the JSON wire types in `core/json_schema/`.
-utoipa = { version = "5.3", features = ["axum_extras"] }
 
 
 # Platform-specific: macOS/iOS

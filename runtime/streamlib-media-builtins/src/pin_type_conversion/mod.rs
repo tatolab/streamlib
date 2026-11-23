@@ -9,9 +9,6 @@
 pub mod audio_to_tensor;
 #[cfg(test)]
 mod audio_to_tensor_tests;
-pub mod channels_to_records;
-#[cfg(test)]
-mod channels_to_records_tests;
 mod conversion_node_config_defaults;
 #[cfg(test)]
 mod conversion_node_config_defaults_tests;
@@ -22,9 +19,6 @@ pub mod number_conversions;
 #[cfg(test)]
 mod number_conversions_tests;
 mod port_family_messages_read_by_a_conversion;
-pub mod records_to_channels;
-#[cfg(test)]
-mod records_to_channels_tests;
 pub mod tensor_to_audio;
 #[cfg(test)]
 mod tensor_to_audio_tests;
@@ -40,12 +34,10 @@ pub mod texture_to_tensor;
 mod texture_to_tensor_tests;
 
 pub use audio_to_tensor::AudioToTensor;
-pub use channels_to_records::{ChannelsToRecords, ChannelsToRecordsConfig};
 pub use number_conversions::{
     BooleanToFloat, BooleanToInteger, FloatToBoolean, FloatToInteger, IntegerToBoolean,
     IntegerToFloat,
 };
-pub use records_to_channels::{RecordsToChannels, RecordsToChannelsConfig};
 pub use tensor_to_audio::{TensorToAudio, TensorToAudioSettings};
 pub use tensor_to_texture::{TensorToTexture, TensorToTextureSettings};
 #[cfg(any(target_os = "linux", target_os = "macos"))]

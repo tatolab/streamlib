@@ -11,7 +11,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use streamlib_node_schema::NodeClassImportPath;
-use streamlib_node_schema::pin_type::{PinAnnotations, ResolvedPin};
+use streamlib_node_schema::PortStreamFacts;
+use streamlib_node_schema::pin_type::{BuiltInPinTypeName, PinAnnotations, ResolvedPin};
 
 use super::{
     GraphLinkOnTheWire, GraphNodeComponentsOnTheWire, StreamClockSpec, StreamConditionOnTheWire,
@@ -286,10 +287,11 @@ pub struct GraphNodePortOnTheWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
     pub audio_window: Option<streamlib_node_schema::AudioWindowContract>,
-    /// The stream facts this output port carries now; absent on a port that states none.
+    /// The stream facts this output port carries now, with the name of the port's pin type as
+    /// `type` on a port whose pin type they describe; absent on a port that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
-    pub stream_facts: Option<streamlib_node_schema::PortStreamFacts>,
+    pub stream_facts: Option<PortStreamFactsOnTheWire>,
     /// `false` on a port whose values no pin type checks; absent on every other port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_checked: Option<bool>,
@@ -334,6 +336,36 @@ pub struct GraphNodePortOnTheWire {
     /// group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_group_slot: Option<PinGroupSlotOnTheWire>,
+}
+
+/// An output port's stream facts as `graph` serves them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortStreamFactsOnTheWire {
+    /// The name of the port's pin type, `texture`, `encoded_video` or `encoded_audio`; absent on
+    /// a port with no pin type, whose facts `family` alone tags.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub pin_type: Option<BuiltInPinTypeName>,
+    /// The facts, tagged by the family they belong to.
+    #[serde(flatten)]
+    pub facts: PortStreamFacts,
+}
+
+impl From<PortStreamFacts> for PortStreamFactsOnTheWire {
+    /// `facts` under their family alone, naming no pin type.
+    fn from(facts: PortStreamFacts) -> Self {
+        Self {
+            pin_type: None,
+            facts,
+        }
+    }
+}
+
+impl PortStreamFactsOnTheWire {
+    /// Name these facts by the pin type of `pin`, the pin of the port that carries them, when
+    /// they describe a stream of it; name none otherwise.
+    pub fn name_the_pin_type_of_the_port_of(&mut self, pin: Option<&ResolvedPin>) {
+        self.pin_type = pin.and_then(|pin| self.facts.the_pin_type_they_describe(&pin.pin_type));
+    }
 }
 
 /// The slot of a pin group a port belongs to.

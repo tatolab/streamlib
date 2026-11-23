@@ -21,35 +21,29 @@ from tatolab.stream.description_lint import (
 PACKAGE_NAME = "description_lint_fixture_nodes"
 
 PARTLY_DESCRIBED_NODES_SOURCE = '''
-import dataclasses
 from typing import Annotated
 
-from tatolab.stream import Description, Image, ImageFrame, Input, Output, node
-
-
-@dataclasses.dataclass
-class BlurConfig:
-    radius: Annotated[int, Description("The radius in pixels.")] = 3
-    sigma: float = 1.0
+from tatolab.stream import Description, InputPin, OutputPin, StreamDelivery, Texture, node
 
 
 @node.meta(description="Blurs each frame.")
-@node.process
+@node
 class Blur:
     """A docstring the lint never counts as a description."""
 
-    video_in = Input(Image, delivery="newest", description="Frames to blur.")
-    mask = Input(Image, delivery="newest")
-    video = Output(Image, description="<b>Blurred</b> frames.")
+    radius: Annotated[int, Description("The radius in pixels.")] = 3
+    sigma: float = 1.0
+    video_in: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames to blur.")]
+    ]
+    mask: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    video: OutputPin[Annotated[Texture, Description("<b>Blurred</b> frames.")]]
 
-    def __init__(self, config: BlurConfig) -> None:
-        self.config = config
 
-
-@node.function
-def brighten(
-    image: Annotated[ImageFrame, Description("The picture.")], amount: float
-) -> ImageFrame:
+@node
+def brighten[Picture: Texture](
+    image: Annotated[Picture, Description("The picture.")], amount: float = 1.0
+) -> Picture:
     return image
 '''
 
@@ -60,9 +54,9 @@ from tatolab.stream import Description, node
 
 
 @node.meta(description="Doubles `x`, see <https://tatolab.com>.")
-@node.function
+@node
 def doubled(
-    x: Annotated[float, Description("The value, when `x < <b>`.")],
+    x: Annotated[float, Description("The value, when `x < <b>`.")] = 0.0,
 ) -> Annotated[float, Description("Twice `x`.")]:
     return 2 * x
 '''
@@ -89,10 +83,10 @@ def test_each_missing_description_and_each_raw_html_one_is_found(fixture_package
     blur = f"{fixture_package}.blur:Blur"
     brighten = f"{fixture_package}.blur:brighten"
     assert findings == [
+        f"{blur}: input port `sigma` has no description",
         f"{blur}: input port `mask` has no description",
         f"{blur}: output port `video`'s description writes raw HTML, which a description's "
         f"CommonMark does not allow",
-        f"{blur}: config key `sigma` has no description",
         f"{brighten}: the node type has no description",
         f"{brighten}: input port `amount` has no description",
         f"{brighten}: output port `result` has no description",

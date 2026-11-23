@@ -82,10 +82,11 @@ pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
     let Some(port) = node.input_port(input) else {
         return Ok(());
     };
+    let port = port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
     refuse_a_value_the_input_port_does_not_take(
         &node.display_name,
         node.node_kind(),
-        port,
+        &port,
         pin_value,
     )
     .map_err(|refusal| Error::Configuration(refusal.words))

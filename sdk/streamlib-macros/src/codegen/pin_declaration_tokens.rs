@@ -7,17 +7,36 @@ use streamlib_node_schema::pin_type::{PinFlow, PinType};
 
 /// Emit the `Option<PinDeclaration>` a port declaring `pin_type` carries: exactly that type, in
 /// the flow it states, else in its type's default flow, with the names it had and whether it may
-/// be unset, as it states them.
+/// be unset, as it states them. A port typed by the setting `pin_type_from_setting` carries the
+/// type that setting chooses, a value unless it states another flow.
 pub(super) fn pin_declaration_tokens(
     pin_type: Option<&PinType>,
+    pin_type_from_setting: Option<&str>,
     flow: Option<PinFlow>,
     former_names: &[String],
     may_be_unset: bool,
 ) -> TokenStream {
+    let descriptors = quote! { __streamlib_sdk::descriptors };
+    if let Some(setting_name) = pin_type_from_setting {
+        let flow = Ident::new(
+            flow.unwrap_or(PinFlow::Value).declaration_name(),
+            Span::call_site(),
+        );
+        return quote! {
+            ::std::option::Option::Some(#descriptors::PinDeclaration {
+                pin_type: #descriptors::DeclaredPinType::SetByInput {
+                    input_name: ::std::string::String::from(#setting_name),
+                },
+                flow: #descriptors::PinFlow::#flow,
+                annotations: ::std::default::Default::default(),
+                former_names: ::std::vec![#(::std::string::String::from(#former_names)),*],
+                may_be_unset: #may_be_unset,
+            })
+        };
+    }
     let Some(pin_type) = pin_type else {
         return quote! { ::std::option::Option::None };
     };
-    let descriptors = quote! { __streamlib_sdk::descriptors };
     let pin_type = pin_type_tokens(pin_type);
     let exactly = quote! { #descriptors::PinDeclaration::exactly(#pin_type) };
     let mut stated = Vec::new();
@@ -54,6 +73,7 @@ fn pin_type_tokens(pin_type: &PinType) -> TokenStream {
     };
     match pin_type {
         PinType::Boolean {} => quote! { #descriptors::PinType::Boolean {} },
+        PinType::String {} => quote! { #descriptors::PinType::String {} },
         PinType::Integer { exact_size } => {
             let exact_size = optional(exact_size.map(|size| {
                 let size = variant(size.variant_name());

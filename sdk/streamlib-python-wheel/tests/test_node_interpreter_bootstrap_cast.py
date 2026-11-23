@@ -36,6 +36,22 @@ def cast_document(cast: subprocess.CompletedProcess[str]) -> dict[str, Any]:
         )
 
 
+def a_request_file(directory: Path, input_port: str, saved_value: Any) -> str:
+    """The path of a request file in `directory` asking a cast of `saved_value` on the
+    conversion's wired input `input_port`, as the engine writes one."""
+    request_file = directory / "saved-value-cast-request.json"
+    request_file.write_text(
+        json.dumps(
+            {
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_INPUT_KEY: input_port,
+                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_VALUE_KEY: saved_value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(request_file)
+
+
 def test_the_samples_own_conversion_casts_a_saved_value_out_of_stream(tmp_path: Path):
     """The `every-pin-kind` sample's `LevelAsPercent` casts a saved 0.1 into the String `10%`,
     its body run once with no stream started.
@@ -48,12 +64,7 @@ def test_the_samples_own_conversion_casts_a_saved_value_out_of_stream(tmp_path: 
         tmp_path,
         node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
         "nodes.level_as_percent:LevelAsPercent",
-        json.dumps(
-            {
-                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_INPUT_KEY: "level",
-                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_VALUE_KEY: 0.1,
-            }
-        ),
+        a_request_file(tmp_path, "level", 0.1),
     )
 
     assert cast_document(cast) == {
@@ -66,12 +77,7 @@ def test_a_cast_by_a_module_that_will_not_import_names_why(tmp_path: Path):
         tmp_path,
         node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
         "no_such_module:LevelAsPercent",
-        json.dumps(
-            {
-                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_INPUT_KEY: "level",
-                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_VALUE_KEY: 0.1,
-            }
-        ),
+        a_request_file(tmp_path, "level", 0.1),
     )
 
     document = cast_document(cast)
@@ -98,15 +104,37 @@ def test_a_body_giving_a_number_no_saved_value_holds_is_a_refused_value(tmp_path
         tmp_path,
         node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
         "levels:TextAsALevel",
-        json.dumps(
-            {
-                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_INPUT_KEY: "text",
-                node_interpreter_bootstrap.SAVED_VALUE_CAST_REQUEST_VALUE_KEY: "nan",
-            }
-        ),
+        a_request_file(tmp_path, "text", "nan"),
     )
 
     document = cast_document(cast)
     not_cast_because = node_interpreter_bootstrap.SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY
     assert set(document) == {not_cast_because}, document
     assert "which no saved value holds" in document[not_cast_because], document
+
+
+def test_a_saved_value_too_long_for_one_argument_reaches_the_body_whole(tmp_path: Path):
+    """A String saved value of 200 KiB, longer than Linux lets one command-line argument be,
+    reaches the body whole through the request file.
+
+    Mental-revert: reading the request from the argument itself reads a path, not JSON, and
+    the cast prints no document."""
+    (tmp_path / "lengths.py").write_text(
+        "from tatolab.stream import node\n\n\n"
+        "@node.meta(conversion=True)\n"
+        "@node\n"
+        "def TextAsItsLength(text: str = '') -> int:\n"
+        "    return len(text)\n"
+    )
+    longer_than_one_argument = 200 * 1024
+
+    cast = run_the_bootstrap(
+        tmp_path,
+        node_interpreter_bootstrap.CAST_A_SAVED_VALUE_ARGUMENT,
+        "lengths:TextAsItsLength",
+        a_request_file(tmp_path, "text", "x" * longer_than_one_argument),
+    )
+
+    assert cast_document(cast) == {
+        node_interpreter_bootstrap.SAVED_VALUE_CAST_DOCUMENT_CAST_KEY: longer_than_one_argument
+    }, cast.stderr

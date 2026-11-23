@@ -105,9 +105,9 @@ fn a_created_stream_document_referencing_an_asset_the_project_does_not_hold_is_r
                     path: ProjectRelativeAssetPath::parse("streams/made.graph.json").unwrap(),
                     document: json!({ "asset": stream, "links": [], "nodes": [{
                         "id": Uuid::new_v4(), "name": "generated", "type": "generators:Look",
-                        "config": {}, "fragment": { "links": [], "nodes": [{
+                        "fragment": { "links": [], "nodes": [{
                             "id": nested_node, "name": "lut", "type": "nodes:Lut",
-                            "config": { "lut": { "asset": missing_asset } } }] } }] }),
+                            "input_values": { "lut": { "asset": missing_asset } } }] } }] }),
                 },
             )],
             ProjectTransactionLineage::NewEdit,
@@ -422,7 +422,7 @@ fn a_stream_that_holds_itself_through_another_is_refused_at_load_by_name() {
         cell.directory().join("streams/other.graph.json"),
         json!({ "asset": other, "links": [], "nodes": [{
             "id": Uuid::new_v4(), "name": "back", "type": STREAM_FRAGMENT_NODE_TYPE,
-            "config": { "stream": { "asset": cell.stream } } }] })
+            "input_values": { "stream": { "asset": cell.stream } } }] })
         .to_string(),
     )
     .unwrap();

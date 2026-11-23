@@ -396,7 +396,7 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
 }
 
 /// A native source whose every `process()` raises the same words.
-#[streamlib::sdk::node(execution = continuous(interval_ms = 5), output("video", family = Image))]
+#[streamlib::sdk::node(execution = continuous(interval_ms = 5), output("video", pin_type = Texture))]
 pub struct StreamToolsTestSourceWhoseProcessRaises;
 
 /// What [`StreamToolsTestSourceWhoseProcessRaises`] raises.
@@ -435,7 +435,6 @@ async fn a_stream_graph_subscriber_is_sent_a_raise_no_graph_event_reports() {
             "id": SOURCE_NODE_UUID,
             "name": "source",
             "type": StreamToolsTestSourceWhoseProcessRaises::node_class_import_path().as_str(),
-            "config": {},
         }],
         "links": [],
     }));

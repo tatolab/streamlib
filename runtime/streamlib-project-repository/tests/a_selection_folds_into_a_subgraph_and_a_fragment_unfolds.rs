@@ -29,11 +29,11 @@ fn a_link(source: &str, source_port: &str, target: &str, target_port: &str) -> V
 fn a_chain_of_five_nodes() -> StreamGraphDocument {
     let node = |id: &str, name: &str| {
         json!({ "id": id, "name": name, "type": format!("looks.nodes:{name}"),
-                "config": { "strength": 1 }, "studio": { "x": 10 } })
+                "input_values": { "strength": 1 }, "studio": { "x": 10 } })
     };
     let grouped = |id: &str, name: &str| {
         json!({ "id": id, "name": name, "type": format!("looks.nodes:{name}"),
-                "config": { "strength": 1 },
+                "input_values": { "strength": 1 },
                 "studio": { "x": 10, "group": "00000000-0000-4000-8000-0000000000c0" } })
     };
     StreamGraphDocument::from_value(json!({
@@ -267,10 +267,10 @@ fn an_unlocked_placed_stream_passing_its_input_straight_to_its_output_links_the_
     let passing_output = "00000000-0000-4000-8000-0000000000a2";
     let document = StreamGraphDocument::from_value(json!({
         "nodes": [
-            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source", "config": {} },
+            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source" },
             { "id": placing, "name": "look", "type": STREAM_FRAGMENT_NODE_TYPE,
-              "config": { "stream": { "asset": LOOK_STREAM } } },
-            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink", "config": {} },
+              "input_values": { "stream": { "asset": LOOK_STREAM } } },
+            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink" },
         ],
         "links": [
             a_link(SOURCE, "video", placing, "video"),
@@ -282,9 +282,9 @@ fn an_unlocked_placed_stream_passing_its_input_straight_to_its_output_links_the_
         "asset": LOOK_STREAM,
         "nodes": [
             { "id": passing_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-              "config": { "port": "video", "family": "image" } },
+              "input_values": { "port": "video", "family": "image" } },
             { "id": passing_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-              "config": { "port": "graded", "family": "image" } },
+              "input_values": { "port": "graded", "family": "image" } },
         ],
         "links": [a_link(passing_input, "value", passing_output, "value")],
     }))
@@ -316,23 +316,24 @@ fn a_generators_frozen_output_unlocked_is_plain_nodes_a_refresh_no_longer_reache
     let look = "00000000-0000-4000-8000-0000000000f0";
     let document = StreamGraphDocument::from_value(json!({
         "nodes": [
-            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source", "config": {} },
-            { "id": look, "name": "look", "type": "looks.generators:look", "config": { "soft": true },
+            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source" },
+            { "id": look, "name": "look", "type": "looks.generators:look",
+             "input_values": { "soft": true },
               "fragment": {
                   "nodes": [
                       { "id": generated_input, "name": "graphinput", "type": GRAPH_INPUT_NODE_TYPE,
-                        "config": { "port": "video", "family": "image" } },
+                        "input_values": { "port": "video", "family": "image" } },
                       { "id": generated_blur, "name": "soft-blur", "type": "looks.nodes:Blur",
-                        "config": { "radius": 3 } },
+                        "input_values": { "radius": 3 } },
                       { "id": generated_output, "name": "graphoutput", "type": GRAPH_OUTPUT_NODE_TYPE,
-                        "config": { "port": "out", "family": "image" } },
+                        "input_values": { "port": "out", "family": "image" } },
                   ],
                   "links": [
                       a_link(generated_input, "value", generated_blur, "video"),
                       a_link(generated_blur, "video", generated_output, "value"),
                   ],
               } },
-            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink", "config": {} },
+            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink" },
         ],
         "links": [
             a_link(SOURCE, "video", look, "video"),
@@ -381,13 +382,13 @@ fn a_stream_interface_node_and_a_name_clash_are_refused() {
     let document = StreamGraphDocument::from_value(json!({
         "nodes": [
             { "id": input, "name": "camera-in", "type": GRAPH_INPUT_NODE_TYPE,
-              "config": { "port": "camera", "family": "image" } },
-            { "id": BLUR, "name": "blur", "type": "looks.nodes:Blur", "config": {} },
+              "input_values": { "port": "camera", "family": "image" } },
+            { "id": BLUR, "name": "blur", "type": "looks.nodes:Blur" },
             { "id": placed, "name": "other", "type": STREAM_FRAGMENT_NODE_TYPE,
-              "config": { "stream": { "asset": "00000000-0000-4000-8000-000000000002" } } },
-            { "id": look, "name": "look", "type": "looks.generators:look", "config": {},
+              "input_values": { "stream": { "asset": "00000000-0000-4000-8000-000000000002" } } },
+            { "id": look, "name": "look", "type": "looks.generators:look",
               "fragment": { "nodes": [{ "id": inner_blur, "name": "blur",
-                                        "type": "looks.nodes:Blur", "config": {} }],
+                                        "type": "looks.nodes:Blur" }],
                             "links": [] } },
         ],
         "links": [a_link(input, "value", BLUR, "video")],
@@ -439,9 +440,9 @@ fn an_inline_subgraph_under_a_node_type_the_runtime_defines_is_refused_naming_it
     let inline = "00000000-0000-4000-8000-0000000000d1";
     let inline_subgraph = |at_the_level_inside_a_generator: bool| {
         let held_inline = json!({ "id": inline, "name": "sub", "type": "tatolab.project:Inline",
-                                  "config": {}, "fragment": { "nodes": [], "links": [] } });
+                                  "fragment": { "nodes": [], "links": [] } });
         let nodes = if at_the_level_inside_a_generator {
-            json!([{ "id": BLUR, "name": "look", "type": "looks.generators:look", "config": {},
+            json!([{ "id": BLUR, "name": "look", "type": "looks.generators:look",
                      "fragment": { "nodes": [held_inline], "links": [] } }])
         } else {
             json!([held_inline])
@@ -471,10 +472,10 @@ fn an_unlocked_placed_stream_holding_a_generators_output_copies_every_node_and_g
     let placed_output = "00000000-0000-4000-8000-0000000000b7";
     let document = StreamGraphDocument::from_value(json!({
         "nodes": [
-            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source", "config": {} },
+            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source" },
             { "id": placing, "name": "look", "type": STREAM_FRAGMENT_NODE_TYPE,
-              "config": { "stream": { "asset": LOOK_STREAM } } },
-            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink", "config": {} },
+              "input_values": { "stream": { "asset": LOOK_STREAM } } },
+            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink" },
         ],
         "links": [
             a_link(SOURCE, "video", placing, "video"),
@@ -486,16 +487,16 @@ fn an_unlocked_placed_stream_holding_a_generators_output_copies_every_node_and_g
         "asset": LOOK_STREAM,
         "nodes": [
             { "id": placed_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-              "config": { "port": "video", "family": "image" } },
-            { "id": subgraph, "name": "grade", "type": "looks.generators:grade", "config": {},
+              "input_values": { "port": "video", "family": "image" } },
+            { "id": subgraph, "name": "grade", "type": "looks.generators:grade",
               "fragment": {
                   "nodes": [
                       { "id": subgraph_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-                        "config": { "port": "video", "family": "image" } },
+                        "input_values": { "port": "video", "family": "image" } },
                       { "id": held_in_the_subgraph, "name": "tint", "type": "looks.nodes:Tint",
-                        "config": {}, "studio": { "group": group_in_the_subgraph } },
+                        "studio": { "group": group_in_the_subgraph } },
                       { "id": subgraph_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-                        "config": { "port": "graded", "family": "image" } },
+                        "input_values": { "port": "graded", "family": "image" } },
                   ],
                   "groups": [{ "id": group_in_the_subgraph, "title": "tints" }],
                   "links": [
@@ -504,7 +505,7 @@ fn an_unlocked_placed_stream_holding_a_generators_output_copies_every_node_and_g
                   ],
               } },
             { "id": placed_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-              "config": { "port": "graded", "family": "image" } },
+              "input_values": { "port": "graded", "family": "image" } },
         ],
         "links": [
             a_link(placed_input, "value", subgraph, "video"),

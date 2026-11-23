@@ -4,7 +4,7 @@
 """What a running node tells an agent about a node's config, end to end.
 
 The declaration suite proves the document is derived, and the engine's Rust
-tests prove it reaches the shape `/api/registry` serializes. This is the whole
+tests prove it reaches the shape the MCP node catalog serializes. This is the whole
 path on a real node with each node in its own node interpreter —
 which needs a running graph, and a running graph initializes a GPU context, so
 it carries `requires_gpu` like every other live proof in this suite.
@@ -56,7 +56,7 @@ def catalog_run(
         stream_id = tatolabd.await_the_latest_stream_loaded()
         local_api = tatolabd.local_api_client()
         local_api.await_every_node_running(stream=stream_id, timeout=GRAPH_READY_TIMEOUT_SECONDS)
-        served = local_api.registry(stream_id)
+        served = local_api.node_catalog(stream_id)
         tatolabd.interrupt()
         tatolabd.await_clean_exit()
         catalog_run_of_this_module["run"] = CatalogRun(

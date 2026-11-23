@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The `@node.function` nodes and helpers more than one function node test file uses."""
+"""The function nodes and helpers more than one function node test file uses."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from tatolab.runtime._function_node_compilation import (
 from tatolab.stream import State, Stateful, Time, node
 
 
+# Kept on `@node.function`: its `x` holds no default, which bare `@node` refuses, and the
+# island tests read what an input with no link, pin or default does.
 @node.function
 def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
     return low + x * (high - low)
@@ -29,7 +31,7 @@ class Phase:
     last_now_ns: int = 0
 
 
-@node.function
+@node
 def lfo(rate_hz: float = 1.0, *, now: Time, previous: State[Phase]) -> Stateful[float, Phase]:
     elapsed_seconds = (now - previous.last_now_ns) * 1e-9 if previous.last_now_ns else 0.0
     cycles = (previous.cycles + rate_hz * elapsed_seconds) % 1.0
@@ -47,8 +49,8 @@ def amplify(x: float, config: GainConfig) -> float:
     return -x * config.gain if config.inverted else x * config.gain
 
 
-@node.function
-def tally(x: float, count: int = 3) -> int:
+@node
+def tally(x: float = 0.0, count: int = 3) -> int:
     return count + int(x)
 
 
@@ -145,7 +147,7 @@ RustGate = node.rust_function(
 )
 
 
-@node.function
+@node
 def measure_its_own_spelling(x: float = 2.0) -> float:
     return float(len(f"{x:.1f}"))
 
@@ -165,7 +167,7 @@ class LabelsSeen:
     labels: str = ""
 
 
-@node.function
+@node
 def remember_each_call_by_a_letter(
     letter_count: float = 1.0, *, previous: State[LabelsSeen]
 ) -> Stateful[float, LabelsSeen]:

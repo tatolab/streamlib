@@ -110,8 +110,8 @@ def _wire_form_of(family: str, facts: Any) -> "dict[str, Any]":
 
 
 def stream_facts_from_wire(wire: "dict[str, Any]") -> PortStreamFacts:
-    """The typed facts the runtime's wire form `wire` spells."""
-    fields = {key: value for key, value in wire.items() if key != "family"}
+    """The typed facts the runtime's wire form `wire` spells; a `type` beside `family` is not read."""
+    fields = {key: value for key, value in wire.items() if key not in ("family", "type")}
     family = wire.get("family")
     if family == "image":
         frame_rate = fields.get("frame_rate")

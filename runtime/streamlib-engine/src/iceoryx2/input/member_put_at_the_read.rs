@@ -44,13 +44,16 @@ impl MemberPutAtTheRead {
     /// The message the port hands its reader once `payload`, a message of the member whose
     /// header is `header`, has arrived, `newest` holding the newest value of each member its
     /// links have carried and taking this one: its header, stating the built payload, and its
-    /// bytes; `None` while the whole bundle still lacks a member that declares no default. Fails
-    /// saying why the message carries no value of the member, or what it builds does not pack.
+    /// bytes; `None` while the whole bundle still lacks a member that declares no default. A
+    /// whole bundle reads each member no link has carried from `set_on_the_input`, the value set
+    /// on its input, when that holds it. Fails saying why the message carries no value of the
+    /// member, or what it builds does not pack.
     pub fn the_message_built_with_the_member(
         &self,
         header: &DataChannelSampleUserHeader,
         payload: &[u8],
         newest: &mut Map<String, Value>,
+        set_on_the_input: Option<&Map<String, Value>>,
     ) -> Result<Option<(DataChannelSampleUserHeader, Vec<u8>)>, String> {
         let value = unpack_pin_value(
             &self.member.member_type,
@@ -62,10 +65,12 @@ impl MemberPutAtTheRead {
         newest.insert(self.member.name.clone(), value);
         let packed = match self.put_into {
             WhatTheMembersArePutInto::TheWholeBundle => {
-                if self.a_member_without_a_default_has_not_arrived(newest) {
+                let whole =
+                    self.the_members_set_with_the_newest_over_them(newest, set_on_the_input);
+                if self.a_member_without_a_default_has_not_arrived(&whole) {
                     return Ok(None);
                 }
-                pack_pin_value(&self.bundle, &Value::Object(newest.clone()), 0)?
+                pack_pin_value(&self.bundle, &Value::Object(whole), 0)?
             }
             WhatTheMembersArePutInto::TheMembersTheLinksCarried => {
                 the_records_message_of_members_of_a_bundle(&self.bundle, newest)?
@@ -87,6 +92,32 @@ impl MemberPutAtTheRead {
             },
             packed.payload,
         )))
+    }
+
+    /// Each member of the bundle `set_on_the_input` holds, with `newest`, what the links have
+    /// carried, over them.
+    fn the_members_set_with_the_newest_over_them(
+        &self,
+        newest: &Map<String, Value>,
+        set_on_the_input: Option<&Map<String, Value>>,
+    ) -> Map<String, Value> {
+        let PinType::Bundle { members } = &self.bundle else {
+            return newest.clone();
+        };
+        let mut whole: Map<String, Value> = set_on_the_input
+            .into_iter()
+            .flatten()
+            .filter(|(name, value)| {
+                !value.is_null() && members.iter().any(|member| &member.name == *name)
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        whole.extend(
+            newest
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
+        whole
     }
 
     fn a_member_without_a_default_has_not_arrived(&self, newest: &Map<String, Value>) -> bool {
@@ -118,21 +149,24 @@ impl BundleMembersAtTheRead {
 
     /// The message the port hands its reader once `payload`, a message of the link's output
     /// whose header is `header`, has arrived: the member taken from it, put into what the port
-    /// reads with `newest`, each member's newest value, taking it. `None` while that is a whole
-    /// bundle still lacking a member that declares no default. Fails saying why the message
-    /// gives no member the link reads.
+    /// reads with `newest`, each member's newest value, taking it, over `set_on_the_input`, the
+    /// value set on its input. `None` while that is a whole bundle still lacking a member that
+    /// declares no default. Fails saying why the message gives no member the link reads.
     pub(super) fn the_message_the_port_reads(
         &self,
         header: &DataChannelSampleUserHeader,
         payload: &[u8],
         newest: &mut Map<String, Value>,
+        set_on_the_input: Option<&Map<String, Value>>,
     ) -> Result<Option<(DataChannelSampleUserHeader, Vec<u8>)>, String> {
         let (header, payload) = match &self.taken_from_its_output {
             Some(taken) => taken.the_message_of_the_member(header, payload)?,
             None => (*header, payload.to_vec()),
         };
         match &self.put_into_its_input {
-            Some(put) => put.the_message_built_with_the_member(&header, &payload, newest),
+            Some(put) => {
+                put.the_message_built_with_the_member(&header, &payload, newest, set_on_the_input)
+            }
             None => Ok(Some((header, payload))),
         }
     }

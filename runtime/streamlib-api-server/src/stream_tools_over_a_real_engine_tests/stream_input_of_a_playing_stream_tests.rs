@@ -25,7 +25,7 @@ const ARRIVES_WITHIN: Duration = Duration::from_secs(10);
 /// A native reader of Records on its input `cue`, which records each one it reads.
 #[streamlib::sdk::node(
     execution = reactive,
-    input("cue", delivery_profile = "newest", family = Records)
+    input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
 pub struct StreamToolsTestRecordsRecorder;
 
@@ -55,11 +55,10 @@ fn a_project_whose_cue_input_a_recorder_reads(lifetime: &str) -> ProjectWithGrap
         "stream": "main",
         "nodes": [
             { "id": CUE_NODE_UUID, "name": "cue", "type": "tatolab.stream:GraphInput",
-              "config": { "port": "cue", "family": "records", "default": { "track": "intro" },
+              "input_values": { "port": "cue", "family": "records", "default": { "track": "intro" },
                           "lifetime": lifetime } },
             { "id": RECORDER_NODE_UUID, "name": "recorder",
-              "type": StreamToolsTestRecordsRecorder::node_class_import_path().as_str(),
-              "config": {} },
+              "type": StreamToolsTestRecordsRecorder::node_class_import_path().as_str() },
         ],
         "links": [
             { "source": { "node": "cue", "port": "value" },

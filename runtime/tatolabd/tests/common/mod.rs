@@ -29,6 +29,7 @@ use streamlib::sdk::runtime::{
     StreamEnvironment, StreamLocation, StreamRecord, StreamRecordAsRead,
     StreamRecordsInTheStateDirectory,
 };
+use streamlib_runtime_client_contract::local_api_wire_contract::control_rest_operation_route_path;
 
 /// The line `tatolabd` logs once its local API is served and its re-loads
 /// queued.
@@ -356,7 +357,7 @@ pub(crate) fn a_stream_graph_crashing_while(stream_id: &str, trigger: &Path) -> 
         "nodes": [{
             "name": "crasher",
             "type": CRASH_ON_DEMAND_TEST_NODE_TYPE,
-            "config": {"crash_while_this_file_exists": trigger, "crash_with": "SIGSEGV"},
+            "input_values": {"crash_while_this_file_exists": trigger, "crash_with": "SIGSEGV"},
         }],
     })
 }
@@ -673,31 +674,38 @@ impl Drop for SpawnedTatolabd {
     }
 }
 
-/// `GET <path>` over the local API socket, retried until it answers 200.
-pub(crate) fn the_local_apis_answer_to_get(
+/// The control operation `operation` called with `params` over REST on the local API socket,
+/// retried until it answers 200.
+pub(crate) fn the_local_apis_answer_to(
     local_api_socket_path: &Path,
-    path: &str,
+    operation: &str,
+    params: &serde_json::Value,
 ) -> serde_json::Value {
+    let route = control_rest_operation_route_path(operation);
     let deadline = Instant::now() + A_RUNTIME_STARTS_SERVING_WITHIN;
     loop {
-        if let Some(answer) = get_once(local_api_socket_path, path) {
+        if let Some(answer) = post_once(local_api_socket_path, &route, &params.to_string()) {
             return answer;
         }
         assert!(
             Instant::now() < deadline,
-            "the local API at {} did not answer `GET {path}`",
+            "the local API at {} did not answer `POST {route}`",
             local_api_socket_path.display()
         );
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
-fn get_once(local_api_socket_path: &Path, path: &str) -> Option<serde_json::Value> {
+fn post_once(local_api_socket_path: &Path, route: &str, body: &str) -> Option<serde_json::Value> {
     let mut local_api = UnixStream::connect(local_api_socket_path).ok()?;
     local_api
         .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
+            format!(
+                "POST {route} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
         )
         .ok()?;
     let mut response = String::new();

@@ -31,10 +31,10 @@ from helper_placement_streams import (
     first_labelled_source_into_sink,
     function_node_run_as_python_into_a_class_lending_it_to_native_code,
     function_node_run_as_python_into_python_records_sink,
-    function_nodes_read_by_two_native_converters_into_python_records_sink,
+    function_nodes_read_by_two_native_converters_into_python_sink,
     lfo_into_python_sink_reporting_each_batch_it_reads,
     lfo_into_remap_into_python_sink,
-    native_channels_to_records_into_python_records_sink,
+    native_float_to_integer_into_python_integer_sink,
     python_level_source_through_a_gate_into_a_native_converter,
     python_source_through_a_gate_into_python_sink,
     python_source_through_a_gate_that_crashes_on_cue_into_python_sink,
@@ -212,7 +212,7 @@ def test_a_native_builtin_stays_in_the_app_process(
     """The other side of the boundary, discriminated.
 
     Every Python node is a child; a native built-in is not.
-    `ChannelsToRecords` is statically linked into `tatolabd` and runs on an
+    `FloatToInteger` is statically linked into `tatolabd` and runs on an
     engine thread, in `tatolabd`'s own process — and the way to see that is
     that nothing was spawned for it. A two-node stream starts exactly one helper, and it
     belongs to the sink.
@@ -221,8 +221,8 @@ def test_a_native_builtin_stays_in_the_app_process(
     the runtime process". Native built-ins do, by design — their per-frame path
     never enters an interpreter.
     """
-    tatolabd = start_tatolabd_running_stream(native_channels_to_records_into_python_records_sink)
-    sink_pid = tatolabd.await_marker("RECORDS_SINK_PID")["pid"]
+    tatolabd = start_tatolabd_running_stream(native_float_to_integer_into_python_integer_sink)
+    sink_pid = tatolabd.await_marker("INTEGER_SINK_PID")["pid"]
     assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -277,20 +277,20 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
     """Two islands read by native built-ins start one pool, beside the Python class.
 
     A built-in runs in `tatolabd`, which runs no node code, so neither
-    `ChannelsToRecords` can evaluate the island it reads. The stream's one
+    `FloatToInteger` can evaluate the island it reads. The stream's one
     function node pool evaluates both and publishes each on a channel: the
-    class reads the record the first converter makes of `Remap`'s value, and
+    class reads the integer the first converter casts of `Remap`'s value, and
     the stream started exactly two helpers, the pool's and the class's.
 
     Fail-without-fix: the link into a converter is refused, since the app
     process runs no node code, and the stream never loads.
     """
     tatolabd = start_tatolabd_running_stream(
-        function_nodes_read_by_two_native_converters_into_python_records_sink
+        function_nodes_read_by_two_native_converters_into_python_sink
     )
     stream_id = tatolabd.await_the_latest_stream_loaded()
-    records_read = tatolabd.await_marker("LEVEL_RECORDS_READ")
-    sink_pid = records_read["sink_pid"]
+    levels_read = tatolabd.await_marker("LEVELS_READ")
+    sink_pid = levels_read["sink_pid"]
     assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
     graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
     tatolabd.interrupt()
@@ -308,9 +308,9 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
         link for link in graph["links"] if "carried_through_the_function_node_pool" in link["components"]
     ]
     assert len(carried_links) == 2, f"`graph` shows each carried link as it was given: {graph['links']}"
-    levels = [record["level"] for record in records_read["records"]]
-    assert all(0.0 <= level <= 1.0 for level in levels), (
-        f"`Remap` maps the LFO onto 0..1, and the class read {levels}"
+    levels = levels_read["levels"]
+    assert all(0 <= level <= 100 for level in levels), (
+        f"`Remap` maps the LFO onto 0..100, and the class read {levels}"
     )
     assert len(set(levels)) > 1, f"the pool evaluates the island on a moving clock: {levels}"
 
@@ -510,7 +510,7 @@ def test_a_gate_reading_a_python_class_hands_each_message_on_to_each_of_two_pyth
 def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """`<Python class> -> Gate -> ChannelsToRecords -> <Python class>`: the
+    """`<Python class> -> Gate -> FloatToInteger -> <Python class>`: the
     converter runs no node code, so the stream's pool reads the source's
     channel, evaluates `Gate` and hands each level on unread, in its family.
     """
@@ -518,19 +518,19 @@ def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
         python_level_source_through_a_gate_into_a_native_converter
     )
     stream_id = tatolabd.await_the_latest_stream_loaded()
-    records_read = tatolabd.await_marker("LEVEL_RECORDS_READ")
+    levels_read = tatolabd.await_marker("LEVELS_READ")
     graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
     (carry,) = graph["function_node_pool"]["config"]["carries"]
     assert carry["family"] == "message", f"the pool hands `Gate`'s message on unread: {carry}"
-    levels = [record["level"] for record in records_read["records"]]
-    assert levels == sorted(levels) and len(set(levels)) > 1 and levels[0] >= 1.0, (
+    levels = levels_read["levels"]
+    assert levels == sorted(levels) and len(set(levels)) > 1 and levels[0] >= 1, (
         f"the pool hands the source's levels on in order, and the sink read {levels}"
     )
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
-    assert len(helper_pids) == 3 and records_read["sink_pid"] in helper_pids, (
+    assert len(helper_pids) == 3 and levels_read["sink_pid"] in helper_pids, (
         f"the source, the sink and one pool get a process, and the stream started {helper_pids}:\n"
         f"{tatolabd.recent_stderr()}"
     )
@@ -676,7 +676,7 @@ def test_a_stream_whose_pool_runs_takes_an_edit_and_stops_and_plays_again(
         python_level_source_through_a_gate_into_a_native_converter
     )
     stream_id = tatolabd.await_the_latest_stream_loaded()
-    tatolabd.await_marker("LEVEL_RECORDS_READ")
+    tatolabd.await_marker("LEVELS_READ")
     local_api = tatolabd.local_api_client()
     (listed,) = [listed for listed in local_api.list_streams() if listed["stream"] == stream_id]
     project_directory = listed["location"]["project_directory"]
@@ -714,7 +714,7 @@ def test_a_stream_whose_pool_runs_takes_an_edit_and_stops_and_plays_again(
     played = local_api.call_tool("start_playback", {"project_directory": project_directory})
     play_ended = local_api.stream_action_once_ended(played["action"])
     assert play_ended["state"] == "done", f"playing again failed: {play_ended}"
-    records_read_again = tatolabd.await_marker("LEVEL_RECORDS_READ", occurrence=2)
+    levels_read_again = tatolabd.await_marker("LEVELS_READ", occurrence=2)
     played_again = local_api.call_tool("graph", {"stream": stream_id})
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -723,7 +723,7 @@ def test_a_stream_whose_pool_runs_takes_an_edit_and_stops_and_plays_again(
     assert len(played_again["function_node_pool"]["config"]["carries"]) == 1, played_again[
         "function_node_pool"
     ]
-    assert len(records_read_again["records"]) > 0
+    assert len(levels_read_again["levels"]) > 0
 
 
 def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool(
@@ -850,7 +850,7 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
     counts_read = tatolabd.await_marker("COUNTS_READ_IN_ORDER")
     local_api = tatolabd.local_api_client()
     graph = local_api.call_tool("graph", {"stream": stream_id})
-    registry = local_api.registry(stream_id)
+    node_catalog = local_api.node_catalog(stream_id)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
@@ -881,7 +881,7 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
             assert (graph_node.get("kind"), graph_node.get("language")) == ("function", "rust"), (
                 graph_node
             )
-    catalog_entries = {entry["type"]: entry for entry in registry["nodes"]}
+    catalog_entries = {entry["type"]: entry for entry in node_catalog["nodes"]}
     for rust_node_type in rust_node_types:
         entry = catalog_entries[rust_node_type]
         assert (entry["kind"], entry.get("language")) == ("function", "rust"), entry

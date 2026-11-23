@@ -30,12 +30,12 @@ fn refusal_of(graph: serde_json::Value) -> String {
 fn a_camera_offered_as_an_output_and_a_display_fed_by_an_input() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
-            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"name": "camera", "type": "tatolab.camera:CameraSource"},
             {"name": "video", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "config": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "family": "image"}},
             {"name": "overlay", "type": GRAPH_INPUT_NODE_TYPE,
-             "config": {"port": "overlay", "family": "image"}},
-            {"name": "display", "type": "tatolab.display:Display", "config": {}},
+             "input_values": {"port": "overlay", "family": "image"}},
+            {"name": "display", "type": "tatolab.display:Display"},
         ],
         "links": [
             {"source": {"node": "camera", "port": "video"},
@@ -82,9 +82,9 @@ fn resolved_on_the_streams_top_level(
 fn a_records_input_read_by_two_nodes(input_config: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "nodes": [
-            {"name": "cue", "type": GRAPH_INPUT_NODE_TYPE, "config": input_config},
-            {"name": "left", "type": "tatolab.test:Reader", "config": {}},
-            {"name": "right", "type": "tatolab.test:Reader", "config": {}},
+            {"name": "cue", "type": GRAPH_INPUT_NODE_TYPE, "input_values": input_config},
+            {"name": "left", "type": "tatolab.test:Reader"},
+            {"name": "right", "type": "tatolab.test:Reader"},
         ],
         "links": [
             {"source": {"node": "cue", "port": "value"},
@@ -191,8 +191,9 @@ fn a_default_or_range_is_refused_where_no_client_writes_the_input_or_its_family_
 fn an_interface_node_naming_no_family_and_linked_to_nothing_runs_nothing() {
     let resolution = resolved_on_the_streams_top_level(serde_json::json!({
         "nodes": [
-            {"name": "input1", "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "input1"}},
-            {"name": "output1", "type": GRAPH_OUTPUT_NODE_TYPE, "config": {"port": "output1"}},
+            {"name": "input1", "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input1"}},
+            {"name": "output1", "type": GRAPH_OUTPUT_NODE_TYPE,
+             "input_values": {"port": "output1"}},
         ],
         "links": [],
     }))
@@ -230,10 +231,9 @@ fn an_interface_node_naming_no_family_takes_the_family_of_the_first_port_linked_
         .as_array_mut()
         .expect("the graph has nodes")
         .extend([
-            serde_json::json!({"name": "camera", "type": "tatolab.camera:CameraSource",
-                                   "config": {}}),
+            serde_json::json!({"name": "camera", "type": "tatolab.camera:CameraSource"}),
             serde_json::json!({"name": "video", "type": GRAPH_OUTPUT_NODE_TYPE,
-                                   "config": {"port": "video"}}),
+                                   "input_values": {"port": "video"}}),
         ]);
     graph["links"]
         .as_array_mut()
@@ -336,10 +336,10 @@ fn an_output_following_an_input_fed_by_a_graph_input_naming_no_family_carries_th
     );
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [
-            {"name": "cue", "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "cue"}},
-            {"name": "reader", "type": READER_TYPE, "config": {}},
-            {"name": "passer", "type": PASSER_TYPE, "config": {}},
-            {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE, "config": {"port": "out"}},
+            {"name": "cue", "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "cue"}},
+            {"name": "reader", "type": READER_TYPE},
+            {"name": "passer", "type": PASSER_TYPE},
+            {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE, "input_values": {"port": "out"}},
         ],
         "links": [
             {"source": {"node": "cue", "port": "value"},
@@ -380,7 +380,7 @@ fn an_interface_node_naming_no_family_linked_to_a_port_stating_none_is_refused()
 #[test]
 fn a_graph_with_no_interface_node_resolves_to_itself() {
     let graph = serde_json::json!({
-        "nodes": [{"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}}],
+        "nodes": [{"name": "camera", "type": "tatolab.camera:CameraSource"}],
         "links": [],
     });
     let resolution = resolved(graph.clone()).expect("resolves");
@@ -394,11 +394,11 @@ fn a_graph_with_no_interface_node_resolves_to_itself() {
 fn two_outputs_declaring_one_port_are_refused_naming_both() {
     let refusal = refusal_of(serde_json::json!({
         "nodes": [
-            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"name": "camera", "type": "tatolab.camera:CameraSource"},
             {"name": "first", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "config": {"port": "Video", "family": "image"}},
+             "input_values": {"port": "Video", "family": "image"}},
             {"name": "second", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "config": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "family": "image"}},
         ],
         "links": [
             {"source": {"node": "camera", "port": "video"},
@@ -417,11 +417,11 @@ fn two_outputs_declaring_one_port_are_refused_naming_both() {
 fn an_input_and_an_output_may_share_a_port_name() {
     let resolution = resolved(serde_json::json!({
         "nodes": [
-            {"name": "effect", "type": "my_app:Effect", "config": {}},
+            {"name": "effect", "type": "my_app:Effect"},
             {"name": "video-in", "type": GRAPH_INPUT_NODE_TYPE,
-             "config": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "family": "image"}},
             {"name": "video-out", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "config": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "family": "image"}},
         ],
         "links": [
             {"source": {"node": "video-in", "port": "value"},
@@ -438,7 +438,7 @@ fn an_input_and_an_output_may_share_a_port_name() {
 fn an_output_linked_from_no_port_is_refused() {
     let unlinked = refusal_of(serde_json::json!({
         "nodes": [{"name": "video", "type": GRAPH_OUTPUT_NODE_TYPE,
-                   "config": {"port": "video", "family": "image"}}],
+                   "input_values": {"port": "video", "family": "image"}}],
         "links": [],
     }));
     assert!(unlinked.contains("from 0 links"), "got {unlinked}");
@@ -479,7 +479,7 @@ fn a_link_into_an_input_or_out_of_an_output_is_refused_naming_the_node() {
 fn an_interface_node_naming_no_port_an_unknown_family_or_another_key_is_refused() {
     let declaring = |config: serde_json::Value| {
         refusal_of(serde_json::json!({
-            "nodes": [{"name": "overlay", "type": GRAPH_INPUT_NODE_TYPE, "config": config}],
+            "nodes": [{"name": "overlay", "type": GRAPH_INPUT_NODE_TYPE, "input_values": config}],
             "links": [],
         }))
     };
@@ -719,9 +719,9 @@ fn a_graph_input_choosing_a_pin_type_refuses_a_value_or_a_choice_it_does_not_tak
 fn an_interface_node_renders_its_settings_as_inputs_reading_their_values() {
     let resolution = resolved(serde_json::json!({
         "nodes": [
-            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"name": "camera", "type": "tatolab.camera:CameraSource"},
             {"name": "video", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "config": {"port": "video", "pin_type": {"type": "texture"}}},
+             "input_values": {"port": "video", "pin_type": {"type": "texture"}}},
         ],
         "links": [
             {"source": {"node": "camera", "port": "video"},
@@ -776,9 +776,9 @@ fn an_interface_node_renders_its_settings_as_inputs_reading_their_values() {
 fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to() {
     let resolved = resolved(serde_json::json!({
         "nodes": [
-            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"name": "camera", "type": "tatolab.camera:CameraSource"},
             {"name": "level", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "config": {"port": "level", "pin_type": {"type": "float"}}},
+             "input_values": {"port": "level", "pin_type": {"type": "float"}}},
         ],
         "links": [
             {"source": {"node": "camera", "port": "video"},
