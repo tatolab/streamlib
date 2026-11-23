@@ -191,6 +191,11 @@ pub(crate) struct GraphRequestRefusal {
 }
 
 impl GraphRequestRefusal {
+    /// The runtime's own words of why the action was refused.
+    pub(super) fn runtime_words(&self) -> &str {
+        &self.runtime_words
+    }
+
     /// A refusal coded and placed by `code_and_place`, in `runtime_words`.
     pub(crate) fn coded(code_and_place: RefusalCodeAndPlace, runtime_words: String) -> Self {
         Self {
@@ -396,7 +401,11 @@ impl GraphTransactionRefusal {
             .link
             .as_ref()
             .filter(|_| {
-                code_and_place.refusal_code == ControlOperationRefusalCode::InputTakesNoWire
+                matches!(
+                    code_and_place.refusal_code,
+                    ControlOperationRefusalCode::InputTakesNoWire
+                        | ControlOperationRefusalCode::LinkStreamsIntoASetting
+                )
             })
             .map(|link| link.target.node.clone());
         code_and_place.refused_node = what_the_refused_operation_names

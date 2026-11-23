@@ -233,13 +233,19 @@ fn a_number_reads_the_first_sample_of_an_f32_block_as_an_audio_block_carries_it(
     );
 }
 
+/// A Float on the wire read as an Integer truncates toward zero, as `FloatToInteger` casts it.
+///
+/// Mental-revert: rounding reads 0.6 as 1 and -2.5 as -3.
 #[test]
-fn an_integer_reads_a_float_rounded_half_away_from_zero() {
-    let message = control_message_of_channel_values(&[-2.5], 0);
-    assert_eq!(
-        unpack_pin_value(&PinType::Integer { exact_size: None }, message.as_ref()).unwrap(),
-        json!(-3)
-    );
+fn an_integer_reads_a_float_truncated_toward_zero() {
+    let read = |carried: f64| {
+        let message = control_message_of_channel_values(&[carried], 0);
+        unpack_pin_value(&PinType::Integer { exact_size: None }, message.as_ref()).unwrap()
+    };
+    assert_eq!(read(0.6), json!(0));
+    assert_eq!(read(-0.6), json!(0));
+    assert_eq!(read(-2.5), json!(-2));
+    assert_eq!(read(2.9), json!(2));
 }
 
 #[test]

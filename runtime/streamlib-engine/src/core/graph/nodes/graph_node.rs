@@ -232,22 +232,21 @@ impl GraphNode {
             .resolved_against_the_config(&self.node_type, Some(&settings));
     }
 
-    /// Refuse a link into input `input` when it is a setting, which takes a stored value and
-    /// never a wire.
+    /// Refuse a link into input `input` when it is a setting that takes no wire: one read each
+    /// run, one of a type no message carries, and every setting of a node type of the graph
+    /// itself, which names a port of its stream or a variable rather than running on a value.
     pub(crate) fn refuse_a_link_into_a_setting(&self, input: &str) -> crate::core::Result<()> {
-        match self.input_port(input) {
-            Some(port) if !port.takes_a_wire() => Err(the_refusal_of_a_link_into_a_setting(
-                &port.name,
-                &self.display_name,
-            )),
-            _ => Ok(()),
-        }
+        refuse_a_link_into_a_port_taking_no_wire(
+            self.input_port(input),
+            &self.node_type,
+            &self.display_name,
+        )
     }
 
     /// Whether this node is a `GraphInput`; one in a graph that runs is at its stream's top
     /// level, since a fragment's own are flattened away.
     pub fn is_a_graph_input(&self) -> bool {
-        crate::core::graph::graph_interface_resolution::is_the_graph_input_type(&self.node_type)
+        self.node_type.is_the_graph_input_type()
     }
 
     pub fn node_type(&self) -> &NodeClassImportPath {
@@ -372,7 +371,23 @@ impl GraphNodeWithComponents for GraphNode {
     }
 }
 
-/// The refusal of a link into input `input` of node `node`, a setting, which takes no wire.
+/// Refuse a link into `port`, an input of the node `node_name` of `node_type`, when it takes no
+/// wire by the one rule, naming the port by its own name; no port, or one that takes a wire,
+/// passes.
+pub(crate) fn refuse_a_link_into_a_port_taking_no_wire(
+    port: Option<&PortInfo>,
+    node_type: &NodeClassImportPath,
+    node_name: &str,
+) -> crate::core::Result<()> {
+    match port {
+        Some(port) if !port.takes_a_wire_on_a_node_of(node_type) => {
+            Err(the_refusal_of_a_link_into_a_setting(&port.name, node_name))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The refusal of a link into input `input` of node `node`, a setting that takes no wire.
 pub(crate) fn the_refusal_of_a_link_into_a_setting(input: &str, node: &str) -> crate::core::Error {
     crate::core::Error::PinLinkRefused(Box::new(
         crate::core::descriptors::PinLinkRefusal::input_takes_no_wire(node, input),

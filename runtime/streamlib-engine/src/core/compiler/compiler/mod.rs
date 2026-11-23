@@ -60,8 +60,13 @@ use crate::core::graph::{
 use crate::core::nodes::{NodeState, NodeTypesOneStreamResolves};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
+use nodes_set_up_after_the_sources_of_their_wired_settings::{
+    build_each_with_what_the_wires_into_its_settings_carried,
+    let_each_node_set_up_after_the_sources_of_the_wires_into_its_settings,
+};
 
 mod commit_of_the_logged_operations;
+mod nodes_set_up_after_the_sources_of_their_wired_settings;
 mod transaction_held_for_one_commit;
 pub(crate) use commit_of_the_logged_operations::{ACommitFailed, WhatTheHeldCommitFound};
 
@@ -467,6 +472,7 @@ impl Compiler {
         hand_each_reader_the_island_a_compile_changed(&mut graph_arc.write(), &plan.links_to_add)?;
         close_the_channels_no_island_reads_any_more(&mut graph_arc.write())?;
         note_where_each_function_node_runs(&mut graph_arc.write());
+        build_each_with_what_the_wires_into_its_settings_carried(&graph_arc, &plan.nodes_to_add);
         deliver_the_unlinked_input_values_of_each_node(&graph_arc, &plan.nodes_to_add)?;
         hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph_arc.read())?;
 
@@ -494,12 +500,10 @@ impl Compiler {
             record_each_promotion_on_its_nodes_metrics(&mut graph_arc.write(), promotion_planned);
         }
 
-        for (proc_id, handle) in barrier_handles {
-            tracing::trace!("[{}] Signaling CONTINUE", proc_id);
-            if handle.continue_sender.send(()).is_err() {
-                tracing::warn!("[{}] Failed to signal CONTINUE", proc_id);
-            }
-        }
+        let_each_node_set_up_after_the_sources_of_the_wires_into_its_settings(
+            &graph_arc,
+            barrier_handles,
+        )?;
 
         // =====================================================================
         // 8. Config updates - for each config_update
@@ -780,6 +784,7 @@ pub(super) fn unwire_and_remove_a_link(
     drop(graph);
 
     let mut graph = graph_arc.write();
+    crate::core::graph::input_values::forget_what_a_link_into_a_setting_carried(&graph, link_id);
     if graph.traversal_mut().e(link_id).drop().exists() {
         return Err(Error::GraphError("value was not dropped".into()));
     }
@@ -983,3 +988,6 @@ mod abandoned_shader_node_restart_tests;
 
 #[cfg(test)]
 mod transaction_held_for_one_commit_tests;
+
+#[cfg(test)]
+mod nodes_set_up_after_the_sources_of_their_wired_settings_tests;

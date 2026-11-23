@@ -21,8 +21,10 @@ from tatolab.runtime._engine import (
 )
 from tatolab.runtime._node_hosting import (
     class_node_members_of,
+    class_node_pin_groups_of,
     construct_class_node_from_its_fields_and_pins,
     construct_node_instance,
+    the_members_of_each_slot_built,
 )
 from tatolab.runtime._parent_process_bridge import ParentProcessBridge
 
@@ -190,13 +192,15 @@ def construct_hosted_node(
     node_run_id: str,
     bridge: ParentProcessBridge,
     stored_input_values: "Optional[dict[str, Any]]" = None,
+    slot_counts: "Optional[dict[str, int]]" = None,
 ) -> HostedNode:
     """Build the user's object and the two contexts its hooks receive.
 
     The bridge's escalate round trip is what the GPU surface crosses to the
     parent on — without it, `ctx.gpu_limited_access` refuses by name. A class
     under bare `@node` is built from `stored_input_values`, each field holding
-    its value and each pin bound before its `__init__()` runs.
+    its value, each pin bound and each pin group holding the slots
+    `slot_counts` says before its `__init__()` runs.
     """
     full_access_context = open_runtime_context_full_access_for_helper_process(
         configuration or {},
@@ -220,8 +224,19 @@ def construct_hosted_node(
     # new enough to declare one.
     from tatolab.runtime._class_node_fields import ClassNodeFields
 
+    members_of_each_slot = the_members_of_each_slot_built(
+        class_node_pin_groups_of(node_class), slot_counts or {}
+    )
     fields = ClassNodeFields(
-        members,
+        (
+            *members,
+            *(
+                member
+                for slots in members_of_each_slot.values()
+                for slot_members in slots
+                for member in slot_members
+            ),
+        ),
         link_data_access=link_data_access,
         inputs=full_access_context.inputs,
         node_id=node_run_id,
@@ -236,6 +251,7 @@ def construct_hosted_node(
             inputs=full_access_context.inputs,
             outputs=full_access_context.outputs,
             node_id=node_run_id,
+            members_of_each_slot=members_of_each_slot,
         ),
         full_access_context,
         limited_access_context,

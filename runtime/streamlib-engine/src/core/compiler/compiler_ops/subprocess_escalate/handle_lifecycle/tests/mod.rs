@@ -93,6 +93,23 @@ fn next_node_output_frame_over_the_escalate_op(
     }
 }
 
+impl super::NodeOutputPoolsOfOneHelper {
+    /// Drain the pools at the helper's teardown, where no reader holds a frame
+    /// across it: every slot comes back owed its release.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn drain_at_the_helpers_teardown_with_nothing_held(
+        &mut self,
+        host: &crate::core::context::GpuContext,
+    ) -> Vec<super::ReleasedNodeOutputPoolSlot> {
+        let (unheld_slots, slots_a_reader_holds) = self.drain_at_the_helpers_teardown(host);
+        assert!(
+            slots_a_reader_holds.is_empty(),
+            "a slot nothing holds was kept past the helper's teardown"
+        );
+        unheld_slots
+    }
+}
+
 #[test]
 fn release_handle_flags_unknown_handle() {
     // Registry-level release of an unknown handle. A full

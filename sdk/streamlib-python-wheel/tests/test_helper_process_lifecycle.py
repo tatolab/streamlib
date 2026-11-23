@@ -7,7 +7,6 @@ import os
 import resource
 import statistics
 import sys
-import threading
 import time
 
 import pytest
@@ -17,18 +16,14 @@ from helper_process_test_support import (
     drive_lifecycle_on_a_thread,
     engine_shaped_link_wiring,
     frame_index_payload,
+    the_pin_upstream_of_a_pass_through_probe,
 )
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
-from tatolab.runtime._function_node_run_as_a_standalone_node import (
-    the_node_class_a_promoted_function_node_runs_as,
-)
 from tatolab.runtime._node_interpreter_bootstrap import (
-    HelperProcessLifecycle,
     ParentProcessBridge,
     load_node_class,
 )
-from tatolab.stream import node
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -45,62 +40,12 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
         bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
-    stand_in_parent.send(
-        {"cmd": "setup", "capability": "full", "config": {"tag": "probe"}, "ports": {}}
-    )
+    ports = {"input_values": {"tag": "probe"}}
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": ports})
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
     assert stand_in_parent.receive(timeout_seconds=0.5) is None
-
-    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
-    assert stand_in_parent.receive()["rpc"] == "done"
-    lifecycle_thread.join(timeout=5.0)
-    assert not lifecycle_thread.is_alive()
-
-
-@node.function
-def doubles_its_level(level: float = 0.5) -> float:
-    return level * 2.0
-
-
-@node.function
-def labels_its_level(level: float = 0.5) -> dict:
-    return {"label": "high" if level > 0.5 else "low"}
-
-
-@pytest.mark.parametrize(
-    ("function_node", "node_id", "ran_compiled"),
-    [(doubles_its_level, "doubler-1", True), (labels_its_level, "labeller-1", False)],
-)
-def test_a_promoted_function_nodes_ready_says_how_its_own_helper_runs_it(
-    stand_in_parent, function_node, node_id, ran_compiled
-):
-    """A function node promoted to a helper of its own is evaluated by no
-    reader, so its own helper's `ready` is the only report of how it runs."""
-    bridge = ParentProcessBridge(stand_in_parent.child_end)
-    bridge.start_reading()
-
-    def drive() -> None:
-        link_data_access = _engine.open_node_link_data_access_for_helper_process()
-        HelperProcessLifecycle(
-            bridge,
-            the_node_class_a_promoted_function_node_runs_as(
-                function_node, f"{__name__}:{function_node.__name__}", node_id, link_data_access
-            ),
-            "R-helper-test",
-            node_id,
-            link_data_access,
-        ).run_until_the_parent_is_done()
-
-    lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
-    lifecycle_thread.start()
-
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": None, "ports": {}})
-    assert stand_in_parent.receive() == {
-        "rpc": "ready",
-        "function_nodes_ran_compiled": {node_id: ran_compiled},
-    }
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"
@@ -776,7 +721,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         # The helper is parked on its listener by now, so the message arrives
         # by waking the wait.
         time.sleep(0.2)
-        upstream.write_to_output_port("frames_to_downstream", frame_index_payload(3))
+        the_pin_upstream_of_a_pass_through_probe(upstream).write(frame_index_payload(3))
         deadline = time.monotonic() + 5.0
         forwarded = None
         while forwarded is None and time.monotonic() < deadline:

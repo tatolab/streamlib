@@ -491,6 +491,7 @@ fn the_saved_values_of(node_run_id: &NodeRunId, pins: Value) -> SavedValuesOfAKe
         node_run_id: node_run_id.clone(),
         pins: pins.as_object().unwrap().clone(),
         studio: serde_json::Map::new(),
+        handed_over_now: true,
     }
 }
 
@@ -697,6 +698,7 @@ fn a_string_set_live_on_a_function_node_in_a_helper_of_its_own_is_refused() {
         .unwrap()
         .insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
             process_execution: ProcessExecution::Continuous { interval_ms: 10 },
+            evaluated_at_setup: false,
             how_its_own_helper_ran_it: std::sync::Arc::new(
                 HowItsHelpersRanAFunctionNode::default(),
             ),

@@ -20,6 +20,7 @@ use crate::core::graph::{
     GraphNodeWithComponents, GraphState, ObservableGraphReadiness, NodePauseGateComponent,
     NodeRunId, StateComponent, StepProgressOfOneNodeComponent, WhyTheNodeLeaves,
 };
+use crate::core::logging::polled_in_a_project_log_route_entry;
 use crate::core::media_clock::MediaClock;
 use crate::core::nodes::{NodeSpec, NodeState};
 use crate::core::pubsub::{Event, PUBSUB, NodeEvent, RuntimeEvent};
@@ -206,6 +207,7 @@ impl LoadedStreamInThisRuntime {
 
         tracing::info!("[start] Committing pending graph operations");
         self.compiler.commit(&this_streams_runtime_context)?;
+        self.start_the_rebuilds_wires_into_settings_ask_for(&this_streams_runtime_context);
 
         if !this_streams_runtime_context.stream_clock.spec().is_real() {
             let earlier_step_coordinator = self.step_coordinator.lock().take();
@@ -226,6 +228,39 @@ impl LoadedStreamInThisRuntime {
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimePaused);
         }
         Ok(())
+    }
+
+    /// Start the task that rebuilds each node a Value wire into one of its settings read at
+    /// setup carries a new value into, on `runtime_context`'s async runtime, in place of one an
+    /// earlier start left.
+    fn start_the_rebuilds_wires_into_settings_ask_for(&self, runtime_context: &RuntimeContext) {
+        let carried = self
+            .compiler
+            .scope(|graph, _tx| Arc::clone(graph.values_wires_carry_into_settings()));
+        let this_stream = Weak::clone(&self.this_stream);
+        let rebuilds = runtime_context
+            .tokio_handle()
+            .spawn(polled_in_a_project_log_route_entry(
+                Arc::clone(runtime_context.this_streams_log_route()),
+                async move {
+                    loop {
+                        carried.a_value_waits().await;
+                        let Some(stream) = this_stream.upgrade() else {
+                            return;
+                        };
+                        stream
+                            .rebuild_each_node_a_wire_into_its_settings_changed()
+                            .await;
+                    }
+                },
+            ));
+        if let Some(earlier) = self
+            .rebuilds_wires_into_settings_ask_for
+            .lock()
+            .replace(rebuilds)
+        {
+            earlier.abort();
+        }
     }
 
     /// This stream's view of the engine's GPU context: its own surface store,
@@ -287,6 +322,9 @@ impl LoadedStreamInThisRuntime {
 
         tracing::info!("[stop] Stopping the stream `{}`", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopping);
+        if let Some(rebuilds) = self.rebuilds_wires_into_settings_ask_for.lock().take() {
+            rebuilds.abort();
+        }
 
         let step_coordinator = self.step_coordinator.lock().take();
         if let Some(step_coordinator) = step_coordinator {
@@ -332,6 +370,16 @@ impl LoadedStreamInThisRuntime {
                 tracing::warn!("[stop] Failed to stop audio clock: {}", e);
             }
 
+            // Every reader is gone with its node, and each release goes
+            // through the surface store, so before it closes.
+            self.teardown_progress_note()
+                .note_what_the_teardown_is_waiting_on(
+                    "releasing the frames its rebuilt nodes left to their readers",
+                );
+            this_streams_runtime_context
+                .gpu
+                .release_every_slot_outliving_its_producer();
+
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the stream's surface store");
             this_streams_runtime_context.gpu.clear_surface_store();
@@ -349,6 +397,8 @@ impl LoadedStreamInThisRuntime {
         *self.runtime_context.lock() = None;
 
         *self.status.lock() = RuntimeStatus::Stopped;
+        // A start builds each node from its saved values, so none waits on a rebuild.
+        self.nodes_a_setting_read_at_setup_rebuilds.lock().clear();
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopped);
         tracing::info!("[stop] The stream `{}` stopped", self.stream_id());
         (node_removal_outcome, nodes_torn_down, links_torn_down)
@@ -646,6 +696,11 @@ impl LoadedStreamInThisRuntime {
         }
 
         *self.status.lock() = RuntimeStatus::Started;
+        self.compiler.scope(|graph, _tx| {
+            graph
+                .values_wires_carry_into_settings()
+                .wake_for_each_value_waiting()
+        });
         let committed = match self.runtime_context.lock().clone() {
             Some(this_streams_runtime_context) => {
                 self.compiler.commit(&this_streams_runtime_context)

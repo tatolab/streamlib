@@ -319,6 +319,12 @@ pub struct GraphNodePortOnTheWire {
     /// states none.
     #[serde(default, skip_serializing_if = "PinAnnotations::is_empty")]
     pub annotations: PinAnnotations,
+    /// On an input, whether a link may end at it: `false` on a setting read each run, a setting
+    /// of a type no message carries, and every setting of a `GraphInput`, `GraphOutput`,
+    /// `SetVariable` or `GetVariable`. Absent on an output, on the `value` port of a graph
+    /// interface or graph variable, and on a setting of a placed stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takes_a_wire: Option<bool>,
     /// On an input, the value it reads while unlinked, as `value`, and where that value comes
     /// from, as `value_comes_from`; on a bundle input, each member's, as `member_values`. All
     /// are absent on an input that takes no stored value and no link feeds, and on an output.

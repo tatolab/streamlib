@@ -13,14 +13,19 @@ involved.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -31,12 +36,20 @@ from ..gpu_surface_conventions import (
 
 
 @node.meta(description="Copies the camera's frame into a bindable device texture")
-@node.process
+@node
 class CameraFrameToTexture:
     """Buffer-backed camera frame in, texture-backed frame out."""
 
-    video_from_camera = Input(Image, delivery="newest", description="Frames from the camera")
-    video_to_downstream = Output(Image, description="The same frames, in textures a kernel can bind")
+    video_from_camera: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
+    ]
+    video_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The same frames, in textures a kernel can bind"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(
@@ -44,7 +57,7 @@ class CameraFrameToTexture:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_camera)
+        frame = self.video_from_camera.read()
         if frame is None:
             return
 
@@ -56,8 +69,7 @@ class CameraFrameToTexture:
         # texture would see them.
         ctx.gpu_limited_access.copy_surface_to_surface(frame.surface_id, texture)
 
-        ctx.outputs.write(
-            self.video_to_downstream,
+        self.video_to_downstream.write(
             ImageFrameToWrite.of_texture(texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

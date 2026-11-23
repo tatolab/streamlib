@@ -18,7 +18,7 @@ use super::bundle_input_read::{
     ValuesABundleInputHolds, the_bundle_members_of, the_live_members_over_the_held_ones,
 };
 use super::live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
-use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortDescriptor};
+use crate::core::descriptors::{NodeClassImportPath, NodeKind, NodeValueLifetime, PortDescriptor};
 use crate::core::graph::{
     Graph, GraphNode, PortInfo, WhatTheLinksIntoAnInputFeed, WhyTheNodeLeaves,
 };
@@ -276,7 +276,7 @@ pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeVa
 /// input does not state that it takes a wire or a value, only a Channels input; on a port that
 /// names no pin type, any input of a function node.
 pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &PortInfo) -> bool {
-    if !port.takes_a_wire() {
+    if port.is_a_setting() {
         return true;
     }
     match &port.pin {
@@ -329,17 +329,41 @@ pub(crate) fn the_read_of_an_unfed_input(
     }
 }
 
+/// Whether `graph` says of a setting a node type the runtime owns declares that a link may end
+/// at it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TakesAWireRendered<'node_type> {
+    /// As the one rule answers for a setting of a node of this type, which is how `connect`
+    /// judges a link into it.
+    ByTheRuleOnANodeOf(&'node_type NodeClassImportPath),
+    /// `false`: each is a config field a node type not yet typed describes as a setting, which
+    /// is no port, so `connect` takes no link into it, as a view node's settings are.
+    NoneOfThemTakesOne,
+    /// Left out: `connect` judges a link into it by no setting's rule, as it judges one into a
+    /// placed stream, by the Inputs its stream declares.
+    LeftOut,
+}
+
 /// Each of `settings`, the settings a node type the runtime owns declares, as `graph` renders it
 /// on a node holding `input_values`: reading the value the node holds, else the default the
-/// setting declares.
+/// setting declares, and saying whether a link may end at it as `takes_a_wire` says.
 pub(crate) fn the_settings_rendered_reading_the_values_held(
     settings: &[PortDescriptor],
     input_values: &Map<String, Value>,
+    takes_a_wire: TakesAWireRendered<'_>,
 ) -> Vec<GraphNodePortOnTheWire> {
     settings
         .iter()
         .map(|setting| {
-            let mut rendered = GraphNodePortOnTheWire::from(&PortInfo::from(setting));
+            let setting_info = PortInfo::from(setting);
+            let mut rendered = GraphNodePortOnTheWire::from(&setting_info);
+            rendered.takes_a_wire = match takes_a_wire {
+                TakesAWireRendered::ByTheRuleOnANodeOf(node_type) => {
+                    Some(setting_info.takes_a_wire_on_a_node_of(node_type))
+                }
+                TakesAWireRendered::NoneOfThemTakesOne => Some(false),
+                TakesAWireRendered::LeftOut => None,
+            };
             let read = input_values
                 .get(&setting.name)
                 .filter(|held| !held.is_null())
@@ -444,19 +468,49 @@ fn the_value_an_unlinked_input_is_handed(
 }
 
 /// The value each input of `node` in `graph` reads while no link feeds it, by input: its live
-/// value, else its saved one, else its declared default. An input that takes no stored value, a
-/// config field the node exposes as an input, which reads the node's config, and an input with
-/// none of the three are left out.
+/// value, else its saved one, else its declared default. A setting read at setup that a wire
+/// feeds reads instead the value its wire last carried, once it has carried one. An input that
+/// takes no stored value, a config field the node exposes as an input, which reads the node's
+/// config, and an input with none of these are left out.
 pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<String, Value> {
     node.ports
         .inputs
         .iter()
         .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
         .filter_map(|port| {
-            the_value_an_unlinked_input_is_handed(graph, node, port)
+            the_value_a_wire_into_the_setting_carried(graph, node, port)
+                .or_else(|| the_value_an_unlinked_input_is_handed(graph, node, port))
                 .map(|value| (port.name.clone(), value))
         })
         .collect()
+}
+
+/// The value setting `setting` of `node` in `graph` reads while no wire has carried it one: its
+/// live value, else its saved one, else its declared default; `None` with none of the three.
+pub(crate) fn the_value_a_setting_reads_with_no_wire(
+    graph: &Graph,
+    node: &GraphNode,
+    setting: &str,
+) -> Option<Value> {
+    the_value_an_unlinked_input_is_handed(graph, node, node.input_port(setting)?)
+}
+
+/// The value the wire into `port` of `node` in `graph` last carried that the node is built
+/// with, when `port` is a setting read at setup a link feeds; `None` otherwise, and while its
+/// wire has carried none.
+fn the_value_a_wire_into_the_setting_carried(
+    graph: &Graph,
+    node: &GraphNode,
+    port: &PortInfo,
+) -> Option<Value> {
+    if !port.is_a_setting_read_at_setup()
+        || !WhatTheLinksIntoAnInputFeed::of(graph, &node.id, &port.name).the_whole_input()
+    {
+        return None;
+    }
+    graph
+        .values_wires_carry_into_settings()
+        .the_value_its_node_is_built_with(node.node_uuid, &port.name)
 }
 
 /// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now, under

@@ -165,8 +165,8 @@ fn the_verdict_into_a_node_types_input(
 }
 
 /// A node type's exactly typed port is judged as a placed node of the type is: a Float into
-/// its Integer input connects for free, into its String input or its setting it is refused in
-/// connect's very words, and the graph holds no more nodes and links after each check than
+/// its Integer input connects for free, into its String input, and a stream of Floats into its
+/// setting, it is refused in connect's very words, and the graph holds no more nodes and links after each check than
 /// before.
 ///
 /// Mental-revert: judging the node type's port by its family alone would answer `None` for the
@@ -176,6 +176,7 @@ fn a_node_types_typed_port_is_judged_as_a_placed_node_of_the_type_is() {
     register_the_node_types_port_fixtures();
     let compiler = Arc::new(Compiler::new());
     let float_source = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let float_stream_source = a_node_of(&compiler, class_path(FLOAT_STREAM_SOURCE));
     let nodes_before = the_nodes_in(&compiler);
 
     let verdict = the_verdict_into_a_node_types_input(
@@ -194,18 +195,13 @@ fn a_node_types_typed_port_is_judged_as_a_placed_node_of_the_type_is() {
     assert_eq!(the_nodes_in(&compiler), nodes_before);
 
     let placed_sink = a_node_of(&compiler, class_path(NUMBER_SINK));
-    for input in ["label", "gain"] {
-        let judged = the_verdict_into_a_node_types_input(
-            &compiler,
-            &float_source,
-            "value",
-            NUMBER_SINK,
-            input,
-        )
-        .expect_err("connect refuses the link");
+    for (source, input) in [(&float_source, "label"), (&float_stream_source, "gain")] {
+        let judged =
+            the_verdict_into_a_node_types_input(&compiler, source, "value", NUMBER_SINK, input)
+                .expect_err("connect refuses the link");
         let placed = the_verdict_connect_takes_on_a_link(
             &compiler,
-            OutputLinkPortRef::new(float_source.clone(), "value"),
+            OutputLinkPortRef::new(source.clone(), "value"),
             InputLinkPortRef::new(placed_sink.clone(), input),
         )
         .expect_err("connect refuses the link");

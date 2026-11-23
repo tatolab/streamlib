@@ -376,7 +376,18 @@ async fn a_projects_node_types_are_listed_by_source_with_the_runtimes_own_last()
         .iter()
         .filter_map(|listed| listed["node_type"].as_str())
         .collect();
-    assert!(names.is_sorted(), "{names:?}");
+    let (run_by_node_code, of_the_graph_itself) = names.split_at(names.len() - 4);
+    assert!(run_by_node_code.is_sorted(), "{names:?}");
+    assert_eq!(
+        of_the_graph_itself,
+        [
+            "tatolab.stream:GraphInput",
+            "tatolab.stream:GraphOutput",
+            "tatolab.stream:SetVariable",
+            "tatolab.stream:GetVariable",
+        ],
+        "the graph's own node types come last"
+    );
 }
 
 /// A built-in node type is described from the runtime's own description: a typed input with its
@@ -417,13 +428,13 @@ async fn a_built_in_node_type_is_described_with_each_input_mode_value_schema_and
         json!([
             { "name": "gain", "documentation": "",
               "pin_type": { "kind": "is", "pin_type": { "type": "float" } }, "flow": "value",
-              "mode": "wire_or_value", "lifetime": "kept",
+              "mode": "wire_or_value", "takes_a_wire": true, "lifetime": "kept",
               "value_json_schema": { "type": "number", "minimum": -f64::MAX, "maximum": f64::MAX } },
             { "name": "video", "documentation": "",
               "pin_type": { "kind": "is", "pin_type": { "type": "texture" } }, "flow": "stream",
-              "mode": "wire_only", "lifetime": "kept" },
+              "mode": "wire_only", "takes_a_wire": true, "lifetime": "kept" },
             { "name": "frame_width", "documentation": "", "mode": "setting_only",
-              "read": "at_setup", "lifetime": "kept",
+              "takes_a_wire": false, "read": "at_setup", "lifetime": "kept",
               "value_json_schema": {
                   "type": ["integer", "null"], "format": "uint32", "minimum": 0.0,
                   "default": null,
@@ -493,7 +504,7 @@ async fn a_project_node_type_is_described_from_source_or_says_why_it_is_not() {
             "declared_at": { "path": "nodes/mix.py", "line": 7 },
             "inputs": [{ "name": "level", "documentation": "the level",
                          "family": { "family": "channels" }, "annotation": "float",
-                         "default_value": 0.5 }],
+                         "takes_a_wire": true, "default_value": 0.5 }],
             "outputs": [{ "name": "mixed", "documentation": "",
                           "family": { "family": "channels" } }],
         })

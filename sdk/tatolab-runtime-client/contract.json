@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 33
+    "x-contract-revision": 41
   },
   "methods": [
     {
@@ -370,8 +370,8 @@
     },
     {
       "name": "describe_runtime",
-      "summary": "Describe this runtime: its version, its build id, how long it has been up and where it logs.",
-      "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.",
+      "summary": "Describe this runtime: its version, its build id, how long it has been up, where it logs and its machine's name.",
+      "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none, and `machine`, the machine's name, the first part of `<machine>/<stream id>/<node>/<port>`, which `graph` gives every loaded stream's graph under. Names no stream.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -548,7 +548,7 @@
     {
       "name": "graph",
       "summary": "Export a loaded stream's graph, or every loaded stream's, with each node's and link's state and each part not live yet marked.",
-      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`, and a port whose pin states annotations, such as its `range` and the `control` that sets it, carries them as `annotations`, a top-level Graph Input's `value` input those its settings state. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. A node that keeps a state carries its `health` in its `components` (`healthy`, `not_ready`, `raising` or `failed`) with the `diagnostics` behind it, left out while it has none; a fragment's own node carries neither. Each stream graph carries its `condition`, as `list_streams` answers it. While a stream's graph document holds an edit its running graph did not take, its graph is the document's: each node and link the running graph holds rendered live, and each other drawn as the document writes it with `live: false` until the stream's playback stops and takes it; `live` is absent on every node and link that runs. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
+      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it, and `takes_a_wire`, whether a link may end at it as `connect` rules: false for a setting read each run, a setting of a type no message carries, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`; a port whose pin type is exact names it as `pin_type`, with its `flow`, and a port whose pin states annotations, such as its `range` and the `control` that sets it, carries them as `annotations`, a top-level Graph Input's `value` input those its settings state. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. A node that keeps a state carries its `health` in its `components` (`healthy`, `not_ready`, `raising` or `failed`) with the `diagnostics` behind it, left out while it has none; a fragment's own node carries neither. Each stream graph carries its `condition`, as `list_streams` answers it. While a stream's graph document holds an edit its running graph did not take, its graph is the document's: each node and link the running graph holds rendered live, and each other drawn as the document writes it with `live: false` until the stream's playback stops and takes it; `live` is absent on every node and link that runs. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -656,7 +656,7 @@
                   "ports": {
                     "inputs": [
                       {
-                        "name": "layer_0",
+                        "name": "layers.0.picture",
                         "pin_type": {
                           "type": "texture"
                         },
@@ -690,7 +690,7 @@
                   },
                   "target": {
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   },
                   "state": "wired",
                   "components": {}
@@ -793,7 +793,7 @@
                     },
                     "target": {
                       "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                      "port": "layer_0"
+                      "port": "layers.0.picture"
                     }
                   },
                   {
@@ -834,7 +834,7 @@
                   },
                   "target": {
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   }
                 },
                 {
@@ -862,7 +862,7 @@
                   },
                   "target": {
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   },
                   "state": "wired"
                 }
@@ -967,7 +967,7 @@
     {
       "name": "connect",
       "summary": "Link an output port to an input port in one loaded stream, as one transaction.",
-      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends, only when both ends are UUID-named nodes the edited level holds. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports carry the same kind of message, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These rules judge a link inside a placed stream, under a non-empty `level`, the same way, among the nodes of that level alone, by the settings each holds and the links the level holds, and judge each link a `PreviousValue` node closing a loop there is linked by; `connect` places no convert node there, so a link that needs one is refused naming it. A link there reaching a fragment node, a `GraphInput` or `GraphOutput` that does not yet say what it carries, or a node whose type is not described is saved unjudged, and its entry under `connected_links` says why under `not_judged_because`.",
+      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends, only when both ends are UUID-named nodes the edited level holds. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports carry the same kind of message, and the runtime logs the refusal. A setting read at setup takes a link from an output that flows as a `value`: once the stream has started, each value the link carries that differs from the one the node was built with rebuilds the node once, a burst of them arriving within about 50 ms of the first rebuilding it once with the last, and a node started while the link has carried one, its source's value as that source set up among them, is built with it; a value its node refuses to rebuild with is logged, and the node is rebuilt with the value it held before. A link into it from an output that flows as a `stream` or a `trigger` is refused with `link_streams_into_a_setting`, saved or not: place a node that samples it into a value between them, or set the setting's value with `set_node_input_value`. A link into a setting read each run, into a setting of a type no message carries, or into a setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, is refused with `input_takes_no_wire`. A function or shader node's output that flows as a `value` feeds a setting read at setup as any other node's does. Whatever evaluates a function node outside an island works its value out as it sets up, before the setting's node is built: the stream's function node pool, or the helper of its own a stateful node several nodes read runs in. The setting's node is built with that value at the start, and each value worked out after that which differs rebuilds the node as above. A shader node's output is a texture, which flows as a `stream`, so a link from it into a setting is refused with `link_streams_into_a_setting`. `graph` says under each input's `takes_a_wire` whether a link may end at it by these rules. These rules judge a link inside a placed stream, under a non-empty `level`, the same way, among the nodes of that level alone, by the settings each holds and the links the level holds, and judge each link a `PreviousValue` node closing a loop there is linked by; `connect` places no convert node there, so a link that needs one is refused naming it. A link there reaching a fragment node, a `GraphInput` or `GraphOutput` that does not yet say what it carries, or a node whose type is not described is saved unjudged, and its entry under `connected_links` says why under `not_judged_because`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1037,7 +1037,7 @@
                 },
                 "target": {
                   "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                  "port": "layer_0"
+                  "port": "layers.0.picture"
                 },
                 "stream": "night-show-main-3fa2b1"
               }
@@ -1049,7 +1049,7 @@
     {
       "name": "check_link",
       "summary": "Answer what `connect` would answer for one link in a loaded stream, changing nothing.",
-      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. A link inside a placed stream, under a non-empty `level`, is judged among the nodes of that level as `connect` judges it there. Some links are not checked yet, and `check_link` itself fails on them, saying why: one reaching a fragment node or a `GraphInput` or `GraphOutput` that does not yet say what it carries; inside a placed stream, one reaching a node whose type is not described; and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
+      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion`, `input_takes_no_wire` or `link_streams_into_a_setting`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. A link inside a placed stream, under a non-empty `level`, is judged among the nodes of that level as `connect` judges it there. Some links are not checked yet, and `check_link` itself fails on them, saying why: one reaching a fragment node or a `GraphInput` or `GraphOutput` that does not yet say what it carries; inside a placed stream, one reaching a node whose type is not described; and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1242,7 +1242,7 @@
                     {
                       "kind": "placed_port",
                       "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                      "port": "layer_0"
+                      "port": "layers.0.picture"
                     },
                     {
                       "kind": "placed_port",
@@ -1263,7 +1263,7 @@
                   "end": {
                     "kind": "placed_port",
                     "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                    "port": "layer_0"
+                    "port": "layers.0.picture"
                   },
                   "check": {
                     "outcome": "connects"
@@ -1536,7 +1536,7 @@
                 },
                 "target": {
                   "node": "71f3a0d8-2e6c-4b95-9d47-a3c8e1f0b264",
-                  "port": "layer_0"
+                  "port": "layers.0.picture"
                 },
                 "stream": "night-show-main-3fa2b1"
               }
@@ -1672,7 +1672,7 @@
     {
       "name": "set_node_input_value",
       "summary": "Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.",
-      "description": "Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A setting takes no link: a node type takes a link only on an input it declares as a port. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.",
+      "description": "Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A set on a setting read at setup that a link feeds is kept and answered there too, its node built with the value the link last carried. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A set of the `pin_type` of a top-level `GraphInput` that saves a value carries that value into the new type in the same commit, which one undo reverses whole: when exactly one conversion the stream registers takes the former type and gives the new one, the value is cast by it and then held within the Input's `range`, among them the built-in `FloatToInteger`, which truncates toward zero within an Integer's range, `IntegerToFloat`, exact, and `BooleanToInteger`, `IntegerToBoolean`, `BooleanToFloat` and `FloatToBoolean`, 0 and 1; with none, or when the one that fits is a module's, a node body that converts only inside a started stream, a value the new type takes as it is is kept; otherwise the value gives way to the new type's default, no saved value, as it does when more than one conversion fits, the cast is refused, or an Integer's `range` holds no whole number. Each such value is answered under `saved_values_retyped`: its `value_before`, the `value` it now saves and the conversion under `cast_by`, or why it took the default under `default_because` with each conversion that fits under `conversions_that_fit`. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5146,7 +5146,7 @@
     {
       "name": "create_node_file",
       "summary": "Create a node file in a project from the template, as one transaction.",
-      "description": "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a `@node.process` class in the current `tatolab.stream` idiom, named after the file, with one input `video_in` taking frames, which it hands on unchanged to one output `video_out`, each with its description. It loads as a node type of the project with no edits and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.",
+      "description": "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5692,7 +5692,7 @@
     {
       "name": "list_node_types",
       "summary": "List the node types and graph generators a project offers, by the source each comes from.",
-      "description": "List the node types and graph generators a project offers, each under `sources` by `source`: the project's own node code outside `imports/` (`project`), each import as its folder holds it now (`dependency`, with its `project`, `folder`, `version` and `project_name`), each installed distribution that declares `tatolab.nodes` entry points (`installed_distribution`, with its `distribution` and `distribution_version`), then the node types the runtime brings itself (`built_in`). Project code is read from source without running it. Each node type has its `node_type` (what `add_node` and `describe_node_types` take), the first line of its description as `documentation`, its `category`, its `kind` (`process`, `function` or `shader`) and `described_from`, where the runtime's description of it comes from: `built_in`, `source`, or `interpreter` when a loaded stream of the project described it in its own interpreter. `describe_node_types` answers each one's inputs and outputs. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, where it is declared, and the settings it promotes as `promoted_settings`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.",
+      "description": "List the node types and graph generators a project offers, each under `sources` by `source`: the project's own node code outside `imports/` (`project`), each import as its folder holds it now (`dependency`, with its `project`, `folder`, `version` and `project_name`), each installed distribution that declares `tatolab.nodes` entry points (`installed_distribution`, with its `distribution` and `distribution_version`), then the node types the runtime brings itself (`built_in`), ending with the graph's own `GraphInput`, `GraphOutput`, `SetVariable` and `GetVariable` in the `Graph` category, which no node code runs and so have no `kind`. Project code is read from source without running it. Each node type has its `node_type` (what `add_node` and `describe_node_types` take), the first line of its description as `documentation`, its `category`, its `kind` (`process`, `function` or `shader`) and `described_from`, where the runtime's description of it comes from: `built_in`, `source`, or `interpreter` when a loaded stream of the project described it in its own interpreter. `describe_node_types` answers each one's inputs and outputs. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, where it is declared, and the settings it promotes as `promoted_settings`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5819,7 +5819,7 @@
     {
       "name": "describe_node_types",
       "summary": "Describe the inputs and outputs of the node types named, each with its pin type.",
-      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`), its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and states what it carries in the older fields its schema marks `x-removed-in`; its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
+      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`: `at_setup`, which takes a link from an output that flows as a `value` and rebuilds its node on each change, or `each_run`, which takes no link), `takes_a_wire`, whether a link may end at it: false for a setting read each run, a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and states what it carries in the older fields its schema marks `x-removed-in`; its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -7942,7 +7942,18 @@
           {
             "type": "string",
             "const": "input_takes_no_wire",
-            "description": "The link sent ends at an input that is a setting, which takes a stored value and never a\nlink; `refused_field` names it."
+            "description": "The link sent ends at an input that takes no link: a setting read each run, a setting of\na type no message carries, or a setting of a `GraphInput`, `GraphOutput`, `SetVariable`\nor `GetVariable`; `refused_field` names it."
+          },
+          {
+            "type": "string",
+            "const": "link_streams_into_a_setting",
+            "description": "The link sent carries a Stream or a Trigger into a setting read at setup, which takes a\nValue wire only, since each change of what it carries rebuilds the setting's node;\n`refused_field` names the setting, and the runtime's words the node to place between them."
+          },
+          {
+            "type": "string",
+            "const": "link_from_a_function_node_into_a_setting",
+            "description": "Never answered: a link from a function or shader node into a setting read at setup\nconnects. Listed for a client of an earlier revision until contract version 4.",
+            "x-removed-in": 4
           },
           {
             "type": "string",
@@ -8400,12 +8411,17 @@
               "null"
             ],
             "description": "The folder the runtime's own log is written to, absolute for `tatolabd`; `None` when it\nkeeps none."
+          },
+          "machine": {
+            "type": "string",
+            "description": "The machine's name, the first part of `<machine>/<stream id>/<node>/<port>`: the name\n`graph` gives every loaded stream's graph under."
           }
         },
         "required": [
           "version",
           "build_id",
-          "up_for_ms"
+          "up_for_ms",
+          "machine"
         ],
         "description": "The `describe_runtime` tool's result."
       },
@@ -9402,6 +9418,13 @@
           "annotations": {
             "$ref": "#/components/schemas/PinAnnotations",
             "description": "What the port's pin states besides its type, such as its range, its unit and the control\nthat sets it, none of which decides a link: as its node type declares it, and on a\n`GraphInput`'s `value` input, as that node's settings state it. Absent on a port that\nstates none."
+          },
+          "takes_a_wire": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "On an input, whether a link may end at it: `false` on a setting read each run, a setting\nof a type no message carries, and every setting of a `GraphInput`, `GraphOutput`,\n`SetVariable` or `GetVariable`. Absent on an output, on the `value` port of a graph\ninterface or graph variable, and on a setting of a placed stream."
           },
           "value": {
             "description": "The value it reads, null when it reads nothing; absent when a link feeds it, and on a\nbundle input."
@@ -12588,6 +12611,13 @@
               "$ref": "#/components/schemas/GraphTransactionInputOverriddenByALink"
             },
             "description": "Each input it set a value on that a link feeds, whose messages the node reads instead."
+          },
+          "saved_values_retyped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphTransactionSavedValueRetyped"
+            },
+            "description": "Each saved value of a `GraphInput` it carried into the pin type it chose for it."
           }
         },
         "required": [
@@ -12803,6 +12833,52 @@
           "from_output"
         ],
         "description": "An input a graph transaction set a value on while a link feeds it, so the link's messages\nare what the node reads until the link is taken out."
+      },
+      "GraphTransactionSavedValueRetyped": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream the `GraphInput` is in, by stream id."
+          },
+          "node": {
+            "type": "string",
+            "description": "The `GraphInput`'s UUID."
+          },
+          "value_before": {
+            "description": "The value it saved under its former type."
+          },
+          "value": {
+            "description": "The value it saves under its new type, held within its `range`; absent when it gave way to\nthe new type's default."
+          },
+          "cast_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node type of the conversion that cast it; absent when none did."
+          },
+          "default_because": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it gave way to the new type's default; absent when it was cast."
+          },
+          "conversions_that_fit": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The node type of each conversion that fits the two types, when it gave way to the default\nthough one or more fit."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "value_before"
+        ],
+        "description": "The saved value of a top-level `GraphInput` that a graph transaction carried into the pin\ntype it chose for it: cast by the one conversion that fits the two types, or given up for the\nnew type's default, which is no saved value."
       },
       "AddNodeRequest": {
         "type": "object",
@@ -18398,7 +18474,7 @@
                 "type": "null"
               }
             ],
-            "description": "How its code runs; null for an entry point whose declaration source does not show it."
+            "description": "How its code runs; null for an entry point whose declaration source does not show it,\nand for a node type the graph resolves itself, which no node code runs."
           },
           "described_from": {
             "$ref": "#/components/schemas/NodeTypeDescribedFrom",
@@ -18585,7 +18661,7 @@
                 "type": "null"
               }
             ],
-            "description": "How its code runs; null where its declaration source does not show it."
+            "description": "How its code runs; null where its declaration source does not show it, and for a node\ntype the graph resolves itself, which no node code runs."
           },
           "declared_at": {
             "anyOf": [
@@ -18769,6 +18845,11 @@
             ],
             "description": "Whether it takes a wire, a stored value or both; absent where only source describes its\nnode type."
           },
+          "takes_a_wire": {
+            "type": "boolean",
+            "description": "Whether a link may end at it: `false` on a setting read each run, a setting of a type no\nmessage carries, every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or\n`GetVariable`, and each legacy field of a node type not yet typed, which is no port.",
+            "default": true
+          },
           "read": {
             "anyOf": [
               {
@@ -18917,7 +18998,7 @@
           {
             "type": "string",
             "const": "setting_only",
-            "description": "A stored value only, never a link: a setting."
+            "description": "A setting: a stored value, read when its `read` says; one read at setup also takes a\nlink from an output that flows as a value, each change of either rebuilding its node."
           }
         ],
         "description": "Whether an input takes a wire, a stored value, or both."
@@ -18927,15 +19008,15 @@
           {
             "type": "string",
             "const": "at_setup",
-            "description": "Once, when the node is set up; a change rebuilds the node."
+            "description": "Once, when the node is set up; it takes a Value wire, and a change of its value or of\nwhat its wire carries rebuilds the node."
           },
           {
             "type": "string",
             "const": "each_run",
-            "description": "Each run, with no rebuild. Runtime-owned nodes only."
+            "description": "Each run, with no rebuild and no wire. Runtime-owned nodes only."
           }
         ],
-        "description": "When a node reads a setting-only input."
+        "description": "When a node reads a setting."
       },
       "NodeValueLifetime": {
         "oneOf": [
@@ -21211,7 +21292,7 @@
             "required": [
               "mode"
             ],
-            "description": "A stored value only, never a link."
+            "description": "A setting: a stored value, or what a Value wire into it carries, read when `read` says.\nOne read at setup takes a wire, and a change of either rebuilds its node; one read each\nrun takes no wire."
           }
         ],
         "description": "Whether an input takes a wire, a stored value, or both."

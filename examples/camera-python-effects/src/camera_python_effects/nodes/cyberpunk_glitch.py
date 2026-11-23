@@ -13,6 +13,8 @@ from __future__ import annotations
 import random
 import struct
 
+from typing import ClassVar
+
 from tatolab.stream import ImageFrame, RuntimeContextFullAccess, node
 
 from ..single_pass_video_effect import SinglePassVideoEffect
@@ -79,12 +81,12 @@ class GlitchFlashSchedule:
 
 
 @node.meta(description="Cyberpunk colour grade with intermittent glitch flashes")
-@node.process
+@node
 class CyberpunkGlitch(SinglePassVideoEffect):
     """The grade is always on; the glitch is not."""
 
-    fragment_shader_file_name = "cyberpunk_glitch_fragment.slang"
-    push_constant_size = GLITCH_PUSH_CONSTANT_SIZE
+    fragment_shader_file_name: ClassVar[str] = "cyberpunk_glitch_fragment.slang"
+    push_constant_size: ClassVar[int] = GLITCH_PUSH_CONSTANT_SIZE
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         super().setup(ctx)

@@ -6,7 +6,7 @@
 //! transaction while it is held, judged by the graph they leave, compiled in one commit, and
 //! announced once they stand; or taken back whole.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -64,13 +64,15 @@ fn announces_a_connect(event: &RuntimeEvent) -> bool {
 
 /// What graph edits held for one commit keep until they close: each event they would have
 /// announced, beside the link it announces, the stream as drawn before them, the names the
-/// graph-only nodes held then, and the name each node they renamed held before.
+/// graph-only nodes held then, the slots each node's pin groups held then, and the name each
+/// node they renamed held before.
 pub(in crate::core::runtime) struct GraphEditsHeldForOneCommit {
     events_held: Mutex<Vec<(Option<LinkUniqueId>, RuntimeEvent)>>,
     /// Whether an edit held announced the graph changed, announced once as the edits close.
     the_graph_changed: AtomicBool,
     drawn_before: GraphOnlyNodesAsDrawn,
     node_names_the_graph_only_nodes_held_before: HashSet<String>,
+    pin_group_slot_counts_before: HashMap<NodeRunId, Vec<usize>>,
     names_before_each_rename: Mutex<Vec<(NodeRunId, String)>>,
 }
 
@@ -169,6 +171,9 @@ impl LoadedStreamInThisRuntime {
             node_names_the_graph_only_nodes_held_before: self
                 .compiler
                 .scope_reading(|graph| graph.node_names_the_graph_only_nodes_hold().clone()),
+            pin_group_slot_counts_before: self
+                .compiler
+                .scope_reading(|graph| graph.the_pin_group_slot_counts_of_each_node()),
             names_before_each_rename: Mutex::new(Vec::new()),
         })
     }
@@ -256,6 +261,7 @@ impl LoadedStreamInThisRuntime {
                     self.restore_what_was_drawn_and_drop_the_events(held);
                     if failed.after_changing_what_runs {
                         self.announce_each_event_of_what_a_failed_commit_left_changed(events_held);
+                        self.leave_each_node_whose_pin_group_slots_changed_to_rebuild(held);
                     }
                     return Err(GraphEditBatchRefused {
                         refusal: failed.refusal,
@@ -274,7 +280,30 @@ impl LoadedStreamInThisRuntime {
             return Err(self.the_refusal_of_edits_a_forced_stop_took_back(held));
         }
         self.announce_each_event_of_what_stands(held);
+        self.leave_each_node_whose_pin_group_slots_changed_to_rebuild(held);
         Ok(())
+    }
+
+    /// Leave each node that held a pin group before `held` and holds another number of its
+    /// slots now to rebuild: a node is built for the slots its pin groups hold. Run once the
+    /// edits stand, and once a commit that failed after it changed what runs is taken back as
+    /// far as it can be, since the links it leaves wired may have changed a node's slots.
+    fn leave_each_node_whose_pin_group_slots_changed_to_rebuild(
+        &self,
+        held: &GraphEditsHeldForOneCommit,
+    ) {
+        let slot_counts_now = self
+            .compiler
+            .scope_reading(|graph| graph.the_pin_group_slot_counts_of_each_node());
+        for (node_run_id, slot_counts) in &slot_counts_now {
+            if held
+                .pin_group_slot_counts_before
+                .get(node_run_id)
+                .is_some_and(|before| before != slot_counts)
+            {
+                self.leave_the_node_to_rebuild(node_run_id);
+            }
+        }
     }
 
     /// Close `held` from synchronous code, as `close_the_graph_edits_held_for_one_commit` does.

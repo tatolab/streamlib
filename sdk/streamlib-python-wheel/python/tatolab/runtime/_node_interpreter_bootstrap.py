@@ -23,7 +23,12 @@ OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 12)
 
 DESCRIBE_ARGUMENT = "--describe"
 DESCRIBE_INSTALLED_MODULES_ARGUMENT = "--describe-installed-modules"
-DESCRIBE_ARGUMENTS = (DESCRIBE_ARGUMENT, DESCRIBE_INSTALLED_MODULES_ARGUMENT)
+CAST_A_SAVED_VALUE_ARGUMENT = "--cast-a-saved-value"
+OUT_OF_STREAM_RUN_ARGUMENTS = (
+    DESCRIBE_ARGUMENT,
+    DESCRIBE_INSTALLED_MODULES_ARGUMENT,
+    CAST_A_SAVED_VALUE_ARGUMENT,
+)
 
 #: The entry-point group an installed distribution declares its node classes in,
 #: each entry's value a `module:qualname` import path.
@@ -105,7 +110,7 @@ if __name__ == "__main__":
     # Before the lent runtime and `tatolab.stream` import, so nothing their
     # imports print reaches the document; only the interpreter's own site hooks
     # run earlier.
-    if sys.argv[1:2] and sys.argv[1] in DESCRIBE_ARGUMENTS:
+    if sys.argv[1:2] and sys.argv[1] in OUT_OF_STREAM_RUN_ARGUMENTS:
         _reserve_stdout_for_the_described_document()
     _import_the_lent_runtime_or_refuse()
 
@@ -158,6 +163,16 @@ from tatolab.runtime._parent_process_bridge import (
     ParentProcessBridge as ParentProcessBridge,
     _PendingEscalateResponse as _PendingEscalateResponse,
 )
+from tatolab.runtime._function_node_saved_value_cast import (
+    SAVED_VALUE_CAST_DOCUMENT_CAST_KEY,
+    SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY,
+    SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY,
+    SAVED_VALUE_CAST_REQUEST_INPUT_KEY,
+    SAVED_VALUE_CAST_REQUEST_VALUE_KEY,
+    SavedValueCastDidNotRun,
+    SavedValueNotCast as SavedValueNotCast,
+    the_saved_value_a_function_node_casts as the_saved_value_a_function_node_casts,
+)
 from tatolab.runtime._node_class_description import (
     DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE as DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE,
     NodeClassNotDescribable as NodeClassNotDescribable,
@@ -166,13 +181,14 @@ from tatolab.runtime._node_class_description import (
 )
 
 
-def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> NoReturn:
+def _end_the_run_out_of_stream_without_finalizing_the_interpreter(exit_status: int) -> NoReturn:
     """Exit at once, the document already written.
 
     Finalizing would join every non-daemon thread and run every atexit handler
-    a described module left, and the parent refuses a describe that has not
-    exited within its bound however complete its document. The parent kills
-    the describe's process group, so nothing the module started outlives it.
+    a module the run imported left, and the parent refuses a describe or a cast
+    that has not exited within its bound however complete its document. The
+    parent kills the run's process group, so nothing the module started
+    outlives it.
     """
     for standard_stream in (sys.__stdout__, sys.stderr):
         if standard_stream is not None:
@@ -180,14 +196,14 @@ def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> No
     os._exit(exit_status)
 
 
-def _end_the_describe_once_its_parent_closes_stdin() -> None:
-    """End the describe and its process group when the stdin pipe its parent
-    holds open reaches end-of-file: the parent is gone, and on macOS nothing
-    else ends a describe whose module blocks at import.
+def _end_the_run_out_of_stream_once_its_parent_closes_stdin() -> None:
+    """End the describe or cast and its process group when the stdin pipe its
+    parent holds open reaches end-of-file: the parent is gone, and on macOS
+    nothing else ends a run whose module blocks at import.
 
-    Armed only on a pipe, so a describe run by hand with stdin on a terminal or
-    `/dev/null` is not ended at once. Only a describe leading its own process
-    group, as the engine starts it, takes the group down with it.
+    Armed only on a pipe, so a run by hand with stdin on a terminal or
+    `/dev/null` is not ended at once. Only a run leading its own process group,
+    as the engine starts it, takes the group down with it.
     """
     try:
         if not stat.S_ISFIFO(os.fstat(0).st_mode):
@@ -315,6 +331,58 @@ def describe_installed_modules_onto_stdout() -> int:
     return 0
 
 
+def cast_a_saved_value_onto_stdout(import_path: str, request: str) -> int:
+    """Print one JSON document of the saved value the conversion `import_path` names casts; 0.
+
+    `request` is `{"input": <the conversion's wired input>, "value": <the saved value>}`.
+    Wire contract with the engine: stdout carries exactly `{"cast": <the value cast>}`;
+    `{"not_cast_because": <why, in words>}` when the body ran and gave no cast of the value;
+    or `{"not_run_because": <why, in words>}` when the body cannot run out of stream or its
+    module does not import. The keys are the `SAVED_VALUE_CAST_*_KEY` constants.
+    """
+    described_document_fd = _reserve_stdout_for_the_described_document()
+    asked = json.loads(request)
+    cast_document: "dict[str, Any]"
+    try:
+        conversion = load_node_class(import_path)
+    except Exception as failure:
+        traceback.print_exc()
+        cast_document = {
+            SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY: (
+                f"`{import_path}` did not load: {_in_one_line(failure)}"
+            )
+        }
+    else:
+        try:
+            cast_document = {
+                SAVED_VALUE_CAST_DOCUMENT_CAST_KEY: the_saved_value_a_function_node_casts(
+                    conversion,
+                    import_path,
+                    asked[SAVED_VALUE_CAST_REQUEST_INPUT_KEY],
+                    asked[SAVED_VALUE_CAST_REQUEST_VALUE_KEY],
+                )
+            }
+        except SavedValueCastDidNotRun as not_run:
+            cast_document = {SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY: str(not_run)}
+        except SavedValueNotCast as not_cast:
+            cast_document = {SAVED_VALUE_CAST_DOCUMENT_NOT_CAST_BECAUSE_KEY: str(not_cast)}
+        except Exception as failure:
+            traceback.print_exc()
+            cast_document = {
+                SAVED_VALUE_CAST_DOCUMENT_NOT_RUN_BECAUSE_KEY: (
+                    f"`{import_path}` gave no cast: {_in_one_line(failure)}"
+                )
+            }
+    with os.fdopen(described_document_fd, "w", encoding="utf-8") as cast_document_output:
+        cast_document_output.write(json.dumps(cast_document, allow_nan=False) + "\n")
+    return 0
+
+
+def _in_one_line(failure: BaseException) -> str:
+    """`failure`'s type and message, as the last line of its traceback reads."""
+    return "".join(traceback.format_exception_only(type(failure), failure)).strip()
+
+
 def _required_environment(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -367,27 +435,37 @@ def main(arguments: "list[str]") -> int:
                 f"`{DESCRIBE_ARGUMENT}` takes one or more import paths, `module:qualname`"
             )
             return 1
-        _end_the_describe_once_its_parent_closes_stdin()
+        _end_the_run_out_of_stream_once_its_parent_closes_stdin()
         log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
         try:
             describe_exit_status = describe_node_classes_onto_stdout(arguments[1:])
         except BaseException:
             traceback.print_exc()
             describe_exit_status = 1
-        _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
+        _end_the_run_out_of_stream_without_finalizing_the_interpreter(describe_exit_status)
     if arguments == [DESCRIBE_INSTALLED_MODULES_ARGUMENT]:
-        _end_the_describe_once_its_parent_closes_stdin()
+        _end_the_run_out_of_stream_once_its_parent_closes_stdin()
         log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
         try:
             describe_exit_status = describe_installed_modules_onto_stdout()
         except BaseException:
             traceback.print_exc()
             describe_exit_status = 1
-        _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
+        _end_the_run_out_of_stream_without_finalizing_the_interpreter(describe_exit_status)
+    if arguments[:1] == [CAST_A_SAVED_VALUE_ARGUMENT] and len(arguments) == 3:
+        _end_the_run_out_of_stream_once_its_parent_closes_stdin()
+        log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
+        try:
+            cast_exit_status = cast_a_saved_value_onto_stdout(arguments[1], arguments[2])
+        except BaseException:
+            traceback.print_exc()
+            cast_exit_status = 1
+        _end_the_run_out_of_stream_without_finalizing_the_interpreter(cast_exit_status)
     if arguments:
         _write_a_bootstrap_fatal_to_raw_stderr(
             f"a node interpreter takes no arguments, `{DESCRIBE_ARGUMENT}` and "
-            f"import paths, or `{DESCRIBE_INSTALLED_MODULES_ARGUMENT}` alone; it was given "
+            f"import paths, `{DESCRIBE_INSTALLED_MODULES_ARGUMENT}` alone, or "
+            f"`{CAST_A_SAVED_VALUE_ARGUMENT}`, an import path and a request; it was given "
             f"{arguments!r}"
         )
         return 1

@@ -36,11 +36,51 @@ pub struct NodeClassImportPath(String);
 /// built-in's type is `tatolab.stream:<Class>`.
 pub const BUILT_IN_NODE_CLASS_MODULE: &str = "tatolab.stream";
 
+/// The import path a graph names `GraphInput` by, in the built-in node module.
+pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
+
+/// The import path a graph names `GraphOutput` by, in the built-in node module.
+pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
+
+/// The import path a graph names `SetVariable` by, in the built-in node module.
+pub const SET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:SetVariable";
+
+/// The import path a graph names `GetVariable` by, in the built-in node module.
+pub const GET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:GetVariable";
+
+/// Whether `node_type` is `GraphInput` or `GraphOutput`.
+pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
+    matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
+}
+
+/// Whether `node_type` is one the graph resolves itself, which no node code runs: `GraphInput`,
+/// `GraphOutput`, `SetVariable` or `GetVariable`.
+pub fn is_a_node_type_of_the_graph_itself(node_type: &str) -> bool {
+    is_a_graph_interface_node_type(node_type)
+        || matches!(node_type, SET_VARIABLE_NODE_TYPE | GET_VARIABLE_NODE_TYPE)
+}
+
 /// What ends the import folder leading a node type that names a class in an
 /// import's own node code; neither a Python nor a Rust import path holds it.
 pub const IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR: char = '/';
 
 impl NodeClassImportPath {
+    /// Whether this is `GraphInput`.
+    pub fn is_the_graph_input_type(&self) -> bool {
+        self.0 == GRAPH_INPUT_NODE_TYPE
+    }
+
+    /// Whether this is a node type the graph resolves itself, which no node code runs:
+    /// `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`.
+    pub fn is_a_node_type_of_the_graph_itself(&self) -> bool {
+        is_a_node_type_of_the_graph_itself(&self.0)
+    }
+
+    /// The import path of `GraphOutput`.
+    pub fn graph_output() -> Self {
+        Self(GRAPH_OUTPUT_NODE_TYPE.to_owned())
+    }
+
     /// Build a path, refusing one that names no class.
     ///
     /// Emptiness is the whole rule: the path holds two grammars at once, so

@@ -28,24 +28,24 @@ FAILED_START_TIMEOUT_SECONDS = 30.0
 START_RAISING_NODES_SOURCE = '''\
 """A manual node whose `start()` raises, beside one whose `start()` returns."""
 
-from tatolab.stream import Output, Records, RuntimeContextFullAccess, node
+from tatolab.stream import OutputPin, RuntimeContextFullAccess, Trigger, node
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class StartRaises:
     """Cannot read the file its `start()` opens."""
 
-    video = Output(Records)
+    video: OutputPin[Trigger]
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         raise FileNotFoundError('could not read "lower_third.riv"')
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class StartReturns:
     """Starts and does nothing."""
 
-    video = Output(Records)
+    video: OutputPin[Trigger]
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         pass

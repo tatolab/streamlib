@@ -6,7 +6,7 @@ use std::sync::Arc;
 use streamlib_project_repository::{
     STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
     StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphOperation,
-    is_a_graph_interface_node_type,
+    is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
 };
 
 use uuid::Uuid;
@@ -24,7 +24,7 @@ use crate::core::graph::{
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
+    KeptNodesLeftToRebuild, LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
 };
 use crate::core::compiler::compiler_ops::node_interpreter_describe::a_node_interpreter_describes;
 use crate::core::nodes::NodeTypesOneStreamResolves;
@@ -221,8 +221,9 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Whether `graph_operation` is applied to the graph as drawn first and the live graph
-    /// reconciled to it: an edit that places or touches a node no node runs as, a wire into a
-    /// `Connection` input, which runs as the reference it brings, and one that
+    /// reconciled to it: an edit that places or touches a node no node runs as, one that places
+    /// or takes out a `SetVariable` or `GetVariable`, which the graph resolves away, a wire into
+    /// a `Connection` input, which runs as the reference it brings, and one that
     /// places, takes out or changes a `GraphInput` or `GraphOutput`, whose interface the graph as
     /// drawn declares and `graph` renders from. A link to a running interface node is the live
     /// graph's own, and `graph` renders it from there.
@@ -237,7 +238,7 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::AddNode { node, links } => {
                 node.fragment.is_some()
                     || node.node_type == STREAM_FRAGMENT_NODE_TYPE
-                    || is_a_graph_interface_node_type(&node.node_type)
+                    || is_a_node_type_of_the_graph_itself(&node.node_type)
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
@@ -252,7 +253,7 @@ impl LoadedStreamInThisRuntime {
                     || self.the_input_takes_a_connection(link.target.node, &link.target.port)
             }
             StreamGraphOperation::RemoveNode { node, .. } => {
-                is_a_graph_interface_node_type(&node.node_type) || held_only_as_drawn(node.id)
+                is_a_node_type_of_the_graph_itself(&node.node_type) || held_only_as_drawn(node.id)
             }
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }
@@ -277,12 +278,14 @@ impl LoadedStreamInThisRuntime {
         self.reconcile_the_live_graph_to_the_graph_document(
             graph_as_drawn,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
+            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         )
         .await
     }
 
     /// Apply `graph_operation` to this stream's graph as drawn and reconcile the live graph to
     /// the result, the live graph reconciled back to what it was drawn as when that is refused.
+    /// Each node either reconcile leaves to rebuild is left to the caller's rebuild.
     async fn apply_a_stream_graph_operation_by_reconciling_the_live_graph(
         &self,
         mut graph_operation: StreamGraphOperation,
@@ -317,6 +320,7 @@ impl LoadedStreamInThisRuntime {
             .reconcile_the_live_graph_to_the_graph_document(
                 graph_document.to_value(),
                 LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+                KeptNodesLeftToRebuild::RebuiltByTheCaller,
             )
             .await
         {
@@ -324,6 +328,7 @@ impl LoadedStreamInThisRuntime {
                 .reconcile_the_live_graph_to_the_graph_document(
                     graph_as_drawn,
                     LinksAReconcileMakes::EachAsASavedGraphsLink,
+                    KeptNodesLeftToRebuild::RebuiltByTheCaller,
                 )
                 .await
             {
@@ -663,14 +668,21 @@ impl LoadedStreamInThisRuntime {
         to: crate::core::runtime::PortOfANodeOfAType<'_>,
     ) -> Option<crate::core::descriptors::PinLinkVerdict> {
         let node_types = self.node_types_this_stream_resolves();
-        let ports_of = |node_type: &str| {
-            node_types
-                .port_info(&crate::core::descriptors::NodeClassImportPath::new(node_type).ok()?)
-        };
-        let (output_ports, input_ports) = (ports_of(from.node_type)?, ports_of(to.node_type)?);
+        let output_node_type =
+            crate::core::descriptors::NodeClassImportPath::new(from.node_type).ok()?;
+        let input_node_type =
+            crate::core::descriptors::NodeClassImportPath::new(to.node_type).ok()?;
+        let (output_ports, input_ports) = (
+            node_types.port_info(&output_node_type)?,
+            node_types.port_info(&input_node_type)?,
+        );
         crate::core::graph::the_verdict_of_a_link_between_declared_ports(
             (from.node_name, output_ports.output_named(from.port)?),
-            (to.node_name, input_ports.input_named(to.port)?),
+            (
+                to.node_name,
+                &input_node_type,
+                input_ports.input_named(to.port)?,
+            ),
             &node_types.pin_conversions(),
         )
     }

@@ -20,6 +20,7 @@ use crate::stream_graph_studio_contract::{
 mod fragment_node_uuids_kept_by_name;
 mod input_value_of_one_member;
 mod input_values_and_asset_references_at_every_level;
+mod node_types_of_the_graph_itself;
 mod stream_graph_operation;
 
 use input_value_of_one_member::set_the_input_value_in;
@@ -37,33 +38,12 @@ use input_values_and_asset_references_at_every_level::{
 };
 
 pub use fragment_node_uuids_kept_by_name::fragment_with_each_node_uuid_kept_by_its_name;
+pub use node_types_of_the_graph_itself::{
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, is_a_graph_interface_node_type,
+    is_a_node_type_of_the_graph_itself,
+};
 pub use stream_graph_operation::StreamGraphOperation;
-
-/// The import path a graph names `GraphInput` by, in the built-in node module.
-pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
-
-/// Whether `node_type` is `GraphInput`.
-pub fn is_the_graph_input_type(node_type: &streamlib_node_schema::NodeClassImportPath) -> bool {
-    node_type.as_str() == GRAPH_INPUT_NODE_TYPE
-}
-
-/// The import path a graph names `GraphOutput` by, in the built-in node module.
-pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
-
-/// The config key an interface node names the port it declares under.
-pub const GRAPH_INTERFACE_PORT_CONFIG_KEY: &str = "port";
-
-/// The config key an interface node names its port's family under.
-pub const GRAPH_INTERFACE_FAMILY_CONFIG_KEY: &str = "family";
-
-/// The one port an interface node has: a `GraphOutput`'s input, a
-/// `GraphInput`'s output.
-pub const GRAPH_INTERFACE_VALUE_PORT_NAME: &str = "value";
-
-/// Whether `node_type` is `GraphInput` or `GraphOutput`.
-pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
-    matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
-}
 
 /// One node as a stream's graph document holds it: the spec keys a load reads. A node an older
 /// runtime recorded, with `config` and `pins`, reads with them folded into `input_values`, and

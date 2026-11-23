@@ -12,7 +12,8 @@ use streamlib_node_schema::NODE_REFERENCE_NODE_KEY;
 use streamlib_runtime_client_contract::local_api_wire_contract::GraphLinkStateOnTheWire;
 
 use crate::core::descriptors::{
-    PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinType, pin_link_verdict,
+    NodeClassImportPath, NodeInputMode, PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, ResolvedPin,
+    pin_link_verdict,
 };
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, refuse_a_port_the_node_does_not_have,
@@ -75,14 +76,13 @@ impl GraphSnapshot {
         for link in &self.links {
             let target_cast = cast_exposed_name_to_url_safe(&link.target.node)?.into_owned();
             let input_cast = cast_exposed_name_to_url_safe(&link.target.port)?.into_owned();
-            let Some(input_type) = ports_of_each_node_by_cast
+            let Some((input, input_pin)) = ports_of_each_node_by_cast
                 .get(&target_cast)
                 .and_then(|(inputs, _)| {
                     GraphNodePorts::the_port_of_a_type_a_name_finds(inputs, &input_cast)
                 })
                 .filter(|input| input.takes_a_connection())
-                .and_then(|input| input.pin.as_ref())
-                .map(|pin| &pin.pin_type)
+                .and_then(|input| input.pin.as_ref().map(|pin| (input, pin)))
             else {
                 lowered.links.push(link.clone());
                 continue;
@@ -97,7 +97,23 @@ impl GraphSnapshot {
             else {
                 return Err(self.the_refusal_of_a_wire_from_no_output(node_types, link));
             };
-            refuse_a_wire_whose_output_gives_out_another_connection(link, output, input_type)?;
+            let target_index = node_index_by_cast.get(&target_cast).copied();
+            let Some(target_node_type) = target_index
+                .and_then(|target_index| self.nodes.get(target_index))
+                .map(|target| &target.node_type)
+            else {
+                lowered.links.push(link.clone());
+                continue;
+            };
+            refuse_a_wire_whose_output_gives_out_another_connection(
+                link,
+                output,
+                WireTarget {
+                    node_type: target_node_type,
+                    input_mode: input.input_mode,
+                    pin: input_pin,
+                },
+            )?;
             if let Some(first) =
                 wire_into_each_input.insert((target_cast.clone(), input_cast.clone()), link)
             {
@@ -110,9 +126,8 @@ impl GraphSnapshot {
                     the_end_named(&link.source)
                 )));
             }
-            if let Some(target) = node_index_by_cast
-                .get(&target_cast)
-                .and_then(|&target_index| lowered.nodes.get_mut(target_index))
+            if let Some(target) =
+                target_index.and_then(|target_index| lowered.nodes.get_mut(target_index))
             {
                 target.input_values.insert(
                     input_cast,
@@ -160,13 +175,21 @@ impl GraphSnapshot {
     }
 }
 
-/// Refuse `link`, a wire into an input of `input_type`, unless `output` gives out a `Connection`
-/// of the input's connection type, in the words of the link verdict.
+/// The input a connection wire ends at: its node's type, how it takes a value, and its pin.
+struct WireTarget<'input> {
+    node_type: &'input NodeClassImportPath,
+    input_mode: Option<NodeInputMode>,
+    pin: &'input ResolvedPin,
+}
+
+/// Refuse `link`, a wire into `target`, unless `output` gives out a `Connection` of the input's
+/// connection type, in the words of the link verdict.
 fn refuse_a_wire_whose_output_gives_out_another_connection(
     link: &GraphSnapshotLink,
     output: &PortInfo,
-    input_type: &PinType,
+    target: WireTarget<'_>,
 ) -> Result<()> {
+    let input_type = &target.pin.pin_type;
     let Some(output_pin) = output.pin.as_ref() else {
         return Err(Error::GraphError(format!(
             "`{}` is wired into `{}`, a {input_type}, and `{}` declares no pin type, so it \
@@ -183,6 +206,7 @@ fn refuse_a_wire_whose_output_gives_out_another_connection(
             member_name: None,
             pin_type: &output_pin.pin_type,
             meaning: None,
+            flow: Some(output_pin.flow),
         },
         PinLinkInputEnd {
             end: PinLinkEnd {
@@ -191,8 +215,10 @@ fn refuse_a_wire_whose_output_gives_out_another_connection(
                 member_name: None,
                 pin_type: input_type,
                 meaning: None,
+                flow: Some(target.pin.flow),
             },
-            input_mode: None,
+            node_type: target.node_type,
+            input_mode: target.input_mode,
         },
         &[],
     );

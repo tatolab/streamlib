@@ -23,6 +23,7 @@ mod process_signal_handling;
 mod project_code_check_verb;
 mod project_log_records_from_the_runtime;
 mod project_source_change_watcher;
+mod runtime_description_the_cli_reads;
 mod runtime_gone_while_following_a_stream;
 mod runtime_log_record_decoding_and_filters;
 mod runtime_logs_verb;

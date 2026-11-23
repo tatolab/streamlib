@@ -6,6 +6,9 @@
 //! unwired and its build forgotten, then built and wired again by the same compile, while every
 //! other node keeps running.
 
+use super::function_node_island::{
+    HowALinkIsWired, how_a_link_is_wired, unwire_a_link_from_a_function_node_island_into_its_reader,
+};
 use super::open_iceoryx2_service_op::{
     close_iceoryx2_service, close_iceoryx2_service_into_the_host_of_a_shader_node_island,
 };
@@ -54,9 +57,13 @@ impl RunningNodesALiveEditRestarts {
 /// not add or remove. A node the same edit adds or removes is built or taken out instead, so it
 /// is not restarted.
 ///
-/// Refused by name, changing nothing, for a function or shader node, which reads no setting at
-/// setup, and for a node one of whose links joins a function node, whose place in an island is
-/// read once, when its reader starts.
+/// A link into it from a function node island it evaluates itself is restarted with it, the
+/// island fed to it again as it sets up, and so is a channel into it from a function node the
+/// pool or a helper of its own evaluates. Refused by name, changing nothing, for a function or
+/// shader node, which reads no setting at setup, and for a node one of whose other links joins a
+/// function node otherwise: a link out of it into an island another node evaluates, whose place
+/// in that island is read once, when that node starts, or into a function node run in a process
+/// of its own.
 pub(crate) fn the_running_nodes_a_rebuild_restarts(
     graph: &Graph,
     nodes_to_rebuild: &[NodeRunId],
@@ -90,11 +97,7 @@ pub(crate) fn the_running_nodes_a_rebuild_restarts(
             return Err(Error::Configuration(format!(
                 "`{}` is a {} node, which reads no setting at setup, so no edit rebuilds it",
                 name_of(node_id),
-                if matches!(kind, NodeKind::Shader) {
-                    "shader"
-                } else {
-                    "function"
-                },
+                kind.name(),
             )));
         }
         let links_of_the_node: Vec<(LinkUniqueId, NodeRunId, NodeRunId)> = graph
@@ -123,7 +126,9 @@ pub(crate) fn the_running_nodes_a_rebuild_restarts(
             } else {
                 &source_id
             };
-            if matches!(kind_of(other_end), Some(NodeKind::Function { .. })) {
+            if matches!(kind_of(other_end), Some(NodeKind::Function { .. }))
+                && !is_rewired_with_the_node_it_feeds(graph, &link_id, &reader_id, node_id)
+            {
                 return Err(Error::Configuration(format!(
                     "`{}` is rebuilt to read a setting read at setup, and its link `{link_id}` \
                      joins function node `{}`, whose place in an island is read once, when its \
@@ -139,9 +144,27 @@ pub(crate) fn the_running_nodes_a_rebuild_restarts(
     Ok(restarted.joined_with(RunningNodesALiveEditRestarts::default()))
 }
 
+/// Whether link `link_id`, which joins a function node, is wired again with its reader `reader_id`
+/// when `restarted` restarts: `restarted` reads it, as an island it evaluates itself or as a
+/// channel from a function node the pool or a helper of its own evaluates.
+fn is_rewired_with_the_node_it_feeds(
+    graph: &Graph,
+    link_id: &LinkUniqueId,
+    reader_id: &NodeRunId,
+    restarted: &NodeRunId,
+) -> bool {
+    reader_id == restarted
+        && matches!(
+            how_a_link_is_wired(graph, link_id),
+            Ok(HowALinkIsWired::ThroughAChannel
+                | HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead)
+        )
+}
+
 /// Close the channel of each link of the nodes a live edit restarts the way it was wired before
 /// the edit, keeping the link in the graph so the compile wires it again: a call inside an
-/// island has no channel, and a link into a fused node was read at its island's host.
+/// island has no channel, a link into a fused node was read at its island's host, and an island
+/// its reader evaluates is taken off that reader.
 pub(crate) fn unwire_each_link_of_the_nodes_restarted(
     graph: &mut Graph,
     restarted: &RunningNodesALiveEditRestarts,
@@ -158,6 +181,12 @@ pub(crate) fn unwire_each_link_of_the_nodes_restarted(
         else {
             continue;
         };
+        if how_a_link_is_wired(graph, link_id)
+            .is_ok_and(|how| how == HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead)
+        {
+            unwire_a_link_from_a_function_node_island_into_its_reader(graph, link_id)?;
+            continue;
+        }
         let was_placed_fused_into_another =
             |node_id: &NodeRunId| {
                 graph.traversal().v(node_id).first().is_some_and(|node| {

@@ -6,7 +6,7 @@ use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
     NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, NodeRuntime, NodeScheduling,
-    NodeValueLifetime, PinDeclaration, PortDescriptor, PortFamilyDeclaration,
+    NodeValueLifetime, PinDeclaration, PinGroupDescriptor, PortDescriptor, PortFamilyDeclaration,
     PortFamilyDeclarationDirection, refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
@@ -38,6 +38,9 @@ const DESCRIBED_CONVERSION_KEY: &str = "conversion";
 const DESCRIBED_PIN_DECLARATION_KEY: &str = "pin_declaration";
 const DESCRIBED_INPUT_MODE_KEY: &str = "input_mode";
 const DESCRIBED_LIFETIME_KEY: &str = "lifetime";
+const DESCRIBED_PIN_GROUPS_KEY: &str = "pin_groups";
+const DESCRIBED_PIN_GROUP_INPUTS_KEY: &str = "inputs";
+const DESCRIBED_PIN_GROUP_OUTPUTS_KEY: &str = "outputs";
 
 /// Everything the engine needs to register one Python node type and run its
 /// nodes.
@@ -127,6 +130,7 @@ impl PythonNodeDeclaration {
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
+        descriptor.pin_groups = read_pin_groups(described_node_type)?;
         declare_each_typed_port(&mut descriptor, typed_ports)?;
         descriptor.conversion = read_whether_it_states_a_conversion(described_node_type)?;
         if let Some(refusal) = descriptor.refusal_of_a_port_whose_type_no_input_finds() {
@@ -359,7 +363,62 @@ fn read_port_descriptors(
     direction: PortDirection,
 ) -> std::result::Result<Vec<PortDescriptor>, String> {
     let ports_key = direction.described_ports_key();
-    let declared = described_field(described_node_type, ports_key)?
+    read_listed_port_descriptors(
+        described_field(described_node_type, ports_key)?,
+        ports_key,
+        direction,
+    )
+}
+
+/// The pin groups a described class node declares, each slot's inputs and outputs read as the
+/// node's own ports are, refusing a group no node type may declare; none when it declares none.
+fn read_pin_groups(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<Vec<PinGroupDescriptor>, String> {
+    let Some(declared) = described_node_type
+        .get(DESCRIBED_PIN_GROUPS_KEY)
+        .filter(|declared| !declared.is_null())
+    else {
+        return Ok(Vec::new());
+    };
+    let declared = declared
+        .as_array()
+        .ok_or_else(|| format!("{DESCRIBED_PIN_GROUPS_KEY} must be a list"))?;
+    declared
+        .iter()
+        .map(|group| {
+            if !group.is_object() {
+                return Err(format!("{DESCRIBED_PIN_GROUPS_KEY} must hold dicts"));
+            }
+            let name = read_string(group, "name")?;
+            let ports_of = |key: &str, direction| {
+                read_listed_port_descriptors(
+                    described_field(group, key)?,
+                    &format!("the {key} of pin group {name:?}"),
+                    direction,
+                )
+            };
+            let pin_group = PinGroupDescriptor::new(
+                name.clone(),
+                read_string(group, DESCRIBED_DESCRIPTION_KEY)?,
+                ports_of(DESCRIBED_PIN_GROUP_INPUTS_KEY, PortDirection::Input)?,
+                ports_of(DESCRIBED_PIN_GROUP_OUTPUTS_KEY, PortDirection::Output)?,
+            );
+            match pin_group.refusal_of_its_declaration() {
+                Some(refusal) => Err(refusal),
+                None => Ok(pin_group),
+            }
+        })
+        .collect()
+}
+
+/// The ports `declared`, the list a described node type holds under `ports_key`, declares.
+fn read_listed_port_descriptors(
+    declared: &serde_json::Value,
+    ports_key: &str,
+    direction: PortDirection,
+) -> std::result::Result<Vec<PortDescriptor>, String> {
+    let declared = declared
         .as_array()
         .ok_or_else(|| format!("{ports_key} must be a list"))?;
 
@@ -861,6 +920,8 @@ fn json_kind_name(value: &serde_json::Value) -> &'static str {
 
 mod ports_typed_by_a_signature;
 
+#[cfg(test)]
+mod pin_groups_read_tests;
 #[cfg(test)]
 mod pin_type_found_another_way_tests;
 #[cfg(test)]

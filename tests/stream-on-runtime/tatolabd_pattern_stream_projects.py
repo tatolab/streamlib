@@ -41,23 +41,25 @@ from tatolab.testpattern import TestPatternSource
 @graph_generator
 def {stream_function_name}(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
-        TestPatternSource, name="pattern", config={{"width": 320, "height": 180}}
+        TestPatternSource, name="pattern", input_values={{"width": 320, "height": 180}}
     )
     reader = stream_builder.add(PatternFrameReader, name="reader")
     stream_builder.connect(pattern.output("video"), reader.input("video_from_upstream"))
 '''
 PROJECT_FRAME_READER_SOURCE = '''\
-from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
+from typing import Annotated
+
+from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
 
-@node.process
+@node
 class PatternFrameReader:
     """Reads each frame it receives and keeps none."""
 
-    video_from_upstream = Input(Image, delivery="newest")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read(self.video_from_upstream)
+        self.video_from_upstream.read()
 '''
 PROJECT_STREAM_NODE_COUNT = 2
 

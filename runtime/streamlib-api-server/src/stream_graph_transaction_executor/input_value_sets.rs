@@ -19,14 +19,17 @@ pub(super) const DOCUMENTS_FIRST: &str =
 /// taking their edits once the documents hold them, the project it is committed to, and the
 /// node each `as` names, the `as` of each node added, and why a `connect` inserted each node it
 /// added on its link.
-pub(super) struct WhatTheTransactionHasStaged<'repository> {
+pub(super) struct WhatTheTransactionHasStaged<'transaction> {
     pub(super) streams: BTreeMap<String, StreamATransactionEdits>,
     pub(super) staged_graph_of_each_stream_not_running: BTreeMap<Uuid, StreamGraphDocument>,
     pub(super) streams_taking_their_edits_once_the_documents_hold_them: BTreeSet<String>,
-    pub(super) project_repository: Option<&'repository ProjectRepository>,
+    pub(super) project_repository: Option<&'transaction ProjectRepository>,
     pub(super) node_by_label: HashMap<String, Uuid>,
     pub(super) what_the_answer_names_of_each_added_node:
         HashMap<Uuid, WhatTheAnswerNamesOfAnAddedNode>,
+    /// What became of each saved value the transaction retypes, worked out before any lock.
+    pub(super) saved_value_retypes_worked_out_before_the_edit:
+        &'transaction SavedValueRetypesWorkedOutBeforeTheEdit,
 }
 
 /// Whether [`StreamGraphTransactionExecutor::apply_one_request`] checks a value it sets on an
@@ -244,7 +247,8 @@ impl StreamGraphTransactionExecutor<'_> {
     /// `set_node_config` sets each input value it names and, on a node type that
     /// takes a config, takes off each config field it does not name; a `set_exposed_config_fields`
     /// on a node type that takes no config records nothing; a `disconnect` closes the gap it
-    /// leaves in a pin group.
+    /// leaves in a pin group; a `set_node_input_value` choosing another type for a `GraphInput`
+    /// carries its saved value into that type.
     pub(super) fn apply_one_action(
         &self,
         request: StreamGraphAction,
@@ -308,6 +312,9 @@ impl StreamGraphTransactionExecutor<'_> {
                 return self
                     .apply_a_disconnect_closing_the_gap_it_leaves(request, stream_id, staged);
             }
+            StreamGraphAction::SetNodeInputValue { .. } => {
+                return self.apply_a_set_carrying_a_retyped_saved_value(request, stream_id, staged);
+            }
             _ => {}
         }
         self.apply_one_request(request, stream_id, staged, InputValueCheck::MadeOnApply)
@@ -350,11 +357,11 @@ impl StreamGraphTransactionExecutor<'_> {
 }
 
 /// Whether the engine checks the input values of `node`: every node but a stream fragment and
-/// a graph interface node, whose input values the runtime reads itself.
+/// a node of a type the graph resolves itself, whose input values the runtime reads itself.
 pub(super) fn its_input_values_are_checked(node: &StreamGraphDocumentNode) -> bool {
     node.fragment.is_none()
         && node.node_type != STREAM_FRAGMENT_NODE_TYPE
-        && !is_a_graph_interface_node_type(&node.node_type)
+        && !is_a_node_type_of_the_graph_itself(&node.node_type)
 }
 
 /// The link of `level` that feeds input `input` of `node`, which overrides a value set on it.
@@ -378,8 +385,9 @@ pub(super) fn the_link_overriding_the_input(
 }
 
 /// What node `node` of a running stream holds on its input `input`: its saved value, its pin
-/// value else its config field, and the value set live over it; so a set made on the running
-/// node is reversed to the saved value with the live one set live again.
+/// value else its config field else the input value it saves, as a `GraphInput` saves its
+/// `value`, which its config renders under `default`, and the value set live over it; so a set
+/// made on the running node is reversed to the saved value with the live one set live again.
 pub(super) struct ValueARunningInputHolds {
     pub(super) saved: Option<Value>,
     pub(super) live: Option<Value>,
@@ -408,6 +416,8 @@ pub(super) fn the_value_a_running_node_holds_on_the_input(
         saved: rendered_node["pins"]
             .get(input)
             .or_else(|| rendered_node["config"].get(input))
+            .filter(|held| !held.is_null())
+            .or_else(|| rendered_node["input_values"].get(input))
             .and_then(not_null),
         live: rendered_node["ports"]["inputs"]
             .as_array()

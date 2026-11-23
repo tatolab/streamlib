@@ -5,6 +5,7 @@ use super::*;
 use crate::NodeClassImportPath;
 
 mod bundle_tests;
+mod connection_tests;
 
 fn boolean() -> PinType {
     PinType::Boolean {}
@@ -53,7 +54,15 @@ fn an_output(pin_type: &PinType) -> PinLinkEnd<'_> {
         member_name: None,
         pin_type,
         meaning: None,
+        flow: None,
     }
+}
+
+/// The type of the node every input end of these tests is on.
+fn the_sinks_node_type() -> &'static NodeClassImportPath {
+    static SINK: std::sync::LazyLock<NodeClassImportPath> =
+        std::sync::LazyLock::new(|| NodeClassImportPath::new("nodes.sink:Sink").unwrap());
+    &SINK
 }
 
 fn an_input(pin_type: &PinType) -> PinLinkInputEnd<'_> {
@@ -63,6 +72,7 @@ fn an_input(pin_type: &PinType) -> PinLinkInputEnd<'_> {
             port_name: "in",
             ..an_output(pin_type)
         },
+        node_type: the_sinks_node_type(),
         input_mode: None,
     }
 }
@@ -91,6 +101,7 @@ fn a_conversion(node_type: NodeClassImportPath, from: PinType, to: PinType) -> P
         output_port_name: "out".to_owned(),
         output_pin_type: to,
         output_picked_for_the_input: None,
+        saved_value_cast: None,
     }
 }
 
@@ -329,48 +340,6 @@ fn two_named_types_connect_only_under_one_path() {
     ));
 }
 
-fn connection(import_path: &str, one_referrer_per_referenced_node: bool) -> PinType {
-    PinType::Connection {
-        connection_type: NamedPinTypeImportPath::new(import_path).unwrap(),
-        one_referrer_per_referenced_node,
-    }
-}
-
-/// Mental-revert: compared whole, the input's sole-referrer flag would refuse every connection
-/// into a sole-referrer input.
-#[test]
-fn a_connection_connects_to_one_of_its_own_type_whatever_the_input_takes_of_referrers() {
-    assert_eq!(
-        the_outcome_between(
-            &connection("relays:RelayConnection", false),
-            &connection("relays:RelayConnection", true)
-        ),
-        PinLinkOutcome::Connects
-    );
-}
-
-#[test]
-fn a_connection_of_one_modules_type_is_refused_on_another_naming_both() {
-    let PinLinkOutcome::Refused(refusal) = the_outcome_between(
-        &connection("relays:RelayConnection", false),
-        &connection("tracks:TrackConnection", false),
-    ) else {
-        panic!("two connection types do not connect");
-    };
-    let words = refusal.to_string();
-    assert!(
-        words.contains("relays:RelayConnection") && words.contains("tracks:TrackConnection"),
-        "{words}"
-    );
-    assert!(matches!(
-        the_outcome_between(
-            &named("relays:RelayConnection"),
-            &connection("relays:RelayConnection", false)
-        ),
-        PinLinkOutcome::Refused(_)
-    ));
-}
-
 #[test]
 fn different_meanings_warn_and_never_block() {
     let verdict = pin_link_verdict(
@@ -393,20 +362,99 @@ fn different_meanings_warn_and_never_block() {
     );
 }
 
+fn a_setting(read: SettingReadTime, pin_type: &PinType) -> PinLinkInputEnd<'_> {
+    PinLinkInputEnd {
+        input_mode: Some(NodeInputMode::SettingOnly { read }),
+        ..an_input(pin_type)
+    }
+}
+
+fn a_value_output(pin_type: &PinType) -> PinLinkEnd<'_> {
+    PinLinkEnd {
+        flow: Some(PinFlow::Value),
+        ..an_output(pin_type)
+    }
+}
+
 #[test]
-fn a_link_into_a_setting_is_refused_whatever_the_types() {
+fn a_value_wire_into_a_setting_read_at_setup_connects_as_its_types_do() {
+    for output in [an_output(&float()), a_value_output(&float())] {
+        let verdict = pin_link_verdict(output, a_setting(SettingReadTime::AtSetup, &float()), &[]);
+        assert_eq!(verdict.outcome, PinLinkOutcome::Connects, "{verdict:?}");
+    }
     let verdict = pin_link_verdict(
-        an_output(&float()),
-        PinLinkInputEnd {
-            input_mode: Some(NodeInputMode::SettingOnly {
-                read: SettingReadTime::AtSetup,
-            }),
-            ..an_input(&float())
+        a_value_output(&float()),
+        a_setting(SettingReadTime::AtSetup, &integer()),
+        &[],
+    );
+    assert_eq!(
+        verdict.outcome,
+        PinLinkOutcome::ConnectsWithFreeConversion(FreePinConversion::BetweenNumbers)
+    );
+}
+
+#[test]
+fn a_stream_or_a_trigger_into_a_setting_read_at_setup_is_refused_naming_the_sampling_fix() {
+    for (output_flow, pin_type) in [
+        (PinFlow::Stream, float()),
+        (PinFlow::Trigger, PinType::Trigger {}),
+    ] {
+        let verdict = pin_link_verdict(
+            PinLinkEnd {
+                flow: Some(output_flow),
+                ..an_output(&pin_type)
+            },
+            a_setting(SettingReadTime::AtSetup, &float()),
+            &[],
+        );
+        let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
+            panic!("a setting takes a Value wire only: {verdict:?}");
+        };
+        let PinLinkRefusal::StreamIntoASetting {
+            output_flow: refused_flow,
+            node_name,
+            input_name,
+            ..
+        } = refusal.as_ref()
+        else {
+            panic!("refused as a stream into a setting: {refusal:?}");
+        };
+        assert_eq!(
+            (*refused_flow, node_name.as_str(), input_name.as_str()),
+            (output_flow, "sink", "in")
+        );
+        let words = refusal.to_string();
+        assert!(
+            words.contains("setting `in` of `sink`")
+                && words.contains(&format!("flows as `{}`", output_flow.name()))
+                && words.contains("place a node that samples"),
+            "{words}"
+        );
+    }
+}
+
+#[test]
+fn a_stream_into_an_input_read_each_run_connects_as_its_types_do() {
+    let verdict = pin_link_verdict(
+        PinLinkEnd {
+            flow: Some(PinFlow::Stream),
+            ..an_output(&float())
         },
+        an_input(&float()),
+        &[],
+    );
+    assert_eq!(verdict.outcome, PinLinkOutcome::Connects);
+}
+
+#[test]
+fn a_link_into_a_setting_read_each_run_is_refused_whatever_the_types() {
+    let verdict = pin_link_verdict(
+        a_value_output(&float()),
+        a_setting(SettingReadTime::EachRun, &float()),
         &[],
     );
     let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
-        panic!("a setting takes no wire: {verdict:?}");
+        panic!("a setting read each run takes no wire: {verdict:?}");
     };
     assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
     assert!(
@@ -415,6 +463,69 @@ fn a_link_into_a_setting_is_refused_whatever_the_types() {
             .contains("input `in` of `sink`, a setting"),
         "{refusal}"
     );
+}
+
+#[test]
+fn a_setting_of_a_type_no_message_carries_takes_no_wire() {
+    let node_reference = PinType::NodeReference {
+        referenced_node_type: None,
+        one_referrer_per_referenced_node: false,
+    };
+    let verdict = pin_link_verdict(
+        a_value_output(&node_reference),
+        a_setting(SettingReadTime::AtSetup, &node_reference),
+        &[],
+    );
+    let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
+        panic!("a node reference takes no wire: {verdict:?}");
+    };
+    assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
+}
+
+/// A setting read at setup of each node type of the graph itself — `GraphInput`,
+/// `GraphOutput`, `SetVariable` and `GetVariable` — takes no wire, though the same setting on
+/// another node takes a Value wire; an input of one of them that is no setting still takes one.
+///
+/// Mental-revert: exempting a `GraphInput`'s settings alone connects the `GraphOutput`'s, the
+/// `SetVariable`'s and the `GetVariable`'s.
+#[test]
+fn a_setting_of_a_node_type_of_the_graph_itself_takes_no_wire() {
+    for node_type in [
+        crate::GRAPH_INPUT_NODE_TYPE,
+        crate::GRAPH_OUTPUT_NODE_TYPE,
+        crate::SET_VARIABLE_NODE_TYPE,
+        crate::GET_VARIABLE_NODE_TYPE,
+    ] {
+        let node_type = NodeClassImportPath::new(node_type).unwrap();
+        let verdict = pin_link_verdict(
+            a_value_output(&float()),
+            PinLinkInputEnd {
+                node_type: &node_type,
+                ..a_setting(SettingReadTime::AtSetup, &float())
+            },
+            &[],
+        );
+        let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
+            panic!("a setting of {node_type} takes no wire: {verdict:?}");
+        };
+        assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
+
+        assert!(
+            an_input_takes_a_wire(&node_type, Some(NodeInputMode::WireOrValue), Some(&float())),
+            "an input of {node_type} that is no setting takes a wire"
+        );
+        assert!(
+            an_input_takes_a_wire(&node_type, None, None),
+            "a port of {node_type} takes a wire"
+        );
+    }
+    assert!(an_input_takes_a_wire(
+        the_sinks_node_type(),
+        Some(NodeInputMode::SettingOnly {
+            read: SettingReadTime::AtSetup
+        }),
+        Some(&float())
+    ));
 }
 
 #[test]

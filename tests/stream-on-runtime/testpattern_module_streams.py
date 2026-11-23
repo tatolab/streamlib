@@ -11,7 +11,7 @@ from test_pattern_module_probes import ImageFrameProbe
 
 @graph_generator
 def a_test_pattern_into_an_image_frame_probe(stream_builder: StreamBuilder) -> None:
-    pattern = stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
+    pattern = stream_builder.add(TestPatternSource, input_values={"width": 320, "height": 180})
     probe = stream_builder.add(ImageFrameProbe)
     stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 

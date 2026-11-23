@@ -5,6 +5,7 @@
 //! port, and the shape of each result a client parses, written once for the runtime that serves
 //! them and every client that calls them.
 
+mod control_operation_refusal_code;
 mod graph_answer_link_wire_types;
 mod graph_answer_node_component_wire_types;
 mod graph_answer_wire_types;
@@ -20,6 +21,7 @@ mod stream_clock_spec;
 mod stream_condition_wire_types;
 mod stream_wire_types;
 
+pub use control_operation_refusal_code::ControlOperationRefusalCode;
 pub use graph_answer_link_wire_types::{
     GraphInterfacePortDirectionOnTheWire, GraphInterfacePortOnTheWire,
     GraphLinkComponentsOnTheWire, GraphLinkOnTheWire, GraphLinkPortRefOnTheWire,
@@ -43,8 +45,8 @@ pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
     GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
-    GraphTransactionRebuiltNode, GraphTransactionToolResult, InsertedNodeOnTheWire,
-    RefusedGraphLinkOnTheWire,
+    GraphTransactionRebuiltNode, GraphTransactionSavedValueRetyped, GraphTransactionToolResult,
+    InsertedNodeOnTheWire, RefusedGraphLinkOnTheWire,
 };
 pub use link_check_wire_types::{
     ConvertNodeToInsertOnTheWire, LinkCandidateChecked, LinkCandidateEnd, LinkCandidateNotChecked,
@@ -75,17 +77,16 @@ pub use project_wire_types::{
     AssetAudioFactsOnTheWire, AssetImageFactsOnTheWire, AssetLutFactsOnTheWire,
     AssetMediaFactsOnTheWire, AssetMediaFactsReadOnTheWire, AssetPreviewOnTheWire,
     AssetSceneFactsOnTheWire, AssetTransactionToolResult, AssetVideoFactsOnTheWire,
-    ControlOperationRefusalCode, CreateNodeFileToolResult, CreateNodeUiElementToolResult,
-    CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
-    DescribeAssetToolResult, DuplicateProjectToolResult,
-    GraphGeneratorPromotedSettingReadFromSource, GraphGeneratorReadFromSource,
-    ImportProjectToolResult, ListAssetsToolResult, ListDependenciesToolResult,
-    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
-    ListSamplesToolResult, ListSamplesToolResultSample, ListedProjectDependencyOnTheWire,
-    NodeModuleNotReadable, NodeNotRunningBecauseOnTheWire, NodeTypeOfOneProjectSource,
-    NodeTypePortReadFromSource, NodeTypeReadFromSource, NodeTypeSourceOrigin,
-    NodeTypeSourceReadWithoutRunningIt, ProjectActionRefusalOnTheWire, ProjectAssetOnTheWire,
-    ProjectAssetWithItsMediaFactsOnTheWire, ProjectChangeFeedEntryOnTheWire,
+    CreateNodeFileToolResult, CreateNodeUiElementToolResult, CreateProjectToolResult,
+    DeleteProjectToolResult, DependencyTransactionToolResult, DescribeAssetToolResult,
+    DuplicateProjectToolResult, GraphGeneratorPromotedSettingReadFromSource,
+    GraphGeneratorReadFromSource, ImportProjectToolResult, ListAssetsToolResult,
+    ListDependenciesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
+    ListProjectViewsToolResult, ListSamplesToolResult, ListSamplesToolResultSample,
+    ListedProjectDependencyOnTheWire, NodeModuleNotReadable, NodeNotRunningBecauseOnTheWire,
+    NodeTypeOfOneProjectSource, NodeTypePortReadFromSource, NodeTypeReadFromSource,
+    NodeTypeSourceOrigin, NodeTypeSourceReadWithoutRunningIt, ProjectActionRefusalOnTheWire,
+    ProjectAssetOnTheWire, ProjectAssetWithItsMediaFactsOnTheWire, ProjectChangeFeedEntryOnTheWire,
     ProjectDependencyOnTheWire, ProjectFileOnTheWire, ProjectFilePlaceOnTheWire,
     ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
     ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ProjectViewDeclaredPort,

@@ -281,7 +281,8 @@ pub(crate) fn what_interrupted_a_load() -> &'static str {
 }
 
 /// Walk a stream a load is still building — in no table the machine's walk
-/// reaches — to the machine's shutdown level, and interrupt its describes.
+/// reaches — to the machine's shutdown level, and interrupt its runs of its interpreter out of
+/// stream.
 fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStreamInThisRuntime) {
     let machines_level = crate::core::runtime::the_machines_shutdown_escalation();
     stream
@@ -290,7 +291,7 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
     if machines_level >= RuntimeShutdownEscalation::Forced {
         stream.this_streams_shutdown_escalation().raise_to_forced();
     }
-    stream.interrupt_every_node_interpreter_describe();
+    stream.interrupt_every_node_interpreter_run_out_of_stream();
 }
 
 /// Ask `stream` for its shutdown and block until it has ended. Once its

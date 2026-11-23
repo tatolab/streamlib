@@ -15,11 +15,7 @@ import numpy
 import pytest
 
 from camera_python_effects.avatar_rig import JOINT_NAMES, idle_joints
-from camera_python_effects.solved_pose_record import (
-    SOLVED_POSE_RECORD_NAMES,
-    SolvedPoseRecord,
-    solved_pose_record_from_records_message,
-)
+from camera_python_effects.solved_pose_record import SolvedPose, SolvedPoseRecord
 from camera_python_effects.timestamp_stream_join import TimestampStreamJoin
 
 
@@ -72,20 +68,21 @@ def _solved_pose_record(timestamp_ns: int) -> SolvedPoseRecord:
     }
 
 
-def test_a_records_message_reads_back_as_the_record_it_was_written_from() -> None:
+def test_a_solved_pose_reads_back_as_the_record_it_was_written_from() -> None:
     solved_pose_record = _solved_pose_record(7)
-    records_message = dict(solved_pose_record)
 
-    assert tuple(records_message) == SOLVED_POSE_RECORD_NAMES
-    assert solved_pose_record_from_records_message(records_message) == solved_pose_record
+    payload = SolvedPose(solved_pose_record).to_bytes()
+
+    assert SolvedPose.from_bytes(payload).record == solved_pose_record
 
 
-def test_a_records_message_with_an_unknown_provenance_is_refused() -> None:
-    records_message = dict(_solved_pose_record(7))
-    records_message["provenance"] = "guessed"
+def test_a_solved_pose_with_an_unknown_provenance_is_refused() -> None:
+    solved_pose_record = _solved_pose_record(7)
+    solved_pose_record["provenance"] = "guessed"  # type: ignore[typeddict-item]
+    payload = SolvedPose(solved_pose_record).to_bytes()
 
     with pytest.raises(ValueError, match="provenance is one of"):
-        solved_pose_record_from_records_message(records_message)
+        SolvedPose.from_bytes(payload)
 
 
 def test_pose_vectors_keep_the_promised_layout() -> None:
@@ -204,12 +201,23 @@ class _RecycledFrame:
 
 
 def _recorder():
-    from camera_python_effects.nodes.lerobot_recorder import (
-        LeRobotRecorder,
-        LeRobotRecorderConfig,
-    )
+    from tatolab.stream._class_node_construction import construct_class_node
 
-    return LeRobotRecorder(LeRobotRecorderConfig(dataset_root="unused"))
+    from camera_python_effects.nodes.lerobot_recorder import LeRobotRecorder
+
+    return construct_class_node(
+        LeRobotRecorder,
+        field_values={"dataset_root": "unused"},
+        pins={
+            port: object()
+            for port in (
+                "video_from_camera",
+                "stylized_from_compositor",
+                "pose_from_avatar",
+                "episodes_to_downstream",
+            )
+        },
+    )
 
 
 def test_recorded_pixels_are_a_decimated_rgb_copy_that_outlives_the_frame() -> None:

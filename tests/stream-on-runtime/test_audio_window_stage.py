@@ -228,13 +228,16 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
 GAPPED_AUDIO_NODES_SOURCE = '''\
 """A mono source whose every block starts a second after the last one ended."""
 
+from typing import Annotated
+
 import numpy
 from tatolab.stream import (
+    Audio,
     AudioWindowContract,
-    Channels,
-    Input,
-    Output,
+    InputPin,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     monotonic_now_ns,
     node,
 )
@@ -244,39 +247,41 @@ FRAMES_PER_BLOCK = 300
 GAP_BETWEEN_BLOCKS_NS = 1_000_000_000
 
 
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class GappedMonoSource:
     """Each block is short of a 512-sample window, and each one's stamp is a
     discontinuity, so the windowed consumer flushes what the last block left."""
 
     def __init__(self) -> None:
-        self.blocks = 0
-        self.anchor_ns = monotonic_now_ns()
+        self._blocks = 0
+        self._anchor_ns = monotonic_now_ns()
 
-    audio = Output(Channels, rate=SAMPLE_RATE, dtype="f32")
+    audio: OutputPin[Audio]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write(
-            self.audio,
+        self.audio.write(
             numpy.zeros((1, FRAMES_PER_BLOCK), dtype=numpy.float32),
-            timestamp_ns=self.anchor_ns + self.blocks * GAP_BETWEEN_BLOCKS_NS,
-            start_sample=self.blocks * SAMPLE_RATE * GAP_BETWEEN_BLOCKS_NS // 1_000_000_000,
+            timestamp_ns=self._anchor_ns + self._blocks * GAP_BETWEEN_BLOCKS_NS,
+            start_sample=self._blocks * SAMPLE_RATE * GAP_BETWEEN_BLOCKS_NS // 1_000_000_000,
+            sample_rate=SAMPLE_RATE,
         )
-        self.blocks += 1
+        self._blocks += 1
 
 
-@node.process
+@node
 class WindowedMonoConsumer:
-    audio = Input(
-        Channels,
-        delivery="ordered",
-        window=AudioWindowContract(
-            sample_rate=SAMPLE_RATE, channels=1, dtype="f32", window_size=512
-        ),
-    )
+    audio: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            AudioWindowContract(
+                sample_rate=SAMPLE_RATE, channels=1, dtype="f32", window_size=512
+            ),
+        ]
+    ]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read(self.audio)
+        self.audio.read()
 '''
 
 GAPPED_AUDIO_STREAM_SOURCE = '''\

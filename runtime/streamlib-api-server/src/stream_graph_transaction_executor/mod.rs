@@ -33,7 +33,7 @@ use streamlib_project_repository::{
     asset_references_made_references_into_the_import,
     config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
-    input_values_after_the_set, is_a_graph_interface_node_type,
+    input_values_after_the_set, is_a_node_type_of_the_graph_itself,
     stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
     the_stream_document_of_an_import, the_value_held_on_the_input_or_its_member,
 };
@@ -41,7 +41,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
-    GraphTransactionRebuiltNode, GraphTransactionToolResult,
+    GraphTransactionRebuiltNode, GraphTransactionSavedValueRetyped, GraphTransactionToolResult,
 };
 use uuid::Uuid;
 
@@ -61,7 +61,9 @@ pub(crate) use graph_request_refusals::{
     the_level_holds_both_ends_by_uuid,
 };
 mod fragments_a_changed_module_defines;
+mod graph_input_retype_carrying_its_saved_value;
 pub(crate) use fragments_a_changed_module_defines::the_refresh_of_each_fragment_a_changed_module_defines;
+use graph_input_retype_carrying_its_saved_value::SavedValueRetypesWorkedOutBeforeTheEdit;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
@@ -277,6 +279,7 @@ struct OneGraphRequestApplied {
     overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
     links_made_unjudged: Vec<(StreamGraphDocumentLink, String)>,
     links_made_unjudged_as_kept: Vec<ProjectTransactionLinkMadeUnjudged>,
+    saved_value_retyped: Option<GraphTransactionSavedValueRetyped>,
 }
 
 /// One operation made on a running stream, and the value set live on the input it set that it
@@ -396,7 +399,7 @@ fn the_graph_node_an_edit_adds_or_configures(
     };
     let names_a_node = !holds_a_fragment
         && node_type != STREAM_FRAGMENT_NODE_TYPE
-        && !is_a_graph_interface_node_type(&node_type);
+        && !is_a_node_type_of_the_graph_itself(&node_type);
     names_a_node.then_some((node_type, node_name, input_values))
 }
 
@@ -542,6 +545,16 @@ impl StreamGraphTransactionExecutor<'_> {
                     .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             ),
         };
+        let requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)> = requests
+            .into_iter()
+            .zip(stream_id_of_each_request.iter().cloned())
+            .collect();
+        let saved_value_retypes_worked_out_before_the_edit = self
+            .the_saved_value_retypes_worked_out_before_the_edit(
+                &requests_and_the_stream_id_each_names,
+                stream_locations,
+                project_repository.as_ref(),
+            );
         let mut project_repository_held = project_repository.as_ref().map(|held| held.lock());
         if let Some(project_repository_held) = project_repository_held.as_deref()
             && let Some(applied_before) = project_repository_held
@@ -553,10 +566,11 @@ impl StreamGraphTransactionExecutor<'_> {
             ));
         }
         let applied = self.apply_the_requests(
-            requests
-                .into_iter()
-                .zip(stream_id_of_each_request.iter().cloned())
-                .collect(),
+            request_application::TheRequestsOfATransaction {
+                requests_and_the_stream_id_each_names,
+                saved_value_retypes_worked_out_before_the_edit:
+                    &saved_value_retypes_worked_out_before_the_edit,
+            },
             mode,
             author,
             idempotency_key,

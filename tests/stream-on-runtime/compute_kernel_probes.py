@@ -95,8 +95,8 @@ class _ComputeKernelProbeBase:
 
     # Declared, not merely assigned: `setup` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
-    gpu_full_access: GpuContextFullAccess
-    gpu_limited_access: GpuContextLimitedAccess
+    _gpu_full_access: GpuContextFullAccess
+    _gpu_limited_access: GpuContextLimitedAccess
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
@@ -105,8 +105,8 @@ class _ComputeKernelProbeBase:
             # (a refusal at construction is observed by constructing), and
             # the Limited surface beside it for the by-id verbs — resolving
             # a surface and asking whether it takes a write-back.
-            self.gpu_full_access = gpu
-            self.gpu_limited_access = ctx.gpu_limited_access
+            self._gpu_full_access = gpu
+            self._gpu_limited_access = ctx.gpu_limited_access
             kernel = gpu.create_compute_kernel(
                 source=READ_ONE_WRITE_ANOTHER_SLANG,
                 push_constant_size=4,
@@ -137,7 +137,7 @@ class _ComputeKernelProbeBase:
 
 
 @node.meta(description="Reads one surface and writes another through a compute kernel")
-@node.process(execution="manual")
+@node(execution="manual")
 class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
     """The pass the v1 wire could not express."""
 
@@ -157,7 +157,7 @@ class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
 
 
 @node.meta(description="Every way of getting the bindings wrong, refused by name")
-@node.process(execution="manual")
+@node(execution="manual")
 class BindingRefusalProbe(_ComputeKernelProbeBase):
     """Unknown, missing and wrong-target refusals, each raising before any
     GPU work is submitted and each naming the shader's own bindings."""
@@ -167,7 +167,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         push_constants = b"\x00\x00\x00\x00"
 
         wrong_declaration = _refusal_of(
-            lambda: self.gpu_full_access.create_compute_kernel(
+            lambda: self._gpu_full_access.create_compute_kernel(
                 source=READ_ONE_WRITE_ANOTHER_SLANG,
                 push_constant_size=4,
                 bindings={"sharpen_amount": "storage_buffer"},
@@ -217,7 +217,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
 
 
 @node.meta(description="A texture's pixels reach the CPU through the staged door")
-@node.process(execution="manual")
+@node(execution="manual")
 class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
     """The staged CPU door end to end, with numpy as the only consumer.
 
@@ -261,7 +261,7 @@ class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
 
 
 @node.meta(description="A raise inside the CPU door over a texture propagates")
-@node.process(execution="manual")
+@node(execution="manual")
 class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
     """A raise inside the CPU door over a texture, and the pixel the frame
     holds afterwards — the staged door's own on Linux, the stores made before
@@ -277,7 +277,7 @@ class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
         # the handle it entered, and the re-read below needs `source` open.
         raised = None
         try:
-            with self.gpu_limited_access.resolve_surface(source.surface_id) as scoped:
+            with self._gpu_limited_access.resolve_surface(source.surface_id) as scoped:
                 scoped.lock(read_only=False)
                 scoped.as_numpy()[:] = DISCARDED_SOURCE_RGBA
                 raise RuntimeError("the edit does not finish")
@@ -294,7 +294,7 @@ class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
 
 
 @node.meta(description="An acquired texture takes a write-back without spelling copy usage")
-@node.process(execution="manual")
+@node(execution="manual")
 class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
     """The LUT flow the ruling widened #1758 to cover, spelled the way an
     author would: acquire with one usage token, fill it through the CPU
@@ -309,10 +309,10 @@ class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
 
     def observe(self, kernel, source, output) -> dict:
         del kernel, source, output
-        lut = self.gpu_full_access.acquire_texture(
+        lut = self._gpu_full_access.acquire_texture(
             LUT_WIDTH, 1, "rgba32_float", ["texture_binding"]
         )
-        takes_a_write_back = self.gpu_limited_access.surface_can_take_write_back(
+        takes_a_write_back = self._gpu_limited_access.surface_can_take_write_back(
             lut.surface_id
         )
 
@@ -370,27 +370,27 @@ class _TwoPassProbeBase:
 
     # Declared, not merely assigned: `setup` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
-    gpu_full_access: GpuContextFullAccess
-    brighten: ComputeKernel
-    double: ComputeKernel
-    source: GpuSurfaceHandle
-    intermediate: GpuSurfaceHandle
-    output: GpuSurfaceHandle
+    _gpu_full_access: GpuContextFullAccess
+    _brighten: ComputeKernel
+    _double: ComputeKernel
+    _source: GpuSurfaceHandle
+    _intermediate: GpuSurfaceHandle
+    _output: GpuSurfaceHandle
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
-            self.gpu_full_access = gpu
-            self.brighten = gpu.create_compute_kernel(source=BRIGHTEN_SLANG)
-            self.double = gpu.create_compute_kernel(source=DOUBLE_SLANG)
+            self._gpu_full_access = gpu
+            self._brighten = gpu.create_compute_kernel(source=BRIGHTEN_SLANG)
+            self._double = gpu.create_compute_kernel(source=DOUBLE_SLANG)
             usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
-            self.source = gpu.acquire_texture(
+            self._source = gpu.acquire_texture(
                 SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
             )
-            self.intermediate = gpu.acquire_texture(
+            self._intermediate = gpu.acquire_texture(
                 SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
             )
-            self.output = gpu.acquire_texture(
+            self._output = gpu.acquire_texture(
                 SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
             )
             return self.observe()
@@ -403,18 +403,18 @@ class _TwoPassProbeBase:
     def brighten_then_double(self, batch: KernelDispatchBatch) -> None:
         """The two passes, in order, into whatever batch is handed in."""
         batch.dispatch(
-            self.brighten,
+            self._brighten,
             bindings={
-                "unbrightened_image": self.source,
-                "brightened_image": self.intermediate,
+                "unbrightened_image": self._source,
+                "brightened_image": self._intermediate,
             },
             group_count=GROUP_COUNT,
         )
         batch.dispatch(
-            self.double,
+            self._double,
             bindings={
-                "brightened_image": self.intermediate,
-                "doubled_image": self.output,
+                "brightened_image": self._intermediate,
+                "doubled_image": self._output,
             },
             group_count=GROUP_COUNT,
         )
@@ -424,13 +424,13 @@ class _TwoPassProbeBase:
 
 
 @node.meta(description="A two-pass filter dispatched as one batch")
-@node.process(execution="manual")
+@node(execution="manual")
 class TwoPassBatchProbe(_TwoPassProbeBase):
     """The demo: a chain whose intermediate is written by pass 1 and read by
     pass 2, inside one scope."""
 
     def observe(self) -> dict:
-        with self.gpu_full_access.kernel_dispatch_batch() as batch:
+        with self._gpu_full_access.kernel_dispatch_batch() as batch:
             self.brighten_then_double(batch)
         first_scope_returned = True
 
@@ -439,7 +439,7 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
         # this is where `begin()` refuses.
         second_scope_error = None
         try:
-            with self.gpu_full_access.kernel_dispatch_batch() as second:
+            with self._gpu_full_access.kernel_dispatch_batch() as second:
                 self.brighten_then_double(second)
         except Exception as refused:  # noqa: BLE001 — reported, then asserted on
             second_scope_error = str(refused)
@@ -447,14 +447,14 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
         return {
             "first_scope_returned": first_scope_returned,
             "second_scope_error": second_scope_error,
-            "source_surface_id": self.source.surface_id,
-            "intermediate_surface_id": self.intermediate.surface_id,
-            "output_surface_id": self.output.surface_id,
+            "source_surface_id": self._source.surface_id,
+            "intermediate_surface_id": self._intermediate.surface_id,
+            "output_surface_id": self._output.surface_id,
         }
 
 
 @node.meta(description="A raise inside a batch scope submits nothing and propagates")
-@node.process(execution="manual")
+@node(execution="manual")
 class BatchExceptionProbe(_TwoPassProbeBase):
     """Half of a multi-pass filter is not what the author wrote, so a raise
     inside the scope discards the whole batch — and the exception is not
@@ -466,7 +466,7 @@ class BatchExceptionProbe(_TwoPassProbeBase):
 
         propagated = None
         try:
-            with self.gpu_full_access.kernel_dispatch_batch() as batch:
+            with self._gpu_full_access.kernel_dispatch_batch() as batch:
                 self.brighten_then_double(batch)
                 raise TheProbesOwnFailure("the block did not finish")
         except TheProbesOwnFailure as raised:
@@ -474,7 +474,7 @@ class BatchExceptionProbe(_TwoPassProbeBase):
 
         # The capability is unharmed: a fresh batch runs after the discarded
         # one, which is what a stranded recorder in the parent would refuse.
-        with self.gpu_full_access.kernel_dispatch_batch() as batch:
+        with self._gpu_full_access.kernel_dispatch_batch() as batch:
             self.brighten_then_double(batch)
 
         return {
@@ -484,39 +484,39 @@ class BatchExceptionProbe(_TwoPassProbeBase):
 
 
 @node.meta(description="Every way of getting a batch wrong, refused by name")
-@node.process(execution="manual")
+@node(execution="manual")
 class BatchRefusalProbe(_TwoPassProbeBase):
     """A batch refuses in the caller's own stack: a wrong binding at the
     `dispatch` line, a repeated kernel at the line that repeats it, and a
     closed scope when it is dispatched into again."""
 
     def observe(self) -> dict:
-        with self.gpu_full_access.kernel_dispatch_batch() as batch:
+        with self._gpu_full_access.kernel_dispatch_batch() as batch:
             unknown = _refusal_of(
                 lambda: batch.dispatch(
-                    self.brighten,
+                    self._brighten,
                     bindings={
-                        "unbrightened_image": self.source,
-                        "brightened_image": self.intermediate,
-                        "sharpen_amount": self.output,
+                        "unbrightened_image": self._source,
+                        "brightened_image": self._intermediate,
+                        "sharpen_amount": self._output,
                     },
                     group_count=GROUP_COUNT,
                 )
             )
             batch.dispatch(
-                self.brighten,
+                self._brighten,
                 bindings={
-                    "unbrightened_image": self.source,
-                    "brightened_image": self.intermediate,
+                    "unbrightened_image": self._source,
+                    "brightened_image": self._intermediate,
                 },
                 group_count=GROUP_COUNT,
             )
             same_kernel_twice = _refusal_of(
                 lambda: batch.dispatch(
-                    self.brighten,
+                    self._brighten,
                     bindings={
-                        "unbrightened_image": self.intermediate,
-                        "brightened_image": self.output,
+                        "unbrightened_image": self._intermediate,
+                        "brightened_image": self._output,
                     },
                     group_count=GROUP_COUNT,
                 )
@@ -525,10 +525,10 @@ class BatchRefusalProbe(_TwoPassProbeBase):
 
         after_the_scope = _refusal_of(
             lambda: closed_batch.dispatch(
-                self.double,
+                self._double,
                 bindings={
-                    "brightened_image": self.intermediate,
-                    "doubled_image": self.output,
+                    "brightened_image": self._intermediate,
+                    "doubled_image": self._output,
                 },
                 group_count=GROUP_COUNT,
             )
@@ -537,11 +537,11 @@ class BatchRefusalProbe(_TwoPassProbeBase):
         # Never entered: nothing would ever send what it collected, so it
         # refuses rather than swallowing the work.
         never_entered = _refusal_of(
-            lambda: self.gpu_full_access.kernel_dispatch_batch().dispatch(
-                self.double,
+            lambda: self._gpu_full_access.kernel_dispatch_batch().dispatch(
+                self._double,
                 bindings={
-                    "brightened_image": self.intermediate,
-                    "doubled_image": self.output,
+                    "brightened_image": self._intermediate,
+                    "doubled_image": self._output,
                 },
                 group_count=GROUP_COUNT,
             )
@@ -555,14 +555,14 @@ class BatchRefusalProbe(_TwoPassProbeBase):
 
 
 @node.meta(description="Every way of getting the kernel's source wrong, refused by name")
-@node.process(execution="manual")
+@node(execution="manual")
 class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
     """Slang source and pre-compiled SPIR-V are alternatives, and a shader that
     does not compile says so with the compiler's own diagnostic."""
 
     def observe(self, kernel, source, output) -> dict:
         del kernel, source, output
-        gpu = self.gpu_full_access
+        gpu = self._gpu_full_access
         return {
             "neither": _refusal_of(lambda: gpu.create_compute_kernel()),
             "both": _refusal_of(

@@ -9,12 +9,23 @@ that declares no pin types, and is refused on a typed one.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
 from stream_graph_builder_nodes import FrameInverter, RigMonitor, TintedLevel
-from tatolab.stream import Color, StreamBuilder, graph_generator, run_graph_generator
+from tatolab.stream import (
+    Color,
+    InputPin,
+    OutputPin,
+    PinGroup,
+    StreamBuilder,
+    Texture,
+    graph_generator,
+    node,
+    run_graph_generator,
+)
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -183,3 +194,51 @@ def test_an_input_finds_its_values_by_a_name_it_had() -> None:
     assert typed_pins is not None
 
     assert typed_pins.stored_input_values({"volume": 2}) == {"gain": 2.0}
+
+
+@dataclass(frozen=True)
+class _Layer:
+    picture: InputPin[Texture]
+    opacity: float = 1.0
+
+
+@node
+class _LayeredOver:
+    """Lays each layer's picture over the one below it."""
+
+    layers: PinGroup[_Layer]
+    result: OutputPin[Texture]
+
+    def process(self, ctx: Any) -> None:
+        pass
+
+
+def test_a_slot_port_of_a_pin_group_takes_a_value_of_its_fields_type_and_a_link_in_any_slot() -> None:
+    """Fail-without-fix: find ports among the node's own pins alone and `layers.2.opacity` is
+    refused as no input of the node."""
+    stream_builder = StreamBuilder("rig")
+    layered = stream_builder.add(_LayeredOver, input_values={"layers.2.opacity": 1})
+
+    assert layered.input("layers.11.picture").port_name == "layers.11.picture"
+    (recorded,) = stream_builder._compiled_graph()["nodes"]
+    assert recorded["input_values"] == {"layers.2.opacity": 1.0}
+
+
+@pytest.mark.parametrize(
+    ("set_on", "refusal"),
+    [
+        ("layers.0.depth", "declares no input `layers.0.depth`"),
+        ("layers.x.opacity", "declares no input `layers.x.opacity`"),
+        ("layers.01.opacity", "declares no input `layers.01.opacity`"),
+        ("bands.0.opacity", "declares no input `bands.0.opacity`"),
+        ("layers.0.picture", "carries a stream and holds no value"),
+    ],
+)
+def test_a_value_on_a_port_no_slot_holds_or_on_a_slots_stream_is_refused(set_on: str, refusal: str) -> None:
+    with pytest.raises((TypeError, ValueError), match=refusal):
+        StreamBuilder("rig").add(_LayeredOver, input_values={set_on: 0.5})
+
+
+def test_a_refusal_lists_a_groups_slot_ports_among_the_inputs() -> None:
+    with pytest.raises(ValueError, match=r"`layers\.<slot>\.opacity`, `layers\.<slot>\.picture`"):
+        StreamBuilder("rig").add(_LayeredOver).input("level")

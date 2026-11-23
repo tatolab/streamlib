@@ -194,7 +194,8 @@ pub struct NodeTypeListed {
     /// Who filed it under `category`; null when nothing files it.
     #[serde(default)]
     pub category_from: Option<NodeTypeCategoryFrom>,
-    /// How its code runs; null for an entry point whose declaration source does not show it.
+    /// How its code runs; null for an entry point whose declaration source does not show it,
+    /// and for a node type the graph resolves itself, which no node code runs.
     pub kind: Option<NodeTypeKind>,
     /// Where the runtime's description of it comes from.
     pub described_from: NodeTypeDescribedFrom,
@@ -314,7 +315,8 @@ pub struct NodeTypeDescription {
     /// Who filed it under `category`; null when nothing files it.
     #[serde(default)]
     pub category_from: Option<NodeTypeCategoryFrom>,
-    /// How its code runs; null where its declaration source does not show it.
+    /// How its code runs; null where its declaration source does not show it, and for a node
+    /// type the graph resolves itself, which no node code runs.
     pub kind: Option<NodeTypeKind>,
     /// Where it is declared, its path relative to its source's root; absent on a built-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -424,6 +426,11 @@ pub struct NodeTypeInputDescribed {
     /// node type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<NodeTypeInputMode>,
+    /// Whether a link may end at it: `false` on a setting read each run, a setting of a type no
+    /// message carries, every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or
+    /// `GetVariable`, and each legacy field of a node type not yet typed, which is no port.
+    #[serde(default = "an_input_takes_a_wire_unless_it_says_not")]
+    pub takes_a_wire: bool,
     /// When the node reads a setting: once at setup, a change rebuilding the node, or each run.
     /// Absent on an input that takes a wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -446,6 +453,11 @@ pub struct NodeTypeInputDescribed {
     pub value_json_schema: Option<Value>,
 }
 
+/// An input that does not say whether it takes a wire is a port that takes one.
+fn an_input_takes_a_wire_unless_it_says_not() -> bool {
+    true
+}
+
 /// Whether an input takes a wire, a stored value, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -455,7 +467,8 @@ pub enum NodeTypeInputMode {
     WireOrValue,
     /// A link only, read each run.
     WireOnly,
-    /// A stored value only, never a link: a setting.
+    /// A setting: a stored value, read when its `read` says; one read at setup also takes a
+    /// link from an output that flows as a value, each change of either rebuilding its node.
     SettingOnly,
 }
 

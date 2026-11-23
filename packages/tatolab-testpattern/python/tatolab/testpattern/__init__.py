@@ -16,25 +16,28 @@ import ctypes
 import dataclasses
 import struct
 from importlib import resources
-from typing import Annotated, Any
+from typing import Annotated
 
 from tatolab.stream import (
     ColorInfo,
     ComputeKernel,
+    Description,
     GpuContextFullAccess,
     GpuSurfaceHandle,
-    Image,
     ImageFrameToWrite,
     NodeOutputTextureRing,
-    Output,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    Texture,
+    TexturePixelFormats,
     log,
     monotonic_now_ns,
     node,
 )
 
-__all__ = ["TestPatternSource", "TestPatternSourceConfig"]
+__all__ = ["TestPatternSource"]
 
 _THIS_PACKAGE = "tatolab.testpattern"
 
@@ -167,30 +170,6 @@ def compute_kernel_slang_rendering_a_test_pattern_frame() -> str:
     return resources.files(_THIS_PACKAGE).joinpath("test_pattern_frame.slang").read_text()
 
 
-def _is_plain_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-@dataclasses.dataclass
-class TestPatternSourceConfig:
-    """What a `TestPatternSource` is configured with: the frame size; the animation, rate and format are fixed."""
-
-    __test__ = False
-
-    width: Annotated[int, "Frame width in pixels."] = 1280
-    height: Annotated[int, "Frame height in pixels."] = 720
-
-    def __post_init__(self) -> None:
-        for dimension_name, dimension in (("width", self.width), ("height", self.height)):
-            if not _is_plain_int(dimension) or not (
-                1 <= dimension <= LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS
-            ):
-                raise ValueError(
-                    f"TestPatternSourceConfig: {dimension_name} is a frame side of 1 to "
-                    f"{LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS} pixels, got {dimension!r}"
-                )
-
-
 def _workgroups_covering(pixels: int) -> int:
     return (pixels + _WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // _WORKGROUP_TILE_SIZE_IN_PIXELS
 
@@ -228,14 +207,34 @@ def _upload_overlay_into_a_texture(
         "captions, rendered on the GPU — demos a pipeline with no camera attached"
     ),
 )
-@node.process(execution="continuous", interval_ms=33)
+@node(execution="continuous", interval_ms=33)
 class TestPatternSource:
-    """The sample stream's animation at about 30 frames a second, as RGBA Image frames."""
+    """The sample stream's animation at about 30 frames a second, as RGBA pictures.
+
+    The frame size is read each frame, so a change takes effect from the next frame on.
+    """
 
     __test__ = False
 
-    def __init__(self, config: TestPatternSourceConfig) -> None:
-        self._config = config
+    width: Annotated[
+        int,
+        NumberRange(minimum=1, maximum=LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS),
+        Description("Frame width in pixels."),
+    ] = 1280
+    height: Annotated[
+        int,
+        NumberRange(minimum=1, maximum=LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS),
+        Description("Frame height in pixels."),
+    ] = 720
+    video: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(_TEST_PATTERN_FRAME_TEXTURE_FORMAT),
+            Description("Test-pattern video frames"),
+        ]
+    ]
+
+    def __init__(self) -> None:
         self._frame_ring = NodeOutputTextureRing(
             _TEST_PATTERN_FRAME_TEXTURE_FORMAT, _TEST_PATTERN_FRAME_TEXTURE_USAGE
         )
@@ -245,10 +244,6 @@ class TestPatternSource:
         # Advances only on a published frame, so frame N's picture never depends on a dropped one.
         self._next_frame_index = 0
         self._consecutive_dropped_frames = 0
-
-    video = Output(
-        Image, formats=(_TEST_PATTERN_FRAME_TEXTURE_FORMAT,), description="Test-pattern video frames"
-    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu_full_access = ctx.gpu_full_access
@@ -268,12 +263,8 @@ class TestPatternSource:
             gpu_full_access, SAMPLE_STREAM_CAPTION_PANEL
         )
         log.info(
-            f"TestPatternSource: rendering {self._config.width}x{self._config.height} on the GPU"
+            f"TestPatternSource: rendering {self.width}x{self.height} on the GPU"
         )
-
-    def configure(self, config: TestPatternSourceConfig) -> None:
-        """Take a new frame size, rendered from the next frame on."""
-        self._config = config
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if (
@@ -282,7 +273,7 @@ class TestPatternSource:
             or self._caption_panel_texture is None
         ):
             return
-        frame_width, frame_height = self._config.width, self._config.height
+        frame_width, frame_height = self.width, self.height
         try:
             frame_texture = self._frame_ring.next_texture_for_this_frame(
                 ctx.gpu_limited_access, frame_width, frame_height
@@ -308,8 +299,7 @@ class TestPatternSource:
         )
         self._next_frame_index += 1
         timestamp_ns = monotonic_now_ns()
-        ctx.outputs.write(
-            self.video,
+        self.video.write(
             ImageFrameToWrite.of_texture(frame_texture, TEST_PATTERN_FRAME_COLOUR),
             timestamp_ns=timestamp_ns,
         )

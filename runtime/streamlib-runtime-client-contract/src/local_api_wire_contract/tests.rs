@@ -8,21 +8,22 @@ use serde::Serialize;
 use super::*;
 
 #[test]
-fn a_runtime_description_names_its_log_folder_or_null_when_it_keeps_none() {
+fn a_runtime_description_names_its_log_folder_or_null_and_its_machine() {
     let described = |runtime_log_directory: Option<&str>| DescribeRuntimeToolResult {
         version: "0.55.1".to_owned(),
         build_id: "0.55.1+0123abc.9f8e7d".to_owned(),
         up_for_ms: 266_400_000,
         runtime_log_directory: runtime_log_directory.map(PathBuf::from),
+        machine: "rig".to_owned(),
     };
     for (description, expected_wire_text) in [
         (
             described(Some("/home/u/.local/state/tatolab/logs")),
-            r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":"/home/u/.local/state/tatolab/logs"}"#,
+            r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":"/home/u/.local/state/tatolab/logs","machine":"rig"}"#,
         ),
         (
             described(None),
-            r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":null}"#,
+            r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":null,"machine":"rig"}"#,
         ),
     ] {
         let wire_text = serde_json::to_string(&description).unwrap();

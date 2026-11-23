@@ -36,6 +36,7 @@ import inspect
 import typing
 from typing import Any, Callable, Final, Generic, Optional, ParamSpec, TypeVar
 
+from ._class_node_pin_group import refuse_a_pin_group_on_a_function_node
 from ._contract_pin_types import PinDeclarationOnTheWire
 from ._description import description_and_annotation_without_it
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
@@ -346,6 +347,7 @@ class _FunctionNodeSignatureReading:
                 f"{self._function_name}'s parameter `{parameter.name}` has no type, so nothing "
                 f"names the pin's family. To fix: annotate it, `{parameter.name}: float`."
             )
+        refuse_a_pin_group_on_a_function_node(self._function_name, parameter.name, annotations[parameter.name])
         port_description, annotation = self._port_description_and_annotation_without_it(
             annotations[parameter.name], f"input `{parameter.name}`"
         )

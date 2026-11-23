@@ -4,23 +4,25 @@
 """A source of frames whose every pixel is known, and a sink that reports the pixels a shader node wrote.
 
 The source writes a horizontal ramp into its own texture ring in the format its
-config names, so the shader node's input is a texture another process
+`texture_format` names, so the shader node's input is a texture another process
 published. The sink reports one `MARKER:PROBE_RESULT` line per frame it reads.
 """
 
-import dataclasses
 import json
 import os
 import traceback
+from typing import Annotated
 
 from tatolab.stream import (
     Color,
     ColorInfo,
-    Image,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
@@ -54,7 +56,7 @@ def _report(probe_name: str, observation_body) -> None:
 QUARTER_AMOUNT = 0.25
 
 
-@node.function
+@node
 def QuarterAmount() -> float:  # noqa: N802
     """A quarter, whatever the time: a function node with a value to link into a shader node."""
     return QUARTER_AMOUNT
@@ -70,23 +72,24 @@ def HalfRedQuarterGreen() -> Color:  # noqa: N802
     return HALF_RED_QUARTER_GREEN
 
 
-@dataclasses.dataclass
-class KnownPixelsVideoSourceConfig:
-    texture_format: str = "rgba8_unorm"
-    frames_to_publish: int = FRAMES_TO_PUBLISH
+#: The formats the source can write its ramp in.
+KNOWN_PIXELS_TEXTURE_FORMATS = ("rgba8_unorm", "bgra8_unorm")
 
 
-@node.process(execution="continuous", interval_ms=30)
+@node(execution="continuous", interval_ms=30)
 class KnownPixelsVideoSource:
     """Publishes a red ramp, constant green, blue and alpha, from its own texture ring."""
 
-    video = Output(Image)
+    video: OutputPin[Annotated[Texture, TexturePixelFormats(*KNOWN_PIXELS_TEXTURE_FORMATS)]]
 
-    def __init__(self, config: KnownPixelsVideoSourceConfig) -> None:
-        self._texture_format = config.texture_format
-        self._frames_to_publish = config.frames_to_publish
+    texture_format: str = "rgba8_unorm"
+    frames_to_publish: int = FRAMES_TO_PUBLISH
+
+    def __init__(self) -> None:
+        self._texture_format = self.texture_format
+        self._frames_to_publish = self.frames_to_publish
         self._output_texture_ring = NodeOutputTextureRing(
-            config.texture_format, ["texture_binding"], depth=4
+            self.texture_format, ["texture_binding"], depth=4
         )
         self._frames_published = 0
 
@@ -107,18 +110,18 @@ class KnownPixelsVideoSource:
                     pixels[:, column] = [red, green, blue, alpha]
         finally:
             texture.unlock()
-        ctx.outputs.write(self.video, ImageFrameToWrite.of_texture(texture, ColorInfo()))
+        self.video.write(ImageFrameToWrite.of_texture(texture, ColorInfo()))
         self._frames_published += 1
 
 
-@node.process
+@node
 class ShadedFramePixelReadingSink:
     """Reports the extent, format and sampled pixels of each frame a shader node wrote."""
 
-    shaded = Input(Image, delivery="ordered")
+    shaded: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.shaded)
+        frame = self.shaded.read()
         if frame is None:
             return
 
@@ -140,11 +143,11 @@ class ShadedFramePixelReadingSink:
         _report("ShadedFramePixelReadingSink", read_the_shaded_pixels)
 
 
-@node.process
+@node
 class FrameDiscardingSink:
-    """Reads each frame it is handed and keeps none: a second reader of the Image feeding it."""
+    """Reads each frame it is handed and keeps none: a second reader of the Texture feeding it."""
 
-    discarded = Input(Image, delivery="newest")
+    discarded: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     def process(self, ctx) -> None:
-        ctx.inputs.read(self.discarded)
+        self.discarded.read()

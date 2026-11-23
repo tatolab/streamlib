@@ -37,6 +37,7 @@ from helper_placement_nodes import (
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
     ReportsTheCountsItReadInOrderSink,
     ReportsTheFunctionNodeValuesItReadSink,
+    ReportsTheLevelItIsBuiltWith,
     ReportsTheLevelRecordsItReadSink,
     ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
@@ -53,7 +54,7 @@ from helper_placement_nodes import (
 def _labelled_source_into_sink(
     stream_builder: StreamBuilder, label: str, *, sink_name: "str | None" = None
 ) -> None:
-    source = stream_builder.add(ReportsItsOwnProcessSource, config={"label": label})
+    source = stream_builder.add(ReportsItsOwnProcessSource, input_values={"label": label})
     sink = stream_builder.add(ReportsUpstreamProcessSink, name=sink_name)
     stream_builder.connect(source.output("frames_to_downstream"), sink.input("frames_from_upstream"))
 
@@ -93,7 +94,7 @@ def dies_abruptly_beside_a_survivor_pair(stream_builder: StreamBuilder) -> None:
 @graph_generator
 def stale_build_labelled_source(stream_builder: StreamBuilder) -> None:
     """A lone source labelled `stale`, for a helper made to see another build."""
-    stream_builder.add(ReportsItsOwnProcessSource, config={"label": "stale"})
+    stream_builder.add(ReportsItsOwnProcessSource, input_values={"label": "stale"})
 
 
 @graph_generator
@@ -262,7 +263,7 @@ def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuil
 
 @graph_generator
 def function_node_run_as_python_into_python_records_sink(stream_builder: StreamBuilder) -> None:
-    """A function node giving a `dict`, which runs as Python, read by a Python class as Records."""
+    """A function node giving a bundle, which runs as Python, read by a Python class's field."""
     labeller = stream_builder.add(LabelsTheLevel, name="labeller")
     sink = stream_builder.add(ReportsTheRecordsItReadSink, name="sink")
     stream_builder.connect(labeller.output("result"), sink.input("label"))
@@ -405,3 +406,24 @@ def python_level_source_through_a_gate_into_a_native_converter(stream_builder: S
     stream_builder.connect(source.output("level_to_downstream"), gate.input("value"))
     stream_builder.connect(gate.output("result"), converter.input("channels"))
     stream_builder.connect(converter.output("records"), sink.input("level_records"))
+
+
+@graph_generator
+def typed_level_into_a_setting_a_python_class_reads_at_setup(stream_builder: StreamBuilder) -> None:
+    """A typed function node built with `gain` 0.5 into `level`, a setting a Python class reads at setup."""
+    scaled = stream_builder.add(
+        LevelScaledByItsTypedGain, name="scaled", input_values={"gain": 0.5}
+    )
+    reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
+    stream_builder.connect(scaled.output("result"), reader.input("level"))
+
+
+@graph_generator
+def held_level_into_a_setting_and_read_by_a_python_sink(stream_builder: StreamBuilder) -> None:
+    """A stateful function node holding its config's `level`, into a setting a Python class reads
+    at setup and into a second Python class: two readers, so it runs in a process of its own."""
+    held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
+    reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(held.output("result"), reader.input("level"))
+    stream_builder.connect(held.output("result"), sink.input("brightness"))

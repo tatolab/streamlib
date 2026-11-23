@@ -69,6 +69,7 @@ fn a_conversion_is_its_one_wired_input_and_its_one_output_beside_any_settings() 
             output_port_name: "texture".to_owned(),
             output_pin_type: texture(),
             output_picked_for_the_input: None,
+            saved_value_cast: None,
         }))
     );
 }
@@ -97,9 +98,12 @@ fn a_conversion_of_any_other_shape_is_refused_naming_the_node_type() {
         vec![a_typed_port("texture", texture())],
     );
     for (descriptor, why) in [
-        (two_wired_inputs, "2 inputs that take a wire and 1 outputs"),
-        (two_outputs, "1 inputs that take a wire and 2 outputs"),
-        (only_settings, "0 inputs that take a wire and 1 outputs"),
+        (
+            two_wired_inputs,
+            "2 inputs besides its settings and 1 outputs",
+        ),
+        (two_outputs, "1 inputs besides its settings and 2 outputs"),
+        (only_settings, "0 inputs besides its settings and 1 outputs"),
         (
             an_untyped_input,
             "its input `tensor` states no one pin type",
@@ -127,6 +131,7 @@ fn only_a_built_in_conversion_may_be_inserted() {
         output_port_name: "out".to_owned(),
         output_pin_type: texture(),
         output_picked_for_the_input: None,
+        saved_value_cast: None,
     };
     assert!(conversion(NodeClassImportPath::of_built_in_node("TensorToTexture")).may_be_inserted());
     assert!(

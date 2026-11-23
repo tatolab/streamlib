@@ -240,3 +240,74 @@ fn an_edit_the_documents_hold_that_a_running_stream_refuses_is_held_with_each_la
         "{held:?}"
     );
 }
+
+/// Two edits the documents hold, the second a rename, and how far `runtime` took them: each made
+/// live on the stub's one stream.
+fn two_edits_the_documents_hold_made_live_on(
+    runtime: &crate::mcp::tests::ControlPlaneMcpDispatchStubRuntime,
+) -> [StreamGraphOperation; 2] {
+    use crate::control_plane_stub_support::STUB_STREAM_ID;
+
+    let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
+    let project_repositories =
+        streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime::default();
+    let executor = super::StreamGraphTransactionExecutor {
+        operations_on_the_loaded_streams: runtime,
+        project_repositories: &project_repositories,
+        async_runtime: tokio_runtime.handle(),
+    };
+    let carried = StreamGraphOperation::CarryTheLinksOntoThePortsOfAPlacedStream {
+        placed_stream: Uuid::new_v4(),
+        port_links_taken_out: Vec::new(),
+        port_links_put_back: Vec::new(),
+    };
+    let renamed = StreamGraphOperation::RenameNode {
+        node: Uuid::new_v4(),
+        from: "scale".to_owned(),
+        to: "zoom".to_owned(),
+    };
+    executor.make_live_what_the_documents_now_hold(vec![
+        (STUB_STREAM_ID.to_owned(), carried.clone()),
+        (STUB_STREAM_ID.to_owned(), renamed.clone()),
+    ]);
+    [carried, renamed]
+}
+
+/// A stream that took edits the documents hold rebuilds the nodes they left to rebuild once,
+/// though none of them is a value set: a reconcile an edit goes through leaves its rebuild to
+/// its caller.
+///
+/// Mental-revert: rebuilding only a stream that took a value set leaves a node such an edit
+/// left to rebuild neither handed its values nor rebuilt.
+#[test]
+fn a_stream_taking_edits_the_documents_hold_rebuilds_once_though_none_sets_a_value() {
+    let runtime = crate::mcp::tests::ControlPlaneMcpDispatchStubRuntime::new();
+
+    two_edits_the_documents_hold_made_live_on(&runtime);
+
+    assert_eq!(runtime.recorded_rebuilds_and_the_armed_refusal.lock().0, 1);
+    assert!(runtime.recorded_edits_held_not_live.lock().is_empty());
+}
+
+/// A rebuild the stream refuses after taking edits the documents hold holds each of them as
+/// not live, with the refusal.
+#[test]
+fn a_refused_rebuild_after_edits_the_documents_hold_holds_each_of_them_not_live() {
+    let refusal = "`blur` blurs nothing with a kernel of size 0";
+    let runtime =
+        crate::mcp::tests::ControlPlaneMcpDispatchStubRuntime::refusing_each_rebuild(refusal);
+
+    let made_live = two_edits_the_documents_hold_made_live_on(&runtime);
+
+    let held = runtime.recorded_edits_held_not_live.lock().clone();
+    assert_eq!(
+        held.iter()
+            .map(|(edit, _)| edit.clone())
+            .collect::<Vec<_>>(),
+        made_live.to_vec()
+    );
+    assert!(
+        held.iter().all(|(_, why)| why.contains(refusal)),
+        "{held:?}"
+    );
+}

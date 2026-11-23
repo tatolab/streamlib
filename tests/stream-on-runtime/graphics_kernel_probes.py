@@ -19,18 +19,21 @@ import json
 import os
 import traceback
 from collections.abc import Sequence
+from typing import Annotated
 
 import numpy
 from tatolab.stream import (
     ColorInfo,
     GpuContextFullAccess,
-    Image,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
@@ -153,14 +156,14 @@ class _GraphicsKernelProbeBase:
 
     # Declared, not merely assigned: `setup` assigns it inside a nested
     # closure, which a type checker does not walk for attribute inference.
-    gpu_full_access: GpuContextFullAccess
+    _gpu_full_access: GpuContextFullAccess
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             # Held for probes whose observation needs the capability itself
             # (a refusal at construction is observed by constructing).
-            self.gpu_full_access = gpu
+            self._gpu_full_access = gpu
             kernel = _invert_sampled_input_graphics_kernel(gpu, DECLARED_BINDINGS)
             source = gpu.acquire_texture(
                 SURFACE_WIDTH,
@@ -195,7 +198,7 @@ class _GraphicsKernelProbeBase:
 
 
 @node.meta(description="Draws a fullscreen triangle sampling one texture into another")
-@node.process(execution="manual")
+@node(execution="manual")
 class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
     """The demo: a Python node renders a pass with named bindings.
 
@@ -220,13 +223,13 @@ class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
 
 
 @node.meta(description="Every way of getting a draw's bindings wrong, refused by name")
-@node.process(execution="manual")
+@node(execution="manual")
 class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
     """Unknown, missing, kind-mismatched and unresolvable, each raising with a
     message naming what the shaders actually declare."""
 
     def observe(self, kernel, source, color_target) -> dict:
-        gpu = self.gpu_full_access
+        gpu = self._gpu_full_access
 
         unknown_at_construction = _refusal_of(
             lambda: _invert_sampled_input_graphics_kernel(
@@ -290,7 +293,7 @@ class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
 
 
 @node.meta(description="A binding declared for a stage the shaders do not read it in")
-@node.process(execution="manual")
+@node(execution="manual")
 class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
     """The ticket's named validation case, at the line it belongs to.
 
@@ -302,7 +305,7 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
     """
 
     def observe(self, kernel, source, color_target) -> dict:
-        gpu = self.gpu_full_access
+        gpu = self._gpu_full_access
 
         def declare_the_texture_for_a_stage_that_does_not_read_it() -> None:
             gpu.create_graphics_kernel(
@@ -330,7 +333,7 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
 
 
 @node.meta(description="A uniform-buffer binding a draw cannot name a surface for")
-@node.process(execution="manual")
+@node(execution="manual")
 class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
     """A uniform-buffer binding is reflected, declared and refused at the draw.
 
@@ -343,7 +346,7 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
 
     def observe(self, kernel, source, color_target) -> dict:
         del kernel
-        tinted = self.gpu_full_access.create_graphics_kernel(
+        tinted = self._gpu_full_access.create_graphics_kernel(
             color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
             vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
             fragment_source=TINTED_SAMPLED_INPUT_FRAGMENT_SLANG,
@@ -367,7 +370,7 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
 
 
 @node.meta(description="Pass shapes a Python draw cannot ask for")
-@node.process(execution="manual")
+@node(execution="manual")
 class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
     """Vertex buffers, an index buffer and a depth target are not arguments.
 
@@ -378,7 +381,7 @@ class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
     """
 
     def observe(self, kernel, source, color_target) -> dict:
-        gpu = self.gpu_full_access
+        gpu = self._gpu_full_access
 
         def draw_with(**unsupported) -> None:
             kernel.draw(
@@ -440,16 +443,16 @@ float4 main(float4 fragment_position : SV_Position) : SV_Target {{
 """
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class RenderedTextureFrameProducer:
     """Renders two known halves into a texture from its output pool, once,
     and sends that frame downstream on every tick — no link promises delivery,
     and a bag written before the reader's interpreter subscribed is lost."""
 
-    video_to_downstream = Output(Image)
+    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
 
     def __init__(self) -> None:
-        self.color_target = None
+        self._color_target = None
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         try:
@@ -460,12 +463,12 @@ class RenderedTextureFrameProducer:
                 fragment_source=TWO_HALVES_FRAGMENT_SLANG,
                 label="python-two-halves",
             )
-            self.color_target = NodeOutputTextureRing(
+            self._color_target = NodeOutputTextureRing(
                 COLOR_ATTACHMENT_FORMAT, COLOR_TARGET_TEXTURE_USAGE, depth=1
             ).next_texture_for_this_frame(gpu, SURFACE_WIDTH, SURFACE_HEIGHT)
             kernel.draw(
                 bindings={},
-                color_targets=[self.color_target],
+                color_targets=[self._color_target],
                 extent=(SURFACE_WIDTH, SURFACE_HEIGHT),
                 vertex_count=3,
             )
@@ -474,33 +477,32 @@ class RenderedTextureFrameProducer:
             raise
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.color_target is None:
+        if self._color_target is None:
             return
-        ctx.outputs.write(
-            self.video_to_downstream,
-            ImageFrameToWrite.of_texture(self.color_target, ColorInfo()),
+        self.video_to_downstream.write(
+            ImageFrameToWrite.of_texture(self._color_target, ColorInfo()),
             timestamp_ns=ctx.time,
         )
 
 
 @node.meta(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
-@node.process
+@node
 class RenderedFrameCpuReader:
     """Reads the first frame it is handed through `cpu()`, in a node
     interpreter of its own, and reports what each half holds."""
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.reported:
+        if self._reported:
             return
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is None:
             return
-        self.reported = True
+        self._reported = True
 
         def observe() -> dict:
             with frame.cpu() as host_pixels:

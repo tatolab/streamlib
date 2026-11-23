@@ -94,8 +94,31 @@ pub fn register_media_builtin_node_types() {
 }
 
 /// Register each built-in conversion node, each with the function that picks the setting its
-/// output follows when it has one, on the process-wide registry.
+/// output follows when it has one, and each number conversion with the cast it makes of a saved
+/// value, on the process-wide registry.
 pub fn register_the_conversion_node_types() {
+    use pin_type_conversion::number_conversions::{
+        BooleanToFloat, BooleanToInteger, FloatToBoolean, FloatToInteger, IntegerToBoolean,
+        IntegerToFloat, the_number_cast_of_a_saved_value,
+    };
+    let the_number_cast = the_number_cast_of_a_saved_value();
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<FloatToInteger::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<IntegerToFloat::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<BooleanToInteger::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<IntegerToBoolean::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY.register_a_conversion_casting_a_saved_value::<BooleanToFloat::Node>(
+        the_number_cast.clone(),
+    );
+    NODE_REGISTRY
+        .register_a_conversion_casting_a_saved_value::<FloatToBoolean::Node>(the_number_cast);
     NODE_REGISTRY.register::<pin_type_conversion::AudioToTensor::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::TensorToAudio::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::ChannelsToRecords::Node>();

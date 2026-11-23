@@ -3,7 +3,10 @@
 
 use std::fmt;
 
-use super::{BundleMember, NodeInputMode, PinConversion, PinConversionOutputPicked, PinType};
+use super::{
+    BundleMember, NodeInputMode, PinConversion, PinConversionOutputPicked, PinFlow, PinType,
+    an_input_takes_a_wire,
+};
 use crate::port_family::{
     CodecDirection, EncodedMedia, PortFamily, codec_nodes_placed_between,
     node_placed_between_families,
@@ -23,6 +26,8 @@ pub struct PinLinkEnd<'end> {
     pub pin_type: &'end PinType,
     /// What its value stands for, as its pin states it.
     pub meaning: Option<&'end str>,
+    /// How its messages are read, as its pin states it; `None` where it states none.
+    pub flow: Option<PinFlow>,
 }
 
 /// The input end of a link, with whether the input takes a wire.
@@ -30,6 +35,8 @@ pub struct PinLinkEnd<'end> {
 pub struct PinLinkInputEnd<'end> {
     /// The end.
     pub end: PinLinkEnd<'end>,
+    /// The type of the input's node.
+    pub node_type: &'end crate::NodeClassImportPath,
     /// Whether the input takes a wire, a stored value, or both; `None` for one that takes a wire.
     pub input_mode: Option<NodeInputMode>,
 }
@@ -59,7 +66,8 @@ pub enum PinLinkOutcome {
 /// Two differing types the verdict lets connect, each variant stating what the input reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FreePinConversion {
-    /// Boolean, Integer and Float among themselves; a Float read as an Integer rounds half away.
+    /// Boolean, Integer and Float among themselves; a Float read as an Integer truncates toward
+    /// zero.
     BetweenNumbers,
     /// A Vector into one of another size, its components to be dropped or padded with 0.
     BetweenVectors,
@@ -91,11 +99,24 @@ pub struct ConvertNodeToInsert {
 /// Why a link is refused; its words are the sentence a client shows, naming both ends.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PinLinkRefusal {
-    /// The input is a setting, which takes a stored value and never a wire.
+    /// The input is a setting that takes no wire: one read each run, one of a type no message
+    /// carries, or one of a `GraphInput`.
     InputTakesNoWire {
         /// The node of the input.
         node_name: String,
         /// The input.
+        input_name: String,
+    },
+    /// A Stream or a Trigger output enters a setting read at setup, which takes a Value wire
+    /// only, since each change of it rebuilds its node.
+    StreamIntoASetting {
+        /// The output end.
+        output: PinLinkEndNamed,
+        /// How the output's messages are read.
+        output_flow: PinFlow,
+        /// The node of the setting.
+        node_name: String,
+        /// The setting.
         input_name: String,
     },
     /// No rule connects the output's type to the input's.
@@ -194,6 +215,22 @@ impl fmt::Display for PinLinkRefusal {
                 "a link enters input `{input_name}` of `{node_name}`, a setting, which takes no \
                  wire. To fix: set its value with `set_node_input_value`"
             ),
+            Self::StreamIntoASetting {
+                output,
+                output_flow,
+                node_name,
+                input_name,
+            } => {
+                let flow = output_flow.name();
+                write!(
+                    formatter,
+                    "cannot link {output} to setting `{input_name}` of `{node_name}`: the output \
+                     flows as `{flow}`, and a setting takes a `value` wire only, since each \
+                     change of it rebuilds its node. To fix: place a node that samples the \
+                     {flow} into a value between them, or set the setting's value with \
+                     `set_node_input_value`"
+                )
+            }
             Self::PinTypesDoNotConnect {
                 output,
                 input,
@@ -379,15 +416,27 @@ pub fn pin_link_verdict(
     input: PinLinkInputEnd<'_>,
     conversions: &[PinConversion],
 ) -> PinLinkVerdict {
-    if input
-        .input_mode
-        .is_some_and(|input_mode| !input_mode.takes_a_wire())
-    {
+    if !an_input_takes_a_wire(input.node_type, input.input_mode, Some(input.end.pin_type)) {
         return PinLinkVerdict {
             outcome: PinLinkOutcome::Refused(Box::new(PinLinkRefusal::input_takes_no_wire(
                 input.end.node_name,
                 input.end.port_name,
             ))),
+            warnings: Vec::new(),
+        };
+    }
+    if let Some(output_flow @ (PinFlow::Stream | PinFlow::Trigger)) = output.flow
+        && input
+            .input_mode
+            .is_some_and(NodeInputMode::is_a_setting_read_at_setup)
+    {
+        return PinLinkVerdict {
+            outcome: PinLinkOutcome::Refused(Box::new(PinLinkRefusal::StreamIntoASetting {
+                output: output.into(),
+                output_flow,
+                node_name: input.end.node_name.to_owned(),
+                input_name: input.end.port_name.to_owned(),
+            })),
             warnings: Vec::new(),
         };
     }
@@ -495,6 +544,13 @@ impl DirectPinLink {
             warnings: Vec::new(),
         }
     }
+}
+
+/// Whether a value of `output` is a value of `input` with nothing converted: a link between them
+/// connects as it is, or both are numbers of one type, whatever size each states.
+pub(super) fn takes_as_it_is(output: &PinType, input: &PinType) -> bool {
+    (output.is_a_number() && output.built_in_name() == input.built_in_name())
+        || direct_link_between(output, input).is_some_and(|direct| direct.free_conversion.is_none())
 }
 
 /// How an output of `output` connects to an input of `input` with nothing between them.

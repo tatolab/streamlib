@@ -248,12 +248,13 @@ pub mod sdk {
     pub mod nodes {
         pub use crate::core::nodes::{
             __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
-            DynamicNodeConstructorFn, EmptyConfig, GeneratedNode, InstalledModuleOfANodeType,
-            ManualNode, NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec, NodeState,
-            NodeStateComponent, NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
+            DynamicNodeConstructorFn, EmptyConfig, GRAPH_NODE_TYPE_CATEGORY, GeneratedNode,
+            InstalledModuleOfANodeType, ManualNode, NODE_REGISTRY, NodeInstance,
+            NodeInstanceFactory, NodeSpec, NodeState, NodeStateComponent,
+            NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
             OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
             OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ReactiveNode,
-            VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
+            VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, the_node_types_of_the_graph_itself, traits,
         };
 
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};

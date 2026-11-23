@@ -40,7 +40,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   subscribe_project_log_records(params: ControlOperations["subscribe_project_log_records"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_project_log_records"]["result"]>;
   /**
-   * Describe this runtime: its version, its build id, how long it has been up and where it logs.
+   * Describe this runtime: its version, its build id, how long it has been up, where it logs and its machine's name.
    */
   describe_runtime(params?: ControlOperations["describe_runtime"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["describe_runtime"]["result"]>;
   /**

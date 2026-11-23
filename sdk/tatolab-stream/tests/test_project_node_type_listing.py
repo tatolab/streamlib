@@ -395,6 +395,34 @@ def test_a_class_under_bare_node_is_listed_with_its_fields_and_pins_and_no_state
     assert [(port["name"], port["family"]) for port in blur["outputs"]] == [("result", "image")]
 
 
+def test_a_pin_typed_by_a_bound_type_parameter_is_listed_with_the_family_of_its_bound() -> None:
+    module_source = "\n".join(
+        [
+            "from typing import Annotated",
+            "from tatolab.stream import Description, InputPin, OutputPin, Texture, node",
+            "",
+            "@node",
+            "class HandsOn[Frame: Texture, Unbound]:",
+            "    picture_in: InputPin[Annotated[Frame, Description('The pictures.')]]",
+            "    other: InputPin[Unbound]",
+            "    picture_out: OutputPin[Frame]",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.hands_on", "nodes/hands_on.py", module_source)]
+    )
+
+    (hands_on,) = read["node_types"]
+    assert [(port["name"], port["family"]) for port in hands_on["inputs"]] == [
+        ("picture_in", "image"),
+        ("other", None),
+    ]
+    assert hands_on["inputs"][0]["description"] == "The pictures."
+    assert [(port["name"], port["family"]) for port in hands_on["outputs"]] == [("picture_out", "image")]
+
+
 def test_a_named_pin_type_is_listed_by_its_import_path_and_description_from_source() -> None:
     module_source = "\n".join(
         [

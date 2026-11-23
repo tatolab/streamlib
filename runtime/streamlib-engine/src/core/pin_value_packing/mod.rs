@@ -27,7 +27,7 @@ use streamlib_node_schema::pin_type::{
 };
 use streamlib_project_repository::FAMILIES_A_PANEL_WRITES;
 
-use crate::core::descriptors::{PinType, PortFamily};
+use crate::core::descriptors::{PinType, PortFamily, the_integer_a_float_is_cast_to};
 
 mod bundle_frame_packing;
 #[cfg(test)]
@@ -457,13 +457,14 @@ pub fn the_channel_values_of_a_stored_value(
 }
 
 /// The JSON form of the value of `pin_type` whose parts are `channel_values`, as many as
-/// [`channel_count_of`] gives, in the order its stored form lists them: an Integer rounded half
-/// away from zero, and a Boolean true for any number but 0.
+/// [`channel_count_of`] gives, in the order its stored form lists them: an Integer as
+/// [`the_integer_a_float_is_cast_to`] casts it, truncated toward zero, and a Boolean true for any
+/// number but 0.
 fn the_stored_value_of_channel_values(pin_type: &PinType, channel_values: &[f64]) -> Value {
     let number = |index: usize| channel_values.get(index).copied().unwrap_or_default();
     match pin_type {
         PinType::Boolean {} => Value::Bool(number(0) != 0.0),
-        PinType::Integer { .. } => Value::from(number(0).round() as i64),
+        PinType::Integer { exact_size } => the_integer_a_float_is_cast_to(number(0), *exact_size),
         PinType::Color {} => serde_json::json!({
             "red": number(0), "green": number(1), "blue": number(2), "alpha": number(3),
         }),

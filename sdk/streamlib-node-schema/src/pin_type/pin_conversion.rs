@@ -10,7 +10,7 @@ use crate::descriptors::{NodeDescriptor, PortDescriptor};
 pub struct PinConversion {
     /// The node type that converts.
     pub node_type: NodeClassImportPath,
-    /// Its one input that takes a wire.
+    /// Its one input that is no setting.
     pub input_port_name: String,
     /// The type that input takes.
     pub input_pin_type: PinType,
@@ -21,6 +21,11 @@ pub struct PinConversion {
     /// The settings it picks for the input its output feeds, when what its output gives
     /// follows a setting; `None` when its output gives `output_pin_type` whatever it holds.
     pub output_picked_for_the_input: Option<PinConversionOutputPick>,
+    /// The function that casts one saved value its input takes into the value its output gives,
+    /// with no stream started: a host function, or one run of a module's function node out of
+    /// stream; `None` when it converts only inside a started stream, as a module's node class or
+    /// shader does.
+    pub saved_value_cast: Option<PinConversionSavedValueCast>,
 }
 
 impl PinConversion {
@@ -78,6 +83,94 @@ impl PartialEq for PinConversionOutputPick {
     }
 }
 
+/// What a conversion casts one saved value with, with no stream started: a function of the
+/// host's, or one run of a module's own conversion out of stream.
+type SavedValueCastFunction = dyn Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, SavedValueNotCast>
+    + Send
+    + Sync;
+
+/// Why a conversion's cast gives no value for a saved value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SavedValueNotCast {
+    /// What casts it did not run with no stream started, in words: the stream cannot run the
+    /// conversion's body out of stream, or its run failed.
+    DidNotRun(String),
+    /// It ran and refused the value, in words.
+    RefusedTheValue(String),
+}
+
+/// The function a conversion supplies that casts one saved value with no stream started.
+#[derive(Clone)]
+pub struct PinConversionSavedValueCast {
+    cast: std::sync::Arc<SavedValueCastFunction>,
+    starts_a_process: bool,
+}
+
+impl PinConversionSavedValueCast {
+    /// The cast `cast` makes: for a value the conversion's input takes and the type of the value
+    /// to give, its output's type or a size of it, the value cast; why not when it gives none.
+    pub fn new(
+        cast: impl Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, SavedValueNotCast>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            cast: std::sync::Arc::new(cast),
+            starts_a_process: false,
+        }
+    }
+
+    /// The cast `cast` makes, as [`Self::new`] does, by starting a process: a module's body run
+    /// in the stream's interpreter, which a caller holding a lock is not to wait on.
+    pub fn that_starts_a_process(
+        cast: impl Fn(&serde_json::Value, &PinType) -> Result<serde_json::Value, SavedValueNotCast>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            starts_a_process: true,
+            ..Self::new(cast)
+        }
+    }
+
+    /// A cast that never runs, for a conversion the stream cannot run out of stream: why, in
+    /// words.
+    pub fn that_does_not_run(why: impl Into<String>) -> Self {
+        let why = why.into();
+        Self::new(move |_value, _into| Err(SavedValueNotCast::DidNotRun(why.clone())))
+    }
+
+    /// Whether the cast starts a process, as [`Self::that_starts_a_process`] makes one.
+    pub fn starts_a_process(&self) -> bool {
+        self.starts_a_process
+    }
+
+    /// `value`, a value the conversion's input takes, cast into a value of `into`; why not when
+    /// it gives none.
+    pub fn cast(
+        &self,
+        value: &serde_json::Value,
+        into: &PinType,
+    ) -> Result<serde_json::Value, SavedValueNotCast> {
+        (self.cast)(value, into)
+    }
+}
+
+impl std::fmt::Debug for PinConversionSavedValueCast {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PinConversionSavedValueCast(..)")
+    }
+}
+
+// Two casts are one when they share one function, as a clone of one does.
+impl PartialEq for PinConversionSavedValueCast {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.cast, &other.cast)
+    }
+}
+
 /// What a conversion picks to feed one input: the settings its node holds and the type its output
 /// gives under them.
 #[derive(Debug, Clone, PartialEq)]
@@ -104,11 +197,11 @@ impl NodeDescriptor {
         let wired_inputs: Vec<&PortDescriptor> = self
             .inputs
             .iter()
-            .filter(|input| input.input_mode.is_none_or(|mode| mode.takes_a_wire()))
+            .filter(|input| input.input_mode.is_none_or(|mode| !mode.is_a_setting()))
             .collect();
         let ([wired_input], [output]) = (wired_inputs.as_slice(), self.outputs.as_slice()) else {
             return refused(format!(
-                "it has {} inputs that take a wire and {} outputs",
+                "it has {} inputs besides its settings and {} outputs",
                 wired_inputs.len(),
                 self.outputs.len()
             ));
@@ -148,6 +241,7 @@ impl NodeDescriptor {
             output_port_name: output.name.clone(),
             output_pin_type,
             output_picked_for_the_input: None,
+            saved_value_cast: None,
         }))
     }
 }
@@ -166,7 +260,7 @@ impl std::fmt::Display for PinConversionRefusal {
         write!(
             formatter,
             "`{}` states that it is a conversion, and {}; a conversion has exactly one input \
-             that takes a wire, exactly one output and any number of setting inputs, each wired \
+             besides its settings, exactly one output and any number of setting inputs, each wired \
              pin stating one pin type",
             self.node_type, self.why
         )

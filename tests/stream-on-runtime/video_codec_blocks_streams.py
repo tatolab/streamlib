@@ -61,7 +61,7 @@ def _add_a_codec_round_trip_with_probes(
     asserting about a single group.
     """
     pattern = stream_builder.add(
-        TestPatternSource, config={"width": 320, "height": 180}
+        TestPatternSource, input_values={"width": 320, "height": 180}
     )
     encoder = stream_builder.add(
         encoder_class,

@@ -33,8 +33,8 @@ def process_context_probe_alone(stream_builder: StreamBuilder) -> None:
 
 
 @graph_generator
-def config_probe_alone(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(capability_context_probes.ConfigProbe)
+def fields_probe_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(capability_context_probes.FieldsProbe)
 
 
 @graph_generator
@@ -63,9 +63,11 @@ def worker_thread_privileged_constructor_alone(stream_builder: StreamBuilder) ->
 
 
 @graph_generator
-def one_config_probe_with_gain_and_label(stream_builder: StreamBuilder) -> None:
-    """A `ConfigProbe` configured with a gain and a label."""
-    stream_builder.add(capability_context_probes.ConfigProbe, config={"gain": 2.5, "label": "left"})
+def one_fields_probe_with_gain_and_label(stream_builder: StreamBuilder) -> None:
+    """A `FieldsProbe` added with a gain and a label."""
+    stream_builder.add(
+        capability_context_probes.FieldsProbe, input_values={"gain": 2.5, "label": "left"}
+    )
 
 
 @graph_generator

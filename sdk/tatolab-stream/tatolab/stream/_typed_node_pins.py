@@ -5,7 +5,8 @@
 
 A typed node is one whose every port carries the `pin_declaration` bare `@node` reads, so its
 declaration names each input's type. A node of the family grammar declares no such thing, and
-the builder records what it is given unchecked.
+the builder records what it is given unchecked. A port of a slot of a node's pin group,
+`layers.2.picture`, is found as the slot's field it names, in any slot.
 """
 
 from __future__ import annotations
@@ -21,7 +22,12 @@ from ._contract_pin_types import (
     PinType,
 )
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
-from ._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP, NODE_DECLARATION_OUTPUT_PORTS_STAMP
+from ._class_node_pin_group import PIN_GROUP_SLOT_PORT_NAME_SEPARATOR
+from ._node_declaration import (
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+    NODE_DECLARATION_PIN_GROUPS_STAMP,
+)
 from ._pin_declaration import PinValueNotTaken, stored_form_of_a_pin_value
 
 __all__ = ["TypedNodePins"]
@@ -51,16 +57,26 @@ class TypedNodePins:
 
     _inputs: Mapping[str, _DeclaredPort]
     _outputs: Mapping[str, _DeclaredPort]
+    _slot_inputs_by_group: Mapping[str, Mapping[str, _DeclaredPort]]
+    _slot_outputs_by_group: Mapping[str, Mapping[str, _DeclaredPort]]
 
     @classmethod
     def of(cls, node_class: object, node: str) -> Optional[TypedNodePins]:
         """The pins `node_class` declares when it is a typed node; `None` when it is not."""
         input_ports: list[dict[str, Any]] = getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, None) or []
         output_ports: list[dict[str, Any]] = getattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, None) or []
-        ports = [*input_ports, *output_ports]
+        pin_groups: list[dict[str, Any]] = getattr(node_class, NODE_DECLARATION_PIN_GROUPS_STAMP, None) or []
+        slot_ports = [port for group in pin_groups for port in (*group["inputs"], *group["outputs"])]
+        ports = [*input_ports, *output_ports, *slot_ports]
         if not ports or not all(_PIN_DECLARATION_KEY in port for port in ports):
             return None
-        return cls(node, _found_by_each_name(input_ports), _found_by_each_name(output_ports))
+        return cls(
+            node,
+            _found_by_each_name(input_ports),
+            _found_by_each_name(output_ports),
+            {group["name"]: _found_by_each_name(group["inputs"]) for group in pin_groups},
+            {group["name"]: _found_by_each_name(group["outputs"]) for group in pin_groups},
+        )
 
     def port_named(self, name: str, direction: PortDirection) -> str:
         """The name of the port of `direction` that `name`, cast, finds; refused naming the ports declared."""
@@ -139,12 +155,47 @@ class TypedNodePins:
         except ExposedNameCastsToNothingError:
             port = None
         if port is None:
-            names = sorted({port.name for port in declared.values()})
+            port = self._slot_port(name, direction)
+        if port is None:
+            slot_ports = (
+                self._slot_inputs_by_group if direction == "input" else self._slot_outputs_by_group
+            )
+            names = sorted(
+                {port.name for port in declared.values()}
+                | {
+                    f"{group}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}<slot>"
+                    f"{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{port.name}"
+                    for group, ports in slot_ports.items()
+                    for port in ports.values()
+                }
+            )
             listed = ", ".join(f"`{port_name}`" for port_name in names) or "none"
             raise ValueError(
                 f"`{self.node}` declares no {direction} `{name}`; its {direction}s are: {listed}"
             )
         return port
+
+
+    def _slot_port(self, name: str, direction: PortDirection) -> Optional[_DeclaredPort]:
+        """The port `name` finds in a slot of a pin group, `layers.2.picture` the field `picture`
+        of slot 2 of `layers`; `None` when it names none."""
+        parts = name.split(PIN_GROUP_SLOT_PORT_NAME_SEPARATOR, 2)
+        if len(parts) != 3:
+            return None
+        group, slot, field_name = parts
+        if not slot.isdigit() or (slot != "0" and slot.startswith("0")):
+            return None
+        slot_ports = self._slot_inputs_by_group if direction == "input" else self._slot_outputs_by_group
+        try:
+            field_port = slot_ports.get(group, {}).get(cast_exposed_name_to_url_safe(field_name))
+        except ExposedNameCastsToNothingError:
+            return None
+        if field_port is None:
+            return None
+        return _DeclaredPort(
+            f"{group}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{slot}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{field_port.name}",
+            field_port.declaration,
+        )
 
 
 def _found_by_each_name(ports: list[dict[str, Any]]) -> dict[str, _DeclaredPort]:

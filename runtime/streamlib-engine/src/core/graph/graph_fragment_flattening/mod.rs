@@ -23,7 +23,8 @@ use crate::core::graph::graph_interface_resolution::{
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::graph::input_values::{
-    the_read_of_an_input_a_link_feeds, the_settings_rendered_reading_the_values_held,
+    TakesAWireRendered, the_read_of_an_input_a_link_feeds,
+    the_settings_rendered_reading_the_values_held,
 };
 use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{
@@ -34,7 +35,10 @@ use crate::core::json_schema::{
     GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
     LinkStateOutput, PinLinkMarksOnTheWire, redraw_a_node_over_its_pins,
 };
-use crate::core::nodes::{NodeTypesOneStreamResolves, the_settings_of_a_placed_stream};
+use crate::core::nodes::{
+    NodeTypesOneStreamResolves, the_setting_of_a_placed_stream_named,
+    the_settings_of_a_placed_stream,
+};
 use crate::core::{Error, Result};
 
 /// What separates a fragment's name from the name of a node it holds, in the name the node
@@ -217,6 +221,12 @@ fn flatten_one_level(
                     "fragment `{fragment_path_of_names}` does not flatten: {refusal}"
                 )),
             })?;
+        if node.node_type.as_str() == STREAM_FRAGMENT_NODE_TYPE {
+            refuse_an_input_named_like_a_setting_of_the_placed_stream(
+                &fragment_path_of_names,
+                &interface.interface_as_drawn,
+            )?;
+        }
         nodes_of_the_fragments_held.extend(interface.graph_the_runtime_runs.nodes);
         links_of_the_fragments_held.extend(interface.graph_the_runtime_runs.links);
         fragment_by_cast_name.insert(cast_of(&node.name)?, fragments.len());
@@ -513,6 +523,7 @@ impl GraphFragmentAsDrawn {
                 the_settings_rendered_reading_the_values_held(
                     the_settings_of_a_placed_stream(),
                     &self.node.input_values,
+                    TakesAWireRendered::LeftOut,
                 ),
             );
         }
@@ -852,6 +863,36 @@ fn rendered_as_drawn(link: &GraphSnapshotLink) -> LinkOutput {
         },
         ..LinkOutput::default()
     }
+}
+
+/// Refuse the placed stream at `path_of_names` when an Input the stream it places declares takes
+/// the name, as `graph` casts it, of one of the placed stream's own settings.
+fn refuse_an_input_named_like_a_setting_of_the_placed_stream(
+    path_of_names: &str,
+    interface_as_drawn: &GraphInterfaceAsDrawn,
+) -> Result<()> {
+    for declared in interface_as_drawn.declared_ports() {
+        if declared.direction != GraphInterfacePortDirection::Input {
+            continue;
+        }
+        if let Some(setting) =
+            the_setting_of_a_placed_stream_named(&cast_or_as_written(&declared.port))
+        {
+            let interface_node_as_the_stream_names_it = declared
+                .interface_node
+                .strip_prefix(path_of_names)
+                .and_then(|name| name.strip_prefix(GRAPH_FRAGMENT_NODE_PATH_SEPARATOR))
+                .unwrap_or(&declared.interface_node);
+            return Err(Error::GraphError(format!(
+                "placed stream `{path_of_names}`: the stream it places declares the Input `{}` on \
+                 its Graph Input `{interface_node_as_the_stream_names_it}`, the name of the placed stream's own setting `{}`, so a link \
+                 into that Input would also feed the setting; rename the Input in the stream it \
+                 places",
+                declared.port, setting.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn cast_of(name: &str) -> Result<String> {

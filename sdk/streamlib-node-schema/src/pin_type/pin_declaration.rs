@@ -221,7 +221,9 @@ pub enum NodeInputMode {
     WireOrValue,
     /// A link only, read each run.
     WireOnly,
-    /// A stored value only, never a link.
+    /// A setting: a stored value, or what a Value wire into it carries, read when `read` says.
+    /// One read at setup takes a wire, and a change of either rebuilds its node; one read each
+    /// run takes no wire.
     SettingOnly {
         /// When the node reads it.
         #[serde(default)]
@@ -229,10 +231,30 @@ pub enum NodeInputMode {
     },
 }
 
+/// Whether a link may end at an input of `mode` carrying `pin_type` on a node of `node_type`,
+/// the one rule every place that asks follows: every input but a setting read each run, a
+/// setting of a type no message carries, such as a node reference or a choice of pin type, and
+/// any setting of a node type of the graph itself — `GraphInput`, `GraphOutput`, `SetVariable`
+/// or `GetVariable` — which names a port of its stream or a variable, so fixes types across
+/// the graph before any link is judged, rather than running on a value. An input of no `mode`
+/// is a port that takes a wire; one of no `pin_type` links by its family.
+pub fn an_input_takes_a_wire(
+    node_type: &crate::NodeClassImportPath,
+    mode: Option<NodeInputMode>,
+    pin_type: Option<&PinType>,
+) -> bool {
+    mode.is_none_or(|mode| {
+        !mode.is_a_setting()
+            || !(mode.is_a_setting_read_each_run()
+                || node_type.is_a_node_type_of_the_graph_itself()
+                || pin_type.is_some_and(|pin_type| !pin_type.takes_a_wire()))
+    })
+}
+
 impl NodeInputMode {
-    /// Whether a link may end at an input of this mode: every mode but a setting.
-    pub fn takes_a_wire(self) -> bool {
-        !matches!(self, Self::SettingOnly { .. })
+    /// Whether an input of this mode is a setting, read at setup or each run.
+    pub fn is_a_setting(self) -> bool {
+        matches!(self, Self::SettingOnly { .. })
     }
 
     /// Whether an input of this mode is a setting its node reads each run.
@@ -257,7 +279,7 @@ impl NodeInputMode {
     }
 }
 
-/// When a node reads a setting-only input.
+/// When a node reads a setting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "contract-json-schema",
@@ -266,9 +288,10 @@ impl NodeInputMode {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SettingReadTime {
-    /// Once, when the node is set up; a change rebuilds the node.
+    /// Once, when the node is set up; it takes a Value wire, and a change of its value or of
+    /// what its wire carries rebuilds the node.
     #[default]
     AtSetup,
-    /// Each run, with no rebuild. Runtime-owned nodes only.
+    /// Each run, with no rebuild and no wire. Runtime-owned nodes only.
     EachRun,
 }

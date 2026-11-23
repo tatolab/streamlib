@@ -11,7 +11,7 @@ that stalls half way still says how far it got.
 as a decoder reads it — each message one bare access unit, a keyframe
 opening a group, the port's stream facts naming the codec.
 `EncodedFrameTimestampProbe` reads the same link for its frame-header stamps.
-`DecodedVideoFrameProbe` reads the far side of the decoder as Image frames.
+`DecodedVideoFrameProbe` reads the far side of the decoder as Texture frames.
 
 The two stamp reports are uncapped, unlike the cast report. Each probe is its
 own helper process attaching at its own pace, so a short window on either side
@@ -21,8 +21,9 @@ overlap.
 
 import dataclasses
 import json
+from typing import Annotated
 
-from tatolab.stream import Image, Input, Packets, log, node
+from tatolab.stream import EncodedVideo, InputPin, StreamDelivery, Texture, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -42,35 +43,35 @@ ENCODED_FRAMES_REPORTED = 40
 # the encoded probe's window is not a bound on the decoded one.
 DECODED_STAMPS_REPORTED = 30
 
-ENCODED_PORT = "encoded_video_from_upstream"
+EncodedVideoInOrder = Annotated[EncodedVideo, StreamDelivery("ordered")]
 
 
-@node.process
+@node
 class EncodedFrameProbe:
     """Reads the encoder's output as access units and reports each one."""
 
     def __init__(self) -> None:
-        self.frames_admitted = 0
-        self.entered_the_stream = False
+        self._frames_admitted = 0
+        self._entered_the_stream = False
 
-    encoded_video_from_upstream = Input(Packets, delivery="ordered")
+    encoded_video_from_upstream: InputPin[EncodedVideoInOrder]
 
     def process(self, ctx) -> None:
-        if self.frames_admitted >= ENCODED_FRAMES_REPORTED:
+        if self._frames_admitted >= ENCODED_FRAMES_REPORTED:
             return
-        message = ctx.inputs.read_message(ENCODED_PORT)
+        message = self.encoded_video_from_upstream.read_message()
         if message is None:
             return
         # The doctrine every reader of an encoded stream owes it: enter only
         # at a group start. The first message off this link is not necessarily
         # the producer's first — attaching mid-group hands over frames whose
         # keyframe is already gone.
-        if not self.entered_the_stream:
+        if not self._entered_the_stream:
             if not message.starts_group:
                 return
-            self.entered_the_stream = True
-        self.frames_admitted += 1
-        access_unit = bytes(memoryview(message.payload).cast("B"))
+            self._entered_the_stream = True
+        self._frames_admitted += 1
+        access_unit = bytes(memoryview(message.payload.payload).cast("B"))
         report = {
             "starts_group": message.starts_group,
             "lost_since_last_read": message.lost_since_last_read,
@@ -78,17 +79,17 @@ class EncodedFrameProbe:
             "opening_bytes": list(access_unit[:4]),
             "byte_count": len(access_unit),
         }
-        if self.frames_admitted == 1:
-            upstream_stream_facts = ctx.inputs.upstream_stream_facts(ENCODED_PORT)
+        if self._frames_admitted == 1:
+            upstream_stream_facts = self.encoded_video_from_upstream.upstream_stream_facts()
             report["stream_facts"] = (
                 None if upstream_stream_facts is None else upstream_stream_facts.to_wire()
             )
         log.info(ENCODED_FRAME_MARKER + json.dumps(report))
-        if self.frames_admitted == ENCODED_FRAMES_REPORTED:
+        if self._frames_admitted == ENCODED_FRAMES_REPORTED:
             log.info(ENCODED_FRAMES_COMPLETE_MARKER)
 
 
-@node.process
+@node
 class EncodedFrameTimestampProbe:
     """Reports the frame-header stamp riding each of the encoder's messages.
 
@@ -96,18 +97,18 @@ class EncodedFrameTimestampProbe:
     whose stamp a decoded frame downstream may carry.
     """
 
-    encoded_video_from_upstream = Input(Packets, delivery="ordered")
+    encoded_video_from_upstream: InputPin[EncodedVideoInOrder]
 
     def process(self, ctx) -> None:
-        payload, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
-        if payload is None:
+        message = self.encoded_video_from_upstream.read_message()
+        if message is None:
             return
-        log.info(ENCODED_FRAME_STAMP_MARKER + json.dumps({"timestamp_ns": timestamp_ns}))
+        log.info(ENCODED_FRAME_STAMP_MARKER + json.dumps({"timestamp_ns": message.timestamp_ns}))
 
 
-@node.process
+@node
 class DecodedVideoFrameProbe:
-    """Reports the decoder's first two Image frames whole, then every frame's stamp.
+    """Reports the decoder's first two Texture frames whole, then every frame's stamp.
 
     The first two carry the whole frame because that is what the extent, colour
     and surface assertions read; the stamps keep coming so the encoded side's
@@ -115,13 +116,13 @@ class DecodedVideoFrameProbe:
     """
 
     def __init__(self) -> None:
-        self.messages_seen = []
-        self.stamps_reported = 0
+        self._messages_seen = []
+        self._stamps_reported = 0
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is None:
             return
         message = {
@@ -132,14 +133,14 @@ class DecodedVideoFrameProbe:
             "colour": dataclasses.asdict(frame.colour),
             "timestamp_ns": frame.timestamp_ns,
         }
-        if len(self.messages_seen) < 2:
-            self.messages_seen.append(message)
-            if len(self.messages_seen) == 2:
-                log.info(DECODED_FRAMES_MARKER + json.dumps(self.messages_seen))
-        self.stamps_reported += 1
+        if len(self._messages_seen) < 2:
+            self._messages_seen.append(message)
+            if len(self._messages_seen) == 2:
+                log.info(DECODED_FRAMES_MARKER + json.dumps(self._messages_seen))
+        self._stamps_reported += 1
         log.info(
             DECODED_FRAME_STAMP_MARKER
             + json.dumps({"timestamp_ns": message["timestamp_ns"]})
         )
-        if self.stamps_reported == DECODED_STAMPS_REPORTED:
+        if self._stamps_reported == DECODED_STAMPS_REPORTED:
             log.info(DECODED_FRAME_STAMPS_COMPLETE_MARKER)

@@ -13,16 +13,30 @@ import hashlib
 import json
 import os
 import traceback
-from typing import TypedDict
+from typing import Annotated
 
 import numpy
 
-from tatolab.stream import Image, Input, Output, log, node
+from tatolab.stream import (
+    InputPin,
+    OutputPin,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
+    log,
+    node,
+)
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 32
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
+
+#: The pixel format the test pattern draws in, which the editing effect writes on.
+TEST_PATTERN_TEXTURE_FORMAT = "rgba8_unorm"
+
+#: An input that takes every frame in order.
+FramesInOrder = Annotated[Texture, StreamDelivery("ordered")]
 
 
 def _report(probe_body) -> None:
@@ -35,7 +49,7 @@ def _report(probe_body) -> None:
     log.info(RESULT_MARKER + json.dumps({"pid": os.getpid(), **observation}))
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class NumpyViewProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -57,7 +71,7 @@ class NumpyViewProbe:
             return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class UnlockedExportProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -88,7 +102,7 @@ class UnlockedExportProbe:
             return outcomes
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class LockModeProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -112,7 +126,7 @@ class LockModeProbe:
         return outcomes
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class SharedMemoryProbe:
     """Writes through one handle, reads through a second one resolved by id."""
 
@@ -139,7 +153,7 @@ class SharedMemoryProbe:
                 return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class TensorOutlivesTheSurfaceProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -163,7 +177,7 @@ class TensorOutlivesTheSurfaceProbe:
         }
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class PoolCycleProbe:
     """Holds a tensor, then churns the pool past its depth with fresh writes."""
 
@@ -200,7 +214,7 @@ class PoolCycleProbe:
         }
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class DlpackConsumerProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -223,7 +237,7 @@ class DlpackConsumerProbe:
             return observation
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class UnsupportedFormatProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -242,7 +256,7 @@ class UnsupportedFormatProbe:
             return {"outcome": outcome}
 
 
-@node.process
+@node
 class InvertingEffect:
     """What a user writes: read the frame, change the pixels, pass it on.
 
@@ -250,16 +264,16 @@ class InvertingEffect:
     opens CPU access, and edits the engine's own memory in place.
     """
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[FramesInOrder]
 
     def __init__(self) -> None:
-        self.frames_seen = 0
+        self._frames_seen = 0
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None or self.frames_seen >= 1:
+        frame = self.video_from_upstream.read()
+        if frame is None or self._frames_seen >= 1:
             return
-        self.frames_seen += 1
+        self._frames_seen += 1
 
         def probe() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -294,11 +308,7 @@ def _sha256_of_every_pixel(pixels: numpy.ndarray) -> str:
     return hashlib.sha256(numpy.ascontiguousarray(pixels).tobytes()).hexdigest()
 
 
-class ReportingInvertingEffectConfig(TypedDict, total=False):
-    skip_edit: bool
-
-
-@node.process
+@node
 class ReportingInvertingEffect:
     """The scaffold's edit, reporting what the frame must read afterwards.
 
@@ -310,17 +320,20 @@ class ReportingInvertingEffect:
     and leaves the pixels alone.
     """
 
-    video_from_upstream = Input(Image, delivery="ordered")
-    video_to_downstream = Output(Image)
+    video_from_upstream: InputPin[FramesInOrder]
+    video_to_downstream: OutputPin[
+        Annotated[Texture, TexturePixelFormats(TEST_PATTERN_TEXTURE_FORMAT)]
+    ]
 
-    def __init__(self, config: ReportingInvertingEffectConfig) -> None:
-        self.skip_edit = config.get("skip_edit", False)
-        self.edited_frame = None
+    skip_edit: bool = False
+
+    def __init__(self) -> None:
+        self._edited_frame = None
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if self.edited_frame is not None:
-            ctx.outputs.write(self.video_to_downstream, self.edited_frame)
+        frame = self.video_from_upstream.read()
+        if self._edited_frame is not None:
+            self.video_to_downstream.write(self._edited_frame)
             return
         if frame is None:
             return
@@ -341,25 +354,25 @@ class ReportingInvertingEffect:
             }
 
         _report(edit)
-        self.edited_frame = frame
-        ctx.outputs.write(self.video_to_downstream, frame)
+        self._edited_frame = frame
+        self.video_to_downstream.write(frame)
 
 
-@node.process
+@node
 class FrameDigestVerifier:
     """Reads the first frame it is handed, in a process of its own, and
     reports a digest of every pixel."""
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[FramesInOrder]
 
     def __init__(self) -> None:
-        self.reported = False
+        self._reported = False
 
     def process(self, ctx) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None or self.reported:
+        frame = self.video_from_upstream.read()
+        if frame is None or self._reported:
             return
-        self.reported = True
+        self._reported = True
 
         def verify() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:

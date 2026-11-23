@@ -26,7 +26,7 @@ pub(super) fn refuse_a_source_this_graph_cannot_take(
 }
 
 /// Refuse `to` when the graph holds no node of its id, or none with an input of its name, or
-/// the input is a setting, which takes no link.
+/// the input is a setting that takes no wire.
 pub(super) fn refuse_a_destination_this_graph_cannot_take(
     graph: &crate::core::graph::Graph,
     to: &InputLinkPortRef,

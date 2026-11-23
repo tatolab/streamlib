@@ -26,7 +26,7 @@ def look(stream_builder: StreamBuilder) -> None:
 @graph_generator
 def pattern_into_a_look_holding_a_fragment(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
-        TestPatternSource, name="pattern", config={"width": 320, "height": 180}
+        TestPatternSource, name="pattern", input_values={"width": 320, "height": 180}
     )
     placed_look = stream_builder.add(look, name="look")
     stream_builder.connect(pattern.output("video"), placed_look.input("video"))

@@ -7,18 +7,50 @@ use super::live_application_and_reversal::{
 use super::*;
 use streamlib::sdk::graph::input_values::InputValueToSetLive;
 
+/// The requests of one transaction, each with the stream id it names, and what becomes of each
+/// saved value they retype, worked out before the transaction took any lock.
+pub(super) struct TheRequestsOfATransaction<'worked_out> {
+    pub(super) requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)>,
+    pub(super) saved_value_retypes_worked_out_before_the_edit:
+        &'worked_out SavedValueRetypesWorkedOutBeforeTheEdit,
+}
+
 impl StreamGraphTransactionExecutor<'_> {
+    /// The graph document of the stream asset `stream_asset`, whose loaded stream
+    /// `stream_operations` runs, as it stands: the one `project_repository` holds, or, with no
+    /// repository, the one the stream's live graph renders.
+    pub(super) fn the_stream_graph_document_as_it_stands(
+        &self,
+        project_repository: Option<&ProjectRepository>,
+        stream_asset: Uuid,
+        stream_operations: &dyn RuntimeOperations,
+    ) -> Result<StreamGraphDocument, GraphTransactionRefusal> {
+        match project_repository {
+            Some(project_repository) => Ok(project_repository.stream_graph_document(stream_asset)?),
+            None => StreamGraphDocument::from_value(
+                self.async_runtime
+                    .block_on(stream_operations.to_json_async())
+                    .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
+            )
+            .map_err(GraphTransactionRefusal::of_the_whole_transaction),
+        }
+    }
+
     /// Apply each request, to the loaded stream it names, as one transaction by `author`, to the
     /// project `project_repository_held` holds when the transaction is committed.
     pub(super) fn apply_the_requests(
         &self,
-        requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)>,
+        requests: TheRequestsOfATransaction<'_>,
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
         stream_locations: &HashMap<String, StreamLocation>,
         project_repository_held: Option<&mut ProjectRepository>,
     ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
+        let TheRequestsOfATransaction {
+            requests_and_the_stream_id_each_names,
+            saved_value_retypes_worked_out_before_the_edit,
+        } = requests;
         let actions_as_sent: Vec<ProjectAction> = requests_and_the_stream_id_each_names
             .iter()
             .map(|(request, _)| ProjectAction::StreamGraph(request.clone()))
@@ -67,8 +99,11 @@ impl StreamGraphTransactionExecutor<'_> {
                             project_repository.project_file().project
                         )));
                     }
-                    let mut staged_graph =
-                        project_repository.stream_graph_document(stream_location.stream_asset)?;
+                    let mut staged_graph = self.the_stream_graph_document_as_it_stands(
+                        Some(&**project_repository),
+                        stream_location.stream_asset,
+                        stream_operations.as_ref(),
+                    )?;
                     move_each_former_port_name(
                         stream_location.stream_asset,
                         &mut staged_graph,
@@ -77,12 +112,11 @@ impl StreamGraphTransactionExecutor<'_> {
                     )?;
                     staged_graph
                 }
-                _ => StreamGraphDocument::from_value(
-                    self.async_runtime
-                        .block_on(stream_operations.to_json_async())
-                        .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
-                )
-                .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
+                None => self.the_stream_graph_document_as_it_stands(
+                    None,
+                    stream_location.stream_asset,
+                    stream_operations.as_ref(),
+                )?,
             };
             streams.insert(
                 stream_id.clone(),
@@ -107,6 +141,7 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository: project_repository_held.as_deref(),
             node_by_label: HashMap::new(),
             what_the_answer_names_of_each_added_node: HashMap::new(),
+            saved_value_retypes_worked_out_before_the_edit,
         };
         self.refuse_a_value_an_input_does_not_take_before_any_is_applied(
             &requests_and_the_stream_id_each_names,
@@ -114,6 +149,7 @@ impl StreamGraphTransactionExecutor<'_> {
         )?;
 
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
+        let mut saved_values_retyped: Vec<GraphTransactionSavedValueRetyped> = Vec::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
         let mut why_each_link_was_made_unjudged = BTreeMap::new();
@@ -159,6 +195,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 made_live_once_the_documents_hold_them
                     .extend(applied.made_live_once_the_documents_hold_them);
                 overridden_by_links.extend(applied.overridden_by_a_link);
+                saved_values_retyped.extend(applied.saved_value_retyped);
                 if let Some(applied_live_now) = applied.applied_live {
                     applied_live.push((stream_id.clone(), applied_live_now));
                 }
@@ -242,6 +279,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 overridden_by_links,
                 why_each_link_was_made_unjudged,
                 nodes_rebuilt,
+                saved_values_retyped,
             },
         ))
     }
@@ -326,6 +364,7 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository,
             node_by_label,
             what_the_answer_names_of_each_added_node,
+            ..
         } = staged;
         let project_repository = *project_repository;
         let label = match &request {
@@ -574,15 +613,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 .staged_graph
                 .apply(&applied);
             if let Err(why) = staged {
+                // Its rebuild is left to the refusal, which takes the open batch back first: a
+                // rebuild waits for the stream's one writer, which the batch holds.
                 self.reverse_one_operation_applied_live(
                     stream_id,
                     stream_operations.as_ref(),
                     the_open_batch_of(streams, stream_id).ok(),
                     &applied_on_the_running_stream,
-                );
-                self.rebuild_each_node_a_reversal_put_its_settings_back_on(
-                    stream_id,
-                    stream_operations.as_ref(),
                 );
                 return Err(format!(
                     "stream `{stream_id}`'s graph document does not hold what its running graph \
@@ -611,6 +648,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 overridden_by_a_link,
                 links_made_unjudged: Vec::new(),
                 links_made_unjudged_as_kept: Vec::new(),
+                saved_value_retyped: None,
             });
         }
 
@@ -727,6 +765,7 @@ impl StreamGraphTransactionExecutor<'_> {
             overridden_by_a_link,
             links_made_unjudged,
             links_made_unjudged_as_kept,
+            saved_value_retyped: None,
         })
     }
 

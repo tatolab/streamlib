@@ -34,6 +34,7 @@ from tatolab.stream._node_config_schema import json_schema_for_a_node_declaring_
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_CONVERSION_STAMP,
+    NODE_DECLARATION_PIN_GROUPS_STAMP,
 )
 
 #: The directory holding the `tatolab/runtime/` this process imported.
@@ -44,38 +45,51 @@ BOOTSTRAP_PATH = LEND_DIRECTORY / "tatolab" / "runtime" / "_node_interpreter_boo
 SECONDS_A_BOOTSTRAP_HAS_TO_ANSWER = 60.0
 
 DESCRIBED_NODES_SOURCE = '''
-from tatolab.stream import AudioWindowContract, Channels, Input, Output, Packets, node
+from typing import Annotated
+
+from tatolab.stream import (
+    Audio,
+    AudioWindowContract,
+    Description,
+    EncodedVideo,
+    InputPin,
+    OutputPin,
+    StreamDelivery,
+    node,
+)
 
 
 @node.meta(category="Audio/Relays", description="Relays each audio window as a frame.")
-@node.process(scheduling="high")
+@node(scheduling="high")
 class WindowedRelay:
-    audio_from_upstream = Input(
-        Channels,
-        delivery="ordered",
-        window=AudioWindowContract(
-            sample_rate=16_000, channels=1, dtype="f32", window_size=512, hop=160
-        ),
-        description="windows from upstream",
-    )
+    audio_from_upstream: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            AudioWindowContract(
+                sample_rate=16_000, channels=1, dtype="f32", window_size=512, hop=160
+            ),
+            Description("windows from upstream"),
+        ]
+    ]
 
-    frames_to_downstream = Output(Packets, description="frames to downstream")
+    frames_to_downstream: OutputPin[Annotated[EncodedVideo, Description("frames to downstream")]]
 
     def process(self, ctx) -> None: ...
 
 
 @node.meta(description="ticks on its own")
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class Ticker:
-    ticks_to_downstream = Output(Packets)
+    ticks_to_downstream: OutputPin[EncodedVideo]
 
     def process(self, ctx) -> None: ...
 
 
 @node.meta(description="captures on its own")
-@node.process(execution="manual", paced_by_real_time=True)
+@node(execution="manual", paced_by_real_time=True)
 class LiveCapture:
-    frames_to_downstream = Output(Packets)
+    frames_to_downstream: OutputPin[EncodedVideo]
 
 
 class Unstamped:
@@ -189,8 +203,12 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                     {
                         "name": "audio_from_upstream",
                         "description": "windows from upstream",
-                        "delivery_profile": "ordered",
                         "family": {"family": "channels"},
+                        "pin_declaration": {
+                            "pin_type": {"kind": "is", "pin_type": {"type": "audio"}},
+                            "flow": "stream",
+                        },
+                        "delivery_profile": "ordered",
                         "audio_window": {
                             "resolved_from": "declaration",
                             "sample_rate": 16_000,
@@ -206,10 +224,15 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                         "name": "frames_to_downstream",
                         "description": "frames to downstream",
                         "family": {"family": "packets"},
+                        "pin_declaration": {
+                            "pin_type": {"kind": "is", "pin_type": {"type": "encoded_video"}},
+                            "flow": "stream",
+                        },
                     }
                 ],
                 "category": "Audio/Relays",
                 "conversion": False,
+                "pin_groups": [],
             }
         ],
         "refused_node_types": [],
@@ -243,6 +266,7 @@ def test_the_bootstrap_spells_each_stamp_an_older_tatolab_stream_lacks_as_tatola
     ) == {
         "category": NODE_DECLARATION_CATEGORY_STAMP,
         "conversion": NODE_DECLARATION_CONVERSION_STAMP,
+        "pin_groups": NODE_DECLARATION_PIN_GROUPS_STAMP,
     }
 
 
@@ -334,14 +358,16 @@ def test_a_module_that_logs_at_import_is_described_with_its_records_on_stderr(
         project_directory,
         "logging_at_import_nodes",
         """
-        from tatolab.stream import Input, Packets, log, node
+        from typing import Annotated
+
+        from tatolab.stream import EncodedVideo, InputPin, StreamDelivery, log, node
 
         log.info("module imported", phase="import")
 
 
-        @node.process(execution="reactive")
+        @node(execution="reactive")
         class LoggingAtImport:
-            frames_from_upstream = Input(Packets, delivery="newest")
+            frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
             def process(self, ctx) -> None: ...
         """,
@@ -425,7 +451,7 @@ def test_what_a_module_prints_at_import_reaches_stderr_and_never_the_document(
         import subprocess
         import sys
 
-        from tatolab.stream import Output, Packets, node
+        from tatolab.stream import EncodedVideo, OutputPin, node
 
         print("printed at import")
         sys.stdout.write("written to sys.stdout at import\\n")
@@ -434,9 +460,9 @@ def test_what_a_module_prints_at_import_reaches_stderr_and_never_the_document(
         subprocess.run([sys.executable, "-c", "print('printed by a child at import')"], check=True)
 
 
-        @node.process(execution="manual")
+        @node(execution="manual")
         class Noisy:
-            noise_to_downstream = Output(Packets)
+            noise_to_downstream: OutputPin[EncodedVideo]
 
             def process(self, ctx) -> None:
                 print("never called")
@@ -473,15 +499,15 @@ def test_a_describe_exits_once_its_document_is_out_whatever_a_module_left_runnin
         import threading
         import time
 
-        from tatolab.stream import Output, Packets, node
+        from tatolab.stream import EncodedVideo, OutputPin, node
 
         threading.Thread(target=time.sleep, args=(30,)).start()
         atexit.register(time.sleep, 30)
 
 
-        @node.process(execution="manual")
+        @node(execution="manual")
         class Lingering:
-            nothing_to_downstream = Output(Packets)
+            nothing_to_downstream: OutputPin[EncodedVideo]
 
             def process(self, ctx) -> None: ...
         """,
@@ -869,7 +895,7 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
         """
         import importlib.util
 
-        from tatolab.stream import Output, Packets, node
+        from tatolab.stream import EncodedVideo, OutputPin, node
 
         BESIDE_THE_BOOTSTRAP = (
             "_node_hosting",
@@ -883,9 +909,9 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
                 name for name in BESIDE_THE_BOOTSTRAP if importlib.util.find_spec(name)
             )
         )
-        @node.process(execution="manual")
+        @node(execution="manual")
         class ShadowProbe:
-            nothing_to_downstream = Output(Packets)
+            nothing_to_downstream: OutputPin[EncodedVideo]
 
             def process(self, ctx) -> None: ...
         """,

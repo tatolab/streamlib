@@ -34,7 +34,7 @@ from tatolab.testpattern import TestPatternSource
 
 @graph_generator
 def main(stream_builder: StreamBuilder) -> None:
-    source = stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
+    source = stream_builder.add(TestPatternSource, input_values={"width": 320, "height": 180})
     for _ in range(%d):
         reporter = stream_builder.add(ReportsItsProcessOnFirstFrame)
         stream_builder.connect(source.output("video"), reporter.input("video_from_upstream"))

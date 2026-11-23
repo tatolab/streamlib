@@ -7,11 +7,11 @@
 use std::sync::LazyLock;
 
 use crate::core::descriptors::{
-    DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
-    PortFamily, PortFamilyDeclaration, SettingReadTime,
+    DeclaredPinType, NodeDescriptor, NodeInputMode, NodeValueLifetime, PinAnnotations,
+    PinDeclaration, PinFlow, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    SettingReadTime,
 };
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_CONTROL_SETTING, GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_MEANING_SETTING,
     GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_STEP_SETTING,
@@ -19,6 +19,8 @@ use crate::core::graph::graph_interface_resolution::{
     GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
 };
+
+use super::node_types_of_the_graph_itself::node_type_of_the_graph_itself;
 
 /// The settings of the `GraphInput` node type, built once.
 static THE_SETTINGS_OF_A_GRAPH_INPUT: LazyLock<Vec<PortDescriptor>> =
@@ -69,7 +71,7 @@ pub(crate) fn the_family_a_graph_interface_value_port_declares() -> PortFamilyDe
 /// `value` ports are of the type `pin_type` chooses, and of the family `family` names while it
 /// chooses none.
 pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
-    let mut descriptor = interface_node_type(
+    let mut descriptor = node_type_of_the_graph_itself(
         "GraphInput",
         GRAPH_INPUT_NODE_TYPE,
         "One Input of a stream: every port `value` is linked to reads what enters it.",
@@ -137,7 +139,7 @@ pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
 /// each read at setup, and its `value` input, the port linked into it, of the type `pin_type`
 /// chooses, and of the family `family` names while it chooses none.
 pub(crate) fn the_node_type_of_a_graph_output() -> Result<NodeDescriptor> {
-    let mut descriptor = interface_node_type(
+    let mut descriptor = node_type_of_the_graph_itself(
         "GraphOutput",
         GRAPH_OUTPUT_NODE_TYPE,
         "One Output of a stream: the port linked into `value`.",
@@ -149,22 +151,6 @@ pub(crate) fn the_node_type_of_a_graph_output() -> Result<NodeDescriptor> {
         value_port("The port the Output offers.", Vec::new(), false),
     ];
     Ok(descriptor)
-}
-
-/// The descriptor of the interface node type `node_type`, of short name `short_name`, stating
-/// `description` and no ports yet.
-fn interface_node_type(
-    short_name: &str,
-    node_type: &str,
-    description: &str,
-) -> Result<NodeDescriptor> {
-    Ok(NodeDescriptor::new(
-        NodeClassShortName::new(short_name.to_string())
-            .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
-        NodeClassImportPath::new(node_type.to_string())
-            .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
-        description.to_string(),
-    ))
 }
 
 /// A setting of a node type the runtime owns, named `name` of `pin_type`, stating

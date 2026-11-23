@@ -18,29 +18,29 @@ import model_input_tensor_kernel_probes
 
 
 def _wire_a_test_pattern_into_probe(
-    stream_builder: StreamBuilder, probe_class: type, probe_config: "dict[str, Any] | None"
+    stream_builder: StreamBuilder, probe_class: type, probe_input_values: "dict[str, Any] | None"
 ) -> None:
     pattern = stream_builder.add(
         TestPatternSource,
-        config={
+        input_values={
             "width": model_input_tensor_kernel_probes.FRAME_WIDTH,
             "height": model_input_tensor_kernel_probes.FRAME_HEIGHT,
         },
     )
-    probe = stream_builder.add(probe_class, config=probe_config)
+    probe = stream_builder.add(probe_class, input_values=probe_input_values)
     stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
 def _wire_a_test_pattern_into_the_matrix_probe(
     stream_builder: StreamBuilder, fit_case_name: str, compile_with_the_wrong_mean: bool = False
 ) -> None:
-    matrix_probe_config: "dict[str, Any]" = {"fit_case_name": fit_case_name}
+    matrix_probe_input_values: "dict[str, Any]" = {"fit_case_name": fit_case_name}
     if compile_with_the_wrong_mean:
-        matrix_probe_config["compile_with_the_wrong_mean"] = True
+        matrix_probe_input_values["compile_with_the_wrong_mean"] = True
     _wire_a_test_pattern_into_probe(
         stream_builder,
         model_input_tensor_kernel_probes.ModelInputTensorMatrixProbe,
-        matrix_probe_config,
+        matrix_probe_input_values,
     )
 
 

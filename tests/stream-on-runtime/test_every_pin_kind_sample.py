@@ -10,8 +10,12 @@ promoted from `Caption`'s `lines` does, one node not yet typed that holds a sett
 whose inputs each name the control the Studio draws, and two nodes whose Texture pins state
 different formats, which `connect` links through a `TextureFormatConvert`. Its `SweepPosition`
 states that it converts the sample's own `Sweep` to a Float, so a link from a `Sweep` into a
-Float input is refused naming it. The pin types `graph` names here are what the Studio's
-recordings are made from, so each later type, mode and flow joins the sample and this check.
+Float input is refused naming it. Its `LevelAsPercent` converts a Float to a String, so its
+unlinked `level_saved`, saving 0.1, retyped to a String saves the `10%` that body gives, run
+once by the stream's interpreter; its `AccentAtTheMoment` takes the stream's time, so
+`accent_saved` retyped to a String gives way to the default, saying why. The pin types `graph`
+names here are what the Studio's recordings are made from, so each later type, mode and flow
+joins the sample and this check.
 """
 
 from __future__ import annotations
@@ -68,6 +72,8 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
     "sweep": {"position": "float", "width": "float", "result": "named"},
     "sweep_position": {"sweep": "named", "result": "float"},
     "warmth_base": {"pin_type": "pin_type_choice", "value": "float"},
+    "level_as_percent": {"level": "float", "result": "string"},
+    "accent_at_the_moment": {"accent": "boolean", "result": "string"},
 }
 
 #: The Graph Input whose `pin_type` setting chooses Float, linked into `warmth`'s `base`.
@@ -349,6 +355,62 @@ def assert_a_link_only_sweep_position_bridges_is_refused_naming_it(
     assert out_of_it["target"] == {"node": warmth, "port": "base"}, checked
 
 
+def retype_to_a_string(
+    local_api: LocalApiClient, stream_id: str, graph: dict[str, Any], node_name: str
+) -> dict[str, Any]:
+    """What one `transact` choosing a String on the Graph Input `node_name` answers of its
+    saved value."""
+    retyped = local_api.call_tool(
+        "transact",
+        {
+            "operations": [
+                {
+                    "operation": "set_node_input_value",
+                    "stream": stream_id,
+                    "node": node_named(graph, node_name)["id"],
+                    "input": "pin_type",
+                    "value": {"type": "string"},
+                }
+            ]
+        },
+    )
+    (saved_value_retyped,) = retyped["saved_values_retyped"]
+    return saved_value_retyped
+
+
+def assert_a_retype_casts_through_the_samples_own_conversion_or_says_why_not(
+    local_api: LocalApiClient, project_directory: str, stream_id: str, graph: dict[str, Any]
+) -> None:
+    """`level_saved`, saving 0.1, retyped to a String saves `10%`, the cast of the sample's
+    `LevelAsPercent`, whose body the stream's interpreter runs once; `accent_saved` retyped to
+    a String saves no value, since the body of `AccentAtTheMoment` takes the stream's time.
+    One `undo` after each puts the Graph Input back.
+
+    Mental-revert: with no cast provided for a module's function node conversion, the Float's
+    0.1 gives way to the String's default, naming `LevelAsPercent`."""
+    cast = retype_to_a_string(local_api, stream_id, graph, "level_saved")
+    assert (cast["value_before"], cast.get("value"), cast.get("cast_by")) == (
+        0.1,
+        "10%",
+        "nodes.level_as_percent:LevelAsPercent",
+    ), cast
+    local_api.call_tool("undo", {"project_directory": project_directory})
+
+    not_cast = retype_to_a_string(local_api, stream_id, graph, "accent_saved")
+    assert "value" not in not_cast, not_cast
+    assert not_cast.get("conversions_that_fit") == [
+        "nodes.accent_at_the_moment:AccentAtTheMoment"
+    ], not_cast
+    assert "takes the stream's time as `now`" in not_cast.get("default_because", ""), not_cast
+    local_api.call_tool("undo", {"project_directory": project_directory})
+
+    graph_undone = local_api.graph(stream=stream_id)
+    for node_name, value in (("level_saved", 0.1), ("accent_saved", True)):
+        assert input_port_named(node_named(graph_undone, node_name), "value")["value"] == value, (
+            node_named(graph_undone, node_name)
+        )
+
+
 def play(local_api: LocalApiClient, project_directory: str, stream_id: str) -> None:
     queued_playback = local_api.call_tool(
         "start_playback", {"project_directory": project_directory}
@@ -439,6 +501,9 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
     assert_a_link_only_sweep_position_bridges_is_refused_naming_it(local_api, stream_id, graph)
     assert_the_colour_bars_connect_through_a_texture_format_convert(
         tatolabd, local_api, project_directory, stream_id, graph
+    )
+    assert_a_retype_casts_through_the_samples_own_conversion_or_says_why_not(
+        local_api, project_directory, stream_id, graph
     )
     beats_per_minute = input_port_named(node_named(graph, "beat"), "beats_per_minute")
     assert beats_per_minute.get("value_comes_from") == "saved", beats_per_minute

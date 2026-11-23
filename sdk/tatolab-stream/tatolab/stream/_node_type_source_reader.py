@@ -339,6 +339,7 @@ class _ModuleDeclarationReading:
         or an `OutputPin`, in the order written; `_private` and `ClassVar` ones are state."""
         inputs: list[dict[str, Any]] = []
         outputs: list[dict[str, Any]] = []
+        bound_of_each_type_parameter = _the_bound_of_each_type_parameter_of(node_class)
         for statement in node_class.body:
             if not isinstance(statement, ast.AnnAssign) or not isinstance(statement.target, ast.Name):
                 continue
@@ -348,7 +349,11 @@ class _ModuleDeclarationReading:
                 continue
             port: dict[str, Any] = {
                 "name": _port_name_as_cast(attribute_name),
-                "family": _function_port_family(type_annotation),
+                "family": _function_port_family(
+                    _read_with_each_type_parameter_as_its_bound(
+                        type_annotation, bound_of_each_type_parameter
+                    )
+                ),
                 "description": self._described_text_of(statement.annotation)
                 or self._described_text_of(type_annotation),
                 "annotation": ast.unparse(statement.annotation),
@@ -705,6 +710,29 @@ def _function_port_family(annotation: Optional[ast.expr]) -> Optional[str]:
     if type_name is None:
         return None
     return _PORT_FAMILY_BY_ANNOTATED_TYPE.get(type_name)
+
+
+def _the_bound_of_each_type_parameter_of(node_class: ast.ClassDef) -> dict[str, ast.expr]:
+    """Each type parameter the class statement binds to a type, `class X[Frame: Texture]`, by its name."""
+    return {
+        type_parameter.name: type_parameter.bound
+        for type_parameter in node_class.type_params
+        if isinstance(type_parameter, ast.TypeVar) and type_parameter.bound is not None
+    }
+
+
+def _read_with_each_type_parameter_as_its_bound(
+    annotation: ast.expr, bound_of_each_type_parameter: dict[str, ast.expr]
+) -> ast.expr:
+    """`annotation` with each name of a bound type parameter written as its bound, so a pin
+    typed `Frame` of `[Frame: Texture]` is read as a `Texture` pin."""
+    if isinstance(annotation, ast.Name):
+        return bound_of_each_type_parameter.get(annotation.id, annotation)
+    if isinstance(annotation, ast.Subscript) and _annotated_type_name(annotation) == _ANNOTATED_ANNOTATION:
+        arguments = _subscript_arguments(annotation)
+        if arguments and isinstance(arguments[0], ast.Name):
+            return bound_of_each_type_parameter.get(arguments[0].id, annotation)
+    return annotation
 
 
 def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:

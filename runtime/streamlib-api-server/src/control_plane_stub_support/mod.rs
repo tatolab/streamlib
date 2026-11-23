@@ -338,7 +338,7 @@ pub(crate) fn the_stub_machine() -> &'static ::streamlib::sdk::runtime::MachineN
 }
 
 /// The description a stub runtime answers `describe_runtime` with: a fixed
-/// version, build id, uptime and own-log folder.
+/// version, build id, uptime and own-log folder, and [`STUB_MACHINE_NAME`].
 pub(crate) fn the_stub_runtimes_description()
 -> ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
     ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
@@ -346,6 +346,7 @@ pub(crate) fn the_stub_runtimes_description()
         build_id: "0.0.0-stub+unknown.stub".to_owned(),
         up_for_ms: 266_400_000,
         runtime_log_directory: Some(::std::path::PathBuf::from("/stub-state/logs")),
+        machine: the_stub_machine().name().to_owned(),
     }
 }
 
@@ -756,7 +757,8 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 mod graph_mutations_recorded_by_a_stub;
 pub(crate) use graph_mutations_recorded_by_a_stub::{
     ArmedAddNodeRefusal, ArmedRefusalOfEachEditTheDocumentsHoldFirst,
-    GraphEditsOfAStubAppliedOneByOne, RecordedEditsHeldNotLive, graph_mutation_ops_record_the_call,
+    GraphEditsOfAStubAppliedOneByOne, RecordedEditsHeldNotLive, RecordedRebuildsAndTheArmedRefusal,
+    graph_mutation_ops_record_the_call,
 };
 
 /// The target of every tracing span and event raised on the calling thread

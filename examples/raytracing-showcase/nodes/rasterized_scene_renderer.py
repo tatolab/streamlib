@@ -12,15 +12,19 @@ what differs across the divider is only what a ray buys.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
     NodeOutputTextureRing,
-    Output,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -158,26 +162,24 @@ float4 main(RasterVertexToFragment fragment) : SV_Target0 {
 )
 
 
-@dataclass
-class RasterizedSceneRendererConfig:
-    """RasterizedSceneRenderer's settings: the extent of the frame it draws."""
-
-    width: int = 1280
-    height: int = 720
-
-
 @node.meta(description="The showcase scene rasterized — direct lighting and nothing else")
-@node.process(execution="continuous", interval_ms=16)
+@node(execution="continuous", interval_ms=16)
 class RasterizedSceneRenderer:
     """Ray tracing off: flat direct lighting, no shadows, no reflections."""
 
-    def __init__(self, config: RasterizedSceneRendererConfig) -> None:
-        self.frame_width = config.width
-        self.frame_height = config.height
-
-    rasterized_frame_to_downstream = Output(
-        Image, description="The scene with direct lighting only — no rays cast"
-    )
+    width: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The frame's width in pixels.")
+    ] = 1280
+    height: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The frame's height in pixels.")
+    ] = 720
+    rasterized_frame_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The scene with direct lighting only — no rays cast"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(
@@ -198,25 +200,24 @@ class RasterizedSceneRenderer:
         camera_azimuth, light_azimuth = orbit_azimuths_at(frame_time_ns)
 
         rasterized_frame_texture = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.frame_width, self.frame_height
+            ctx.gpu_limited_access, self.width, self.height
         )
         self.raster_kernel.draw(
             bindings={},
             color_targets=[rasterized_frame_texture],
-            extent=(self.frame_width, self.frame_height),
+            extent=(self.width, self.height),
             vertex_count=UNIT_CUBE_VERTEX_COUNT,
             instance_count=SHOWCASE_BOX_COUNT,
             push_constants=struct.pack(
                 RASTER_PUSH_CONSTANT_FORMAT,
                 camera_azimuth,
                 light_azimuth,
-                self.frame_width / self.frame_height,
+                self.width / self.height,
                 packed_ring_draw_order_furthest_first(camera_azimuth),
             ),
         )
 
-        ctx.outputs.write(
-            self.rasterized_frame_to_downstream,
+        self.rasterized_frame_to_downstream.write(
             ImageFrameToWrite.of_texture(
                 rasterized_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR
             ),

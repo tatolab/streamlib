@@ -161,6 +161,10 @@ pub struct LoadedStreamInThisRuntime {
     /// Each running node a value set on one of its settings read at setup has left to rebuild,
     /// once, in the order first set; taken by the next rebuild of them.
     pub(in crate::core::runtime) nodes_a_setting_read_at_setup_rebuilds: Mutex<Vec<NodeRunId>>,
+    /// The task that rebuilds each node a Value wire into one of its settings read at setup
+    /// carries a new value into, while the stream is started.
+    pub(in crate::core::runtime) rebuilds_wires_into_settings_ask_for:
+        Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// What a loaded stream is keyed by and shown as: its id, its display name,
@@ -346,6 +350,7 @@ impl LoadedStreamInThisRuntime {
             is_held_stopped: AtomicBool::new(false),
             edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             nodes_a_setting_read_at_setup_rebuilds: Mutex::new(Vec::new()),
+            rebuilds_wires_into_settings_ask_for: Mutex::new(None),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -532,10 +537,15 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// This stream's graph as `graph` answers it: its running graph, or, while its graph
-    /// document holds edits the running graph did not take, the document's graph over it.
+    /// document holds edits the running graph did not take, the document's graph over it; each
+    /// view node with the settings its view's manifest declares among its inputs.
     pub fn the_graph_as_answered(&self) -> Result<serde_json::Value> {
         let mut graph_response = self.the_running_graph_rendered();
         self.render_the_document_over_the_live_graph_while_edits_are_not_live(&mut graph_response);
+        crate::core::nodes::render_the_settings_of_each_view_node_into(
+            &mut graph_response.nodes,
+            &self.node_types_this_stream_resolves,
+        );
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
     }

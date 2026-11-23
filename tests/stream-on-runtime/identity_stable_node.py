@@ -13,7 +13,7 @@ copies this file into each project it runs `tatolab` on.
 from tatolab.stream import node
 
 
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class IdentityStableNode:
     """Does nothing per tick. Identity is the whole subject here."""
 

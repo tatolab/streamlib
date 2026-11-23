@@ -186,7 +186,9 @@ pub trait RuntimeOperations: Send + Sync {
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>>;
 
     /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
-    /// it as applied: an added node under the name it took.
+    /// it as applied: an added node under the name it took. A running node it sets a setting
+    /// read at setup on is not handed its new values but left to rebuild: the caller rebuilds
+    /// it with [`Self::rebuild_each_node_a_setting_read_at_setup_changed`].
     fn apply_a_stream_graph_operation_live(
         &self,
         graph_operation: streamlib_project_repository::StreamGraphOperation,
