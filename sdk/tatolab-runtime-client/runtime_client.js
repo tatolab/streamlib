@@ -50,8 +50,11 @@ export class TatolabRuntimeClientCallsOverATransport {
     return client;
   }
 
+  /** The mismatch naming a runtime from before the revision the older side, with the `version` its `describe_runtime` answers; the rest of that answer is read by no schema, since such a runtime lacks every key added since. */
   async #theMismatchOfARuntimeFromBeforeTheRevision(signal) {
-    const { version } = await this.call("describe_runtime", {}, { signal });
+    const answerMessage = await this.#transport.sendRequest(controlRequestMessage("describe_runtime", {}, this.#nextRequestId++), { signal });
+    const answeredVersion = answerMessage?.result?.version;
+    const version = typeof answeredVersion === "string" ? answeredVersion : controlAnswerResult("describe_runtime", answerMessage).version;
     return new ControlContractMismatch({
       client_contract_version: CONTROL_CONTRACT_VERSION,
       runtime_contract_version: CONTROL_CONTRACT_VERSION,

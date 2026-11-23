@@ -39,8 +39,8 @@ impl Runner {
             .and_then(|runtime_own_log| runtime_own_log.jsonl_log_path())
     }
 
-    /// This runtime's version, build id, monotonic uptime and the folder its own log is written
-    /// to.
+    /// This runtime's version, build id, monotonic uptime, the folder its own log is written to
+    /// and its machine's name.
     pub fn describe_this_runtime(&self) -> DescribeRuntimeToolResult {
         let engine_resources = &self.engine_resources_shared_by_every_stream;
         DescribeRuntimeToolResult {
@@ -57,6 +57,7 @@ impl Runner {
                 .runtime_own_log_path()
                 .and_then(std::path::Path::parent)
                 .map(std::path::Path::to_path_buf),
+            machine: self.machine_name().name().to_owned(),
         }
     }
 

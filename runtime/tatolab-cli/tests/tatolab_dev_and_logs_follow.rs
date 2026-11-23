@@ -101,6 +101,7 @@ fn a_runtime_logging_in(runtime_log_directory: &str) -> StubToolAnswer {
             "build_id": "0.57.0+0123abc.9f8e7d",
             "up_for_ms": 5,
             "runtime_log_directory": runtime_log_directory,
+            "machine": "rig",
         })
         .to_string(),
     )

@@ -416,6 +416,11 @@ export interface DescribeRuntimeToolResult {
    * keeps none.
    */
   runtime_log_directory?: string | null;
+  /**
+   * The machine's name, the first part of `<machine>/<stream id>/<node>/<port>`: the name
+   * `graph` gives every loaded stream's graph under.
+   */
+  machine: string;
 }
 
 /**
@@ -7326,9 +7331,9 @@ export interface ControlOperations {
     result: SubscribeProjectLogRecordsResult;
   };
   /**
-   * Describe this runtime: its version, its build id, how long it has been up and where it logs.
+   * Describe this runtime: its version, its build id, how long it has been up, where it logs and its machine's name.
    *
-   * Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.
+   * Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none, and `machine`, the machine's name, the first part of `<machine>/<stream id>/<node>/<port>`, which `graph` gives every loaded stream's graph under. Names no stream.
    *
    * Since contract version 1, stable.
    */
@@ -8271,7 +8276,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 39;
+export declare const CONTROL_CONTRACT_REVISION: 40;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

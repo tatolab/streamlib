@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 39
+    "x-contract-revision": 40
   },
   "methods": [
     {
@@ -370,8 +370,8 @@
     },
     {
       "name": "describe_runtime",
-      "summary": "Describe this runtime: its version, its build id, how long it has been up and where it logs.",
-      "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.",
+      "summary": "Describe this runtime: its version, its build id, how long it has been up, where it logs and its machine's name.",
+      "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none, and `machine`, the machine's name, the first part of `<machine>/<stream id>/<node>/<port>`, which `graph` gives every loaded stream's graph under. Names no stream.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -8396,12 +8396,17 @@
               "null"
             ],
             "description": "The folder the runtime's own log is written to, absolute for `tatolabd`; `None` when it\nkeeps none."
+          },
+          "machine": {
+            "type": "string",
+            "description": "The machine's name, the first part of `<machine>/<stream id>/<node>/<port>`: the name\n`graph` gives every loaded stream's graph under."
           }
         },
         "required": [
           "version",
           "build_id",
-          "up_for_ms"
+          "up_for_ms",
+          "machine"
         ],
         "description": "The `describe_runtime` tool's result."
       },

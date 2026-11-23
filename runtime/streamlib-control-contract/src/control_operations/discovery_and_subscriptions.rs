@@ -154,15 +154,15 @@ impl ControlOperation for SubscribeStreamActionChanges {
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
-/// `describe_runtime`: this runtime's version, build and uptime.
+/// `describe_runtime`: this runtime's version, build, uptime and machine.
 pub struct DescribeRuntime;
 
 impl ControlOperation for DescribeRuntime {
     type Request = DescribeRuntimeRequest;
     type Result = DescribeRuntimeToolResult;
     const METHOD_NAME: &'static str = "describe_runtime";
-    const ONE_LINE_DOC: &'static str = "Describe this runtime: its version, its build id, how long it has been up and where it logs.";
-    const AGENT_USAGE_NOTE: &'static str = "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.";
+    const ONE_LINE_DOC: &'static str = "Describe this runtime: its version, its build id, how long it has been up, where it logs and its machine's name.";
+    const AGENT_USAGE_NOTE: &'static str = "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none, and `machine`, the machine's name, the first part of `<machine>/<stream id>/<node>/<port>`, which `graph` gives every loaded stream's graph under. Names no stream.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
