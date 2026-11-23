@@ -61,6 +61,7 @@ mod tests {
             "input_ports": stamp("__tatolab_node_input_ports__")?,
             "output_ports": stamp("__tatolab_node_output_ports__")?,
             "conversion": stamp("__tatolab_node_conversion__")?,
+            "pin_groups": stamp("__tatolab_node_pin_groups__")?,
         }))
     }
 
@@ -233,6 +234,58 @@ class AudioConsumer:
         assert_eq!(
             serde_json::to_value(&described.outputs[0]).unwrap()["flow"],
             serde_json::json!("value")
+        );
+    }
+
+    /// A class under bare `@node` declaring `PinGroup[Slot]` reaches the catalog as a pin group,
+    /// each field of its slot a pin of one slot, and its slot input that takes a wire making it
+    /// follow its wires.
+    #[test]
+    fn a_class_nodes_pin_group_reaches_the_catalog_with_the_pins_of_one_slot() {
+        let declaration = read_python_declaration(
+            "\
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Layer:
+    picture: InputPin[Texture]
+    opacity: float = 1.0
+
+
+@node
+class AudioConsumer:
+    layers: PinGroup[Layer]
+    result: OutputPin[Texture]
+",
+        )
+        .expect("the declaration reads");
+
+        let group = &declaration.descriptor.pin_groups[0];
+        assert_eq!(
+            (
+                group.name.as_str(),
+                group
+                    .inputs
+                    .iter()
+                    .map(|port| port.name.as_str())
+                    .collect::<Vec<_>>(),
+                group.outputs.len(),
+            ),
+            ("layers", vec!["picture", "opacity"], 0)
+        );
+        let described =
+            streamlib::sdk::nodes::NodeTypePortsDescribedOnTheWire::of(&declaration.descriptor);
+        assert_eq!(
+            serde_json::to_value(&described.pin_groups[0]).unwrap()["slots"],
+            serde_json::json!("follow_their_wires")
+        );
+        assert!(
+            declaration
+                .descriptor
+                .inputs
+                .iter()
+                .all(|port| !port.name.starts_with("layers"))
         );
     }
 

@@ -1,19 +1,20 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`InputPin[T]` and `OutputPin[T]`: how a class node under bare `@node` declares a stream, a trigger and an output.
+"""`InputPin[T]`, `OutputPin[T]` and `PinGroup[S]`: how a class node under bare `@node` declares a stream, a trigger, an output and a slot that repeats.
 
 A class node declares each of them as an annotation with no value, `video: InputPin[Texture]`,
 and each value input as an annotated field with a default, `radius: float = 4.0`. The form
 states the flow: an `InputPin` streams, or fires for a Trigger, and a field is a value. Each is
 read by bare `@node` at decoration and is never constructed: on a running node the attribute
 holds the object its helper bound, which reads or writes through the pin's port, and in a test
-whatever stand-in the test hands `construct_class_node`.
+whatever stand-in the test hands `construct_class_node`. A `PinGroup` holds the slots its
+node was built with.
 """
 
 from __future__ import annotations
 
-from collections.abc import Buffer
+from collections.abc import Buffer, Iterator
 from typing import TYPE_CHECKING, Generic, Literal, NoReturn, TypeVar, overload
 
 from ._pin_types import Audio, EncodedAudio, EncodedVideo, Tensor, Texture, Trigger
@@ -25,9 +26,10 @@ if TYPE_CHECKING:
     from .image_frame import ImageFrame, ImageFrameToWrite
     from .stream_facts import PortStreamFacts
 
-__all__ = ["InputPin", "OutputPin"]
+__all__ = ["InputPin", "OutputPin", "PinGroup"]
 
 PinTypeOfThePin = TypeVar("PinTypeOfThePin")
+SlotOfTheGroup = TypeVar("SlotOfTheGroup")
 
 
 class _ClassNodePin(Generic[PinTypeOfThePin]):
@@ -170,4 +172,40 @@ class OutputPin(_ClassNodePin[PinTypeOfThePin]):
 
     def set_stream_facts(self, stream_facts: PortStreamFacts) -> None:
         """Replace the stream facts this pin carries, as `ctx.outputs.set_stream_facts` does."""
+        raise NotImplementedError
+
+
+class PinGroup(Generic[SlotOfTheGroup]):
+    """A class node's slot of pins and values that repeats: `layers: PinGroup[Layer]`.
+
+    The slot is a frozen dataclass whose fields are pins, `picture: InputPin[Texture]`, and
+    values with their defaults, `opacity: float = 1.0`, read as a class node's own pins and
+    fields are. Each slot's ports are named `<group>.<index>.<field>`, from 0. A group whose
+    slot holds an input that takes a wire has one empty slot after the last wired one; a group
+    whose slot holds only outputs or settings has as many slots as the node's Integer input
+    named after the group says.
+
+    On a running node the attribute holds the slots the node was built with, in order: each slot
+    the dataclass, its pins bound and its values as set. A change in the count rebuilds the node,
+    so `len(self.layers)` read in `__init__()` or `setup()` holds for the node's life.
+    """
+
+    __slots__ = ()
+
+    def __init__(self) -> NoReturn:
+        raise TypeError(
+            "`PinGroup[...]` declares a class node's pin group in an annotation with no value, "
+            "`layers: PinGroup[Layer]`, and is never constructed."
+        )
+
+    def __len__(self) -> int:
+        """How many slots the node was built with."""
+        raise NotImplementedError
+
+    def __iter__(self) -> Iterator[SlotOfTheGroup]:
+        """Each slot, in order."""
+        raise NotImplementedError
+
+    def __getitem__(self, index: int) -> SlotOfTheGroup:
+        """The slot at `index`, from 0."""
         raise NotImplementedError

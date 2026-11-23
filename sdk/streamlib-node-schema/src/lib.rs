@@ -22,6 +22,8 @@ pub mod node_schema;
 pub mod node_settings;
 pub mod node_value_lifetime;
 pub mod pin_group;
+#[cfg(test)]
+mod pin_group_tests;
 pub mod pin_type;
 pub mod port_family;
 pub mod port_stream_facts;
