@@ -17,9 +17,14 @@ use crate::generate_runtime_client::{
     SET_THAT_MAY_GROW_MARK, property_key,
 };
 
+/// The keyword stating that no two items of a list hold the same value under the key it names,
+/// as the members of a bundle each hold a name of their own.
+const ITEMS_UNIQUE_BY_KEYWORD: &str = "x-unique-by";
+
 /// The keywords `control_contract_check.js` checks a value against whose stated value, once its
 /// shape is right, needs no further look here.
 const KEYWORDS_CHECKED_AS_STATED: &[&str] = &[
+    ITEMS_UNIQUE_BY_KEYWORD,
     "const",
     "minimum",
     "exclusiveMinimum",
@@ -167,6 +172,9 @@ fn refuse_what_the_checker_does_not_know(
             }
             "minItems" | "maxItems" if !stated.is_u64() => {
                 bail!("{place_of_the_keyword} is not a whole number")
+            }
+            ITEMS_UNIQUE_BY_KEYWORD if !stated.is_string() => {
+                bail!("{place_of_the_keyword} names no key the items are unique by")
             }
             "required"
                 if !stated

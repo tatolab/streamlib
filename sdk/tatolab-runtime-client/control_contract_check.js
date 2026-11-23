@@ -6,7 +6,8 @@ import { CONTROL_CONTRACT_SCHEMAS } from "./control_contract_schemas.js";
 const COMPONENT_SCHEMA_REFERENCE_PREFIX = "#/components/schemas/";
 const READS_ITS_DEFAULT_MARK = "x-generated-reads-its-default";
 const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const ARRAY_KEYWORDS = ["items", "minItems", "maxItems"];
+const ITEMS_UNIQUE_BY_MARK = "x-unique-by";
+const ARRAY_KEYWORDS = ["items", "minItems", "maxItems", ITEMS_UNIQUE_BY_MARK];
 const OBJECT_KEYWORDS = ["properties", "required", "additionalProperties"];
 const UUID_FORMAT = "uuid";
 /** The floating-point formats, which state no check beyond `type`. */
@@ -207,6 +208,9 @@ class ControlContractReader {
     if (typeof schema.maxItems === "number" && value.length > schema.maxItems) {
       this.issue("too_big", path, `expected at most ${schema.maxItems} items, read ${value.length}`);
     }
+    if (typeof schema[ITEMS_UNIQUE_BY_MARK] === "string") {
+      this.checkTheItemsAreUniqueBy(schema[ITEMS_UNIQUE_BY_MARK], value, path);
+    }
     if (schema.items === undefined) return value;
     let read = value;
     value.forEach((item, index) => {
@@ -217,6 +221,19 @@ class ControlContractReader {
       }
     });
     return read;
+  }
+
+  /** A list marked `x-unique-by`: no two of its object items hold the same value under `key`. */
+  checkTheItemsAreUniqueBy(key, value, path) {
+    const seen = [];
+    value.forEach((item, index) => {
+      if (!isAJsonObject(item) || !isPresent(item, key)) return;
+      if (seen.some((earlier) => sameJson(earlier, item[key]))) {
+        this.issue("not_unique", [...path, index, key], `${describedValue(item[key])} is held by an earlier item, and each holds its own`);
+        return;
+      }
+      seen.push(item[key]);
+    });
   }
 
   readAnObject(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere) {

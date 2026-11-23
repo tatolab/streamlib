@@ -1,0 +1,80 @@
+{
+  "taken": [
+    { "why": "a bundle with no member", "pin_type": { "type": "bundle", "members": [] } },
+    {
+      "why": "small members",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "gain", "member_type": { "type": "float" }, "meaning": "loudness" },
+        { "name": "label", "member_type": { "type": "string" } },
+        { "name": "mode", "member_type": { "type": "menu", "option_names": ["soft", "hard"] } }
+      ] }
+    },
+    {
+      "why": "a heavy member beside a small one",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "frame", "member_type": { "type": "texture" } },
+        { "name": "sound", "member_type": { "type": "audio" } },
+        { "name": "count", "member_type": { "type": "integer" } }
+      ] }
+    },
+    {
+      "why": "a List of a small type as a member",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "points", "member_type": { "type": "list_of", "element_type": { "type": "float" } } }
+      ] }
+    },
+    {
+      "why": "every member a Tensor",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "weights", "member_type": { "type": "tensor" } },
+        { "name": "biases", "member_type": { "type": "tensor" } }
+      ] }
+    }
+  ],
+  "refused": [
+    {
+      "why": "a bundle inside a bundle",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "inner", "member_type": { "type": "bundle", "members": [] } }
+      ] }
+    },
+    {
+      "why": "a Trigger member",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "go", "member_type": { "type": "trigger" } }
+      ] }
+    },
+    {
+      "why": "a Named member",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "pose", "member_type": { "type": "named", "named_pin_type": "nodes.pose:Pose" } }
+      ] }
+    },
+    {
+      "why": "a Tensor beside a member that is no Tensor",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "weights", "member_type": { "type": "tensor" } },
+        { "name": "gain", "member_type": { "type": "float" } }
+      ] }
+    },
+    {
+      "why": "a List of a heavy type as a member",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "frames", "member_type": { "type": "list_of", "element_type": { "type": "texture" } } }
+      ] }
+    },
+    {
+      "why": "a List of bundles as a member",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "rows", "member_type": { "type": "list_of", "element_type": { "type": "bundle", "members": [] } } }
+      ] }
+    },
+    {
+      "why": "a member named twice",
+      "pin_type": { "type": "bundle", "members": [
+        { "name": "gain", "member_type": { "type": "float" } },
+        { "name": "gain", "member_type": { "type": "integer" } }
+      ] }
+    }
+  ]
+}
