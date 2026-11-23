@@ -255,6 +255,32 @@ async fn graph_without_a_stream_renders_both_and_a_one_stream_tool_naming_none_i
     );
 }
 
+/// `describe_runtime` names the machine `graph` gives every loaded stream's
+/// graph under.
+#[tokio::test(flavor = "multi_thread")]
+async fn describe_runtime_names_the_machine_the_graph_names() {
+    let loaded = AnEngineLoadingTwoStreams::load();
+
+    let described = first_text_block_json(
+        &tool_call_result(
+            loaded.operations_on_the_loaded_streams(),
+            "describe_runtime",
+            json!({}),
+        )
+        .await,
+    );
+    let machine_wide = first_text_block_json(
+        &tool_call_result(
+            loaded.operations_on_the_loaded_streams(),
+            "graph",
+            json!({}),
+        )
+        .await,
+    );
+    assert_eq!(described["machine"], machine_wide["machine"], "{described}");
+    assert_eq!(described["machine"], loaded.engine.machine_name().name());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_resources_render_every_stream() {
     let loaded = AnEngineLoadingTwoStreams::load();
@@ -352,6 +378,12 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
     assert!(
         body.contains("idle-in-first") && body.contains("idle-in-second"),
         "without `stream`, every loaded stream: {body}"
+    );
+    let machine_wide: Value = serde_json::from_str(&body).expect("the graph route answers JSON");
+    assert_eq!(
+        machine_wide["machine"],
+        loaded.engine.describe_this_runtime().machine,
+        "the graph route names the machine `describe_runtime` does"
     );
     for request_naming_no_loaded_stream in [
         "/api/graph?stream=third",
