@@ -33,7 +33,7 @@ CAMERA_NAMES = ["front", "back"]
 def invert_twice(stream_builder: StreamBuilder, strength: int = 4) -> None:
     """Two inverters between one Input and one Output."""
     source = stream_builder.add(GraphInput, input_values={"port": "video", "family": Packets})
-    first = stream_builder.add(FrameInverter, name="first", config={"strength": strength})
+    first = stream_builder.add(FrameInverter, name="first", input_values={"strength": strength})
     second = stream_builder.add(FrameInverter, name="second")
     stream_builder.connect(source.output("value"), first.input("video_from_upstream"))
     stream_builder.connect(

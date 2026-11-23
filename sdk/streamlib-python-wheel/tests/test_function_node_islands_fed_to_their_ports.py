@@ -329,7 +329,7 @@ class EvaluationsSoFar:
     evaluations: float = 0.0
 
 
-@node.function
+@node
 def count_each_evaluation(
     step: float = 1.0, *, previous: State[EvaluationsSoFar]
 ) -> Stateful[float, EvaluationsSoFar]:
@@ -432,7 +432,7 @@ def test_a_port_an_island_stops_feeding_reads_nothing_and_names_no_node():
     assert fed.stop_feeding_an_input_port("count") is False
 
 
-@node.function
+@node
 def build_an_object_then_answer_the_level_raising_on_a_negative_one(level: float = 0.5) -> float:
     repr(object())
     if level < 0.0:
@@ -562,8 +562,8 @@ def test_a_pin_value_that_is_not_a_number_is_refused_by_name():
         )
 
 
-@node.function
-def add_a_step(x: float, step: float = 1.0) -> float:
+@node
+def add_a_step(x: float = 0.0, step: float = 1.0) -> float:
     return x + step
 
 
