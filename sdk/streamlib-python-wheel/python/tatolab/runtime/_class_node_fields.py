@@ -147,4 +147,16 @@ class ClassNodeFields:
             return PinTypeChoice.of_the_chosen_type(chosen)
         if pin_type["type"] == "node_reference":
             return stored_value
+        if pin_type["type"] == "connection":
+            return _the_node_a_connection_brings(stored_value, what_it_is)
         return the_value_a_body_takes(pin_type, stored_value, what_it_is, member.bundle_class)
+
+
+def _the_node_a_connection_brings(stored_value: Any, what_it_is: str) -> Any:
+    """The `NodeReference` of the node a connection field's wire comes from, as the runtime stores it, `{"node": name}`."""
+    from tatolab.stream._stream_builder import NodeReference
+
+    node_name = stored_value.get("node") if isinstance(stored_value, dict) else None
+    if not isinstance(node_name, str):
+        raise ValueError(f"{what_it_is} is {stored_value!r}, which names no node a wire brings")
+    return NodeReference(node_name)

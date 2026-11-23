@@ -504,6 +504,8 @@ fn names_in_backticks(names: &[String]) -> String {
 }
 
 #[cfg(test)]
+mod connection_input_tests;
+#[cfg(test)]
 mod function_and_shader_node_tests;
 #[cfg(test)]
 mod tests;

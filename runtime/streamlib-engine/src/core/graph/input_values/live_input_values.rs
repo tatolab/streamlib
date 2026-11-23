@@ -471,9 +471,10 @@ fn the_value_an_unlinked_input_is_handed(
 
 /// The value each input of `node` in `graph` reads while no link feeds it, by input: its live
 /// value, else its saved one, else its declared default. A setting read at setup that a wire
-/// feeds reads instead the value its wire last carried, once it has carried one. An input that
-/// takes no stored value, a config field the node exposes as an input, which reads the node's
-/// config, and an input with none of these are left out.
+/// feeds reads instead the value its wire last carried, once it has carried one, and a
+/// connection input the node its wire brings. An input that takes no stored value, a config
+/// field the node exposes as an input, which reads the node's config, and an input with none
+/// of these are left out.
 pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<String, Value> {
     node.ports
         .inputs
@@ -481,10 +482,25 @@ pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<
         .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
         .filter_map(|port| {
             the_value_a_wire_into_the_setting_carried(graph, node, port)
+                .or_else(|| the_node_a_connection_wire_brings(node, port))
                 .or_else(|| the_value_an_unlinked_input_is_handed(graph, node, port))
                 .map(|value| (port.name.clone(), value))
         })
         .collect()
+}
+
+/// The reference a wire into connection input `port` of `node` was lowered to,
+/// `{"node": "<source>"}`, which the node reads as the node its wire brings; `None` for any
+/// other input, and while no wire reaches it. A connection holds no stored value of its own,
+/// so this is the one value it is handed.
+fn the_node_a_connection_wire_brings(node: &GraphNode, port: &PortInfo) -> Option<Value> {
+    if !port.takes_a_connection() {
+        return None;
+    }
+    node.pins
+        .get(&port.name)
+        .filter(|reference| !reference.is_null())
+        .cloned()
 }
 
 /// The value setting `setting` of `node` in `graph` reads while no wire has carried it one: its
