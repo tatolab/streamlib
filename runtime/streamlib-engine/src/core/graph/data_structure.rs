@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -109,6 +109,15 @@ impl Graph {
             .is_some_and(|node_index| {
                 super::nodes::reshape_the_pin_group_slots_of(&mut self.digraph, node_index)
             })
+    }
+
+    /// How many slots each pin group of each node declaring one holds now, by node.
+    pub(crate) fn the_pin_group_slot_counts_of_each_node(&self) -> HashMap<NodeRunId, Vec<usize>> {
+        self.digraph
+            .node_weights()
+            .filter(|node| !node.pin_groups().is_empty())
+            .map(|node| (node.id.clone(), node.slot_counts_held()))
+            .collect()
     }
 
     /// Grow the pin group of the node `node_run_id` holding port `port_name` of `direction` to
