@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::descriptors::PortDescriptor;
-use crate::pin_type::{DeclaredPinType, PinDeclaration, PinFlow, PinType, TexturePixelFormat};
+use crate::pin_type::{
+    BundleMember, DeclaredPinType, PinDeclaration, PinFlow, PinType, TexturePixelFormat,
+};
 
 fn image() -> PortFamilyDeclaration {
     PortFamilyDeclaration::of_family(PortFamily::Image)
@@ -80,6 +82,69 @@ fn a_typed_port_serves_the_family_its_messages_belong_to() {
         PortFamily::carrying(&PinType::PinTypeChoice { among: vec![] }),
         None
     );
+}
+
+/// A bundle of numbers is carried whole on Records, as one map of its members, and a type
+/// `carrying` gives a family keeps it.
+///
+/// Mental-revert: answering `carrying` alone gives a bundle of numbers no family, so a view's
+/// port of a record of named numbers does not open.
+#[test]
+fn a_bundle_of_small_members_is_carried_whole_on_records() {
+    let member = |name: &str, member_type| BundleMember {
+        name: name.into(),
+        member_type,
+        meaning: None,
+        default_value: None,
+    };
+    let yaw_and_burst = PinType::Bundle {
+        members: vec![
+            member("yaw", PinType::Float { exact_size: None }),
+            member("burst", PinType::Integer { exact_size: None }),
+        ],
+    };
+    assert_eq!(PortFamily::carrying(&yaw_and_burst), None);
+    assert_eq!(
+        PortFamily::carrying_a_whole_value_of(&yaw_and_burst),
+        Some(PortFamily::Records)
+    );
+    assert_eq!(
+        PortFamily::carrying_a_whole_value_of(&PinType::Float { exact_size: None }),
+        Some(PortFamily::Channels)
+    );
+}
+
+/// A bundle holding a heavy member travels as a Bundle frame, and one holding a Tensor or a
+/// bundle as anything but one Records map, so neither is carried whole on a family.
+///
+/// Mental-revert: calling any bundle Records names a family for a Texture's Bundle frame,
+/// which no Records reader takes.
+#[test]
+fn a_bundle_with_a_member_that_is_not_small_is_carried_whole_on_no_family() {
+    let member = |name: &str, member_type| BundleMember {
+        name: name.into(),
+        member_type,
+        meaning: None,
+        default_value: None,
+    };
+    for not_small in [
+        PinType::Texture {
+            pixel_formats: vec![],
+        },
+        PinType::Tensor {},
+    ] {
+        let bundle = PinType::Bundle {
+            members: vec![
+                member("label", PinType::String {}),
+                member("payload", not_small),
+            ],
+        };
+        assert_eq!(
+            PortFamily::carrying_a_whole_value_of(&bundle),
+            None,
+            "{bundle}"
+        );
+    }
 }
 
 #[test]

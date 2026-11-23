@@ -35,6 +35,22 @@ impl PortFamily {
         Self::carrying_a_pin_of(pin_type.built_in_name())
     }
 
+    /// The family one message of which carries a whole value of `pin_type`: the one
+    /// [`Self::carrying`] finds, and Records for a bundle whose every member is a small type,
+    /// which packs as one Records map of its members by name. `None` where neither carries it.
+    pub fn carrying_a_whole_value_of(pin_type: &PinType) -> Option<Self> {
+        match pin_type {
+            PinType::Bundle { members }
+                if members
+                    .iter()
+                    .all(|member| member.member_type.is_a_small_type()) =>
+            {
+                Some(Self::Records)
+            }
+            _ => Self::carrying(pin_type),
+        }
+    }
+
     /// The family whose messages carry a pin of the built-in type `name`, as [`Self::carrying`]
     /// finds it.
     pub fn carrying_a_pin_of(name: BuiltInPinTypeName) -> Option<Self> {

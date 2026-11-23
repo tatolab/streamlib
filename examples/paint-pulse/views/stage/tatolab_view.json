@@ -19,7 +19,15 @@
   "outputs": [
     {
       "name": "camera",
-      "family": "records",
+      "pin_type": {
+        "type": "bundle",
+        "members": [
+          { "name": "yaw", "member_type": { "type": "float" } },
+          { "name": "pitch", "member_type": { "type": "float" } },
+          { "name": "zoom", "member_type": { "type": "float" } },
+          { "name": "burst", "member_type": { "type": "integer" } }
+        ]
+      },
       "description": "Where the stage has been dragged and zoomed to, and how many bursts it has asked for."
     }
   ]
