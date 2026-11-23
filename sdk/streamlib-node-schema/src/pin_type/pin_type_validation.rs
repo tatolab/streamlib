@@ -8,6 +8,7 @@
 //! member or an element, as it has no value. A single pin holds a whole number exact to 2^53 at
 //! most, so a 64-bit Integer types only an element.
 
+use super::bundle_message::is_a_bundle_of_only_tensors;
 use super::{BundleMember, IntegerSize, PinType};
 
 impl PinType {
@@ -109,11 +110,7 @@ fn validate_a_bundle(members: &[BundleMember]) -> Result<(), String> {
              has a name of its own"
         ));
     }
-    if !members.is_empty()
-        && members
-            .iter()
-            .all(|member| matches!(member.member_type, PinType::Tensor {}))
-    {
+    if is_a_bundle_of_only_tensors(members) {
         return Ok(());
     }
     members.iter().try_for_each(validate_a_bundle_member)

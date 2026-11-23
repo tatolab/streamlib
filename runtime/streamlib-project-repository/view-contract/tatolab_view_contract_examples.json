@@ -147,6 +147,161 @@
       "refused_at": "outputs[0]"
     },
     {
+      "named": "a port of a bundle of numbers, carried whole as Records",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Stage",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [
+          {
+            "name": "camera",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "yaw", "member_type": { "type": "float" } },
+                { "name": "bursts", "member_type": { "type": "integer" } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Stage",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "camera",
+            "family": "records",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "yaw", "member_type": { "type": "float" } },
+                { "name": "bursts", "member_type": { "type": "integer" } }
+              ]
+            }
+          }
+        ],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
+    },
+    {
+      "named": "a port of a bundle holding a Texture, which no Records message carries",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Framed",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [
+          {
+            "name": "framed",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "label", "member_type": { "type": "string" } },
+                { "name": "picture", "member_type": { "type": "texture" } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": false,
+      "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a port of a bundle with a List of Float member, carried whole as Records",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Meters",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "levels",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "label", "member_type": { "type": "string" } },
+                { "name": "peaks", "member_type": { "type": "list_of", "element_type": { "type": "float" } } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Meters",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "levels",
+            "family": "records",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "label", "member_type": { "type": "string" } },
+                { "name": "peaks", "member_type": { "type": "list_of", "element_type": { "type": "float" } } }
+              ]
+            }
+          }
+        ],
+        "outputs": [],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
+    },
+    {
+      "named": "a port of a bundle of only Tensors, carried whole as Array",
+      "manifest": {
+        "contract": "1.1",
+        "title": "Detections",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "detections",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "boxes", "member_type": { "type": "tensor" } },
+                { "name": "scores", "member_type": { "type": "tensor" } }
+              ]
+            }
+          }
+        ]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.1",
+        "title": "Detections",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          {
+            "name": "detections",
+            "family": "array",
+            "pin_type": {
+              "type": "bundle",
+              "members": [
+                { "name": "boxes", "member_type": { "type": "tensor" } },
+                { "name": "scores", "member_type": { "type": "tensor" } }
+              ]
+            }
+          }
+        ],
+        "outputs": [],
+        "accepts": { "files": [] },
+        "capabilities": []
+      }
+    },
+    {
       "named": "a port of no known pin type",
       "manifest": {
         "contract": "1.1",

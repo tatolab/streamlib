@@ -6,7 +6,7 @@
 export const STREAM_ASSET = "9e1f3a5c-7b9d-4e2f-8a4c-6e8f0a2c4e61";
 export const STAGE_FOV_DEGREES = 50;
 export const STAGE_HOME = {"target_x": -1.02853, "target_y": 0.1, "distance": 0.32, "yaw_degrees": -22.0, "pitch_degrees": 16.0};
-export const NODE_IDS = {
+export const NODE_IDS: Readonly<Record<string, string>> = {
   "take_clock": "48a546bf-eb3d-55df-98f1-b4ad1287fbd8",
   "soundtrack_pulse": "adbc5ed2-0ee0-5e74-af6c-dd8179639ee4",
   "noaa_virginia_key": "10ddb26d-1ff7-5eee-9f92-332feff0e2fa",
