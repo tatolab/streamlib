@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #[cfg(target_os = "linux")]
+use serde::{Deserialize, Serialize};
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
@@ -31,9 +32,18 @@ const SMOKE_RCHIT_SPV: &[u8] = include_bytes!(concat!(
 #[cfg(target_os = "linux")]
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
+/// The settings [`RayTracingKernelSmokeTest`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RayTracingKernelSmokeTestSettings {
+    #[description = "The file the node writes its result to."]
+    pub output_path: String,
+}
+
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::test_fixture_node_configs::RayTracingKernelSmokeTestNodeConfig,
+    settings = crate::ray_tracing_kernel_smoke_test_node::RayTracingKernelSmokeTestSettings,
 )]
 #[meta(
     description = "Ray-tracing-kernel smoke test fixture — builds a single-triangle BLAS + identity TLAS via FullAccess, creates an RT kernel, acquires a STORAGE_BINDING Texture, runs a single trace_rays() to assert the binding methods (set_acceleration_structure / set_storage_image / set_push_constants / trace_rays) don't panic. Smoke-only; pixel correctness not asserted."
@@ -46,7 +56,7 @@ impl ManualNode for RayTracingKernelSmokeTest::Node {
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.config.output_path.clone();
+        let output_path = self.settings.output_path.clone();
 
         let outcome = run_ray_tracing_kernel_smoke(ctx);
 

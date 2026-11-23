@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #[cfg(target_os = "linux")]
+use serde::{Deserialize, Serialize};
 use streamlib::engine_internal::sdk::rhi::VulkanLayout;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
@@ -10,9 +11,18 @@ use streamlib::sdk::nodes::ManualNode;
 use streamlib::sdk::rhi::Texture;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
+/// The settings [`EscalateSmokeTest`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateSmokeTestSettings {
+    #[description = "The file the node writes its result to."]
+    pub output_path: String,
+}
+
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::test_fixture_node_configs::EscalateSmokeTestNodeConfig,
+    settings = crate::escalate_smoke_test_node::EscalateSmokeTestSettings,
 )]
 #[meta(
     description = "Escalate smoke test fixture — runs gpu.escalate(|_full| Ok(())) end-to-end through escalate_begin/escalate_end and FullAccess construction"
@@ -25,7 +35,7 @@ impl ManualNode for EscalateSmokeTest::Node {
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.config.output_path.clone();
+        let output_path = self.settings.output_path.clone();
 
         // Manual-mode start() takes FullAccess directly.
         //
