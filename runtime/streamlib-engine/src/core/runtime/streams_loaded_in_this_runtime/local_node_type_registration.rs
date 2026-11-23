@@ -47,7 +47,7 @@ mod tests {
     #[crate::node(
         execution = manual,
         config = crate::core::runtime::streams_loaded_in_this_runtime::local_node_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
-        output("video", family = Image),
+        output("video", pin_type = Texture),
     )]
     pub(super) struct AddLocalSourceTakingOneSetting;
 

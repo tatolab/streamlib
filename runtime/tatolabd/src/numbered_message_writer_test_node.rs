@@ -20,8 +20,8 @@ pub(crate) const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
 
 #[streamlib::sdk::node(
     execution = continuous(interval_ms = 10),
-    output("numbers", family = Records),
-    output("more_numbers", family = Records),
+    output("numbers", pin_type = String, flow = Stream),
+    output("more_numbers", pin_type = String, flow = Stream),
 )]
 pub struct NumberedMessageWriterTestNode {
     next_message_number: u64,

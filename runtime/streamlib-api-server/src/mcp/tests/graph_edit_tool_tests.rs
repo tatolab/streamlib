@@ -190,7 +190,7 @@ pub(super) struct AddNodeTestSourceTakingOneSettingConfig {
 #[streamlib::sdk::node(
     execution = manual,
     config = crate::mcp::tests::graph_edit_tool_tests::AddNodeTestSourceTakingOneSettingConfig,
-    output("video", family = Image),
+    output("video", pin_type = Texture),
 )]
 pub(super) struct AddNodeTestSourceTakingOneSetting;
 

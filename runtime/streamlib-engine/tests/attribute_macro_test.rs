@@ -8,8 +8,8 @@ use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
 #[streamlib::sdk::node(
     execution = manual,
-    input("video_in", delivery_profile = "newest", family = Image),
-    output("video_out", family = Image),
+    input("video_in", delivery_profile = "newest", pin_type = Texture),
+    output("video_out", pin_type = Texture),
 )]
 pub struct TestNode;
 
@@ -136,7 +136,7 @@ impl Default for ConfiguredProbeNodeConfig {
 #[streamlib::sdk::node(
     execution = manual,
     config = crate::ConfiguredProbeNodeConfig,
-    output("video_out", family = Image, description = "Frames as *recorded*."),
+    output("video_out", pin_type = Texture, description = "Frames as *recorded*."),
 )]
 #[meta(category = "Probes/Recording", description = PROBE_NODE_DESCRIPTION)]
 pub struct ConfiguredProbeNode;
@@ -261,8 +261,8 @@ pub struct CfgGatedFieldAlwaysCompiledState {
 
 #[streamlib::sdk::node(
     execution = manual,
-    input("video_in", delivery_profile = "newest", family = Image),
-    output("video_out", family = Image),
+    input("video_in", delivery_profile = "newest", pin_type = Texture),
+    output("video_out", pin_type = Texture),
 )]
 pub struct CfgGatedFieldNode {
     #[cfg(any())]
@@ -344,9 +344,9 @@ fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
             window_size = 512,
             hop = 160
         ),
-        family = Channels,
+        pin_type = Audio,
     ),
-    output("windows", family = Records),
+    output("windows", pin_type = String, flow = Stream),
 )]
 pub struct WindowedAudioConsumer;
 
@@ -394,7 +394,7 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
         "audio",
         delivery_profile = "ordered",
         audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960),
-        family = Channels,
+        pin_type = Audio,
     ),
 )]
 pub struct SourceFollowingAudioConsumer;

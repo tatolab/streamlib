@@ -11,7 +11,7 @@ use streamlib::sdk::nodes::ReactiveNode;
 use super::*;
 
 /// A native source of Channels on its output `audio`, with nothing to do.
-#[streamlib::sdk::node(execution = manual, output("audio", family = Channels))]
+#[streamlib::sdk::node(execution = manual, output("audio", pin_type = Audio))]
 pub struct StreamToolsTestAudioSource;
 
 impl ManualNode for StreamToolsTestAudioSource::Node {
@@ -24,7 +24,7 @@ impl ManualNode for StreamToolsTestAudioSource::Node {
 /// first wired to is created shallower than a windowed ring.
 #[streamlib::sdk::node(
     execution = reactive,
-    input("audio", delivery_profile = "ordered", family = Channels)
+    input("audio", delivery_profile = "ordered", pin_type = Audio)
 )]
 pub struct StreamToolsTestPlainAudioReader;
 
@@ -47,7 +47,7 @@ impl ReactiveNode for StreamToolsTestPlainAudioReader::Node {
             window_size = 512,
             hop = 512
         ),
-        family = Channels,
+        pin_type = Audio,
     )
 )]
 pub struct StreamToolsTestWindowedAudioReader;

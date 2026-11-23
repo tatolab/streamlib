@@ -25,7 +25,7 @@ const ARRIVES_WITHIN: Duration = Duration::from_secs(10);
 /// A native reader of Records on its input `cue`, which records each one it reads.
 #[streamlib::sdk::node(
     execution = reactive,
-    input("cue", delivery_profile = "newest", family = Records)
+    input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
 pub struct StreamToolsTestRecordsRecorder;
 
