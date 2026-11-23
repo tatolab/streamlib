@@ -52,7 +52,7 @@ fn the_codes_ports_and_severities(
 }
 
 #[test]
-fn a_port_declared_by_family_fails_the_check_with_the_readers_words_naming_the_pin_type() {
+fn a_port_declared_by_family_fails_the_check_naming_the_port_and_the_pin_type_to_write() {
     let workspace = tempfile::tempdir().unwrap();
     let project_directory = workspace.path().join("acme");
     a_project_named(&project_directory, "acme");
@@ -66,9 +66,10 @@ fn a_port_declared_by_family_fails_the_check_with_the_readers_words_naming_the_p
         the_codes_ports_and_severities(&checked),
         [(
             "view_manifest_refused".to_owned(),
-            None,
+            Some("picture".to_owned()),
             ProjectCodeCheckSeverity::Error
-        )]
+        )],
+        "the finding names the port the refusal is about"
     );
     let refused = &checked.findings[0];
     assert_eq!(refused.path, "views/monitor/tatolab_view.json");
@@ -123,7 +124,7 @@ fn a_manifest_that_does_not_open_fails_the_check_with_the_readers_words() {
         [
             (
                 "view_manifest_refused".to_owned(),
-                None,
+                Some("picture".to_owned()),
                 ProjectCodeCheckSeverity::Error
             ),
             (
@@ -281,7 +282,7 @@ fn every_in_tree_folder_that_may_hold_views(workspace_root: &Path) -> Vec<std::p
 #[test]
 fn every_in_tree_view_opens_and_the_check_reports_nothing_for_it() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut views_read = 0;
+    let mut views_read = Vec::new();
     let mut not_as_expected = Vec::new();
     for folder in every_in_tree_folder_that_may_hold_views(&workspace_root) {
         let relative_folder = folder
@@ -299,8 +300,8 @@ fn every_in_tree_view_opens_and_the_check_reports_nothing_for_it() {
                 &std::fs::read(view.join(TATOLAB_VIEW_MANIFEST_FILE_NAME)).unwrap(),
             )
             .unwrap();
-            views_read += 1;
-            let opens = read_tatolab_view_manifest(&manifest_json);
+            views_read.push(view_path.clone());
+            let opens = crate::read_tatolab_view_manifest(&manifest_json);
             match (
                 opens,
                 IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY.contains(&view_path.as_str()),
@@ -329,9 +330,14 @@ fn every_in_tree_view_opens_and_the_check_reports_nothing_for_it() {
             );
         }
     }
-    assert!(
-        views_read > IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY.len(),
-        "the tree's views are found"
-    );
+    for expected in IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY
+        .into_iter()
+        .chain(["packages/tatolab-core-nodes/views/audio_video_preview"])
+    {
+        assert!(
+            views_read.iter().any(|read| read == expected),
+            "{expected} is among the views read: {views_read:#?}"
+        );
+    }
     assert!(not_as_expected.is_empty(), "{not_as_expected:#?}");
 }

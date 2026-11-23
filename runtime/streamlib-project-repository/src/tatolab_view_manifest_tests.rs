@@ -375,6 +375,43 @@ fn a_port_declared_by_family_is_refused_naming_the_port_the_field_and_the_pin_ty
 }
 
 #[test]
+fn a_refusal_names_the_declared_port_it_is_about_and_none_when_it_is_about_no_port() {
+    let port_of = |manifest: Value| {
+        read_tatolab_view_manifest_naming_the_port_it_refuses(&manifest)
+            .expect_err("the manifest is refused")
+            .port
+    };
+    assert_eq!(
+        port_of(a_node_view_declaring(
+            "1.1",
+            json!([{ "name": "level", "pin_type": { "type": "float" } },
+                   { "name": "picture", "family": "image" }]),
+        )),
+        Some("picture".to_owned()),
+        "a port declared by `family`"
+    );
+    assert_eq!(
+        port_of(a_node_view_declaring(
+            "1.1",
+            json!([{ "name": "level", "pin_type": { "type": "decibels" } }]),
+        )),
+        Some("level".to_owned()),
+        "a field inside a port"
+    );
+    assert_eq!(
+        port_of(a_node_view_declaring(
+            "1.1",
+            json!([{ "name": "Level", "pin_type": { "type": "float" } }]),
+        )),
+        Some("Level".to_owned()),
+        "a port the manifest's own checks refuse"
+    );
+    let mut no_title = a_node_view_declaring("1.1", json!([]));
+    no_title.as_object_mut().unwrap().remove("title");
+    assert_eq!(port_of(no_title), None, "a field of no port");
+}
+
+#[test]
 fn a_view_built_for_contract_one_point_zero_that_declares_no_port_still_opens() {
     let manifest = read_tatolab_view_manifest(&a_node_view_declaring("1.0", json!([])))
         .expect("everything a portless 1.0 view uses is still in the contract");

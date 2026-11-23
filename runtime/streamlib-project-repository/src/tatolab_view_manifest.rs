@@ -238,22 +238,48 @@ struct TatolabViewManifestIssue {
     why: String,
 }
 
+/// Why a view's `tatolab_view.json` does not open: every way it falls short, and the name of the
+/// declared port the first of them that is about a port is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TatolabViewManifestRefusal {
+    /// Each way the manifest falls short, as "`field`: why.", as the view SDK words them.
+    pub(crate) words: String,
+    /// The declared port a refusal of one of its fields is about, by its name.
+    pub(crate) port: Option<String>,
+}
+
 /// `manifest_json`, a view's `tatolab_view.json` as parsed, read against view contract 1.1, or
 /// every way it falls short, each as "`field`: why.", as the view SDK words them.
 pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewManifest, String> {
+    read_tatolab_view_manifest_naming_the_port_it_refuses(manifest_json)
+        .map_err(|refusal| refusal.words)
+}
+
+/// [`read_tatolab_view_manifest`], its refusal naming the declared port it is about.
+pub(crate) fn read_tatolab_view_manifest_naming_the_port_it_refuses(
+    manifest_json: &Value,
+) -> Result<TatolabViewManifest, TatolabViewManifestRefusal> {
     let mut manifest: TatolabViewManifest = serde_path_to_error::deserialize(manifest_json.clone())
         .map_err(|not_the_contract| {
             let field_path =
                 the_field_a_serde_refusal_names(&not_the_contract, TATOLAB_VIEW_MANIFEST_FILE_NAME);
-            format!("`{field_path}`: {}.", not_the_contract.into_inner())
+            TatolabViewManifestRefusal {
+                port: the_declared_port_a_field_lies_in(manifest_json, &field_path),
+                words: format!("`{field_path}`: {}.", not_the_contract.into_inner()),
+            }
         })?;
     let issues = every_issue_of_a_manifest(&manifest);
     if !issues.is_empty() {
-        return Err(issues
-            .iter()
-            .map(|issue| format!("`{}`: {}.", issue.field_path, issue.why))
-            .collect::<Vec<_>>()
-            .join(" "));
+        return Err(TatolabViewManifestRefusal {
+            words: issues
+                .iter()
+                .map(|issue| format!("`{}`: {}.", issue.field_path, issue.why))
+                .collect::<Vec<_>>()
+                .join(" "),
+            port: issues.iter().find_map(|issue| {
+                the_declared_port_a_field_lies_in(manifest_json, &issue.field_path)
+            }),
+        });
     }
     manifest.title = manifest.title.trim().to_owned();
     let mut capabilities_seen = BTreeSet::new();
@@ -261,6 +287,25 @@ pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewMa
         .capabilities
         .retain(|capability| capabilities_seen.insert(*capability));
     Ok(manifest)
+}
+
+/// The name of the declared port of `manifest_json` that `field_path`, as `inputs[0].pin_type`,
+/// lies in, when it lies in one that has a name.
+fn the_declared_port_a_field_lies_in(manifest_json: &Value, field_path: &str) -> Option<String> {
+    let (direction, after_the_direction) =
+        ["inputs", "outputs"].into_iter().find_map(|direction| {
+            field_path
+                .strip_prefix(direction)
+                .and_then(|rest| rest.strip_prefix('['))
+                .map(|rest| (direction, rest))
+        })?;
+    let index: usize = after_the_direction.split(']').next()?.parse().ok()?;
+    manifest_json
+        .get(direction)?
+        .get(index)?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewManifestIssue> {
