@@ -1,0 +1,9 @@
+[project]
+name = "paint-pulse"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tatolab-stream>=0.54.3", "numpy>=2.1", "tatolab-microphone", "tatolab-core-nodes"]
+
+[tool.uv.sources]
+tatolab-microphone = { path = "../../packages/tatolab-microphone", editable = true }
+tatolab-core-nodes = { path = "../../packages/tatolab-core-nodes", package = false }
