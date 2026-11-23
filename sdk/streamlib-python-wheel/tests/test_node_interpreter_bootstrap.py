@@ -34,6 +34,7 @@ from tatolab.stream._node_config_schema import json_schema_for_a_node_declaring_
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_CONVERSION_STAMP,
+    NODE_DECLARATION_PIN_GROUPS_STAMP,
 )
 
 #: The directory holding the `tatolab/runtime/` this process imported.
@@ -231,6 +232,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                 ],
                 "category": "Audio/Relays",
                 "conversion": False,
+                "pin_groups": [],
             }
         ],
         "refused_node_types": [],
@@ -264,6 +266,7 @@ def test_the_bootstrap_spells_each_stamp_an_older_tatolab_stream_lacks_as_tatola
     ) == {
         "category": NODE_DECLARATION_CATEGORY_STAMP,
         "conversion": NODE_DECLARATION_CONVERSION_STAMP,
+        "pin_groups": NODE_DECLARATION_PIN_GROUPS_STAMP,
     }
 
 
