@@ -42,9 +42,9 @@ mod member_put_at_the_read;
 mod member_taken_at_the_read;
 mod queued_trigger_fires;
 
+use member_put_at_the_read::NewestOfEachMemberPutAtTheRead;
 pub use member_put_at_the_read::{
-    BundleMembersAtTheRead, HeavyMemberMessageHeldAtTheRead, MemberPutAtTheRead,
-    NewestOfEachMemberPutAtTheRead, WhatTheMembersArePutInto,
+    BundleMembersAtTheRead, MemberPutAtTheRead, WhatTheMembersArePutInto,
 };
 pub use member_taken_at_the_read::MemberTakenAtTheRead;
 

@@ -231,3 +231,75 @@ fn payloads_and_losses_read_off(mailboxes: &InputMailboxesInner, port: &str) -> 
         })
         .collect()
 }
+
+fn a_bundle_member(
+    name: &str,
+    member_type: crate::core::descriptors::PinType,
+    default_value: Option<serde_json::Value>,
+) -> crate::core::descriptors::BundleMember {
+    crate::core::descriptors::BundleMember {
+        name: name.to_owned(),
+        member_type,
+        meaning: None,
+        default_value,
+    }
+}
+
+fn a_texture() -> crate::core::descriptors::PinType {
+    crate::core::descriptors::PinType::Texture {
+        pixel_formats: Vec::new(),
+    }
+}
+
+/// The Image frame of a picture in slot `slot` of one pool, at its `generation`.
+fn an_image_frame(slot: u32, generation: u64) -> streamlib_ipc_types::DataChannelPayloadDescriptor {
+    streamlib_ipc_types::DataChannelPayloadDescriptor::image_frame(
+        streamlib_ipc_types::ImageFrameDescriptorBody {
+            slot: streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody {
+                pool: [7; 16],
+                slot,
+                generation,
+                timeline_value: 3,
+                image_layout: 5,
+            },
+            width: 64,
+            height: 32,
+            format: 2,
+            colour: streamlib_ipc_types::ImageFrameH273Colour::UNSPECIFIED,
+        },
+    )
+}
+
+/// A block of two mono f32 samples at 48 kHz.
+fn a_sound_block() -> streamlib_ipc_types::DataChannelPayloadDescriptor {
+    streamlib_ipc_types::DataChannelPayloadDescriptor::channels_block(
+        streamlib_ipc_types::ChannelsBlockDescriptorBody {
+            start_sample: 480,
+            sample_rate: 48_000,
+            channel_count: 1,
+            samples_per_channel: 2,
+            sample_type: streamlib_ipc_types::ChannelsBlockSampleType::F32 as u32,
+        },
+    )
+}
+
+/// The samples [`a_sound_block`] describes.
+fn the_sound_samples() -> Vec<u8> {
+    [0.25f32, -0.5]
+        .iter()
+        .flat_map(|s| s.to_le_bytes())
+        .collect()
+}
+
+/// Publish one message described by `payload_descriptor` and carrying `payload`.
+fn publish_a_message(
+    publisher: &TestChannelPublisherNumberingItsSends,
+    payload_descriptor: streamlib_ipc_types::DataChannelPayloadDescriptor,
+    payload: &[u8],
+    timestamp_ns: i64,
+) {
+    publisher.send_numbered(&TestChannelSample {
+        payload_descriptor,
+        ..TestChannelSample::carrying(timestamp_ns, payload)
+    });
+}

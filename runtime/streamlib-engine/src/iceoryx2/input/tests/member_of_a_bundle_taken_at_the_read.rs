@@ -5,10 +5,6 @@
 //! taken from each message of the whole bundle as it arrives.
 
 use serde_json::json;
-use streamlib_ipc_types::{
-    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
-    GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody, ImageFrameH273Colour,
-};
 
 use super::*;
 use crate::core::descriptors::{BundleMember, PinType};
@@ -138,62 +134,15 @@ fn a_message_holding_no_bundle_is_dropped_and_counted() {
     assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-member"), Some(&1));
 }
 
-fn a_member(name: &str, member_type: PinType) -> BundleMember {
-    BundleMember {
-        name: name.to_owned(),
-        member_type,
-        meaning: None,
-        default_value: None,
-    }
-}
-
 /// A picture with the level metered off it and the sound recorded with it.
 fn a_metered_picture() -> PinType {
     PinType::Bundle {
         members: vec![
-            a_member(
-                "picture",
-                PinType::Texture {
-                    pixel_formats: Vec::new(),
-                },
-            ),
-            a_member("level", PinType::Float { exact_size: None }),
-            a_member("sound", PinType::Audio {}),
+            a_bundle_member("picture", a_texture(), None),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
+            a_bundle_member("sound", PinType::Audio {}, None),
         ],
     }
-}
-
-fn an_image_frame() -> DataChannelPayloadDescriptor {
-    DataChannelPayloadDescriptor::image_frame(ImageFrameDescriptorBody {
-        slot: GpuPoolSlotFrameDescriptorBody {
-            pool: [7; 16],
-            slot: 4,
-            generation: 19,
-            timeline_value: 3,
-            image_layout: 5,
-        },
-        width: 64,
-        height: 32,
-        format: 2,
-        colour: ImageFrameH273Colour::UNSPECIFIED,
-    })
-}
-
-fn a_sound_block() -> DataChannelPayloadDescriptor {
-    DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
-        start_sample: 480,
-        sample_rate: 48_000,
-        channel_count: 1,
-        samples_per_channel: 2,
-        sample_type: ChannelsBlockSampleType::F32 as u32,
-    })
-}
-
-fn the_sound_samples() -> Vec<u8> {
-    [0.25f32, -0.5]
-        .iter()
-        .flat_map(|s| s.to_le_bytes())
-        .collect()
 }
 
 /// Publish one Bundle frame of a metered picture: level 0.5, the picture and the sound.
@@ -205,7 +154,7 @@ fn publish_a_metered_picture(publisher: &TestChannelPublisherNumberingItsSends) 
         &[
             HeavyMemberOfABundleFrame {
                 name: "picture",
-                descriptor: an_image_frame(),
+                descriptor: an_image_frame(4, 19),
                 payload: &[],
             },
             HeavyMemberOfABundleFrame {
@@ -238,7 +187,7 @@ fn a_texture_member_link_reads_the_pictures_own_image_frame() {
         .unwrap()
         .expect("the picture arrives");
     assert_eq!(message.timestamp_ns, 11);
-    assert_eq!(message.payload_descriptor, an_image_frame());
+    assert_eq!(message.payload_descriptor, an_image_frame(4, 19));
     assert!(message.payload.is_empty());
 }
 

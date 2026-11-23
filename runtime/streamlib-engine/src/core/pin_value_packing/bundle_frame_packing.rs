@@ -11,7 +11,7 @@
 
 use serde_json::{Map, Value};
 use streamlib_ipc_types::{
-    BundleFrameDescriptorBody, BundleFrameRowHolds, BundleFrameRowToPack,
+    BundleFrameDescriptorBody, BundleFrameRow, BundleFrameRowHolds, BundleFrameRowToPack,
     DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, bundle_frame_of_rows,
     bundle_frame_row_table_of,
 };
@@ -88,6 +88,25 @@ fn kind_a_heavy_member_travels_as(member_type: &PinType) -> DataChannelPayloadDe
     message_kind_of(member_type).expect("a heavy type travels on a link")
 }
 
+/// Refuse `descriptor`, given for the heavy member `member`, when it describes another kind of
+/// message than the member travels as on a wire of its own, naming the member and `where_it_is`.
+pub(crate) fn refuse_a_heavy_member_message_of_another_kind(
+    member: &BundleMember,
+    descriptor: &DataChannelPayloadDescriptor,
+    where_it_is: &str,
+) -> Result<(), String> {
+    let kind = kind_a_heavy_member_travels_as(&member.member_type);
+    if descriptor.known_kind().ok() == Some(kind) {
+        return Ok(());
+    }
+    Err(format!(
+        "member `{}` is {}, which travels as {kind:?}, and {where_it_is} is described as {:?}",
+        member.name,
+        member.member_type,
+        descriptor.known_kind()
+    ))
+}
+
 /// `small_members`, the stored value of `bundle`'s small members by name, and `heavy_members`,
 /// one for each of its heavy members, packed as one Bundle frame: the small members' Records
 /// message row first, when the bundle has small members, then each heavy member's row in the
@@ -143,16 +162,11 @@ pub fn the_bundle_frame_of_a_bundle(
                     .count()
             ));
         };
-        let kind = kind_a_heavy_member_travels_as(&member.member_type);
-        if heavy_member.descriptor.known_kind().ok() != Some(kind) {
-            return Err(format!(
-                "member `{}` is {}, which travels as {kind:?}, and it was given a message \
-                 described as {:?}",
-                member.name,
-                member.member_type,
-                heavy_member.descriptor.known_kind()
-            ));
-        }
+        refuse_a_heavy_member_message_of_another_kind(
+            member,
+            &heavy_member.descriptor,
+            "the message it was given",
+        )?;
         rows.push(BundleFrameRowToPack {
             holds,
             descriptor: heavy_member.descriptor,
@@ -167,6 +181,96 @@ pub fn the_bundle_frame_of_a_bundle(
     })
 }
 
+/// The rows of `message`, a Bundle frame of `bundle`: refused when it is no Bundle frame or
+/// its row table does not read.
+fn the_rows_of_a_bundle_frame(
+    bundle: &PinType,
+    message: PackedPinValueRef<'_>,
+) -> Result<Vec<BundleFrameRow>, String> {
+    if message.payload_descriptor.known_kind().ok()
+        != Some(DataChannelPayloadDescriptorKind::BundleFrame)
+    {
+        return Err(format!(
+            "a {bundle} travels as a Bundle frame, and the message is described as {:?}",
+            message.payload_descriptor.known_kind()
+        ));
+    }
+    bundle_frame_row_table_of(
+        BundleFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body),
+        message.payload,
+    )
+    .map_err(|refusal| refusal.reason)
+}
+
+/// The bytes `row` holds in `message`.
+fn the_bytes_of_the_row<'message>(
+    row: &BundleFrameRow,
+    message: PackedPinValueRef<'message>,
+) -> &'message [u8] {
+    &message.payload[row.payload_byte_offset as usize
+        ..(row.payload_byte_offset + row.payload_byte_len) as usize]
+}
+
+/// The small members of `small_bundle` the Records message row of `rows` carries, each one it
+/// leaves out given its default, and all of them so when the frame has no such row.
+fn the_small_members_a_bundle_frame_carries(
+    small_bundle: &PinType,
+    rows: &[BundleFrameRow],
+    message: PackedPinValueRef<'_>,
+) -> Result<Map<String, Value>, String> {
+    if matches!(small_bundle, PinType::Bundle { members } if members.is_empty()) {
+        return Ok(Map::new());
+    }
+    let empty_records = rmp_serde::to_vec_named(&Map::new()).expect("an empty map encodes");
+    let records_message_descriptor = DataChannelPayloadDescriptor::records_message();
+    let records = match rows
+        .iter()
+        .find(|row| row.holds == BundleFrameRowHolds::SmallMembers)
+    {
+        Some(row) => PackedPinValueRef {
+            payload_descriptor: &row.descriptor,
+            payload: the_bytes_of_the_row(row, message),
+        },
+        None => PackedPinValueRef {
+            payload_descriptor: &records_message_descriptor,
+            payload: &empty_records,
+        },
+    };
+    match the_bundle_a_records_message_carries(small_bundle, records)? {
+        Value::Object(small_members) => Ok(small_members),
+        _ => unreachable!("a bundle reads as an object of its members"),
+    }
+}
+
+/// The heavy member `member` of `bundle` borrowed from its row of `rows`: refused when the frame
+/// holds no row for it, or one of another kind of message.
+fn the_heavy_member_a_bundle_frame_carries<'message>(
+    bundle: &PinType,
+    member: &BundleMember,
+    rows: &[BundleFrameRow],
+    message: PackedPinValueRef<'message>,
+) -> Result<HeavyMemberReadOffABundleFrame<'message>, String> {
+    let row = rows
+        .iter()
+        .find(|row| row.holds == BundleFrameRowHolds::Member(member.name.clone()))
+        .ok_or_else(|| {
+            format!(
+                "the {bundle}'s Bundle frame holds no row for member `{}`",
+                member.name
+            )
+        })?;
+    refuse_a_heavy_member_message_of_another_kind(
+        member,
+        &row.descriptor,
+        "its row in the Bundle frame",
+    )?;
+    Ok(HeavyMemberReadOffABundleFrame {
+        name: member.name.clone(),
+        descriptor: row.descriptor,
+        payload: the_bytes_of_the_row(row, message),
+    })
+}
+
 /// The Bundle frame `message` read as `bundle`, the bundle an input declares: its small members
 /// read off the frame's Records message row as a bundle of those members reads them, and each
 /// heavy member borrowed from its row. Refused when `message` is no Bundle frame, a heavy member
@@ -176,80 +280,11 @@ pub fn the_bundle_a_bundle_frame_carries<'message>(
     message: PackedPinValueRef<'message>,
 ) -> Result<BundleFrameReadAsItsBundle<'message>, String> {
     let (small_bundle, declared_heavy_members) = small_and_heavy_members_of(bundle)?;
-    if message.payload_descriptor.known_kind().ok()
-        != Some(DataChannelPayloadDescriptorKind::BundleFrame)
-    {
-        return Err(format!(
-            "a {bundle} travels as a Bundle frame, and the message is described as {:?}",
-            message.payload_descriptor.known_kind()
-        ));
-    }
-    let rows = bundle_frame_row_table_of(
-        BundleFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body),
-        message.payload,
-    )
-    .map_err(|refusal| refusal.reason)?;
-    let bytes_of_the_row = |payload_byte_offset: u64, payload_byte_len: u64| {
-        &message.payload
-            [payload_byte_offset as usize..(payload_byte_offset + payload_byte_len) as usize]
-    };
-    let small_members = match &small_bundle {
-        PinType::Bundle { members } if members.is_empty() => Map::new(),
-        _ => {
-            let records = rows
-                .iter()
-                .find(|row| row.holds == BundleFrameRowHolds::SmallMembers);
-            let empty_records = rmp_serde::to_vec_named(&Map::new()).expect("an empty map encodes");
-            let carried = match records {
-                Some(row) => the_bundle_a_records_message_carries(
-                    &small_bundle,
-                    PackedPinValueRef {
-                        payload_descriptor: &row.descriptor,
-                        payload: bytes_of_the_row(row.payload_byte_offset, row.payload_byte_len),
-                    },
-                ),
-                None => the_bundle_a_records_message_carries(
-                    &small_bundle,
-                    PackedPinValueRef {
-                        payload_descriptor: &DataChannelPayloadDescriptor::records_message(),
-                        payload: &empty_records,
-                    },
-                ),
-            }?;
-            match carried {
-                Value::Object(small_members) => small_members,
-                _ => unreachable!("a bundle reads as an object of its members"),
-            }
-        }
-    };
+    let rows = the_rows_of_a_bundle_frame(bundle, message)?;
+    let small_members = the_small_members_a_bundle_frame_carries(&small_bundle, &rows, message)?;
     let heavy_members = declared_heavy_members
         .iter()
-        .map(|member| {
-            let row = rows
-                .iter()
-                .find(|row| row.holds == BundleFrameRowHolds::Member(member.name.clone()))
-                .ok_or_else(|| {
-                    format!(
-                        "the {bundle}'s Bundle frame holds no row for member `{}`",
-                        member.name
-                    )
-                })?;
-            let kind = kind_a_heavy_member_travels_as(&member.member_type);
-            if row.descriptor.known_kind().ok() != Some(kind) {
-                return Err(format!(
-                    "member `{}` is {}, which travels as {kind:?}, and its row in the Bundle \
-                     frame is described as {:?}",
-                    member.name,
-                    member.member_type,
-                    row.descriptor.known_kind()
-                ));
-            }
-            Ok(HeavyMemberReadOffABundleFrame {
-                name: member.name.clone(),
-                descriptor: row.descriptor,
-                payload: bytes_of_the_row(row.payload_byte_offset, row.payload_byte_len),
-            })
-        })
+        .map(|member| the_heavy_member_a_bundle_frame_carries(bundle, member, &rows, message))
         .collect::<Result<Vec<_>, String>>()?;
     Ok(BundleFrameReadAsItsBundle {
         small_members,
@@ -260,24 +295,23 @@ pub fn the_bundle_a_bundle_frame_carries<'message>(
 /// The message member `member` of `bundle` travels as on its own, taken from `message`, a Bundle
 /// frame of the whole bundle: a heavy member's row under the descriptor it states, its bytes
 /// copied, a Texture's naming its pool slot and holding none; a small member's value, or its
-/// default, packed as its own type travels. Refused as reading the frame as `bundle` is.
+/// default, packed as its own type travels. Only the member's own row is read.
 pub(super) fn the_member_a_bundle_frame_carries(
     bundle: &PinType,
     member: &BundleMember,
     message: PackedPinValueRef<'_>,
 ) -> Result<PackedPinValue, String> {
-    let read = the_bundle_a_bundle_frame_carries(bundle, message)?;
-    if let Some(heavy_member) = read
-        .heavy_members
-        .iter()
-        .find(|heavy_member| heavy_member.name == member.name)
-    {
+    let (small_bundle, _) = small_and_heavy_members_of(bundle)?;
+    let rows = the_rows_of_a_bundle_frame(bundle, message)?;
+    if member.member_type.is_a_heavy_type() {
+        let heavy_member = the_heavy_member_a_bundle_frame_carries(bundle, member, &rows, message)?;
         return Ok(PackedPinValue {
             payload_descriptor: heavy_member.descriptor,
             payload: heavy_member.payload.to_vec(),
         });
     }
-    let small_member = read.small_members.get(&member.name).ok_or_else(|| {
+    let small_members = the_small_members_a_bundle_frame_carries(&small_bundle, &rows, message)?;
+    let small_member = small_members.get(&member.name).ok_or_else(|| {
         format!(
             "a {bundle} has no member `{}` its Bundle frame carries",
             member.name

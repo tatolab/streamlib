@@ -5,32 +5,20 @@
 //! newest value each has carried, stamped as the message that arrived last.
 
 use serde_json::{Value, json};
-use streamlib_ipc_types::{
-    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
-    GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody, ImageFrameH273Colour,
-};
+use streamlib_ipc_types::DataChannelPayloadDescriptor;
 
 use super::*;
-use crate::core::descriptors::{BundleMember, PinType};
+use crate::core::descriptors::PinType;
 use crate::core::pin_value_packing::{
     PackedPinValueRef, pack_pin_value, the_bundle_a_bundle_frame_carries,
     the_members_of_a_bundle_a_records_message_carries, unpack_pin_value,
 };
 
-fn member(name: &str, member_type: PinType, default_value: Option<Value>) -> BundleMember {
-    BundleMember {
-        name: name.to_owned(),
-        member_type,
-        meaning: None,
-        default_value,
-    }
-}
-
 fn a_reading() -> PinType {
     PinType::Bundle {
         members: vec![
-            member("level", PinType::Float { exact_size: None }, None),
-            member("label", PinType::String {}, Some(json!("unnamed"))),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
+            a_bundle_member("label", PinType::String {}, Some(json!("unnamed"))),
         ],
     }
 }
@@ -305,49 +293,14 @@ fn a_member_no_link_has_carried_reads_the_value_set_on_the_input() {
     );
 }
 
-fn a_texture() -> PinType {
-    PinType::Texture {
-        pixel_formats: Vec::new(),
-    }
-}
-
 /// A picture with the level metered off it: a Texture beside a Float.
 fn a_metered_picture() -> PinType {
     PinType::Bundle {
         members: vec![
-            member("picture", a_texture(), None),
-            member("level", PinType::Float { exact_size: None }, None),
+            a_bundle_member("picture", a_texture(), None),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
         ],
     }
-}
-
-/// The Image frame of a picture in slot `slot` of one pool, at its `generation`.
-fn an_image_frame(slot: u32, generation: u64) -> DataChannelPayloadDescriptor {
-    DataChannelPayloadDescriptor::image_frame(ImageFrameDescriptorBody {
-        slot: GpuPoolSlotFrameDescriptorBody {
-            pool: [7; 16],
-            slot,
-            generation,
-            timeline_value: 3,
-            image_layout: 5,
-        },
-        width: 64,
-        height: 32,
-        format: 2,
-        colour: ImageFrameH273Colour::UNSPECIFIED,
-    })
-}
-
-fn publish_a_message(
-    publisher: &TestChannelPublisherNumberingItsSends,
-    payload_descriptor: DataChannelPayloadDescriptor,
-    payload: &[u8],
-    timestamp_ns: i64,
-) {
-    publisher.send_numbered(&TestChannelSample {
-        payload_descriptor,
-        ..TestChannelSample::carrying(timestamp_ns, payload)
-    });
 }
 
 fn publish_a_level(publisher: &TestChannelPublisherNumberingItsSends, level: f64, stamp: i64) {
@@ -546,8 +499,8 @@ fn a_message_of_another_kind_into_a_texture_member_is_dropped_and_counted() {
 fn an_audio_block_wired_into_a_member_rides_the_bundle_frame_with_its_samples() {
     let a_sound_with_its_label = PinType::Bundle {
         members: vec![
-            member("sound", PinType::Audio {}, None),
-            member("label", PinType::String {}, Some(json!("unnamed"))),
+            a_bundle_member("sound", PinType::Audio {}, None),
+            a_bundle_member("label", PinType::String {}, Some(json!("unnamed"))),
         ],
     };
     let mailboxes = InputMailboxesInner::new();
@@ -557,17 +510,8 @@ fn an_audio_block_wired_into_a_member_rides_the_bundle_frame_with_its_samples() 
         "sound",
         WhatTheMembersArePutInto::TheWholeBundle,
     );
-    let block = DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
-        start_sample: 480,
-        sample_rate: 48_000,
-        channel_count: 1,
-        samples_per_channel: 2,
-        sample_type: ChannelsBlockSampleType::F32 as u32,
-    });
-    let samples: Vec<u8> = [0.25f32, -0.5]
-        .iter()
-        .flat_map(|s| s.to_le_bytes())
-        .collect();
+    let block = a_sound_block();
+    let samples = the_sound_samples();
 
     publish_a_message(&into_sound, block, &samples, 9);
 
@@ -577,6 +521,49 @@ fn an_audio_block_wired_into_a_member_rides_the_bundle_frame_with_its_samples() 
             json!({ "label": "unnamed" }),
             vec![("sound".to_owned(), block, samples)],
             9
+        )]
+    );
+}
+
+/// A Texture member stating a default still waits for its picture: a default never stands in
+/// for a Texture, so a number arriving first builds no bundle, and is no loss either.
+///
+/// Mental-revert: reading the Texture's default as the member having arrived packs a frame
+/// lacking the picture's row, which is refused, so every number is dropped and counted.
+#[test]
+fn a_defaulted_texture_member_not_yet_arrived_builds_no_bundle_and_drops_nothing() {
+    let a_picture_defaulted = PinType::Bundle {
+        members: vec![
+            a_bundle_member("picture", a_texture(), Some(json!({}))),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
+        ],
+    };
+    let mailboxes = InputMailboxesInner::new();
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_picture_defaulted,
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let into_level = a_link_into_a_member_of(
+        &mailboxes,
+        &a_picture_defaulted,
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+
+    publish_a_level(&into_level, 0.5, 3);
+    let read_before_a_picture = the_bundle_frames_read(&mailboxes, &a_picture_defaulted);
+    publish_a_message(&into_picture, an_image_frame(4, 19), &[], 5);
+
+    assert_eq!(read_before_a_picture, Vec::new());
+    assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-level"), Some(&0));
+    assert_eq!(
+        the_bundle_frames_read(&mailboxes, &a_picture_defaulted),
+        vec![(
+            json!({ "level": 0.5 }),
+            vec![the_picture(an_image_frame(4, 19))],
+            5
         )]
     );
 }
