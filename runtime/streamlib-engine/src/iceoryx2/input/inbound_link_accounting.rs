@@ -209,8 +209,8 @@ impl InputMailboxesInner {
             removed.bundle_members_at_the_read.put_into_its_input
             && let Some(port) = self.ports.lock().get_mut(&local_port)
         {
-            port.newest_value_of_each_member_put_at_the_read
-                .remove(&put_into_its_input.member.name);
+            port.newest_of_each_member_put_at_the_read
+                .forget_the_member(&put_into_its_input.member.name);
         }
         if subscribers_and_listener.subscribers.is_empty() {
             subscribers_and_listener.listener = None;

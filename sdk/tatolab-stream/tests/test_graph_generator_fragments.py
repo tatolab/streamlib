@@ -194,7 +194,7 @@ def test_a_setting_the_generator_does_not_promote_is_refused_naming_those_it_doe
 
 def test_a_node_class_given_promoted_settings_is_refused_naming_input_values() -> None:
     with pytest.raises(TypeError, match=r"pass its values as `input_values=\{\.\.\.\}`"):
-        StreamBuilder("rig").add(FrameInverter, strength=3)  # pyright: ignore[reportCallIssue]
+        StreamBuilder("rig").add(FrameInverter, strength=3)  # pyright: ignore[reportArgumentType]
 
 
 def test_a_generator_given_config_is_refused_naming_keyword_settings() -> None:
@@ -286,3 +286,15 @@ def test_a_node_grouped_twice_is_refused_naming_the_group_it_belongs_to() -> Non
 def test_a_stream_groups_no_node_of_its_own() -> None:
     with pytest.raises(ValueError, match="a stream's own groups are made with `add_group`"):
         run_graph_generator(invert_twice_grouped)
+
+
+def test_a_member_named_on_a_fragment_s_port_is_refused_naming_the_port() -> None:
+    soft = StreamBuilder("rig").add(invert_twice, name="soft")
+
+    with pytest.raises(
+        ValueError,
+        match=r"fragment `soft`'s Output `video` is wired whole, and is named member `level`",
+    ):
+        soft.output("video", member="level")
+    with pytest.raises(ValueError, match=r"fragment `soft`'s Input `video` is wired whole"):
+        soft.input("video", member="level")

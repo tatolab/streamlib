@@ -105,6 +105,7 @@ _CLASS_VARIABLE_ANNOTATION = "ClassVar"
 _ANNOTATED_ANNOTATION = "Annotated"
 _UNREAD_MESSAGE_ANNOTATION = "UnreadMessage"
 _SINGLE_OUTPUT_PORT_NAME = "result"
+_NAMED_TUPLE_BASE = "NamedTuple"
 
 
 def module_name_of_a_source_path(relative_path: str) -> Optional[str]:
@@ -417,12 +418,13 @@ class _ModuleDeclarationReading:
             if not stateful_arguments:
                 return None
             output_annotation = stateful_arguments[0]
-        # Under the family grammar a returned dataclass is one output per field.
-        record_of_outputs = (
-            None
-            if reads_pin_types
-            else self._classes_by_name.get(_annotated_type_name(output_annotation) or "")
-        )
+        # Under the family grammar a returned dataclass is one output per field; under bare
+        # `@node` a returned `NamedTuple` is, and a dataclass is one bundle pin.
+        record_of_outputs = self._classes_by_name.get(_annotated_type_name(output_annotation) or "")
+        if record_of_outputs is not None and reads_pin_types:
+            record_of_outputs = (
+                record_of_outputs if self._is_a_named_tuple_of_outputs(record_of_outputs) else None
+            )
         if record_of_outputs is not None:
             return [
                 self._function_port(field.target.id, field.annotation)
@@ -430,6 +432,12 @@ class _ModuleDeclarationReading:
                 if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)
             ]
         return [self._function_port(_SINGLE_OUTPUT_PORT_NAME, output_annotation)]
+
+    def _is_a_named_tuple_of_outputs(self, record: ast.ClassDef) -> bool:
+        """Whether `record` subclasses `NamedTuple` and is not a named pin type, which is one pin."""
+        return any(
+            _annotated_type_name(base) == _NAMED_TUPLE_BASE for base in record.bases
+        ) and self._decorated_with(record, NAMED_PIN_TYPE_DECORATOR) is None
 
     def _function_port(
         self,

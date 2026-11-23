@@ -8,6 +8,7 @@ path of its class or function, `stream_graph_builder_nodes:<qualname>` — a nam
 process can import.
 """
 
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from tatolab.stream import (
@@ -42,7 +43,7 @@ class FrameInverter:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = self.video_from_upstream.read()
         if frame is not None:
-            self.video_to_downstream.write(frame)
+            self.video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
 
 
 @node
@@ -69,7 +70,7 @@ class FrameFilters:
         def process(self, ctx: RuntimeContextLimitedAccess) -> None:
             frame = self.video_from_upstream.read()
             if frame is not None:
-                self.video_to_downstream.write(frame)
+                self.video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
 
 
 @node
@@ -95,3 +96,23 @@ def TintedLevel(
 ) -> float:
     """A typed node: its level, scaled by how bright its tint is."""
     return level * (tint.red + tint.green + tint.blue) / 3
+
+
+@dataclass(frozen=True)
+class Tone:
+    """A bundle of two members."""
+
+    frequency: float
+    gain: float = 1.0
+
+
+@node
+def LouderTone(tone: Tone = Tone(440.0)) -> Tone:
+    """A typed node taking and giving a bundle: its tone, its gain raised by one."""
+    return Tone(tone.frequency, tone.gain + 1)
+
+
+@node
+def PassesItsValue[PinValue](value: PinValue) -> PinValue:
+    """A typed node whose pins take the type linked into `value`."""
+    return value

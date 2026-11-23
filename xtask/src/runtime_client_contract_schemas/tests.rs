@@ -53,6 +53,33 @@ fn a_reference_to_no_component_and_a_set_that_cannot_fall_back_are_refused() {
     );
 }
 
+/// Mental-revert: with only a set of constants taken, `PinType`'s mark stops generation.
+#[test]
+fn a_set_of_objects_each_named_by_one_tag_may_grow_and_one_with_an_untagged_member_may_not() {
+    let tagged = |tag: &str| json!({ "type": "object", "properties": { "type": { "type": "string", "const": tag } } });
+    assert_eq!(
+        refusal_of_components(json!({
+            "Boolean": tagged("boolean"),
+            "Kind": {
+                "oneOf": [{ "$ref": "#/components/schemas/Boolean" }, tagged("float")],
+                "x-may-grow": true
+            }
+        })),
+        None
+    );
+    let refusal = refusal_of_components(json!({
+        "Kind": {
+            "oneOf": [tagged("boolean"), { "type": "object", "properties": {} }],
+            "x-may-grow": true
+        }
+    }))
+    .unwrap();
+    assert!(
+        refusal.contains("whose unknown tag a client reads as it is"),
+        "{refusal}"
+    );
+}
+
 #[test]
 fn a_property_named_like_a_keyword_is_a_name_not_a_keyword() {
     assert_eq!(

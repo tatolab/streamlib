@@ -31,7 +31,7 @@ test("an open map takes any key both ways", () => {
 
 test("a tagged union is read by its tag, and a wrong field names the alternative its tag chose", () => {
   assert.equal(isControlContractValue("PinType", { type: "boolean" }), true);
-  assert.equal(isControlContractValue("PinType", { type: "no_such_type" }), false);
+  assert.notDeepEqual(controlContractIssues("PinType", { type: "no_such_type" }, "sent"), []);
   const issues = controlContractIssues("PinType", { type: "integer", exact_size: "huge" }, "read");
   assert.ok(issues.length > 0);
   assert.deepEqual(issues[0].path, ["exact_size"]);

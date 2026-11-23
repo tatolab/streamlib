@@ -22,17 +22,17 @@ reads them: a List, a named type and the types that take no wire. A bundle trave
 message of its own, so `MakeBundle` and `BreakBundle` choose one."""
 
 
-def _in_words(pin_type: "PinType") -> str:
+def pin_type_in_words(pin_type: "PinType") -> str:
     """`pin_type` named as the runtime's errors name it."""
     from ._pin_value_stored_form import PIN_TYPE_DESCRIPTION_BY_NAME
 
     held: dict[str, Any] = dict(pin_type)
     label = PIN_TYPE_DESCRIPTION_BY_NAME[held["type"]].label
     if held["type"] == "list_of":
-        return f"{label} of {_in_words(held['element_type'])}"
+        return f"{label} of {pin_type_in_words(held['element_type'])}"
     if held["type"] == "bundle":
         members = ", ".join(
-            f"{member['name']}: {_in_words(member['member_type'])}" for member in held["members"]
+            f"{member['name']}: {pin_type_in_words(member['member_type'])}" for member in held["members"]
         )
         return f"{label} ({members})"
     if held["type"] == "named":
@@ -79,7 +79,7 @@ class PinTypeChoice:
         chosen = declared["pin_type"]
         if chosen["type"] in _TYPES_NO_FAMILY_CARRIES:
             raise TypeError(
-                f"`PinTypeChoice` chooses {_in_words(chosen)}, which no stream's port carries "
+                f"`PinTypeChoice` chooses {pin_type_in_words(chosen)}, which no stream's port carries "
                 f"yet. To fix: choose a type a single message carries, such as a Float, a String "
                 f"or a Texture"
             )
