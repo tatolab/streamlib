@@ -120,11 +120,20 @@ impl InputMailboxesInner {
     /// for a bool, while no link feeds it, stamped with stream time at each read, in place of
     /// the values read before; each is held at its port's cast name, which every read looks up.
     /// An input left out, holding a value of another kind, or whose name casts to nothing,
-    /// reads only its links again.
+    /// reads only its links again. An input holding a bundle's members is kept for the links
+    /// ending at its members, each member no link has carried reading the value it holds.
     pub fn read_each_unlinked_input_as_its_value(
         &self,
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) {
+        *self.bundle_values_set_on_its_inputs.write() = input_values
+            .iter()
+            .filter_map(|(input, value)| {
+                let members = value.as_object()?.clone();
+                let port = cast_exposed_name_to_url_safe(input).ok()?.into_owned();
+                Some((port, members))
+            })
+            .collect();
         let numbers = input_values
             .iter()
             .filter_map(|(input, value)| {

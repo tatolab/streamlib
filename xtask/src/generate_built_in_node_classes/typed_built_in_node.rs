@@ -4,7 +4,7 @@
 //! A typed built-in, rendered as a class node is declared: each value input a field with its
 //! type and default, each stream a pin, each described, so `stream_builder.add` checks the
 //! values it is given against them. A built-in is typed when it takes no config and every port
-//! states exactly one pin type.
+//! states exactly one pin type, or carries the type one of its settings chooses.
 
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -21,9 +21,10 @@ const CLASS_NODE_PINS: &str = "._class_node_pins";
 const DESCRIPTION: &str = "._description";
 const INPUT_DECLARATION_ANNOTATIONS: &str = "._input_declaration_annotations";
 const PIN_TYPES: &str = "._pin_types";
+const PIN_TYPE_CHOICE: &str = "._pin_type_choice";
 
 /// Whether `descriptor` is a typed built-in: its config schema lists no key, and each of its
-/// ports states exactly one pin type.
+/// ports states exactly one pin type or carries the type a setting chooses.
 pub(super) fn is_a_typed_built_in(descriptor: &BuiltInNodeDescriptor) -> bool {
     let lists_a_config_key = descriptor
         .config_schema
@@ -36,7 +37,9 @@ pub(super) fn is_a_typed_built_in(descriptor: &BuiltInNodeDescriptor) -> bool {
             .inputs
             .iter()
             .chain(&descriptor.outputs)
-            .all(|port| port.exact_pin_type().is_some())
+            .all(|port| {
+                port.exact_pin_type().is_some() || port.the_setting_choosing_its_type().is_some()
+            })
 }
 
 /// The fields and pins of the typed built-in `descriptor`, each as the class body declares it,
@@ -85,6 +88,9 @@ fn render_input(
     imports: &mut BTreeSet<ImportedName>,
 ) -> Result<String> {
     let port_label = format!("{refused_item_label}'s input `{}`", input.name);
+    if input.the_setting_choosing_its_type().is_some() {
+        return render_pin("InputPin", input, Vec::new(), refused_item_label, imports);
+    }
     if input.flow.as_deref() != Some("value") {
         let delivery = input
             .delivery_profile
@@ -119,21 +125,29 @@ fn render_input(
         Some(input_mode) if input_mode.mode == "wire_or_value" => None,
         Some(input_mode) => bail!("{port_label} takes its value as `{}`", input_mode.mode),
     };
-    let Some(default) = input
+    let pin_type = input
+        .exact_pin_type()
+        .expect("a typed built-in's setting states one pin type");
+    let chooses_a_pin_type =
+        pin_type.get("type").and_then(Value::as_str) == Some("pin_type_choice");
+    let default = match input
         .default_value
         .as_ref()
         .filter(|value| !value.is_null())
-    else {
-        bail!("{port_label} holds no default, and a field holds its default until it is set");
+    {
+        Some(default) => python_literal(default, &port_label)?,
+        None if chooses_a_pin_type => "None".to_owned(),
+        None => {
+            bail!("{port_label} holds no default, and a field holds its default until it is set")
+        }
     };
     imports.insert((TYPING, "Annotated"));
-    let mut annotations = vec![python_spelling_of_a_pin_type(
-        input
-            .exact_pin_type()
-            .expect("a typed built-in's port states one pin type"),
-        &port_label,
-        imports,
-    )?];
+    let mut annotations = vec![if chooses_a_pin_type {
+        imports.insert((PIN_TYPE_CHOICE, "PinTypeChoice"));
+        "PinTypeChoice | None".to_owned()
+    } else {
+        python_spelling_of_a_pin_type(pin_type, &port_label, imports)?
+    }];
     if let Some(mode) = mode {
         imports.insert((INPUT_DECLARATION_ANNOTATIONS, mode));
         annotations.push(format!("{mode}()"));
@@ -146,7 +160,7 @@ fn render_input(
     for annotation in annotations {
         writeln!(text, "        {annotation},")?;
     }
-    writeln!(text, "    ] = {}", python_literal(default, &port_label)?)?;
+    writeln!(text, "    ] = {default}")?;
     Ok(text)
 }
 
@@ -165,12 +179,24 @@ fn render_pin(
     let port_label = format!("{refused_item_label}'s {direction} `{}`", port.name);
     imports.insert((TYPING, "Annotated"));
     imports.insert((CLASS_NODE_PINS, pin_form));
-    let mut annotations = vec![python_spelling_of_a_pin_type(
-        port.exact_pin_type()
-            .expect("a typed built-in's port states one pin type"),
-        &port_label,
-        imports,
-    )?];
+    let mut annotations = match port.the_setting_choosing_its_type() {
+        Some(setting_name) => {
+            imports.insert((PIN_TYPE_CHOICE, "PinTypeFromSetting"));
+            vec![
+                "object".to_owned(),
+                format!(
+                    "PinTypeFromSetting({})",
+                    python_string_literal(setting_name, &port_label)?
+                ),
+            ]
+        }
+        None => vec![python_spelling_of_a_pin_type(
+            port.exact_pin_type()
+                .expect("a typed built-in's port states one pin type"),
+            &port_label,
+            imports,
+        )?],
+    };
     annotations.extend(stated_besides);
     annotations.push(description_annotation(port, &port_label, imports)?);
     let mut text = format!(

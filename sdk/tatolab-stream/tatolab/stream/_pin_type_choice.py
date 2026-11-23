@@ -15,10 +15,11 @@ __all__ = ["PinTypeChoice", "PinTypeFromSetting"]
 _WHAT_A_CHOICE_IS_READ_AS: Final = "PinTypeChoice"
 
 _TYPES_NO_FAMILY_CARRIES: Final[frozenset[str]] = frozenset(
-    {"list_of", "bundle", "named", "node_reference", "pin_type_choice"}
+    {"list_of", "named", "node_reference", "pin_type_choice"}
 )
 """The types whose values no family's message carries, as the runtime's `PortFamily::carrying`
-reads them: a List, a bundle, a named type and the types that take no wire."""
+reads them: a List, a named type and the types that take no wire. A bundle travels as one
+message of its own, so `MakeBundle` and `BreakBundle` choose one."""
 
 
 def _in_words(pin_type: "PinType") -> str:

@@ -455,6 +455,57 @@ fn a_setting_choosing_a_type_a_wired_link_does_not_take_is_refused_naming_the_li
     );
 }
 
+/// A bundle of one Float member for each of `member_names`.
+fn a_bundle_of_floats(member_names: &[&str]) -> PinType {
+    PinType::Bundle {
+        members: member_names
+            .iter()
+            .map(|name| crate::core::descriptors::BundleMember {
+                name: (*name).to_owned(),
+                member_type: float(),
+                meaning: None,
+                default_value: None,
+            })
+            .collect(),
+    }
+}
+
+/// A new choice keeps a wire whose member it still holds as that member's type, and refuses one
+/// whose member it no longer holds, naming the wire.
+///
+/// Mental-revert: a check reading only links between two typed ends passes over the wire at a
+/// member the bundle no longer holds, and the choice is taken with the wire left dangling.
+#[test]
+fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(
+        &compiler,
+        CHOSEN_SOURCE,
+        choosing(a_bundle_of_floats(&["level", "pan"])),
+    );
+    let float_sink = a_node_of(&compiler, FLOAT_SINK);
+    connect_on_this_thread_waiting_for(
+        &compiler,
+        OutputLinkPortRef::new(chosen.clone(), "value").at_member(Some("pan".to_owned())),
+        InputLinkPortRef::new(float_sink.clone(), "value"),
+        InputValueChangesAConnectWaitsFor::TheStreamsOne(Default::default()),
+    )
+    .expect("the bundle chosen holds a Float `pan`");
+
+    choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["pan", "width"]))
+        .expect("the bundle still holds `pan`");
+    let refused = choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["level"]));
+
+    let words = refused
+        .expect_err("the bundle holds no `pan` for the wire to start at")
+        .to_string();
+    assert!(
+        words.contains("setting `kind`") && words.contains("pan"),
+        "{words}"
+    );
+}
+
 #[test]
 fn an_output_whose_setting_chooses_no_type_yet_is_judged_by_its_family() {
     register_the_fixture_node_types();

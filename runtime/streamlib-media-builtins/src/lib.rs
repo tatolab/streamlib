@@ -10,6 +10,9 @@
 //! pool, texture cache — never private engine guts.
 
 pub mod audio_block;
+pub mod bundle_members;
+#[cfg(test)]
+mod bundle_members_tests;
 pub mod h273_color_vui_translation;
 #[cfg(test)]
 mod msgpack_wire_test_support;
@@ -17,6 +20,7 @@ pub mod pin_type_conversion;
 pub mod video_frame;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
+pub use bundle_members::{BreakBundle, BundleTypeSettings, MakeBundle};
 pub use pin_type_conversion::{
     AudioToTensor, TensorToAudio, TensorToAudioSettings, TensorToTexture, TensorToTextureSettings,
     TextureToTensor,
@@ -73,6 +77,8 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
 /// precedent) — no dlopen, and idempotent, so hosts may call it more than once.
 pub fn register_media_builtin_node_types() {
     register_the_conversion_node_types();
+    NODE_REGISTRY.register::<MakeBundle::Node>();
+    NODE_REGISTRY.register::<BreakBundle::Node>();
 
     for (former_class_name, module_node_type, module_distribution) in BUILT_INS_MOVED_TO_MODULES {
         match NodeClassImportPath::new(*module_node_type) {

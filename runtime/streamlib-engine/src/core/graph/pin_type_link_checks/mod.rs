@@ -763,7 +763,7 @@ fn refuse_a_link_made_now_a_wired_link_past_its_input_refuses(
 /// Refuse the type the setting `setting_name` of the node `node_run_id` now holds when a link
 /// wired at a port whose type it chooses, at an output declaring the type of such an input, or
 /// downstream at an output declaring the type of an input such a link feeds, would not connect
-/// under it, naming that link.
+/// under it, or ends at a member of a bundle the type no longer holds, naming that link.
 pub(crate) fn refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
     graph: &Graph,
     node_run_id: &NodeRunId,
@@ -819,6 +819,15 @@ pub(crate) fn refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
         .iter()
         .flat_map(|output| the_wired_links_out_of(graph, node, &output.name));
     for link in links_into_it.chain(links_out_of_it) {
+        if let Err(refusal) =
+            refuse_a_member_its_port_does_not_hold(graph, link.source(), link.to_port())
+        {
+            return Err(refused_under_it(format!(
+                "the wired link {} → {} is refused: {refusal}",
+                link.source(),
+                link.to_port(),
+            )));
+        }
         let Some(ends) = the_typed_ends_of(graph, link.source(), link.to_port()) else {
             continue;
         };

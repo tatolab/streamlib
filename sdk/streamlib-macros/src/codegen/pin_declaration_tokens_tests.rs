@@ -10,7 +10,7 @@ fn emitted(pin_type: Option<&PinType>) -> String {
 }
 
 fn emitted_in(pin_type: Option<&PinType>, flow: Option<PinFlow>) -> String {
-    pin_declaration_tokens(pin_type, flow, &[], false)
+    pin_declaration_tokens(pin_type, None, flow, &[], false)
         .to_string()
         .split_whitespace()
         .collect()
@@ -76,6 +76,7 @@ fn a_stated_flow_is_emitted_over_the_types_default() {
 fn the_names_a_port_had_and_that_it_may_be_unset_are_emitted_beside_its_flow() {
     let emitted: String = pin_declaration_tokens(
         Some(&PinType::Float { exact_size: None }),
+        None,
         Some(PinFlow::Stream),
         &["level".to_owned(), "amount".to_owned()],
         true,
@@ -92,5 +93,22 @@ fn the_names_a_port_had_and_that_it_may_be_unset_are_emitted_beside_its_flow() {
          may_be_unset:true,\
          ..__streamlib_sdk::descriptors::PinDeclaration::exactly(\
          __streamlib_sdk::descriptors::PinType::Float{exact_size:::std::option::Option::None})})"
+    );
+}
+
+#[test]
+fn a_port_typed_by_a_setting_carries_the_type_it_chooses_as_a_value() {
+    let emitted: String = pin_declaration_tokens(None, Some("bundle_type"), None, &[], false)
+        .to_string()
+        .split_whitespace()
+        .collect();
+    assert_eq!(
+        emitted,
+        "::std::option::Option::Some(__streamlib_sdk::descriptors::PinDeclaration{\
+         pin_type:__streamlib_sdk::descriptors::DeclaredPinType::SetByInput{\
+         input_name:::std::string::String::from(\"bundle_type\"),},\
+         flow:__streamlib_sdk::descriptors::PinFlow::Value,\
+         annotations:::std::default::Default::default(),\
+         former_names:::std::vec![],may_be_unset:false,})"
     );
 }

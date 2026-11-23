@@ -589,6 +589,7 @@ fn generate_descriptor_from_schema(
             let family_tokens = port_family_declaration_tokens(&p.family);
             let pin_declaration_tokens = pin_declaration_tokens(
                 p.pin_type.as_ref(),
+                p.pin_type_from_setting.as_deref(),
                 p.flow,
                 &p.former_names,
                 p.may_be_unset,
@@ -628,6 +629,7 @@ fn generate_descriptor_from_schema(
             let family_tokens = port_family_declaration_tokens(&p.family);
             let pin_declaration_tokens = pin_declaration_tokens(
                 p.pin_type.as_ref(),
+                p.pin_type_from_setting.as_deref(),
                 p.flow,
                 &p.former_names,
                 p.may_be_unset,

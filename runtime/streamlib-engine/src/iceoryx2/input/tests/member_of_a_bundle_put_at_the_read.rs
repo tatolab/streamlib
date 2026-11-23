@@ -251,3 +251,38 @@ fn a_message_stamping_more_payload_than_its_sample_carries_is_dropped_and_counte
     assert_eq!(the_bundles_read(&mailboxes), Vec::new());
     assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-level"), Some(&1));
 }
+
+/// A member no link carries reads the value set on the input, as an unlinked input reads its
+/// own, and a link into it carries over that value once it arrives.
+///
+/// Mental-revert: a port reading only what the links carried would hand no bundle until a
+/// `level` arrives, as `level` declares no default.
+#[test]
+fn a_member_no_link_has_carried_reads_the_value_set_on_the_input() {
+    let mailboxes = InputMailboxesInner::new();
+    let into_label = a_link_into_the_member(
+        &mailboxes,
+        "label",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let into_level = a_link_into_the_member(
+        &mailboxes,
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let set = json!({ "in": { "level": 0.4, "label": "set", "gone": 1 } });
+    mailboxes.read_each_unlinked_input_as_its_value(set.as_object().unwrap());
+
+    publish_the_member(&into_label, "label", json!("kitchen"), 3);
+    let read_before_a_level = the_bundles_read(&mailboxes);
+    publish_the_member(&into_level, "level", json!(0.9), 5);
+
+    assert_eq!(
+        read_before_a_level,
+        vec![(json!({ "level": 0.4, "label": "kitchen" }), 3)]
+    );
+    assert_eq!(
+        the_bundles_read(&mailboxes),
+        vec![(json!({ "level": 0.9, "label": "kitchen" }), 5)]
+    );
+}

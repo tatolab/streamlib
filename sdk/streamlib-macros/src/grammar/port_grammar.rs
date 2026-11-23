@@ -7,7 +7,9 @@ use streamlib_node_schema::{
     DELIVERY_PROFILE_DECLARATION_VALUES, ImageOutputPortFrameRate, MAX_INPUT_PORT_BORROW_QUOTA,
     NodeValueLifetime, OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration,
     PortFamilyDeclarationDirection, cast_exposed_name_to_url_safe,
-    pin_type::{PinDeclaration, PinFlow, PinType, TexturePixelFormat},
+    pin_type::{
+        DeclaredPinType, PinAnnotations, PinDeclaration, PinFlow, PinType, TexturePixelFormat,
+    },
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
@@ -20,8 +22,8 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 /// Parse an `input(...)` / `output(...)` port body.
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
-/// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType>,
-/// lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
+/// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType> |
+/// pin_type = from_setting("<setting>"), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
 /// <family key> = …]`.
 ///
 /// A port states `family = …`, `pin_type = …`, or both when they agree. A port declared by pin
@@ -77,6 +79,7 @@ pub(super) fn parse_port(
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
     let mut family: Option<PortFamily> = None;
     let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
+    let mut pin_type_from_setting: Option<(proc_macro2::Span, String)> = None;
     let mut lifetime = NodeValueLifetime::Kept;
     let mut flow: Option<(proc_macro2::Span, PinFlow)> = None;
     let mut former_names: Option<(proc_macro2::Span, Vec<String>)> = None;
@@ -151,6 +154,9 @@ pub(super) fn parse_port(
             "family" => {
                 let family_ident: Ident = content.parse()?;
                 family = Some(parse_port_family(&family_ident, &name)?);
+            }
+            "pin_type" if content.peek(Ident) && content.peek2(syn::token::Paren) => {
+                pin_type_from_setting = Some((key_span, parse_from_setting(&content, &name)?));
             }
             "pin_type" => {
                 let pin_type_ident: Ident = content.parse()?;
@@ -261,7 +267,16 @@ pub(super) fn parse_port(
         other => other.map(|(_, pin_type)| pin_type),
     };
     let family = family_keys;
-    let pin = declared_pin(pin_type.as_ref(), &family, flow, &name)?;
+    let pin = match &pin_type_from_setting {
+        Some((from_setting_span, setting_name)) => Some(pin_typed_by_a_setting(
+            setting_name,
+            pin_type.is_some(),
+            flow,
+            &name,
+            *from_setting_span,
+        )?),
+        None => declared_pin(pin_type.as_ref(), &family, flow, &name)?,
+    };
     let stated_beside_the_pin = flow
         .map(|(span, _)| span)
         .or(former_names.as_ref().map(|(span, _)| *span))
@@ -327,6 +342,7 @@ pub(super) fn parse_port(
         audio_window: audio_window.map(|(_, contract)| contract),
         family,
         pin_type,
+        pin_type_from_setting: pin_type_from_setting.map(|(_, setting_name)| setting_name),
         lifetime,
         flow: flow.map(|(_, flow)| flow),
         former_names: former_names.map(|(_, names)| names).unwrap_or_default(),
@@ -426,6 +442,54 @@ fn declared_pin(
         Some(refusal) => Err(syn::Error::new(flow_span, refusal)),
         None => Ok(Some(pin)),
     }
+}
+
+/// The pin of port `port_name`, typed by the setting `setting_name` as `pin_type =
+/// from_setting("…")` states it at `from_setting_span`: a value, or of the flow it states, of the
+/// type the setting chooses. Refused beside a stated pin type, which it would replace.
+fn pin_typed_by_a_setting(
+    setting_name: &str,
+    a_pin_type_is_stated_too: bool,
+    flow: Option<(proc_macro2::Span, PinFlow)>,
+    port_name: &str,
+    from_setting_span: proc_macro2::Span,
+) -> syn::Result<PinDeclaration> {
+    if a_pin_type_is_stated_too {
+        return Err(syn::Error::new(
+            from_setting_span,
+            format!(
+                "port `{port_name}` states `pin_type` twice — once a type, once                  `from_setting(\"{setting_name}\")`; keep one"
+            ),
+        ));
+    }
+    Ok(PinDeclaration {
+        pin_type: DeclaredPinType::SetByInput {
+            input_name: setting_name.to_owned(),
+        },
+        flow: flow.map_or(PinFlow::Value, |(_, flow)| flow),
+        annotations: PinAnnotations::default(),
+        former_names: Vec::new(),
+        may_be_unset: false,
+    })
+}
+
+/// Parse `pin_type = from_setting("<setting>")`'s value on port `port_name` into the setting
+/// it names.
+fn parse_from_setting(content: ParseStream<'_>, port_name: &str) -> syn::Result<String> {
+    let function: Ident = content.parse()?;
+    if function != "from_setting" {
+        return Err(syn::Error::new(
+            function.span(),
+            format!(
+                "port `{port_name}` declares `pin_type = {function}(…)` — a port typed by a \
+                 setting states `pin_type = from_setting(\"<setting>\")`"
+            ),
+        ));
+    }
+    let arguments;
+    parenthesized!(arguments in content);
+    let setting_name: LitStr = arguments.parse()?;
+    Ok(setting_name.value())
 }
 
 /// Parse `flow = <PinFlow>`'s value: `Value`, `Stream` or `Trigger`.
