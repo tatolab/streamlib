@@ -338,7 +338,7 @@ pub(crate) fn the_stub_machine() -> &'static ::streamlib::sdk::runtime::MachineN
 }
 
 /// The description a stub runtime answers `describe_runtime` with: a fixed
-/// version, build id, uptime and own-log folder.
+/// version, build id, uptime and own-log folder, and [`STUB_MACHINE_NAME`].
 pub(crate) fn the_stub_runtimes_description()
 -> ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
     ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
@@ -346,6 +346,7 @@ pub(crate) fn the_stub_runtimes_description()
         build_id: "0.0.0-stub+unknown.stub".to_owned(),
         up_for_ms: 266_400_000,
         runtime_log_directory: Some(::std::path::PathBuf::from("/stub-state/logs")),
+        machine: the_stub_machine().name().to_owned(),
     }
 }
 

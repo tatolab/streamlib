@@ -100,6 +100,7 @@ mod tests {
             "build_id": "0.57.0+abc.1",
             "up_for_ms": 5,
             "runtime_log_directory": runtime_log_directory,
+            "machine": "rig",
         })
         .to_string()
     }

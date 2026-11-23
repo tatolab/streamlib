@@ -213,7 +213,7 @@ test("an integer past Number.MAX_SAFE_INTEGER keeps its digits as a bigint, both
     const client = new TatolabRuntimeClient(new ControlPostTransport({ socketPath: localApi.socketPath, clientName: CLIENT_NAME }));
     const described = client.describe_runtime();
     await untilTrue(() => localApi.postRequestsHeard.length === 1);
-    localApi.answerTheNextPostWithTheMessageText('{"jsonrpc":"2.0","id":1,"result":{"version":"0.68.76","build_id":"stand-in","up_for_ms":18446744073709551615}}');
+    localApi.answerTheNextPostWithTheMessageText('{"jsonrpc":"2.0","id":1,"result":{"version":"0.68.76","build_id":"stand-in","up_for_ms":18446744073709551615,"machine":"rig"}}');
     assert.equal((await described).up_for_ms, 18446744073709551615n);
     assert.equal(controlMessageText({ up_for_ms: 18446744073709551615n }), '{"up_for_ms":18446744073709551615}');
   } finally {

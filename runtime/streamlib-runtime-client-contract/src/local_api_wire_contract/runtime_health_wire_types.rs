@@ -18,6 +18,9 @@ pub struct DescribeRuntimeToolResult {
     /// The folder the runtime's own log is written to, absolute for `tatolabd`; `None` when it
     /// keeps none.
     pub runtime_log_directory: Option<PathBuf>,
+    /// The machine's name, the first part of `<machine>/<stream id>/<node>/<port>`: the name
+    /// `graph` gives every loaded stream's graph under.
+    pub machine: String,
 }
 
 /// The port the loopback HTTP listener binds on `127.0.0.1` when nothing names another; on macOS

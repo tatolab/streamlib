@@ -21,7 +21,7 @@ test("a key the contract does not name is an issue in what is sent and ignored i
     [["unknown_key", ["colour"]]],
   );
   assert.deepEqual(controlContractIssues("AddNodeRequest", request, "read"), []);
-  const answer = { version: "0.68.82", build_id: "stand-in", up_for_ms: 3, added_after_this_client: true };
+  const answer = { version: "0.68.82", build_id: "stand-in", up_for_ms: 3, machine: "rig", added_after_this_client: true };
   assert.equal(isControlContractValue("DescribeRuntimeToolResult", answer), true);
 });
 
@@ -43,7 +43,7 @@ test("a tagged union is read by its tag, and a wrong field names the alternative
 
 test("a required field that is absent, a wrong type and a malformed UUID each name where", () => {
   assert.deepEqual(
-    controlContractIssues("DescribeRuntimeToolResult", { version: 1, build_id: "b" }, "read").map((issue) => [issue.code, issue.path]),
+    controlContractIssues("DescribeRuntimeToolResult", { version: 1, build_id: "b", machine: "rig" }, "read").map((issue) => [issue.code, issue.path]),
     [["invalid_type", ["version"]], ["missing", ["up_for_ms"]]],
   );
   assert.deepEqual(
@@ -53,13 +53,13 @@ test("a required field that is absent, a wrong type and a malformed UUID each na
 });
 
 test("a wide integer takes a bigint, a narrow one refuses it, and a format bounds its range", () => {
-  assert.deepEqual(controlContractIssues("DescribeRuntimeToolResult", { version: "v", build_id: "b", up_for_ms: 18446744073709551615n }, "read"), []);
+  assert.deepEqual(controlContractIssues("DescribeRuntimeToolResult", { version: "v", build_id: "b", up_for_ms: 18446744073709551615n, machine: "rig" }, "read"), []);
   assert.deepEqual(
-    controlContractIssues("DescribeRuntimeToolResult", { version: "v", build_id: "b", up_for_ms: 18446744073709551616n }, "read").map((issue) => issue.code),
+    controlContractIssues("DescribeRuntimeToolResult", { version: "v", build_id: "b", up_for_ms: 18446744073709551616n, machine: "rig" }, "read").map((issue) => issue.code),
     ["out_of_range"],
   );
   assert.deepEqual(
-    controlContractIssues("DescribeRuntimeToolResult", { version: "v", build_id: "b", up_for_ms: -1 }, "read").map((issue) => issue.code),
+    controlContractIssues("DescribeRuntimeToolResult", { version: "v", build_id: "b", up_for_ms: -1, machine: "rig" }, "read").map((issue) => issue.code),
     ["too_small", "out_of_range"],
   );
   assert.deepEqual(controlContractIssues("DiscoverRequest", { contract_version: 4294967296 }, "sent").map((issue) => issue.code), ["out_of_range"]);
@@ -96,7 +96,7 @@ test("the schema data holds every component ControlContractComponents names, and
 const VALID_VALUES_BY_COMPONENT = {
   PinType: { type: "boolean" },
   AddNodeRequest: { stream: STREAM, type: "nodes.grayscale_effect:GrayscaleEffect" },
-  DescribeRuntimeToolResult: { version: "0.68.82", build_id: "stand-in", up_for_ms: 3 },
+  DescribeRuntimeToolResult: { version: "0.68.82", build_id: "stand-in", up_for_ms: 3, machine: "rig" },
   ProjectActionRefusalOnTheWire: { action: "open_project", runtime_words: "refused", refusal_code: "refused" },
   ProjectChangeFeedEntryOnTheWire: {
     status: "applied",

@@ -27,6 +27,7 @@ mod against_an_isolated_machine {
             build_id: "0.55.1+0123abc.9f8e7d".to_owned(),
             up_for_ms: ((3 * 24 + 2) * 60 + 7) * 60 * 1000,
             runtime_log_directory: runtime_log_directory.map(PathBuf::from),
+            machine: "rig".to_owned(),
         };
         StubLocalApiScript::answering_every_tool_call_with(StubToolAnswer::tool_result(
             &serde_json::to_string(&runtime_description).unwrap(),

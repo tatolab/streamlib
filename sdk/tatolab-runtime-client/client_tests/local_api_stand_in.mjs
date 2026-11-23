@@ -14,7 +14,7 @@ export const DISCOVERED = { contract_version: CONTROL_CONTRACT_VERSION, contract
 
 /** A `describe_runtime` result naming `version`, in the shape `DescribeRuntimeToolResult` takes. */
 export function describedRuntime(version) {
-  return { version, build_id: "stand-in", up_for_ms: 1 };
+  return { version, build_id: "stand-in", up_for_ms: 1, machine: "rig" };
 }
 
 /** One unmasked text frame, as a server sends it. */
