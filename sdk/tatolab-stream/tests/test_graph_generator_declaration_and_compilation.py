@@ -35,6 +35,7 @@ from stream_graph_builder_streams import (
     CHANNELS_TO_RECORDS_TYPE,
     FRAME_INVERTER_TYPE,
     RIG_CHANNELS_TO_RECORDS,
+    StandInMarker,
     UndecoratedFilter,
     a_configured_stream,
     every_kind_of_node,
@@ -66,12 +67,12 @@ THE_STREAM_BUILDING_FAILURE = StreamBuildingFailure("the camera rig is unplugged
 @graph_generator
 def camera_rig(stream_builder: StreamBuilder) -> None:
     """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
-    source = stream_builder.add(tatolab.stream.ChannelsToRecords, config=RIG_CHANNELS_TO_RECORDS)
+    source = stream_builder.add(tatolab.stream.ChannelsToRecords, input_values=RIG_CHANNELS_TO_RECORDS)
     inverter = stream_builder.add(FrameInverter)
     first_reader = stream_builder.add(BrightnessReader)
     backup_reader = stream_builder.add(BrightnessReader, name="Backup Meter")
     second_inverter = stream_builder.add(FrameInverter)
-    monitor = stream_builder.add(RigMonitor, config={"name": "Rig Monitor"})
+    monitor = stream_builder.add(RigMonitor, input_values={"name": "Rig Monitor"})
     stream_builder.connect(source.output("track"), inverter.input("video_from_upstream"))
     stream_builder.connect(
         inverter.output("video_to_downstream"),
@@ -206,7 +207,7 @@ def test_stream_stamps_identity_name_and_description() -> None:
         "every_kind_of_node"
     )
     assert getattr(every_kind_of_node, "__streamlib_graph_generator_description__") == (
-        "A `@node.process` class, a nested one and a marker-shaped class.\n\n"
+        "A class node, a nested one and a marker-shaped class.\n\n"
         "The second line of the description."
     )
 
@@ -484,7 +485,7 @@ def test_a_node_reference_in_config_compiles_to_the_node_object_it_names() -> No
     stream_builder = StreamBuilder("rig")
     inverter = stream_builder.add(FrameInverter)
     stream_builder.add(
-        BrightnessReader, config={"source": inverter, "nested": [{"also": inverter}]}
+        StandInMarker, config={"source": inverter, "nested": [{"also": inverter}]}
     )
 
     assert stream_builder._compiled_graph()["nodes"][1]["input_values"] == {
@@ -499,7 +500,7 @@ def test_a_node_reference_to_a_node_the_stream_does_not_hold_is_refused_at_add()
     stream_builder.add(FrameInverter)
 
     with pytest.raises(ValueError, match="node `gateway` is not in stream `rig`"):
-        stream_builder.add(BrightnessReader, config={"source": elsewhere})
+        stream_builder.add(StandInMarker, config={"source": elsewhere})
 
 
 def test_a_variable_set_from_a_port_and_read_twice_compiles_to_its_drawn_nodes_and_links() -> None:
@@ -548,7 +549,7 @@ def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_on
         SetVariable, input_values={"variable": "connection", "node_reference": inverter}
     )
     getter = stream_builder.add(GetVariable, input_values={"variable": "connection"})
-    stream_builder.add(BrightnessReader, config={"source": getter})
+    stream_builder.add(StandInMarker, config={"source": getter})
 
     nodes = stream_builder._compiled_graph()["nodes"]
     assert nodes[1]["input_values"] == {
@@ -571,11 +572,11 @@ def test_a_node_reference_in_the_deepest_container_a_config_nests_is_refused_as_
 
     stream_builder = StreamBuilder("rig")
     inverter = stream_builder.add(FrameInverter)
-    stream_builder.add(BrightnessReader, config=config_whose_deepest_container_holds("a str"))
+    stream_builder.add(StandInMarker, config=config_whose_deepest_container_holds("a str"))
 
     with pytest.raises(ValueError, match="config nests too deep"):
         stream_builder.add(
-            BrightnessReader, config=config_whose_deepest_container_holds(inverter)
+            StandInMarker, config=config_whose_deepest_container_holds(inverter)
         )
 
 

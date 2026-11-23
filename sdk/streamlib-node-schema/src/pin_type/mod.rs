@@ -7,6 +7,7 @@
 //! the schemars the contract renders.
 
 mod built_in_pin_types;
+mod bundle_message;
 mod pin_conversion;
 mod pin_declaration;
 mod pin_flows;
@@ -23,6 +24,7 @@ pub use built_in_pin_types::{
     BuiltInPinTypeName, PinAnnotationName, PinTypeDescription, built_in_pin_type,
     built_in_pin_types,
 };
+pub use bundle_message::BundleMessage;
 pub use pin_conversion::{
     PinConversion, PinConversionOutputPick, PinConversionOutputPicked, PinConversionRefusal,
     PinConversionSavedValueCast, SavedValueNotCast,

@@ -40,8 +40,9 @@ const A_SAVED_VALUE_CAST: NodeInterpreterRunOutOfStream = NodeInterpreterRunOutO
     document_name: "cast document",
 };
 
-/// What a cast is asked: the conversion's wired input and the saved value it holds. The
-/// bootstrap reads these keys as `SAVED_VALUE_CAST_REQUEST_*_KEY` names them.
+/// What a cast is asked, in the file its request is read from: the conversion's wired input
+/// and the saved value it holds. The bootstrap reads these keys as
+/// `SAVED_VALUE_CAST_REQUEST_*_KEY` names them.
 #[derive(serde::Serialize)]
 struct SavedValueCastRequest<'a> {
     input: &'a str,
@@ -70,27 +71,57 @@ pub(crate) struct WhereAConversionRunsOutOfStream {
     pub(crate) interrupted_by_the_host: Arc<AtomicBool>,
 }
 
-/// The command that casts `saved_value` through `conversion`'s body, its input `input_port`
-/// holding it, in `stream_environment`.
-pub(crate) fn saved_value_cast_command(
+/// The file a cast reads its request from: the conversion's wired input `input_port` and the
+/// saved value it holds, written out so a value too long for one command-line argument still
+/// reaches the body. The file is removed when it is dropped.
+fn saved_value_cast_request_file(
     conversion: &NodeClassImportPath,
     input_port: &str,
     saved_value: &Value,
+) -> Result<tempfile::NamedTempFile> {
+    let not_written = |why: String| {
+        crate::core::error::Error::Runtime(format!(
+            "the request to cast a saved value through `{conversion}` was not written: {why}"
+        ))
+    };
+    let mut request_file = tempfile::Builder::new()
+        .prefix("tatolab-saved-value-cast-")
+        .suffix(".json")
+        .tempfile()
+        .map_err(|refused| not_written(refused.to_string()))?;
+    serde_json::to_writer(
+        &mut request_file,
+        &SavedValueCastRequest {
+            input: input_port,
+            value: saved_value,
+        },
+    )
+    .map_err(|refused| not_written(refused.to_string()))?;
+    Ok(request_file)
+}
+
+/// The command that casts through `conversion`'s body the saved value `request_file` holds, in
+/// `stream_environment`. Its standard input stays the pipe whose end-of-file tells the run its
+/// parent is gone.
+pub(crate) fn saved_value_cast_command(
+    conversion: &NodeClassImportPath,
+    request_file: &Path,
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
 ) -> Result<Command> {
-    let request = serde_json::to_string(&SavedValueCastRequest {
-        input: input_port,
-        value: saved_value,
-    })
-    .map_err(|not_written| {
+    let request_file = request_file.to_str().ok_or_else(|| {
         crate::core::error::Error::Runtime(format!(
-            "the request to cast a saved value through `{conversion}` was not written: \
-             {not_written}"
+            "the request to cast a saved value through `{conversion}` is at `{}`, a path that \
+             is not UTF-8",
+            request_file.display()
         ))
     })?;
     node_interpreter_out_of_stream_command_with_arguments(
-        [CAST_A_SAVED_VALUE_ARGUMENT, conversion.as_str(), &request],
+        [
+            CAST_A_SAVED_VALUE_ARGUMENT,
+            conversion.as_str(),
+            request_file,
+        ],
         stream_environment,
         lend_directory,
     )
@@ -127,13 +158,19 @@ fn cast_a_saved_value_in_the_streams_node_interpreter(
         the_stream_it_belongs_to,
         interrupted_by_the_host,
     } = where_it_runs;
+    let request_file = saved_value_cast_request_file(conversion, input_port, saved_value).map_err(
+        |not_written| {
+            SavedValueNotCast::DidNotRun(format!(
+                "its body did not run out of stream: {not_written}"
+            ))
+        },
+    )?;
     let (document, _): (SavedValueCastDocument, String) =
         run_the_node_interpreter_out_of_stream_reading_its_document(
             || {
                 saved_value_cast_command(
                     conversion,
-                    input_port,
-                    saved_value,
+                    request_file.path(),
                     stream_environment,
                     lend_directory,
                 )

@@ -3,7 +3,19 @@
 
 use super::*;
 use crate::descriptors::PortDescriptor;
-use crate::pin_type::{DeclaredPinType, PinDeclaration, PinFlow, PinType, TexturePixelFormat};
+use crate::pin_type::{
+    BundleMember, DeclaredPinType, PinDeclaration, PinFlow, PinType, TexturePixelFormat,
+};
+
+/// A member of a bundle named `name`, of `member_type`, with no meaning and no default.
+fn a_member(name: &str, member_type: PinType) -> BundleMember {
+    BundleMember {
+        name: name.into(),
+        member_type,
+        meaning: None,
+        default_value: None,
+    }
+}
 
 fn image() -> PortFamilyDeclaration {
     PortFamilyDeclaration::of_family(PortFamily::Image)
@@ -80,6 +92,75 @@ fn a_typed_port_serves_the_family_its_messages_belong_to() {
         PortFamily::carrying(&PinType::PinTypeChoice { among: vec![] }),
         None
     );
+}
+
+/// A bundle of numbers is carried whole on Records, as one map of its members, and a type
+/// `carrying` gives a family keeps it.
+///
+/// Mental-revert: answering `carrying` alone gives a bundle of numbers no family, so a view's
+/// port of a record of named numbers does not open.
+#[test]
+fn a_bundle_of_small_members_is_carried_whole_on_records() {
+    let yaw_and_burst = PinType::Bundle {
+        members: vec![
+            a_member("yaw", PinType::Float { exact_size: None }),
+            a_member("burst", PinType::Integer { exact_size: None }),
+        ],
+    };
+    assert_eq!(PortFamily::carrying(&yaw_and_burst), None);
+    assert_eq!(
+        PortFamily::carrying_a_whole_value_of(&yaw_and_burst),
+        Some(PortFamily::Records)
+    );
+    assert_eq!(
+        PortFamily::carrying_a_whole_value_of(&PinType::Float { exact_size: None }),
+        Some(PortFamily::Channels)
+    );
+}
+
+/// A whole bundle is carried on the family of the one message it travels as: a bundle with a
+/// List of numbers among its members is one Records map, a bundle of Tensors one Array frame,
+/// and a bundle holding a Texture a Bundle frame, carried on no family.
+///
+/// Mental-revert: asking that every member be a small type finds no family for the bundle
+/// with a List member, which the runtime packs as one Records map.
+#[test]
+fn a_whole_bundle_is_carried_on_the_family_of_the_message_it_travels_as() {
+    let bundle = |members| PinType::Bundle { members };
+    let with_a_list = bundle(vec![
+        a_member("label", PinType::String {}),
+        a_member(
+            "levels",
+            PinType::ListOf {
+                element_type: Box::new(PinType::Float { exact_size: None }),
+            },
+        ),
+    ]);
+    let of_tensors = bundle(vec![
+        a_member("boxes", PinType::Tensor {}),
+        a_member("scores", PinType::Tensor {}),
+    ]);
+    let with_a_texture = bundle(vec![
+        a_member("label", PinType::String {}),
+        a_member(
+            "picture",
+            PinType::Texture {
+                pixel_formats: vec![],
+            },
+        ),
+    ]);
+    for (bundle, family) in [
+        (&with_a_list, Some(PortFamily::Records)),
+        (&of_tensors, Some(PortFamily::Array)),
+        (&with_a_texture, None),
+    ] {
+        bundle.validate().expect("a bundle pin type");
+        assert_eq!(
+            PortFamily::carrying_a_whole_value_of(bundle),
+            family,
+            "{bundle}"
+        );
+    }
 }
 
 #[test]

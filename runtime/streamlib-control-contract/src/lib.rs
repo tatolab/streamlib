@@ -15,6 +15,7 @@ mod control_operation_refusals;
 mod control_operation_requests;
 mod control_operation_results;
 mod control_operations;
+mod control_rest_openapi_document;
 
 pub use agent_surface::{
     AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration, AgentOperationDescribed,
@@ -30,8 +31,9 @@ pub use agent_surface::{
 pub use control_contract_document::{
     CONTROL_CONTRACT_FILE_WORKSPACE_PATH, CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
     CONTROL_OPERATION_FAILED_ERROR_CODE, CONTROL_OPERATION_REFUSED_ERROR_CODE,
-    JSON_RPC_INVALID_PARAMS_ERROR_CODE, JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE,
-    OPENRPC_DOCUMENT_VERSION, control_contract_document, control_contract_file_contents,
+    JSON_RPC_INVALID_PARAMS_ERROR_CODE, JSON_RPC_INVALID_REQUEST_ERROR_CODE,
+    JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE, JSON_RPC_PARSE_ERROR_CODE, OPENRPC_DOCUMENT_VERSION,
+    control_contract_document, control_contract_file_contents,
 };
 pub use control_notification::{
     CONTROL_NOTIFICATIONS, ControlNotification, ControlNotificationDeclaration, InputValueChanged,
@@ -109,4 +111,7 @@ pub use control_operations::{
     SubscribeProjectChanges, SubscribeProjectLogRecords, SubscribeStreamActionChanges,
     SubscribeStreamGraphChanges, Transact, Undo, UnlockSubgraph, UpdateDependency,
     UseDependencyStream, WriteGraphInput, WriteProjectFile, WriteStudioViewOutput,
+};
+pub use control_rest_openapi_document::{
+    OPENAPI_DOCUMENT_VERSION, control_rest_openapi_document, the_http_status_of_a_control_error,
 };

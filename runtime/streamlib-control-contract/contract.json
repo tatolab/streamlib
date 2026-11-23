@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 41
+    "x-contract-revision": 42
   },
   "methods": [
     {
@@ -8777,6 +8777,11 @@
             "type": "string",
             "const": "edit_not_live",
             "description": "An edit the stream's graph document holds that its running graph did not take: `graph`\nshows the document's graph, each part the running graph does not hold yet carrying\n`live: false`, and the stream takes the edit when its playback stops."
+          },
+          {
+            "type": "string",
+            "const": "link_not_wired",
+            "description": "A link the running graph holds that could not be wired, so its reader reads nothing\nfrom it: the words say why, in the words of the end that refused it."
           },
           {
             "type": "string",

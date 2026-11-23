@@ -259,12 +259,12 @@ fn an_imports_views_folder_that_does_not_read_keeps_no_own_view_from_being_check
     assert_eq!(checked.files_checked.len(), 1);
 }
 
-/// The in-tree views whose ports are still declared by the older `family` field, each because
-/// a port carries a record of named numbers, which no pin type a view's port names yet carries.
-/// Each leaves this list once its ports name pin types; a view on it that opens fails the test.
-const IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY: [&str; 2] = [
+/// In-tree views the walk must reach, so a walk that reads none of them cannot pass: each
+/// example's stage, whose ports carry records of named numbers, and a package's own view.
+const IN_TREE_VIEWS_THE_WALK_READS: [&str; 3] = [
     "examples/gulf-stream-neon/views/stage",
     "examples/paint-pulse/views/stage",
+    "packages/tatolab-core-nodes/views/audio_video_preview",
 ];
 
 /// Every folder of the tree that holds views of its own: each of `packages/` and `examples/`.
@@ -301,17 +301,8 @@ fn every_in_tree_view_opens_and_the_check_reports_nothing_for_it() {
             )
             .unwrap();
             views_read.push(view_path.clone());
-            let opens = crate::read_tatolab_view_manifest(&manifest_json);
-            match (
-                opens,
-                IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY.contains(&view_path.as_str()),
-            ) {
-                (Ok(_), false) => {}
-                (Err(why), true) if why.contains("declared by the older `family` field") => {}
-                (Err(why), _) => not_as_expected.push(format!("{view_path} does not open: {why}")),
-                (Ok(_), true) => not_as_expected.push(format!(
-                    "{view_path} opens: take it off IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY"
-                )),
+            if let Err(why) = crate::read_tatolab_view_manifest(&manifest_json) {
+                not_as_expected.push(format!("{view_path} does not open: {why}"));
             }
         }
         if folder.join(PROJECT_FILE_NAME).is_file() {
@@ -320,20 +311,11 @@ fn every_in_tree_view_opens_and_the_check_reports_nothing_for_it() {
                 checked
                     .findings
                     .iter()
-                    .map(|finding| format!("{relative_folder}/{}", finding.path))
-                    .filter(|path| {
-                        !IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY
-                            .iter()
-                            .any(|view| path.starts_with(&format!("{view}/")))
-                    })
-                    .map(|path| format!("the check reports {path}")),
+                    .map(|finding| format!("the check reports {relative_folder}/{}", finding.path)),
             );
         }
     }
-    for expected in IN_TREE_VIEWS_STILL_DECLARED_BY_FAMILY
-        .into_iter()
-        .chain(["packages/tatolab-core-nodes/views/audio_video_preview"])
-    {
+    for expected in IN_TREE_VIEWS_THE_WALK_READS {
         assert!(
             views_read.iter().any(|read| read == expected),
             "{expected} is among the views read: {views_read:#?}"

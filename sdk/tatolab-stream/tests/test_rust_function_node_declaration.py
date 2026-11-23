@@ -181,7 +181,7 @@ def test_a_declaration_missing_a_key_names_it():
 
 @graph_generator
 def ramp_stream(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(Ramp, config={"gain": 1.0})
+    stream_builder.add(Ramp, input_values={"gain": 1.0})
 
 
 def test_a_stream_adds_it_by_its_import_path():

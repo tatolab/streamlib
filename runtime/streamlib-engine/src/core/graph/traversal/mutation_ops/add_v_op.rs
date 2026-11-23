@@ -54,7 +54,7 @@ impl<'a> TraversalSourceMut<'a> {
         }
 
         // A missed node carries the requested path verbatim, so
-        // `GET /api/graph` names exactly what the caller asked for.
+        // `graph` names exactly what the caller asked for.
         let GraphNodePorts {
             mut inputs,
             outputs,

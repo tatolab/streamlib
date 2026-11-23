@@ -22,7 +22,7 @@ use common::{
     AN_INTERRUPTED_RUNTIME_EXITS_WITHIN, SpawnedTatolabd, TatolabTestMachineRoot,
     TemporaryRuntimeUnit, a_native_only_stream_graph, a_stream_graph_crashing_while,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    expect_the_runtime_to_crash_on_segv, the_local_apis_answer_to_get, the_location_of_the_stream,
+    expect_the_runtime_to_crash_on_segv, the_local_apis_answer_to, the_location_of_the_stream,
     the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
 
@@ -82,7 +82,11 @@ fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_b
     let (mut runtime, main_stream_id) =
         start_tatolabd_re_loading_the_recorded_native_only_stream(&runtime_unit, &machine_root);
 
-    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
+    let graph = the_local_apis_answer_to(
+        &machine_root.local_api_socket_path(),
+        "graph",
+        &serde_json::json!({}),
+    );
     let listed =
         the_listed_streams_once_the_reloads_ended(&runtime, &machine_root.local_api_socket_path());
     runtime.interrupt_and_expect_a_clean_exit();

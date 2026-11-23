@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use streamlib_node_schema::PortFamily;
-use streamlib_node_schema::pin_type::{PinType, built_in_pin_type};
+use streamlib_node_schema::pin_type::{BundleMessage, PinType, built_in_pin_type};
 
 use crate::manifest_fields::{
     a_value_never_written_as_null, is_a_contract_version,
@@ -151,7 +151,7 @@ impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
         pin_type
             .validate()
             .map_err(|why| format!("`pin_type`: {why}"))?;
-        let Some(family) = PortFamily::carrying(&pin_type) else {
+        let Some(family) = PortFamily::carrying_a_whole_value_of(&pin_type) else {
             return Err(format!(
                 "`pin_type`: a {pin_type} rides no message a view's port reads or writes; a \
                  view declares a port of a type a link carries"
@@ -182,6 +182,13 @@ fn the_words_of_a_port_declared_by_family(name: &str, family: PortFamily) -> Str
         .into_iter()
         .map(|pin_type| built_in_pin_type(pin_type).typescript_form)
         .collect();
+    let bundle_advice = if BundleMessage::RecordsMap.its_family() == Some(family) {
+        ", or a `bundle` of small members, as a record of named numbers is, written \
+         `{\"type\": \"bundle\", \"members\": [{\"name\": \"<name>\", \
+         \"member_type\": {\"type\": \"float\"}}, ...]}`"
+    } else {
+        ""
+    };
     match pin_types.as_slice() {
         [pin_type] => format!(
             "port `{name}` is declared by the older `family` field, which a view's port no \
@@ -189,8 +196,8 @@ fn the_words_of_a_port_declared_by_family(name: &str, family: PortFamily) -> Str
         ),
         _ => format!(
             "port `{name}` is declared by the older `family` field, which a view's port no \
-             longer names; a `{family_name}` port carries one of {}: write the one it carries \
-             as its `pin_type`, as `{{\"type\": \"<type>\"}}`, {to_write}",
+             longer names; a `{family_name}` port carries one of {}{bundle_advice}: write the \
+             one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, {to_write}",
             pin_types
                 .iter()
                 .map(|pin_type| format!("`{}`", pin_type.trim_matches('"')))

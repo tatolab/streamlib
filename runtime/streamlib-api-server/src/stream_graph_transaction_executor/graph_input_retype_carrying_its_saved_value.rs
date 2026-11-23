@@ -237,6 +237,10 @@ impl StreamGraphTransactionExecutor<'_> {
             let Ok(node) = Uuid::parse_str(node) else {
                 continue;
             };
+            // Only a node's first retype is kept, so a later one runs no cast.
+            if worked_out.by_stream_and_node.contains_key(&(stream, node)) {
+                continue;
+            }
             let Some(retype) = documents
                 .get(stream_id)
                 .and_then(Option::as_ref)
@@ -252,13 +256,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 continue;
             };
             let retyped = what_becomes_of_the_saved_value(&retype.carried, &conversions);
-            worked_out
-                .by_stream_and_node
-                .entry((stream, node))
-                .or_insert(ASavedValueRetypeWorkedOut {
+            worked_out.by_stream_and_node.insert(
+                (stream, node),
+                ASavedValueRetypeWorkedOut {
                     carried: retype.carried,
                     retyped,
-                });
+                },
+            );
         }
         worked_out
     }

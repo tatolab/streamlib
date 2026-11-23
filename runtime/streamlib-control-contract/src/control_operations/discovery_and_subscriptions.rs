@@ -50,6 +50,7 @@ impl ControlOperation for SubscribeProjectChanges {
     type Request = SubscribeProjectChangesRequest;
     type Result = SubscribeProjectChangesResult;
     const METHOD_NAME: &'static str = "subscribe_project_changes";
+    const NEEDS_A_CONNECTION_THAT_STAYS_OPEN: bool = true;
     const ONE_LINE_DOC: &'static str = "Send this connection a `project_changed` notification for each change on the named projects' feeds.";
     const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one, each media facts read it finishes, each making current of its `.venv` (`venv_made_current`) and each burst of files changed in its folder, an editor's saves among them, named under `files`, is sent as a `project_changed` notification, whoever made it, until the connection closes. A connection that falls behind, or a project whose folder changed in ways the OS did not name, is sent `missed`, and the client reads the change feed and lists the project's files and node types again. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
@@ -69,6 +70,7 @@ impl ControlOperation for SubscribeProjectLogRecords {
     type Request = SubscribeProjectLogRecordsRequest;
     type Result = SubscribeProjectLogRecordsResult;
     const METHOD_NAME: &'static str = "subscribe_project_log_records";
+    const NEEDS_A_CONNECTION_THAT_STAYS_OPEN: bool = true;
     const ONE_LINE_DOC: &'static str = "Send this connection each new record of the named projects' logs as `project_log_records_written` notifications.";
     const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, `project_log_records_written` carries them, at most 500 to a notification, naming its `project_directory` as the connection spelled it. Each notification's `after` is the previous one's `next_after`, starting at the log's end as the project is subscribed; a client that read the log with `logs` to another cursor reads `logs` from its cursor `until` the notification's `next_after` instead, and appends the notifications after that. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.";
     const SINCE_CONTRACT_VERSION: u32 = 2;
@@ -106,6 +108,7 @@ impl ControlOperation for SubscribeStreamGraphChanges {
     type Request = SubscribeStreamGraphChangesRequest;
     type Result = SubscribeStreamGraphChangesResult;
     const METHOD_NAME: &'static str = "subscribe_stream_graph_changes";
+    const NEEDS_A_CONNECTION_THAT_STAYS_OPEN: bool = true;
     const ONE_LINE_DOC: &'static str = "Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.";
     const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the live graphs of `streams`, by stream id, each loaded: from then on, each edit of one's graph is sent as a `stream_graph_changed` notification with `change` `edited`, each change of a node's state with `node_state_changed`, its `node` by graph `id` and its `node_state`, and each start, stop, pause or resume of its playback, or failure of one, with `playback_state_changed`, until the connection closes. A connection that falls behind, and a stream loaded again or unloaded, is sent `missed`, and the client reads the stream's `graph` again; the subscription follows the stream id across a reload. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.";
     const SINCE_CONTRACT_VERSION: u32 = 2;
@@ -125,6 +128,7 @@ impl ControlOperation for SubscribeInputValueChanges {
     type Request = SubscribeInputValueChangesRequest;
     type Result = SubscribeInputValueChangesResult;
     const METHOD_NAME: &'static str = "subscribe_input_value_changes";
+    const NEEDS_A_CONNECTION_THAT_STAYS_OPEN: bool = true;
     const ONE_LINE_DOC: &'static str = "Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.";
     const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. A bundle input's change is sent for each member it changes, naming the `member`, with the `value` and `value_comes_from` of that member's row of `member_values`. Changes are sent at most once each 33 ms for one input, or one member of a bundle input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
@@ -143,6 +147,7 @@ impl ControlOperation for SubscribeStreamActionChanges {
     type Request = SubscribeStreamActionChangesRequest;
     type Result = SubscribeStreamActionChangesResult;
     const METHOD_NAME: &'static str = "subscribe_stream_action_changes";
+    const NEEDS_A_CONNECTION_THAT_STAYS_OPEN: bool = true;
     const ONE_LINE_DOC: &'static str = "Send this connection a `stream_action_changed` notification each time a stream action changes.";
     const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to every stream action: from then on, each time one is queued, moves on or ends, its id is sent as a `stream_action_changed` notification with `change` `changed`, and `describe_stream_action` describes it, until the connection closes. A connection that falls behind is sent `missed`, and the client describes each action it follows again. Served only on a connection that stays open. Answers `actions_under_way`, the id of each action queued or running as the subscription began.";
     const SINCE_CONTRACT_VERSION: u32 = 2;

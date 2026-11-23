@@ -104,7 +104,7 @@ def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
 def a_channels_to_records_conversion(stream_builder: tatolab.stream.StreamBuilder) -> None:
     stream_builder.add(
         _built_in_nodes.ChannelsToRecords,
-        config={"channel_names": ["level"]},
+        input_values={"channel_names": ["level"]},
     )
 
 
@@ -121,7 +121,7 @@ def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
 def a_control_value_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> None:
     to_channels = stream_builder.add(
         tatolab.stream.RecordsToChannels,
-        config={"channel_names": ["gain"], "sample_rate": 30},
+        input_values={"channel_names": ["gain"], "sample_rate": 30},
     )
     to_array = stream_builder.add(tatolab.stream.AudioToTensor)
     back_to_channels = stream_builder.add(
@@ -129,7 +129,7 @@ def a_control_value_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> 
         input_values={"channel_names": ["gain"], "sample_rate": 30},
     )
     to_records = stream_builder.add(
-        tatolab.stream.ChannelsToRecords, config={"channel_names": ["gain"]}
+        tatolab.stream.ChannelsToRecords, input_values={"channel_names": ["gain"]}
     )
     stream_builder.connect(to_channels.output("channels"), to_array.input("channels"))
     stream_builder.connect(to_array.output("array"), back_to_channels.input("array"))

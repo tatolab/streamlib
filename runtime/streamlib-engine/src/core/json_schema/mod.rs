@@ -36,7 +36,7 @@ pub use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 // =============================================================================
-// Graph Response (/api/graph and the `graph` operation)
+// Graph Response (the `graph` operation)
 // =============================================================================
 
 /// One stream's graph as `graph` answers it: the control contract's, with each link and the
@@ -183,11 +183,11 @@ impl NodeNamesByNodeRunId {
 }
 
 // =============================================================================
-// Registry Response Schema (/api/registry)
+// Node Catalog Response Schema (the MCP node catalog)
 // =============================================================================
 
-/// Response from the `/api/registry` endpoint, and the MCP node catalog.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+/// One list of the MCP node catalog: node types and the port families.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RegistryResponse {
     /// Every node type this process can add, with its descriptor.
     pub nodes: Vec<NodeDescriptorOutput>,
@@ -196,7 +196,7 @@ pub struct RegistryResponse {
 }
 
 /// One port family, described as a node type is.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortFamilyDescriptorOutput {
     /// The family, as a graph, a config and the wire spell it.
@@ -218,10 +218,9 @@ impl PortFamilyDescriptorOutput {
     }
 }
 
-/// Response from `/api/registry` when no stream is named, and the MCP node
-/// catalog: the native types every stream can add, then each loaded stream's
+/// The MCP node catalog: the native types every stream can add, then each loaded stream's
 /// Python types under that stream.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MachineWideRegistryResponse {
     /// The node types compiled into this runtime, which any stream can add.
@@ -233,7 +232,7 @@ pub struct MachineWideRegistryResponse {
 }
 
 /// The node types one loaded stream's own interpreter described.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeTypesDescribedInOneStreamOutput {
     /// The stream's id.
@@ -247,7 +246,7 @@ pub struct NodeTypesDescribedInOneStreamOutput {
 }
 
 /// One node type an installed distribution declares in `tatolab.nodes`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeTypeAnInstalledModuleDeclaresOutput {
     /// The distribution declaring it, as `pip` names it.
@@ -283,7 +282,7 @@ fn node_kind_rendered_as_kind_and_language(
 }
 
 /// Runtime environment for a node.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeRuntimeOutput {
     #[default]
@@ -303,24 +302,8 @@ fn one_of_the_names_schema(
     .into()
 }
 
-/// A string OpenAPI schema naming one of `names`.
-fn one_of_the_names_openapi_schema(
-    names: impl IntoIterator<Item = &'static str>,
-) -> utoipa::openapi::Object {
-    utoipa::openapi::ObjectBuilder::new()
-        .schema_type(utoipa::openapi::schema::Type::String)
-        .enum_values(Some(names))
-        .build()
-}
-
 fn every_node_kind_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
     one_of_the_names_schema(GraphNodeKindOnTheWire::EVERY_KIND.map(GraphNodeKindOnTheWire::name))
-}
-
-fn every_node_kind_openapi_schema() -> utoipa::openapi::Object {
-    one_of_the_names_openapi_schema(
-        GraphNodeKindOnTheWire::EVERY_KIND.map(GraphNodeKindOnTheWire::name),
-    )
 }
 
 fn every_function_node_language_schema(
@@ -331,14 +314,8 @@ fn every_function_node_language_schema(
     )
 }
 
-fn every_function_node_language_openapi_schema() -> utoipa::openapi::Object {
-    one_of_the_names_openapi_schema(
-        FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE.map(FunctionNodeLanguageOnTheWire::name),
-    )
-}
-
 /// Descriptor for a node type.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NodeDescriptorOutput {
     /// The import path of the class this node type is — the `type` a graph
     /// node carries and `add_node` takes.
@@ -346,12 +323,10 @@ pub struct NodeDescriptorOutput {
     pub node_class_import_path: NodeClassImportPath,
     /// How this node type's code runs.
     #[schemars(schema_with = "every_node_kind_schema")]
-    #[schema(schema_with = every_node_kind_openapi_schema)]
     pub kind: GraphNodeKindOnTheWire,
     /// The language a function node is written in; absent on every other kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "every_function_node_language_schema")]
-    #[schema(schema_with = every_function_node_language_openapi_schema)]
     pub language: Option<FunctionNodeLanguageOnTheWire>,
     /// Human-readable description.
     pub description: String,
@@ -389,7 +364,7 @@ pub struct NodeDescriptorOutput {
 }
 
 /// Descriptor for a node port.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PortDescriptorOutput {
     /// Port name.
     pub name: String,
@@ -429,7 +404,6 @@ pub struct PortDescriptorOutput {
     /// none, and on an output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Value>")]
-    #[schema(value_type = Option<Object>)]
     pub input_mode: Option<NodeInputMode>,
     /// The value a setting reads while no value is set on its node, as its
     /// schema or its declaration states it. Absent on an input that is no
@@ -442,7 +416,6 @@ pub struct PortDescriptorOutput {
     /// picked from. Absent on one that states nothing.
     #[serde(default, skip_serializing_if = "PinAnnotations::is_empty")]
     #[schemars(with = "Option<serde_json::Value>")]
-    #[schema(value_type = Option<Object>)]
     pub annotations: PinAnnotations,
 }
 
@@ -473,21 +446,19 @@ impl PortDescriptorOutput {
 }
 
 /// The pin type a catalog port declares, and its flow.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PortDeclaredPinOutput {
     /// The type it carries, or how that type is found. Its schema here is open
     /// JSON: only the control contract's schemars renders pin types.
     #[schemars(with = "serde_json::Value")]
-    #[schema(value_type = Object)]
     pub pin_type: crate::core::descriptors::DeclaredPinType,
     /// How its messages are read: `value`, `stream` or `trigger`.
     #[schemars(with = "String")]
-    #[schema(value_type = String)]
     pub flow: crate::core::descriptors::PinFlow,
 }
 
 /// Code examples for a node in different languages.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct CodeExamplesOutput {
     /// Rust code example.
     pub rust: String,
@@ -752,6 +723,18 @@ fn render_the_state_component_as(
 ) {
     if let Some(rendered_state) = &mut components.state {
         *rendered_state = state.into();
+    }
+}
+
+/// Why `link` is not wired, as it reports its state `error`: the refusal of the end that
+/// refused it; `None` for a link in any other state.
+pub(crate) fn why_the_link_is_not_wired(link: &crate::core::graph::Link) -> Option<String> {
+    match RenderedLinkState::of(link) {
+        RenderedLinkState::ErrorBecause(reason) => Some(reason),
+        RenderedLinkState::WithoutAReason(LinkStateOutput::Error) => {
+            Some("its wiring failed, and gave no reason".to_owned())
+        }
+        RenderedLinkState::WithoutAReason(_) => None,
     }
 }
 

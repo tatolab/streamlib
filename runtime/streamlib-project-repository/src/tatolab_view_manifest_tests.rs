@@ -316,6 +316,42 @@ fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
     );
 }
 
+/// A port of a bundle of numbers, a record of named numbers to or from a node, rides Records,
+/// whole, as one map of its members; a bundle holding a Texture rides no message a view reads.
+///
+/// Mental-revert: finding the family with `PortFamily::carrying` alone refuses the bundle of
+/// numbers, which no built-in type's family carries.
+#[test]
+fn a_port_of_a_bundle_of_numbers_rides_records_and_one_holding_a_texture_is_refused() {
+    let camera = json!({ "type": "bundle", "members": [
+        { "name": "yaw", "member_type": { "type": "float" } },
+        { "name": "burst", "member_type": { "type": "integer" } },
+    ] });
+    let manifest = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "camera", "pin_type": camera }]),
+    ))
+    .expect("a bundle of numbers opens");
+    assert_eq!(manifest.outputs[0].family, PortFamily::Records);
+    assert_eq!(
+        manifest.outputs[0].pin_type,
+        serde_json::from_value::<PinType>(camera).expect("a bundle pin type")
+    );
+
+    let refusal = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "framed", "pin_type": { "type": "bundle", "members": [
+            { "name": "label", "member_type": { "type": "string" } },
+            { "name": "picture", "member_type": { "type": "texture" } },
+        ] } }]),
+    ))
+    .expect_err("a bundle holding a Texture travels as a Bundle frame");
+    assert!(
+        refusal.contains("rides no message a view's port reads or writes"),
+        "{refusal}"
+    );
+}
+
 #[test]
 fn a_port_with_no_pin_type_or_one_that_also_names_a_family_is_refused_at_the_port() {
     for (outputs, expected) in [
@@ -348,6 +384,11 @@ fn a_port_with_no_pin_type_or_one_that_also_names_a_family_is_refused_at_the_por
     }
 }
 
+/// A Records port declared by `family` alone is told it may also be a bundle of small members,
+/// the type a record of named numbers is; a Channels port, which carries no whole bundle, is not.
+///
+/// Mental-revert: listing only the built-in types leaves a port carrying a record of named
+/// numbers with no type in the advice that it could write.
 #[test]
 fn a_port_declared_by_family_is_refused_naming_the_port_the_field_and_the_pin_type_to_write() {
     for (contract, outputs, expected) in [
@@ -366,6 +407,17 @@ fn a_port_declared_by_family_is_refused_naming_the_port_the_field_and_the_pin_ty
              `float`, `color`, `vector`, `rectangle`, `transform`, `audio`: write the one it \
              carries as its `pin_type`, as `{\"type\": \"<type>\"}`, in place of \
              `\"family\": \"channels\"`, with `\"contract\": \"1.1\"`.",
+        ),
+        (
+            "1.1",
+            json!([{ "name": "station", "family": "records" }]),
+            "`outputs[0]`: port `station` is declared by the older `family` field, which a \
+             view's port no longer names; a `records` port carries one of `string`, `menu`, \
+             `asset`, `trigger`, or a `bundle` of small members, as a record of named numbers \
+             is, written `{\"type\": \"bundle\", \"members\": [{\"name\": \"<name>\", \
+             \"member_type\": {\"type\": \"float\"}}, ...]}`: write the one it carries as its \
+             `pin_type`, as `{\"type\": \"<type>\"}`, in place of `\"family\": \"records\"`, \
+             with `\"contract\": \"1.1\"`.",
         ),
     ] {
         let refusal = read_tatolab_view_manifest(&a_node_view_declaring(contract, outputs))

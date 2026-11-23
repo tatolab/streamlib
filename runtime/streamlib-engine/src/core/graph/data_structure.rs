@@ -505,7 +505,7 @@ impl std::fmt::Display for Graph {
 }
 
 impl Graph {
-    /// Render this graph as the `/api/graph` payload, on the machine named
+    /// Render this graph as the `graph` operation answers it, on the machine named
     /// `machine`: the graph as it was given, so the stream's function node pool
     /// renders under `function_node_pool` rather than as a node, and each link
     /// it carries renders once, as the link it was given.
@@ -518,6 +518,10 @@ impl Graph {
                 inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
                 ..GraphNodeOutput::from(node)
             };
+            if let Some((health, diagnostics)) = self.the_health_and_diagnostics_of(node) {
+                rendered.components.health = Some(health);
+                rendered.components.diagnostics = diagnostics;
+            }
             for (rendered_input, port) in rendered.ports.inputs.iter_mut().zip(&node.ports.inputs) {
                 rendered_input.value_read = the_value_an_input_reads(
                     self,
