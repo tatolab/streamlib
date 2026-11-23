@@ -7,14 +7,12 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
 use crate::local_api_mcp_tool_client::{
     LocalApiMcpToolClientFailure, LocalApiMcpToolClientFailureKind,
 };
-use crate::project_log_records_from_the_runtime::DESCRIBE_RUNTIME_TOOL_NAME;
-use crate::stream_actions_on_the_runtime::tool_result_from;
+use crate::runtime_description_the_cli_reads::RuntimeDescriptionTheCliReads;
 
 /// The runtime's own log folder, as the runtime described it while it answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,15 +33,14 @@ impl RuntimeLogDirectoryAsDescribed {
         let Ok(describe_runtime_result_text) = describe_runtime_answer else {
             return Self::NotDescribed;
         };
-        match tool_result_from::<DescribeRuntimeToolResult>(
-            DESCRIBE_RUNTIME_TOOL_NAME,
+        match RuntimeDescriptionTheCliReads::from_the_tool_result_text(
             &describe_runtime_result_text,
         ) {
-            Ok(DescribeRuntimeToolResult {
+            Ok(RuntimeDescriptionTheCliReads {
                 runtime_log_directory: Some(runtime_log_directory),
                 ..
             }) => Self::WrittenIn(runtime_log_directory),
-            Ok(DescribeRuntimeToolResult {
+            Ok(RuntimeDescriptionTheCliReads {
                 runtime_log_directory: None,
                 ..
             }) => Self::NoneWritten,
@@ -115,6 +112,26 @@ mod tests {
             described.the_runtime_went_away_message(),
             "the runtime went away — it crashed or was stopped; its log is under \
              /home/u/.local/state/tatolab/logs/"
+        );
+    }
+
+    #[test]
+    fn a_runtime_that_names_no_machine_still_names_its_log_folder() {
+        let described = RuntimeLogDirectoryAsDescribed::from_the_describe_runtime_answer(Ok(
+            serde_json::json!({
+                "version": "0.57.0",
+                "build_id": "0.57.0+abc.1",
+                "up_for_ms": 5,
+                "runtime_log_directory": "/home/u/.local/state/tatolab/logs",
+            })
+            .to_string(),
+        ));
+
+        assert_eq!(
+            described,
+            RuntimeLogDirectoryAsDescribed::WrittenIn(PathBuf::from(
+                "/home/u/.local/state/tatolab/logs"
+            ))
         );
     }
 

@@ -67,6 +67,35 @@ mod against_an_isolated_machine {
         );
     }
 
+    /// A runtime built before `describe_runtime` named its machine answers without `machine`,
+    /// and the CLI, which calls it with no contract handshake, still prints its line.
+    #[test]
+    fn version_of_a_runtime_that_names_no_machine_still_prints_the_runtime_it_describes() {
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let _stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            StubLocalApiScript::answering_every_tool_call_with(StubToolAnswer::tool_result(
+                &json!({
+                    "version": "0.55.1",
+                    "build_id": "0.55.1+0123abc.9f8e7d",
+                    "up_for_ms": ((3 * 24 + 2) * 60 + 7) * 60 * 1000,
+                    "runtime_log_directory": null,
+                })
+                .to_string(),
+            )),
+        );
+
+        let versioned = isolated_machine_directories.run_tatolab(&["--version"]);
+
+        assert_eq!(versioned.status.code(), Some(0));
+        assert_eq!(
+            standard_output_text(&versioned),
+            format!(
+                "{CLI_VERSION_LINE}runtime 0.55.1 (0.55.1+0123abc.9f8e7d), up 3d 2h 7m, keeps no \
+                 own log\n"
+            )
+        );
+    }
+
     #[test]
     fn version_of_a_runtime_keeping_no_own_log_says_so() {
         let isolated_machine_directories = IsolatedMachineDirectories::new();

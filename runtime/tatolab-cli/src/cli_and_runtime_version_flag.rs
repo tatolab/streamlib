@@ -6,7 +6,6 @@
 
 use std::time::Duration;
 
-use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 use streamlib_runtime_client_contract::machine_runtime_lock::{
     MachineRuntimeLockHolder, holder_of_the_machine_runtime_lock,
 };
@@ -18,7 +17,7 @@ use crate::machine_runtime_local_api_socket::{
     holder_serving_another_user, local_api_socket_of_the_running_runtime,
 };
 use crate::project_log_records_from_the_runtime::DESCRIBE_RUNTIME_TOOL_NAME;
-use crate::stream_actions_on_the_runtime::tool_result_from;
+use crate::runtime_description_the_cli_reads::RuntimeDescriptionTheCliReads;
 use crate::verb_standard_output::write_verb_standard_output;
 
 /// The runtime line when nothing answers at the machine's local API socket.
@@ -54,7 +53,7 @@ fn runtime_line_of_the_machines_runtime() -> String {
     )
     .map_err(|tool_call_failure| tool_call_failure.to_string())
     .and_then(|tool_result_text| {
-        tool_result_from::<DescribeRuntimeToolResult>(DESCRIBE_RUNTIME_TOOL_NAME, &tool_result_text)
+        RuntimeDescriptionTheCliReads::from_the_tool_result_text(&tool_result_text)
     })
     .map_or_else(
         |describe_failure| format!("runtime: {describe_failure}"),
@@ -78,7 +77,9 @@ fn runtime_line_when_nothing_answers(
 
 /// `runtime <version> (<build_id>), up <d>d <h>h <m>m, log <folder>`, the log segment reading
 /// `keeps no own log` when the runtime names no folder.
-fn rendered_runtime_description_line(runtime_description: &DescribeRuntimeToolResult) -> String {
+fn rendered_runtime_description_line(
+    runtime_description: &RuntimeDescriptionTheCliReads,
+) -> String {
     let runtime_log_segment = runtime_description
         .runtime_log_directory
         .as_ref()
@@ -114,13 +115,12 @@ mod tests {
 
     use super::*;
 
-    fn a_runtime_description(runtime_log_directory: Option<&str>) -> DescribeRuntimeToolResult {
-        DescribeRuntimeToolResult {
+    fn a_runtime_description(runtime_log_directory: Option<&str>) -> RuntimeDescriptionTheCliReads {
+        RuntimeDescriptionTheCliReads {
             version: "0.55.1".to_owned(),
             build_id: "0.55.1+0123abc.9f8e7d".to_owned(),
             up_for_ms: ((3 * 24 + 2) * 60 + 7) * 60 * 1000 + 59_999,
             runtime_log_directory: runtime_log_directory.map(PathBuf::from),
-            machine: "rig".to_owned(),
         }
     }
 

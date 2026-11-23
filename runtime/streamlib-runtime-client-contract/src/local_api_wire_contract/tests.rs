@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::*;
 
 #[test]
-fn a_runtime_description_names_its_log_folder_or_null_when_it_keeps_none_and_its_machine() {
+fn a_runtime_description_names_its_log_folder_or_null_and_its_machine() {
     let described = |runtime_log_directory: Option<&str>| DescribeRuntimeToolResult {
         version: "0.55.1".to_owned(),
         build_id: "0.55.1+0123abc.9f8e7d".to_owned(),
