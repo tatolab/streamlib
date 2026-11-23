@@ -441,6 +441,101 @@
       ]
     },
     {
+      "name": "list_audio_capture_devices",
+      "summary": "List the machine's audio inputs and the monitors of its outputs, each by the id a Microphone Source's `device_id` takes, its name and its kind.",
+      "description": "List each audio capture device this machine's audio backend can open, which a Microphone Source's `device_id` names: its `id`, the `name` a person reads and its `kind`, `input` or `output_monitor` (what an output plays). Inputs come first, the default input first, then the outputs' monitors, the default output's first; leaving `device_id` unset takes the default input. Where the backend has a default output's monitor — on PipeWire, each sink has one, `<sink>.monitor` — the list holds `@DEFAULT_MONITOR@` ahead of the monitors: a `device_id` of `@DEFAULT_MONITOR@` captures what the default output plays, whichever it is when the node opens, so a saved project names no machine's own output; on a backend with none it is refused when the node opens. `audio_backend` names the backend: `pipewire`, `alsa`, `coreaudio`, or `silent-null` where the runtime found none, which lists nothing and captures silence. A `kind` this client does not know reads as `other`. Names no stream.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ListAudioCaptureDevicesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "list_audio_capture_devices_result",
+        "schema": {
+          "$ref": "#/components/schemas/ListAudioCaptureDevicesToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation",
+      "examples": [
+        {
+          "name": "list_audio_capture_devices_example",
+          "params": [
+            {
+              "name": "params",
+              "value": {}
+            }
+          ],
+          "result": {
+            "name": "list_audio_capture_devices_result",
+            "value": {
+              "audio_backend": "pipewire",
+              "devices": [
+                {
+                  "id": "alsa_input.usb-microphone.mono",
+                  "name": "USB Microphone",
+                  "kind": "input"
+                },
+                {
+                  "id": "@DEFAULT_MONITOR@",
+                  "name": "What the default output plays (now Monitor of Speakers)",
+                  "kind": "output_monitor"
+                },
+                {
+                  "id": "alsa_output.speakers.analog-stereo.monitor",
+                  "name": "Monitor of Speakers",
+                  "kind": "output_monitor"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "list_streams",
       "summary": "List every stream the runtime holds, by stream id, with its location and state.",
       "description": "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (playing, or recorded playing and re-loaded playing at the runtime's next start), `stopped` (open with its playback stopped, its graph loaded to read and edit while its node count is set, until `start_playback`), `paused` (open with its playback paused by `pause_playback`, until `resume_playback`), `closed` (its project closed by `close_project`, not loaded, until `open_project`), `preparing` (an action that loads it — an `open_project`, `reload_project` or `start_playback` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_playback`, `close_project` or `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (its code, its venv, its load or its start failed, and held stopped from its document when that reads, its graph there to read and edit, until a play or a `reload_project` retries it; implicated in the runtime's last two crashes in a row, and held at a start from its document with none of its node code read until a `reload_project` of its project tries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `close_project` then `open_project` of its project asks. Its `condition` answers its load, playback and health apart, whatever `state` says: `load` (`not_loaded`, `loading`, `loaded` — its graph held to read and edit, failed or not — or `unloading`), `playback` (`stopped`, `starting`, `playing`, `paused` or `stopping`), `health` (`healthy`, `degraded` while a node of it fails, raises or is not ready, or its graph document holds an edit its running graph did not take — kind `edit_not_live`, taken when its playback stops — whatever its playback, or `failed` until a recovery is made), and `diagnostics`, each problem behind its health: its `kind`, its `place` (`{\"on\": \"stream\"}`, a node by `node_id` and `node_name`, or a link by `from_node`, `from_port`, `to_node` and `to_port`), the runtime's `words` and the `recovery` that applies: `retry_the_load` (a `reload_project` of its project, or a `start_playback` while its graph is loaded), `fix_the_code`, `fix_the_dependencies`, `fix_the_link`, `restart_the_playback`, `remove_the_stream` (a `remove_project` of the project directory its record names) or `wait_for_the_node`. A kind or value this client does not know reads as the set's fallback: `other` for a kind, `not_loaded`, `stopped`, `failed` and `retry_the_load` for the rest.",
@@ -8424,6 +8519,76 @@
           "machine"
         ],
         "description": "The `describe_runtime` tool's result."
+      },
+      "ListAudioCaptureDevicesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "`list_audio_capture_devices`' params: none."
+      },
+      "ListAudioCaptureDevicesToolResult": {
+        "type": "object",
+        "properties": {
+          "audio_backend": {
+            "type": "string",
+            "description": "The audio backend this machine's runtime opens devices through: `pipewire`, `alsa`,\n`coreaudio`, or `silent-null` where it found none."
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudioCaptureDeviceOnTheWire"
+            },
+            "description": "Each capture device the backend can open: its inputs, the default input first, then the\nmonitors of its outputs, the default output's first."
+          }
+        },
+        "required": [
+          "audio_backend",
+          "devices"
+        ],
+        "description": "The `list_audio_capture_devices` operation's result."
+      },
+      "AudioCaptureDeviceOnTheWire": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "What a microphone's `device_id` names the device by."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name a person reads, as the backend describes the device."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AudioCaptureDeviceKindOnTheWire",
+            "description": "Whether the device is an input or an output's monitor."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "description": "One capture device a microphone's `device_id` names."
+      },
+      "AudioCaptureDeviceKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "input",
+            "description": "An input: a microphone, a line in, a virtual source."
+          },
+          {
+            "type": "string",
+            "const": "output_monitor",
+            "description": "The monitor of an output: what that output plays."
+          },
+          {
+            "type": "string",
+            "const": "other",
+            "description": "A kind this client does not know; the runtime never sends it."
+          }
+        ],
+        "description": "What a listed capture device captures. The set grows: a value a client does not know reads\nas `other`.",
+        "x-may-grow": true
       },
       "ListStreamsRequest": {
         "type": "object",

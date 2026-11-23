@@ -16,6 +16,34 @@ pub(in crate::control_operations) const DESCRIBE_RUNTIME: ControlOperationExampl
         refusal: None,
     };
 
+pub(in crate::control_operations) const LIST_AUDIO_CAPTURE_DEVICES: ControlOperationExample =
+    ControlOperationExample {
+        params: || json!({}),
+        answer: Some(|| {
+            json!({
+                "audio_backend": "pipewire",
+                "devices": [
+                    {
+                        "id": "alsa_input.usb-microphone.mono",
+                        "name": "USB Microphone",
+                        "kind": "input",
+                    },
+                    {
+                        "id": "@DEFAULT_MONITOR@",
+                        "name": "What the default output plays (now Monitor of Speakers)",
+                        "kind": "output_monitor",
+                    },
+                    {
+                        "id": "alsa_output.speakers.analog-stereo.monitor",
+                        "name": "Monitor of Speakers",
+                        "kind": "output_monitor",
+                    },
+                ],
+            })
+        }),
+        refusal: None,
+    };
+
 pub(in crate::control_operations) const LIST_STREAMS: ControlOperationExample =
     ControlOperationExample {
         params: || json!({}),

@@ -44,6 +44,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   describe_runtime(params?: ControlOperations["describe_runtime"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["describe_runtime"]["result"]>;
   /**
+   * List the machine's audio inputs and the monitors of its outputs, each by the id a Microphone Source's `device_id` takes, its name and its kind.
+   */
+  list_audio_capture_devices(params?: ControlOperations["list_audio_capture_devices"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_audio_capture_devices"]["result"]>;
+  /**
    * List every stream the runtime holds, by stream id, with its location and state.
    */
   list_streams(params?: ControlOperations["list_streams"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_streams"]["result"]>;

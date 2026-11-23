@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pipewire/proxy.h>
 #include <pipewire/stream.h>
 #include <pipewire/thread-loop.h>
 
@@ -59,6 +60,7 @@ extern "C" {
                 (struct pw_context * context, struct pw_properties *properties,                    \
                  size_t user_data_size))                                                           \
     ENTRY_POINT(pw_core_disconnect, int, (struct pw_core * core))                                  \
+    ENTRY_POINT(pw_proxy_destroy, void, (struct pw_proxy * proxy))                                 \
     ENTRY_POINT(pw_properties_new_dict, struct pw_properties *, (const struct spa_dict *dict))     \
     ENTRY_POINT(pw_stream_new_simple, struct pw_stream *,                                          \
                 (struct pw_loop * loop, const char *name, struct pw_properties *props,             \

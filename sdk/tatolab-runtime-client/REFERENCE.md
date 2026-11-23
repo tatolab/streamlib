@@ -1693,6 +1693,48 @@ Example params:
 {}
 ```
 
+### `list_audio_capture_devices`
+
+List the machine's audio inputs and the monitors of its outputs, each by the id a Microphone Source's `device_id` takes, its name and its kind.
+
+List each audio capture device this machine's audio backend can open, which a Microphone Source's `device_id` names: its `id`, the `name` a person reads and its `kind`, `input` or `output_monitor` (what an output plays). Inputs come first, the default input first, then the outputs' monitors, the default output's first; leaving `device_id` unset takes the default input. Where the backend has a default output's monitor — on PipeWire, each sink has one, `<sink>.monitor` — the list holds `@DEFAULT_MONITOR@` ahead of the monitors: a `device_id` of `@DEFAULT_MONITOR@` captures what the default output plays, whichever it is when the node opens, so a saved project names no machine's own output; on a backend with none it is refused when the node opens. `audio_backend` names the backend: `pipewire`, `alsa`, `coreaudio`, or `silent-null` where the runtime found none, which lists nothing and captures silence. A `kind` this client does not know reads as `other`. Names no stream.
+
+- Since contract version 3, experimental.
+- Params: `ListAudioCaptureDevicesRequest`
+- Result: `ListAudioCaptureDevicesToolResult`
+- Errors: `1` refused, `2` failed, `-32602` params do not match, `3` contract mismatch
+
+Example params:
+
+```json
+{}
+```
+
+Example answer:
+
+```json
+{
+  "audio_backend": "pipewire",
+  "devices": [
+    {
+      "id": "alsa_input.usb-microphone.mono",
+      "name": "USB Microphone",
+      "kind": "input"
+    },
+    {
+      "id": "@DEFAULT_MONITOR@",
+      "name": "What the default output plays (now Monitor of Speakers)",
+      "kind": "output_monitor"
+    },
+    {
+      "id": "alsa_output.speakers.analog-stereo.monitor",
+      "name": "Monitor of Speakers",
+      "kind": "output_monitor"
+    }
+  ]
+}
+```
+
 ### `graph`
 
 Export a loaded stream's graph, or every loaded stream's, with each node's and link's state and each part not live yet marked.

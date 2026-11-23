@@ -39,6 +39,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     ) -> streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
         self.engine.describe_this_runtime()
     }
+    fn list_audio_capture_devices(
+        &self,
+    ) -> Result<
+        streamlib_runtime_client_contract::local_api_wire_contract::ListAudioCaptureDevicesToolResult,
+    >{
+        self.engine.list_audio_capture_devices()
+    }
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
         stream_id: &str,

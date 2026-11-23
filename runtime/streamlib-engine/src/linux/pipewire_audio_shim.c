@@ -467,6 +467,11 @@ static void destroy_audio_stream(struct StreamLibPipeWireAudioStream *audio_stre
     free(audio_stream);
 }
 
+size_t streamlib_pipewire_max_monitored_sink_name_bytes(void)
+{
+    return STREAMLIB_PIPEWIRE_MAX_MONITORED_SINK_NAME_BYTES;
+}
+
 size_t streamlib_pipewire_sink_name_length_of_monitor_device_id(const char *device_id)
 {
     if (device_id == NULL)

@@ -109,6 +109,7 @@ async fn each_operation_answers_over_rest_what_it_answers_over_control() {
     let stream_id = crate::control_plane_stub_support::STUB_STREAM_ID;
     let calls = [
         ("describe_runtime", json!({})),
+        ("list_audio_capture_devices", json!({})),
         (
             "discover",
             json!({ "contract_version": CONTROL_CONTRACT_VERSION }),

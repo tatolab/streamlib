@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    DescribeRuntimeToolResult, GraphToolResult, ListStreamsToolResult, LogsToolResult,
-    ProjectTransactionsResourceContents,
+    DescribeRuntimeToolResult, GraphToolResult, ListAudioCaptureDevicesToolResult,
+    ListStreamsToolResult, LogsToolResult, ProjectTransactionsResourceContents,
 };
 
 use super::worked_examples;
@@ -14,10 +14,11 @@ use crate::control_operation::{
     ControlOperationStability,
 };
 use crate::control_operation_requests::{
-    DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListStreamsRequest, LogsRequest,
-    OneProjectByItsDirectoryRequest, SubscribeInputValueChangesRequest,
-    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
-    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest,
+    DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListAudioCaptureDevicesRequest,
+    ListStreamsRequest, LogsRequest, OneProjectByItsDirectoryRequest,
+    SubscribeInputValueChangesRequest, SubscribeProjectChangesRequest,
+    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
+    SubscribeStreamGraphChangesRequest,
 };
 use crate::control_operation_results::{
     DiscoverResult, SubscribeInputValueChangesResult, SubscribeProjectChangesResult,
@@ -176,6 +177,27 @@ impl ControlOperation for DescribeRuntime {
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DESCRIBE_RUNTIME);
+}
+
+/// `list_audio_capture_devices`: the machine's audio inputs and output monitors, by the id a
+/// microphone's `device_id` takes.
+pub struct ListAudioCaptureDevices;
+
+impl ControlOperation for ListAudioCaptureDevices {
+    type Request = ListAudioCaptureDevicesRequest;
+    type Result = ListAudioCaptureDevicesToolResult;
+    const METHOD_NAME: &'static str = "list_audio_capture_devices";
+    const ONE_LINE_DOC: &'static str = "List the machine's audio inputs and the monitors of its outputs, each by the id a Microphone Source's `device_id` takes, its name and its kind.";
+    const AGENT_USAGE_NOTE: &'static str = "List each audio capture device this machine's audio backend can open, which a Microphone Source's `device_id` names: its `id`, the `name` a person reads and its `kind`, `input` or `output_monitor` (what an output plays). Inputs come first, the default input first, then the outputs' monitors, the default output's first; leaving `device_id` unset takes the default input. Where the backend has a default output's monitor — on PipeWire, each sink has one, `<sink>.monitor` — the list holds `@DEFAULT_MONITOR@` ahead of the monitors: a `device_id` of `@DEFAULT_MONITOR@` captures what the default output plays, whichever it is when the node opens, so a saved project names no machine's own output; on a backend with none it is refused when the node opens. `audio_backend` names the backend: `pipewire`, `alsa`, `coreaudio`, or `silent-null` where the runtime found none, which lists nothing and captures silence. A `kind` this client does not know reads as `other`. Names no stream.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const EXAMPLE: Option<ControlOperationExample> =
+        Some(worked_examples::LIST_AUDIO_CAPTURE_DEVICES);
 }
 
 /// `list_streams`: every stream the runtime holds, with its state.

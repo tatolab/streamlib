@@ -233,6 +233,7 @@ async fn each_operation_answers_over_control_what_its_mcp_tool_answers() {
     let stream_asset = crate::control_plane_stub_support::STUB_STREAM_ASSET;
     let calls = [
         ("describe_runtime", json!({})),
+        ("list_audio_capture_devices", json!({})),
         ("list_streams", json!({})),
         ("graph", json!({})),
         ("transact", json!({ "operations": [], "mode": "live" })),

@@ -9,15 +9,11 @@ use std::sync::{Arc, Weak};
 
 use serde::Serialize;
 use serde_json::Value;
-use streamlib::sdk::error::PrivacyGatedCaptureDevice;
-use streamlib::sdk::runtime::{
-    OperationsOnTheStreamsLoadedInThisRuntime, StreamActionQueued, StreamActionStep,
-    StreamListingState, StreamLocation,
-};
+use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, StreamActionQueued};
 use streamlib_control_contract::{
     ControlContractVersionMismatch, ControlOperationCall, DescribeRuntimeRequest, DiscoverRequest,
-    DiscoverResult, GraphEditMode, GraphRequest, ListStreamsRequest,
-    OneProjectByItsDirectoryRequest, ProjectTransactionAuthorArgument,
+    DiscoverResult, GraphEditMode, GraphRequest, ListAudioCaptureDevicesRequest,
+    ListStreamsRequest, OneProjectByItsDirectoryRequest, ProjectTransactionAuthorArgument,
     ProjectTransactionAuthorKindArgument, SubscribeInputValueChangesRequest,
     SubscribeInputValueChangesResult, SubscribeProjectChangesRequest,
     SubscribeProjectChangesResult, SubscribeProjectLogRecordsRequest,
@@ -31,23 +27,22 @@ use streamlib_project_repository::{
     StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
-    CloseViewerToolResult, ControlOperationRefusalCode, CreateNodeFileToolResult,
-    CreateNodeUiElementToolResult, CreateProjectToolResult, DeleteProjectToolResult,
-    DependencyTransactionToolResult, DescribeAssetToolResult, DescribeNodeTypesToolResult,
-    DescribeRuntimeToolResult, DescribeStreamActionToolResult, DuplicateProjectToolResult,
-    GraphTransactionToolResult, ImportProjectToolResult, LinkCandidatesCheckResult,
-    LinkCheckResult, ListAssetsToolResult, ListDependenciesToolResult, ListNodeTypesToolResult,
+    AssetTransactionToolResult, CancelStreamActionToolResult, CloseViewerToolResult,
+    ControlOperationRefusalCode, CreateNodeFileToolResult, CreateNodeUiElementToolResult,
+    CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
+    DescribeAssetToolResult, DescribeNodeTypesToolResult, DescribeRuntimeToolResult,
+    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
+    ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
+    ListAudioCaptureDevicesToolResult, ListDependenciesToolResult, ListNodeTypesToolResult,
     ListPinTypesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
     ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
-    ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
-    PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectCodeCheckResult,
-    ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
-    ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
-    ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
-    RemoveProjectToolResult, ResumePlaybackToolResult, SetNodeTypeGroupToolResult,
-    SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
-    UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    ListStreamsToolResult, LogsToolResult, OpenViewerToolResult, PausePlaybackToolResult,
+    ProjectActionRefusalOnTheWire, ProjectCodeCheckResult, ProjectFileTransactionToolResult,
+    ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
+    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
+    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
+    SetNodeTypeGroupToolResult, SetStreamClockScaleToolResult, UpdateDependencyToolResult,
+    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
@@ -68,6 +63,12 @@ mod discovery_and_subscription_operation_answers;
 mod graph_edit_operation_answers;
 mod playback_and_stream_action_operation_answers;
 mod project_lifecycle_operation_answers;
+mod stream_listing_on_the_wire;
+
+use stream_listing_on_the_wire::capture_device_on_the_wire;
+pub(crate) use stream_listing_on_the_wire::{
+    listed_stream_state_on_the_wire, stream_action_step_on_the_wire, stream_location_on_the_wire,
+};
 
 pub(crate) use contract_a_client_names::ContractAClientNames;
 
@@ -107,6 +108,8 @@ pub(crate) enum ControlOperationAnswer {
     SubscribeStreamActionChanges(SubscribeStreamActionChangesResult),
     /// `describe_runtime`'s.
     DescribeRuntime(DescribeRuntimeToolResult),
+    /// `list_audio_capture_devices`'.
+    ListAudioCaptureDevices(ListAudioCaptureDevicesToolResult),
     /// `list_streams`'s.
     ListStreams(ListStreamsToolResult),
     /// `graph`'s: one stream's graph, or every loaded stream's.
@@ -442,6 +445,11 @@ impl ControlOperationDispatcher {
                     self.operations_on_the_loaded_streams
                         .describe_this_runtime(),
                 ))
+            }
+            ControlOperationCall::ListAudioCaptureDevices(ListAudioCaptureDevicesRequest {}) => {
+                self.list_audio_capture_devices()
+                    .await
+                    .map(ControlOperationAnswer::ListAudioCaptureDevices)
             }
             ControlOperationCall::ListStreams(ListStreamsRequest {}) => self
                 .list_streams()
@@ -928,46 +936,6 @@ pub(crate) fn the_author_of_a_change(
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or_else(|| AUTHOR_NAME_OF_AN_UNNAMED_CLIENT.to_owned()),
         },
-    }
-}
-
-pub(crate) fn stream_location_on_the_wire(
-    stream_location: StreamLocation,
-) -> StreamLocationOnTheWire {
-    StreamLocationOnTheWire {
-        project_directory: stream_location.project_directory,
-        project: stream_location.project,
-        stream_asset: stream_location.stream_asset,
-    }
-}
-
-pub(crate) fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamState {
-    match state {
-        StreamListingState::Running => ListedStreamState::Running,
-        StreamListingState::Stopped => ListedStreamState::Stopped,
-        StreamListingState::Paused => ListedStreamState::Paused,
-        StreamListingState::Failed => ListedStreamState::Failed,
-        StreamListingState::Preparing => ListedStreamState::Preparing,
-        StreamListingState::Stopping => ListedStreamState::Stopping,
-        StreamListingState::Closed => ListedStreamState::Closed,
-    }
-}
-
-fn capture_device_on_the_wire(device: PrivacyGatedCaptureDevice) -> CaptureDeviceOnTheWire {
-    match device {
-        PrivacyGatedCaptureDevice::Camera => CaptureDeviceOnTheWire::Camera,
-        PrivacyGatedCaptureDevice::Microphone => CaptureDeviceOnTheWire::Microphone,
-    }
-}
-
-pub(crate) fn stream_action_step_on_the_wire(step: StreamActionStep) -> StreamActionStepOnTheWire {
-    match step {
-        StreamActionStep::MakingTheVenv => StreamActionStepOnTheWire::MakingTheVenv,
-        StreamActionStep::ReadingTheGraphDocuments => {
-            StreamActionStepOnTheWire::ReadingTheGraphDocuments
-        }
-        StreamActionStep::Starting => StreamActionStepOnTheWire::Starting,
-        StreamActionStep::Stopping => StreamActionStepOnTheWire::Stopping,
     }
 }
 

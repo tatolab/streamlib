@@ -75,6 +75,10 @@ uint32_t streamlib_pipewire_stream_properties(struct StreamLibPipeWireStreamProp
 /// working pipeline.
 size_t streamlib_pipewire_sink_name_length_of_monitor_device_id(const char *device_id);
 
+/// `STREAMLIB_PIPEWIRE_MAX_MONITORED_SINK_NAME_BYTES`, so the listing leaves out a monitor this
+/// shim would refuse to open.
+size_t streamlib_pipewire_max_monitored_sink_name_bytes(void);
+
 /// How many buffers one graph cycle may hand over before the rest wait for the
 /// next callback. A capture cycle normally yields exactly one; PipeWire's own
 /// buffer pools are smaller than this.
