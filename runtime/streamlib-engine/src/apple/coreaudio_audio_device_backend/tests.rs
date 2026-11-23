@@ -5,13 +5,14 @@ use objc2_audio_toolbox::{kAudioUnitScope_Global, kAudioUnitScope_Input};
 use objc2_core_audio::{AudioObjectID, kAudioObjectUnknown};
 
 use crate::core::context::{
-    AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice, RequestedAudioStreamFormat,
+    AudioCaptureDeviceKind, AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice,
+    RequestedAudioStreamFormat,
 };
 
 use super::audio_objects_and_device_discovery::{
-    CoreAudioDevice, CoreAudioStreamDirection, duration_of_frames_in_ns, first_sample_timestamp_ns,
-    interleaved_f32_description_of, osstatus_text,
-    refusal_for_a_named_audio_device_that_is_not_attached,
+    CoreAudioDevice, CoreAudioStreamDirection, capture_devices_default_first,
+    duration_of_frames_in_ns, first_sample_timestamp_ns, interleaved_f32_description_of,
+    osstatus_text, refusal_for_a_named_audio_device_that_is_not_attached,
 };
 use super::capture_stream::CoreAudioCaptureDelivery;
 use super::hal_output_unit::CoreAudioStreamFormatBridge;
@@ -102,6 +103,39 @@ fn the_devices_latency_moves_the_stamp_back_by_that_many_frames() {
         first_sample_timestamp_ns(5_000_000_000, 441, 44_100),
         5_000_000_000 - 10_000_000,
         "441 frames at 44.1 kHz is 10 ms"
+    );
+}
+
+#[test]
+fn the_capture_devices_are_listed_by_uid_the_default_first() {
+    let a_device = |object_id: AudioObjectID, uid: &str, name: &str| CoreAudioDevice {
+        object_id,
+        uid: uid.into(),
+        name: name.into(),
+    };
+    let listed = capture_devices_default_first(
+        vec![
+            a_device(41, "BuiltInMicrophoneDevice", "MacBook Pro Microphone"),
+            a_device(42, "", "A device with no UID"),
+            a_device(43, "AppleUSBAudioEngine:Mic", "USB Microphone"),
+            a_device(44, "BlackHole2ch_UID", ""),
+        ],
+        Some(43),
+    );
+    let listed: Vec<(&str, &str)> = listed
+        .iter()
+        .map(|device| {
+            assert_eq!(device.kind, AudioCaptureDeviceKind::Input);
+            (device.id.as_str(), device.name.as_str())
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("AppleUSBAudioEngine:Mic", "USB Microphone"),
+            ("BuiltInMicrophoneDevice", "MacBook Pro Microphone"),
+            ("BlackHole2ch_UID", "BlackHole2ch_UID"),
+        ]
     );
 }
 

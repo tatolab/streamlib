@@ -5,13 +5,14 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use streamlib_control_contract::{
-    CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, DiscoverResult,
-    SubscribeInputValueChangesResult, SubscribeProjectChangesResult,
-    SubscribeProjectLogRecordsResult, SubscribeStreamActionChangesResult,
-    SubscribeStreamGraphChangesResult,
+    CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, ControlOperation,
+    DiscoverResult, ListAudioCaptureDevices, SubscribeInputValueChangesResult,
+    SubscribeProjectChangesResult, SubscribeProjectLogRecordsResult,
+    SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesResult,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET, ListStreamsToolResult, ListStreamsToolResultStream,
+    CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET, ListAudioCaptureDevicesToolResult,
+    ListStreamsToolResult, ListStreamsToolResultStream,
 };
 use streamlib_runtime_client_contract::project_log_records::project_log_cursor_at_its_end;
 use uuid::Uuid;
@@ -47,6 +48,27 @@ impl ControlOperationDispatcher {
                 .iter()
                 .map(|declaration| declaration.method_name.to_owned())
                 .collect(),
+        })
+    }
+
+    /// The machine's audio capture devices, read off the async runtime: the backend may wait on
+    /// its audio server's answer.
+    pub(super) async fn list_audio_capture_devices(
+        &self,
+    ) -> Result<ListAudioCaptureDevicesToolResult, ControlOperationRefusal> {
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        tokio::task::spawn_blocking(move || {
+            operations_on_the_loaded_streams.list_audio_capture_devices()
+        })
+        .await
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "listing the audio capture devices",
+        ))?
+        .map_err(|refusal| {
+            ControlOperationRefusal::of_an_engine_error(
+                ListAudioCaptureDevices::METHOD_NAME,
+                &refusal,
+            )
         })
     }
 

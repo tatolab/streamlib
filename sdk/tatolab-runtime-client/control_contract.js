@@ -5,7 +5,7 @@
 
 export const CONTROL_CONTRACT_VERSION = 3;
 
-export const CONTROL_CONTRACT_REVISION = 45;
+export const CONTROL_CONTRACT_REVISION = 46;
 
 export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "discover",
@@ -15,6 +15,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "subscribe_stream_action_changes",
   "subscribe_project_log_records",
   "describe_runtime",
+  "list_audio_capture_devices",
   "list_streams",
   "graph",
   "transact",
@@ -104,6 +105,7 @@ export const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES = Object.freeze([
   "subscribe_input_value_changes",
   "subscribe_stream_action_changes",
   "subscribe_project_log_records",
+  "list_audio_capture_devices",
   "graph",
   "check_link",
   "check_link_candidates",

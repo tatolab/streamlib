@@ -4,6 +4,7 @@
 //! Audio and video device backends: their probes, null arms, liveness reports, access prompts and
 //! the capture conversion stage.
 
+pub(super) mod audio_capture_device_listing;
 pub(super) mod audio_device_backend;
 pub(super) mod capture_device_access_prompting;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

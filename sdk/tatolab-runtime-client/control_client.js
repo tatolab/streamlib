@@ -34,6 +34,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("describe_runtime", params, callOptions);
   }
 
+  list_audio_capture_devices(params = {}, callOptions) {
+    return this.call("list_audio_capture_devices", params, callOptions);
+  }
+
   list_streams(params = {}, callOptions) {
     return this.call("list_streams", params, callOptions);
   }

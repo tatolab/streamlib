@@ -32,9 +32,10 @@ pub use dependency_requests::{
 };
 pub use discovery_and_subscription_requests::{
     DescribeRuntimeRequest, DiscoverRequest, GRAPH_STREAM_ARGUMENT_DESCRIPTION, GraphRequest,
-    ListStreamsRequest, LogsRequest, SubscribeInputValueChangesRequest,
-    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
-    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest,
+    ListAudioCaptureDevicesRequest, ListStreamsRequest, LogsRequest,
+    SubscribeInputValueChangesRequest, SubscribeProjectChangesRequest,
+    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
+    SubscribeStreamGraphChangesRequest,
 };
 pub use graph_edit_requests::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkCandidatesRequest, CheckLinkRequest,

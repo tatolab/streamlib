@@ -23,7 +23,10 @@ use objc2_core_audio_types::{
 };
 use objc2_core_foundation::{CFRetained, CFString};
 
-use crate::core::context::{AudioDeviceStreamRequest, AudioSampleFormat, AudioStreamFormat};
+use crate::core::context::{
+    AudioCaptureDevice, AudioCaptureDeviceKind, AudioDeviceStreamRequest, AudioSampleFormat,
+    AudioStreamFormat, moved_to_the_front,
+};
 use crate::core::{Error, Result};
 
 use super::{AUHAL_INPUT_ELEMENT, AUHAL_OUTPUT_ELEMENT, NO_ERR};
@@ -288,7 +291,7 @@ pub(super) fn describe_device(object_id: AudioObjectID) -> CoreAudioDevice {
 }
 
 /// Every device carrying at least one channel in `direction`.
-fn devices_carrying(direction: CoreAudioStreamDirection) -> Vec<CoreAudioDevice> {
+pub(super) fn devices_carrying(direction: CoreAudioStreamDirection) -> Vec<CoreAudioDevice> {
     audio_object_id_list_property(
         kAudioObjectSystemObject as AudioObjectID,
         kAudioHardwarePropertyDevices,
@@ -297,6 +300,31 @@ fn devices_carrying(direction: CoreAudioStreamDirection) -> Vec<CoreAudioDevice>
     .into_iter()
     .filter(|&object_id| channel_count_of(object_id, direction) > 0)
     .map(describe_device)
+    .collect()
+}
+
+/// `devices` as the capture devices a stream opens by UID, the one whose object is
+/// `default_object_id` first and the rest in CoreAudio's order. A device with no UID cannot be
+/// named, so it is not listed.
+pub(super) fn capture_devices_default_first(
+    devices: Vec<CoreAudioDevice>,
+    default_object_id: Option<AudioObjectID>,
+) -> Vec<AudioCaptureDevice> {
+    let devices: Vec<CoreAudioDevice> = devices
+        .into_iter()
+        .filter(|device| !device.uid.is_empty())
+        .collect();
+    moved_to_the_front(devices, |device| {
+        Some(device.object_id) == default_object_id
+    })
+    .into_iter()
+    .map(|device| {
+        AudioCaptureDevice::named_or_by_id(
+            device.uid,
+            Some(device.name),
+            AudioCaptureDeviceKind::Input,
+        )
+    })
     .collect()
 }
 

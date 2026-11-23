@@ -5,6 +5,7 @@
 //! port, and the shape of each result a client parses, written once for the runtime that serves
 //! them and every client that calls them.
 
+mod audio_capture_device_wire_types;
 mod control_operation_refusal_code;
 mod graph_answer_link_wire_types;
 mod graph_answer_node_component_wire_types;
@@ -21,6 +22,10 @@ mod stream_clock_spec;
 mod stream_condition_wire_types;
 mod stream_wire_types;
 
+pub use audio_capture_device_wire_types::{
+    AudioCaptureDeviceKindOnTheWire, AudioCaptureDeviceOnTheWire, DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
+    ListAudioCaptureDevicesToolResult,
+};
 pub use control_operation_refusal_code::ControlOperationRefusalCode;
 pub use graph_answer_link_wire_types::{
     GraphInterfacePortDirectionOnTheWire, GraphInterfacePortOnTheWire,
