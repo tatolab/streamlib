@@ -361,13 +361,10 @@ impl From<PortStreamFacts> for PortStreamFactsOnTheWire {
 }
 
 impl PortStreamFactsOnTheWire {
-    /// `facts`, carried by a port of `pin`, named by its pin type when they describe a stream of
-    /// it.
-    pub fn carried_by_a_port_of(facts: PortStreamFacts, pin: Option<&ResolvedPin>) -> Self {
-        Self {
-            pin_type: pin.and_then(|pin| facts.the_pin_type_they_describe(&pin.pin_type)),
-            facts,
-        }
+    /// Name these facts by the pin type of `pin`, the pin of the port that carries them, when
+    /// they describe a stream of it; name none otherwise.
+    pub fn name_the_pin_type_of_the_port_of(&mut self, pin: Option<&ResolvedPin>) {
+        self.pin_type = pin.and_then(|pin| self.facts.the_pin_type_they_describe(&pin.pin_type));
     }
 }
 

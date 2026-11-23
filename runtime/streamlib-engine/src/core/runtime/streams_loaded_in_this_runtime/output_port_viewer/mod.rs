@@ -14,7 +14,6 @@ use streamlib_node_schema::PortFamily;
 use streamlib_node_schema::pin_type::PinType;
 use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
 
-use crate::core::PortDirection;
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
@@ -23,11 +22,12 @@ use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{
     Graph, GraphNode, OutputLinkPortRef, names_listed_for_a_refusal,
     port_names_listed_for_a_refusal, the_bundle_frame_type_an_output_may_carry,
-    the_pin_a_port_resolves_to,
+    the_family_a_link_out_of_an_output_carries, the_pin_a_port_resolves_to,
 };
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
+use crate::core::{NodeRunId, PortDirection};
 
 /// How long an open waits for a helper process to open the port it runs.
 const A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN: Duration = Duration::from_secs(10);
@@ -397,21 +397,19 @@ fn the_pin_type_of_an_output(graph: &Graph, node: &GraphNode, port_name: &str) -
 /// every message when it carries Channels, the latest for any other family or one not settled.
 fn what_a_viewer_of_the_port_reads(
     graph: &Graph,
-    node_id: &crate::core::NodeRunId,
+    node_id: &NodeRunId,
     port_name: &str,
     pin_type: Option<&PinType>,
 ) -> OutputPortViewerReads {
-    let carries_samples = match pin_type {
-        Some(pin_type) => matches!(pin_type, PinType::Audio {}),
-        None => crate::core::graph::the_family_a_link_out_of_an_output_carries(
-            graph, node_id, port_name,
-        )
-        .is_some_and(|declaration| declaration.family == PortFamily::Channels),
-    };
-    if carries_samples {
-        OutputPortViewerReads::EveryMessage
-    } else {
-        OutputPortViewerReads::LatestMessage
+    match pin_type {
+        Some(PinType::Audio {}) => OutputPortViewerReads::EveryMessage,
+        Some(_) => OutputPortViewerReads::LatestMessage,
+        None if the_family_a_link_out_of_an_output_carries(graph, node_id, port_name)
+            .is_some_and(|declaration| declaration.family == PortFamily::Channels) =>
+        {
+            OutputPortViewerReads::EveryMessage
+        }
+        None => OutputPortViewerReads::LatestMessage,
     }
 }
 

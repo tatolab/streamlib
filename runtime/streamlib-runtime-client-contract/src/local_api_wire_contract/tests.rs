@@ -738,6 +738,16 @@ fn a_listing_from_a_runtime_before_conditions_reads_with_none() {
     assert_eq!(listed.condition, None);
 }
 
+/// `facts` as `graph` serves them on a port of `pin`.
+fn the_facts_named_by_the_pin_of_their_port(
+    facts: streamlib_node_schema::PortStreamFacts,
+    pin: Option<&streamlib_node_schema::pin_type::ResolvedPin>,
+) -> PortStreamFactsOnTheWire {
+    let mut named = PortStreamFactsOnTheWire::from(facts);
+    named.name_the_pin_type_of_the_port_of(pin);
+    named
+}
+
 #[test]
 fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_back() {
     use streamlib_node_schema::pin_type::{PinFlow, PinType, ResolvedPin};
@@ -756,10 +766,8 @@ fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_bac
         },
         flow: PinFlow::Stream,
     };
-    let named = PortStreamFactsOnTheWire::carried_by_a_port_of(
-        thirty_frames_a_second.clone(),
-        Some(&texture),
-    );
+    let named =
+        the_facts_named_by_the_pin_of_their_port(thirty_frames_a_second.clone(), Some(&texture));
     let rendered = serde_json::to_value(&named).unwrap();
     assert_eq!(
         rendered,
@@ -783,7 +791,7 @@ fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_bac
         flow: PinFlow::Stream,
     };
     assert_eq!(
-        serde_json::to_value(PortStreamFactsOnTheWire::carried_by_a_port_of(
+        serde_json::to_value(the_facts_named_by_the_pin_of_their_port(
             opus.clone(),
             Some(&encoded_audio)
         ))
@@ -791,11 +799,8 @@ fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_bac
         serde_json::json!({"type": "encoded_audio", "family": "packets", "rfc6381_codec": "opus"})
     );
 
-    let untyped = serde_json::to_value(PortStreamFactsOnTheWire::carried_by_a_port_of(
-        opus.clone(),
-        None,
-    ))
-    .unwrap();
+    let untyped =
+        serde_json::to_value(the_facts_named_by_the_pin_of_their_port(opus.clone(), None)).unwrap();
     assert_eq!(
         untyped,
         serde_json::json!({"family": "packets", "rfc6381_codec": "opus"}),

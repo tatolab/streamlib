@@ -49,6 +49,17 @@ def test_image_facts_round_trip_through_their_wire_form():
     assert stream_facts_from_wire(wire) == facts
 
 
+def test_facts_graph_names_by_their_pin_type_read_as_the_facts_of_their_family():
+    encoded = {"family": "packets", "rfc6381_codec": "avc1.64001f", "coded_width": 1280}
+    for pin_type in ("encoded_video", "encoded_audio"):
+        assert stream_facts_from_wire({"type": pin_type, **encoded}) == PacketsStreamFacts(
+            rfc6381_codec="avc1.64001f", coded_width=1280
+        )
+    assert stream_facts_from_wire(
+        {"type": "texture", "family": "image", "frame_rate": {"numerator": 30, "denominator": 1}}
+    ) == ImageStreamFacts(frame_rate=ImageStreamFrameRate(numerator=30, denominator=1))
+
+
 def test_facts_of_a_family_with_none_are_refused():
     with pytest.raises(ValueError, match="records"):
         stream_facts_from_wire({"family": "records"})

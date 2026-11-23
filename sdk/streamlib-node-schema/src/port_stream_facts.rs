@@ -120,7 +120,8 @@ impl PortStreamFacts {
     /// The name of `pin_type` when these facts describe a stream of it, as Image facts describe
     /// a Texture and Packets facts an encoded type; `None` for a type another family carries.
     pub fn the_pin_type_they_describe(&self, pin_type: &PinType) -> Option<BuiltInPinTypeName> {
-        (PortFamily::carrying(pin_type) == Some(self.family())).then(|| pin_type.built_in_name())
+        let name = pin_type.built_in_name();
+        (PortFamily::carrying_a_pin_of(name) == Some(self.family())).then_some(name)
     }
 }
 
