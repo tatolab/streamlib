@@ -888,10 +888,9 @@ fn shader_nodes_in_a_cycle_fail_on_their_nodes_and_the_stream_plays() {
     assert!(!the_record_of(state_directory.path(), &camera).is_failed());
 }
 
-/// A saved project whose document places a built-in this runtime no longer has, as
-/// `ChannelsToRecords` and `RecordsToChannels` were removed with no typed form, still opens: its
-/// stream is held from its document, the node held as written in the `Error` state, and `graph`
-/// names its type.
+/// A saved project whose document places a built-in this runtime does not register, such as
+/// `ChannelsToRecords` or `RecordsToChannels`, opens: its stream is held from its document, the
+/// node held as written in the `Error` state with the values it holds, and `graph` names its type.
 ///
 /// Mental-revert: refusing the open of a project whose load is refused leaves no stream held,
 /// so `graph` has no node to name the type.

@@ -562,11 +562,10 @@ fn a_refusal_names_both_ends_and_both_types() {
     );
 }
 
-/// A refusal between two unencoded types no stated conversion bridges names no node, though
-/// their families once had a conversion node between them.
+/// A refusal between two unencoded types no stated conversion bridges names no node.
 ///
-/// Mental-revert: naming the node of the two ends' families tells a person to place a
-/// `ChannelsToRecords`, which the runtime no longer has.
+/// Mental-revert: naming a node by the two ends' families tells a person to place a
+/// `ChannelsToRecords`, which the runtime does not register.
 #[test]
 fn a_refusal_no_stated_conversion_bridges_names_no_node_between_the_families() {
     let PinLinkOutcome::Refused(refusal) =
