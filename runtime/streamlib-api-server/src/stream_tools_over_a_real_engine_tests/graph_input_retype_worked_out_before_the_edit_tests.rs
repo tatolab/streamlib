@@ -230,3 +230,44 @@ async fn a_retype_after_a_set_on_the_same_input_runs_no_modules_conversion_and_s
         (Value::Null, Value::Null, json!({ "type": "string" }))
     );
 }
+
+/// A transaction choosing a String for a Float `GraphInput` saving 0.1 twice runs its module's
+/// conversion once: the second retype finds the Input already a String and carries nothing.
+///
+/// Mental-revert: working out every retype a transaction names runs the conversion twice and
+/// drops the second cast.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_identical_retypes_in_one_transaction_run_a_modules_conversion_once() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_an_input_saving(
+        json!({ "type": "float" }),
+        json!(0.1),
+        json!({}),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let values_cast = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
+    let values_recorded = Arc::clone(&values_cast);
+    a_function_node_conversions_body_standing_in_as(&engine, &stream_id, move |value| {
+        values_recorded.lock().push(value.clone());
+        as_a_percentage(value)
+    });
+    a_projects_float_to_string_conversion(&engine, &stream_id, "nodes.format:LevelAsPercent");
+    let stream = project.stream_asset_of("main");
+    let retype = set_on_warmth_base(stream, "pin_type", json!({ "type": "string" }));
+
+    let retyped = transact_by_alice(&engine, json!([retype.clone(), retype]))
+        .await
+        .expect("the retypes are taken");
+
+    assert_eq!(
+        retyped["saved_values_retyped"],
+        json!([{ "stream": stream_id, "node": WARMTH_BASE_NODE_UUID, "value_before": 0.1,
+                 "value": "10%", "cast_by": "nodes.format:LevelAsPercent" }]),
+        "{retyped}"
+    );
+    assert_eq!(*values_cast.lock(), vec![json!(0.1)]);
+    assert_eq!(
+        what_warmth_base_holds(&engine, &project, &stream_id),
+        (json!("10%"), json!("10%"), json!({ "type": "string" }))
+    );
+}
