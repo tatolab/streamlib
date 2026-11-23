@@ -43,7 +43,7 @@ class FrameInverter:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = self.video_from_upstream.read()
         if frame is not None:
-            self.video_to_downstream.write(frame)
+            self.video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
 
 
 @node
@@ -70,7 +70,7 @@ class FrameFilters:
         def process(self, ctx: RuntimeContextLimitedAccess) -> None:
             frame = self.video_from_upstream.read()
             if frame is not None:
-                self.video_to_downstream.write(frame)
+                self.video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
 
 
 @node
