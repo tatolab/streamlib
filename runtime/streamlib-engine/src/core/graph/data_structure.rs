@@ -25,8 +25,8 @@ use crate::core::graph::input_values::{
 use crate::core::graph::pin_type_link_checks::the_verdict_on_a_link_between_typed_ends;
 use crate::core::graph::the_pin_a_port_resolves_to;
 use crate::core::json_schema::{
-    GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId, rendered_link,
-    rendered_link_carried_through_the_function_node_pool,
+    GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId, PortStreamFactsOnTheWire,
+    rendered_link, rendered_link_carried_through_the_function_node_pool,
 };
 
 /// Graph state.
@@ -539,6 +539,13 @@ impl Graph {
             {
                 rendered_output.pin =
                     the_pin_a_port_resolves_to(self, node, port, PortDirection::Output);
+                rendered_output.stream_facts =
+                    rendered_output.stream_facts.take().map(|facts_rendered| {
+                        PortStreamFactsOnTheWire::carried_by_a_port_of(
+                            facts_rendered.facts,
+                            rendered_output.pin.as_ref(),
+                        )
+                    });
             }
             rendered
         };

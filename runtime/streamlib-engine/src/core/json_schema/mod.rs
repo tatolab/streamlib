@@ -32,7 +32,8 @@ pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
     LinkCarriedThroughTheFunctionNodePoolOnTheWire, MachineWideGraphOnTheWire,
-    PinGroupSlotOnTheWire, PinLinkMarksOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+    PinGroupSlotOnTheWire, PinLinkMarksOnTheWire, PortKindOnTheWire, PortStreamFactsOnTheWire,
+    StreamGraphOnTheWire,
 };
 
 // =============================================================================
@@ -548,7 +549,8 @@ fn ports_rendered_over_their_settled_contracts(
             .map(|port| GraphNodePortOnTheWire {
                 stream_facts: node
                     .stream_facts_of_output_ports()
-                    .current_facts_of(&port.name),
+                    .current_facts_of(&port.name)
+                    .map(PortStreamFactsOnTheWire::from),
                 pin_group_slot: pin_group_slot(&port.name),
                 ..GraphNodePortOnTheWire::from(port)
             })

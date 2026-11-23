@@ -39,7 +39,8 @@ pub use graph_answer_wire_types::{
     FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire, GraphNodeKindOnTheWire,
     GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphToolResult,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
-    MachineWideGraphOnTheWire, PinGroupSlotOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+    MachineWideGraphOnTheWire, PinGroupSlotOnTheWire, PortKindOnTheWire, PortStreamFactsOnTheWire,
+    StreamGraphOnTheWire,
 };
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,

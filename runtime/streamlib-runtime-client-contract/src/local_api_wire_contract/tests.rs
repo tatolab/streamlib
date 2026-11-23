@@ -737,3 +737,118 @@ fn a_listing_from_a_runtime_before_conditions_reads_with_none() {
     .unwrap();
     assert_eq!(listed.condition, None);
 }
+
+#[test]
+fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_back() {
+    use streamlib_node_schema::pin_type::{PinFlow, PinType, ResolvedPin};
+    use streamlib_node_schema::{ImageStreamFacts, ImageStreamFrameRate, PacketsStreamFacts};
+
+    let thirty_frames_a_second = streamlib_node_schema::PortStreamFacts::from(ImageStreamFacts {
+        frame_rate: Some(ImageStreamFrameRate {
+            numerator: 30,
+            denominator: 1,
+        }),
+        ..ImageStreamFacts::default()
+    });
+    let texture = ResolvedPin {
+        pin_type: PinType::Texture {
+            pixel_formats: Vec::new(),
+        },
+        flow: PinFlow::Stream,
+    };
+    let named = PortStreamFactsOnTheWire::carried_by_a_port_of(
+        thirty_frames_a_second.clone(),
+        Some(&texture),
+    );
+    let rendered = serde_json::to_value(&named).unwrap();
+    assert_eq!(
+        rendered,
+        serde_json::json!({
+            "type": "texture",
+            "family": "image",
+            "frame_rate": {"numerator": 30, "denominator": 1},
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<PortStreamFactsOnTheWire>(rendered).unwrap(),
+        named
+    );
+
+    let opus = streamlib_node_schema::PortStreamFacts::from(PacketsStreamFacts {
+        rfc6381_codec: Some("opus".to_string()),
+        ..PacketsStreamFacts::default()
+    });
+    let encoded_audio = ResolvedPin {
+        pin_type: PinType::EncodedAudio { codecs: Vec::new() },
+        flow: PinFlow::Stream,
+    };
+    assert_eq!(
+        serde_json::to_value(PortStreamFactsOnTheWire::carried_by_a_port_of(
+            opus.clone(),
+            Some(&encoded_audio)
+        ))
+        .unwrap(),
+        serde_json::json!({"type": "encoded_audio", "family": "packets", "rfc6381_codec": "opus"})
+    );
+
+    let untyped = serde_json::to_value(PortStreamFactsOnTheWire::carried_by_a_port_of(
+        opus.clone(),
+        None,
+    ))
+    .unwrap();
+    assert_eq!(
+        untyped,
+        serde_json::json!({"family": "packets", "rfc6381_codec": "opus"}),
+        "a port with no pin type keeps its facts under `family` alone"
+    );
+    assert_eq!(
+        serde_json::from_value::<PortStreamFactsOnTheWire>(untyped)
+            .unwrap()
+            .pin_type,
+        None
+    );
+    assert!(
+        serde_json::from_value::<PortStreamFactsOnTheWire>(
+            serde_json::json!({"type": "texture", "family": "image", "fps": 30})
+        )
+        .is_err(),
+        "a key the facts do not have is still refused"
+    );
+}
+
+#[test]
+fn an_open_viewer_answer_names_the_ports_pin_type_and_a_port_with_none_answers_as_before() {
+    use streamlib_node_schema::pin_type::PinType;
+
+    let untyped = OpenViewerToolResult {
+        viewer: "main/1c1c1c1c-1c1c-4c1c-8c1c-1c1c1c1c1c1c/audio".to_string(),
+        stream: "main".to_string(),
+        node_id: "1c1c1c1c-1c1c-4c1c-8c1c-1c1c1c1c1c1c".to_string(),
+        node_name: "tone".to_string(),
+        port: "audio".to_string(),
+        iceoryx2_domain_root: "/run/user/1000/streamlib/iceoryx2".to_string(),
+        channel: "tone/audio".to_string(),
+        wake_service: "tone/audio/wake".to_string(),
+        pin_type: None,
+        viewer_reads: OutputPortViewerReads::EveryMessage,
+        surface_share_address: None,
+    };
+    let rendered = serde_json::to_value(&untyped).unwrap();
+    assert!(rendered.get("pin_type").is_none(), "{rendered}");
+    assert_eq!(
+        serde_json::from_value::<OpenViewerToolResult>(rendered).unwrap(),
+        untyped
+    );
+
+    let audio = OpenViewerToolResult {
+        pin_type: Some(PinType::Audio {}),
+        ..untyped
+    };
+    let rendered = serde_json::to_value(&audio).unwrap();
+    assert_eq!(rendered["pin_type"], serde_json::json!({"type": "audio"}));
+    assert_eq!(rendered["viewer_reads"], "every_message");
+    assert_eq!(
+        serde_json::from_value::<OpenViewerToolResult>(rendered).unwrap(),
+        audio
+    );
+}

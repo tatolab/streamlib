@@ -884,7 +884,8 @@ export interface GraphNodePortOnTheWire {
    */
   audio_window?: unknown;
   /**
-   * The stream facts this output port carries now; absent on a port that states none.
+   * The stream facts this output port carries now, with the name of the port's pin type as
+   * `type` on a port whose pin type they describe; absent on a port that states none.
    */
   stream_facts?: unknown;
   /**
@@ -6349,6 +6350,11 @@ export interface OpenViewerToolResult {
    */
   wake_service: string;
   /**
+   * The pin type the port carries, resolved, as `graph` serves it on the port; absent on a
+   * port with none.
+   */
+  pin_type?: PinType | null;
+  /**
    * Which of the port's messages the viewer reads, by what the port carries.
    */
   viewer_reads: OutputPortViewerReads;
@@ -8145,7 +8151,7 @@ export interface ControlOperations {
   /**
    * Open a viewer of a node's output port, held open for the connection that opened it.
    *
-   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. The answer's `viewer_reads` says which messages the viewer reads: `every_message` for a port carrying samples, such as audio, in order as far back as the channel holds them for it, so a viewer can play the sound, and `latest_message` for every other port, skipping what it falls behind on; either way the channel overwrites what the viewer has not read, so it never slows the stream; a Texture message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. The answer's `pin_type` is the port's pin type, resolved as `graph` serves it on the port, absent on a port with none, and `viewer_reads` says which messages the viewer reads: `every_message` for a port carrying samples, an Audio port or one with no pin type whose messages are sample blocks, in order as far back as the channel holds them for it, so a viewer can play the sound, and `latest_message` for every other port, a port of a number type included, skipping what it falls behind on; either way the channel overwrites what the viewer has not read, so it never slows the stream; a Texture message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
    *
    * Since contract version 1, stable.
    */
