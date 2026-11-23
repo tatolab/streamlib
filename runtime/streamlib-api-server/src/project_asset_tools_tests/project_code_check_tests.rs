@@ -132,6 +132,49 @@ async fn a_views_port_declared_by_family_fails_the_verdict_naming_the_port_and_t
 }
 
 #[tokio::test]
+async fn a_view_made_of_js_files_fails_the_verdict_naming_each_file_and_ts() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    the_projects_interpreter_prints(
+        &served.project_directory(),
+        &[r#"{"modules":[],"checked_with":["tatolab-stream 1.0"]}"#],
+    );
+    let view_folder = served.project_directory().join("views/monitor");
+    std::fs::create_dir_all(view_folder.join("vendor")).unwrap();
+    std::fs::write(
+        view_folder.join("tatolab_view.json"),
+        r#"{"contract": "1.1", "title": "Monitor", "entry": "index.html", "placement": "node",
+            "inputs": [{"name": "picture", "pin_type": {"type": "texture"}}]}"#,
+    )
+    .unwrap();
+    std::fs::write(view_folder.join("monitor.js"), "export {};\n").unwrap();
+    std::fs::write(view_folder.join("vendor/lib.js"), "export {};\n").unwrap();
+
+    let checked = served.answered("check_project_code", json!({})).await;
+
+    assert_eq!(checked["verdict"], "failed", "{checked}");
+    let not_ts: Vec<&Value> = checked["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|finding| finding["finding_code"] == "not_written_in_ts")
+        .collect();
+    assert_eq!(
+        not_ts.len(),
+        1,
+        "a library under vendor/ is not reported: {checked}"
+    );
+    assert_eq!(not_ts[0]["severity"], "error", "{checked}");
+    assert_eq!(not_ts[0]["path"], "views/monitor/monitor.js", "{checked}");
+    assert!(
+        not_ts[0]["words"]
+            .as_str()
+            .unwrap()
+            .contains("`monitor.js` is refused: write it as .ts"),
+        "{checked}"
+    );
+}
+
+#[tokio::test]
 async fn a_views_manifest_among_the_paths_is_read_by_the_manifest_check_alone() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
     let interpreter = served.project_directory().join(".venv/bin/python");

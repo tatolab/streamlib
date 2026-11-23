@@ -224,20 +224,19 @@ impl ExtensionFolderToCheck {
         })
     }
 
-    /// A finding for each file of a kind neither checker reads: a `.tsx` file is refused, and
-    /// a `.js`, `.mjs` or `.map` file outside vendored code is told to be `.ts`.
+    /// A finding for each file of a kind neither checker reads, each refused: a `.tsx` file, and
+    /// a `.js`, `.mjs` or `.map` file outside vendored code, which is told to be `.ts`.
     fn findings_of_files_not_checked(&self) -> Vec<ExtensionCodeFinding> {
-        let finding = |kind, finding_code: &str, severity, words: &str, relative_file: &str| {
-            ExtensionCodeFinding {
+        let finding =
+            |kind, finding_code: &str, words: String, relative_file: &str| ExtensionCodeFinding {
                 kind,
                 finding_code: finding_code.to_owned(),
-                severity,
-                words: words.to_owned(),
+                severity: ExtensionCodeFindingSeverity::Error,
+                words,
                 path: format!("{}/{relative_file}", self.folder),
                 line: None,
                 column: None,
-            }
-        };
+            };
         let mut not_checked: Vec<ExtensionCodeFinding> = self
             .relative_files()
             .filter(|relative_file| relative_file.ends_with(".tsx"))
@@ -245,9 +244,9 @@ impl ExtensionFolderToCheck {
                 finding(
                     ExtensionCodeCheckKind::Types,
                     "tsx_not_checked",
-                    ExtensionCodeFindingSeverity::Error,
                     "an extension's code is written in .ts; a .tsx file is not checked, and the \
-                     Studio does not load one",
+                     Studio does not load one"
+                        .to_owned(),
                     relative_file,
                 )
             })
@@ -264,9 +263,11 @@ impl ExtensionFolderToCheck {
                     finding(
                         ExtensionCodeCheckKind::Lint,
                         "not_written_in_ts",
-                        ExtensionCodeFindingSeverity::Warning,
-                        "an extension's code is written in .ts, and only .ts is checked; \
-                         vendored code goes under vendor/",
+                        format!(
+                            "an extension's own code is written in .ts, so `{relative_file}` is \
+                             refused: write it as .ts, or put a library the extension carries \
+                             under {VENDORED_FOLDER}/ with its .d.ts beside it"
+                        ),
                         relative_file,
                     )
                 }),
