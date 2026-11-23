@@ -66,7 +66,7 @@ impl ControlCallError {
 
     /// The error of `refusal`: the runtime's words as its message, and the refusal on the wire
     /// as its `data`.
-    fn of_a_refusal(action: &str, refusal: ControlOperationRefusal) -> Self {
+    pub(crate) fn of_a_refusal(action: &str, refusal: ControlOperationRefusal) -> Self {
         let code = match refusal {
             ControlOperationRefusal::ContractVersionMismatch(mismatch) => {
                 return Self::of_a_contract_version_mismatch(mismatch);
@@ -86,6 +86,11 @@ impl ControlCallError {
 
     pub(crate) fn code(&self) -> i64 {
         self.code
+    }
+
+    /// The `refusal_code` of the refusal the error's `data` carries, when it carries one.
+    pub(crate) fn refusal_code(&self) -> Option<&str> {
+        self.data.as_ref()?.get("refusal_code")?.as_str()
     }
 
     /// `{code, message, data}`, `data` left out when there is none.

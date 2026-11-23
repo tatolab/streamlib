@@ -73,11 +73,20 @@ async fn answer_one_control_rest_call(
         the_outcome_of_one_control_call(&dispatcher, &request_origin, &operation, params).await
     }
     .await;
+    the_rest_answer_to(outcome)
+}
+
+/// A call's outcome over REST: `200` with its result, or its error at the status the error's
+/// refusal code, else its code, gives.
+fn the_rest_answer_to(outcome: Result<Value, ControlCallError>) -> Response {
     match outcome {
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),
         Err(why) => {
-            let status = StatusCode::from_u16(the_http_status_of_a_control_error(why.code()))
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status = StatusCode::from_u16(the_http_status_of_a_control_error(
+                why.code(),
+                why.refusal_code(),
+            ))
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(why.into_json())).into_response()
         }
     }

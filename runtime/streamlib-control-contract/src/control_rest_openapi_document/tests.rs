@@ -94,7 +94,51 @@ fn each_control_error_code_answers_its_own_status() {
         (CONTROL_OPERATION_FAILED_ERROR_CODE, 500),
         (CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, 409),
     ] {
-        assert_eq!(the_http_status_of_a_control_error(code), status, "{code}");
+        assert_eq!(
+            the_http_status_of_a_control_error(code, None),
+            status,
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn a_refusal_answers_the_status_its_refusal_code_gives_whatever_its_code() {
+    for (code, refusal_code, status) in [
+        (CONTROL_OPERATION_FAILED_ERROR_CODE, "stream_not_found", 404),
+        (CONTROL_OPERATION_FAILED_ERROR_CODE, "node_not_found", 404),
+        (CONTROL_OPERATION_REFUSED_ERROR_CODE, "node_not_found", 404),
+        (CONTROL_OPERATION_FAILED_ERROR_CODE, "node_name_taken", 409),
+        (CONTROL_OPERATION_FAILED_ERROR_CODE, "refused", 422),
+        (CONTROL_OPERATION_FAILED_ERROR_CODE, "runtime_failed", 500),
+        (
+            JSON_RPC_INVALID_PARAMS_ERROR_CODE,
+            "params_do_not_match_schema",
+            400,
+        ),
+        (
+            JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE,
+            "operation_not_found",
+            404,
+        ),
+    ] {
+        assert_eq!(
+            the_http_status_of_a_control_error(code, Some(refusal_code)),
+            status,
+            "error {code} refused as `{refusal_code}`"
+        );
+    }
+}
+
+#[test]
+fn every_refusal_code_the_contract_lists_is_mapped_to_a_status_by_name() {
+    let refusal_codes = the_refusal_codes_the_contract_lists(&control_contract_document());
+    assert!(refusal_codes.iter().any(|listed| listed == "refused"));
+    for refusal_code in refusal_codes {
+        assert!(
+            the_http_status_mapped_to_a_refusal_code(&refusal_code).is_some(),
+            "`{refusal_code}` answers a status the mapping names, not its code's"
+        );
     }
 }
 
@@ -149,27 +193,30 @@ fn each_operation_the_table_serves_only_on_a_connection_that_stays_open_is_marke
 }
 
 #[test]
-fn each_error_a_contract_method_states_is_described_at_the_status_its_code_gives() {
+fn each_error_a_contract_method_states_is_described_at_each_status_it_may_answer() {
     let contract = control_contract_document();
     let document = the_rest_description_of(&contract);
+    let refusal_statuses = the_statuses_a_refusal_may_answer(&contract);
+    assert!(refusal_statuses.contains(&404) && refusal_statuses.contains(&500));
     for method in contract["methods"].as_array().into_iter().flatten() {
         let method_name = method["name"].as_str().expect("a method name");
         let responses = &the_operation_at(&document, method_name)["responses"];
         for error in method["errors"].as_array().into_iter().flatten() {
             let code = error["code"].as_i64().expect("a whole-number code");
-            let status = the_http_status_of_a_control_error(code);
-            let schema = &responses[status.to_string()]["content"][JSON_MEDIA_TYPE]["schema"];
-            let error_schemas = match schema.get("oneOf") {
-                Some(Value::Array(several)) => several.clone(),
-                _ => vec![schema.clone()],
-            };
-            assert!(
-                error_schemas.iter().any(|error_schema| {
-                    error_schema["properties"]["code"]["const"] == code
-                        && error_schema["properties"]["data"] == error["data"]
-                }),
-                "`{method_name}` describes its error {code} at {status}: {responses}"
-            );
+            for status in the_statuses_an_error_may_answer(error, &refusal_statuses) {
+                let schema = &responses[status.to_string()]["content"][JSON_MEDIA_TYPE]["schema"];
+                let error_schemas = match schema.get("oneOf") {
+                    Some(Value::Array(several)) => several.clone(),
+                    _ => vec![schema.clone()],
+                };
+                assert!(
+                    error_schemas.iter().any(|error_schema| {
+                        error_schema["properties"]["code"]["const"] == code
+                            && error_schema["properties"]["data"] == error["data"]
+                    }),
+                    "`{method_name}` describes its error {code} at {status}: {responses}"
+                );
+            }
         }
     }
 }

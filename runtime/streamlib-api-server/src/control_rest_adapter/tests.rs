@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Each control operation over REST answers what it answers over `/control`: the same result, or
-//! the same error in the same words, at the status the error's code gives.
+//! the same error in the same words, at the status the error's refusal code, else its code, gives.
 
 use serde_json::{Value, json};
 use streamlib_control_contract::{
@@ -19,6 +19,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient;
+use crate::control_operation_dispatcher::ControlOperationRefusal;
+use crate::one_control_call_answered::ControlCallError;
 
 /// One REST call of `method_name` with `extra_headers` and `body`: its status and its body.
 async fn rest_post_with_headers(
@@ -68,7 +70,7 @@ fn the_rest_answer((status, body): (u16, Value)) -> Result<Value, Value> {
         .unwrap_or_else(|| panic!("an error code: {body}"));
     assert_eq!(
         status,
-        the_http_status_of_a_control_error(code),
+        the_http_status_of_a_control_error(code, body["data"]["refusal_code"].as_str()),
         "the status of error {code}: {body}"
     );
     Err(body)
@@ -304,4 +306,37 @@ async fn a_client_of_another_contract_is_refused_over_rest_as_over_control() {
         (400, &json!(JSON_RPC_INVALID_REQUEST_ERROR_CODE)),
         "{refused}"
     );
+}
+
+#[tokio::test]
+async fn a_refusal_answers_the_status_its_refusal_code_gives() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let stream_id = crate::control_plane_stub_support::STUB_STREAM_ID;
+    let calls = [
+        ("graph", json!({ "stream": "elsewhere" }), "refused", 422),
+        (
+            "write_graph_input",
+            json!({ "stream": stream_id, "input": "speed", "value": 1.0 }),
+            "node_not_found",
+            404,
+        ),
+    ];
+    for (method, params, refusal_code, status) in calls {
+        let (answered_status, refused) = rest_post(&served, method, &params.to_string()).await;
+        assert_eq!(
+            (answered_status, &refused["data"]["refusal_code"]),
+            (status, &json!(refusal_code)),
+            "`{method}` with {params}: {refused}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_runtime_that_failed_answers_500() {
+    let failed = ControlCallError::of_a_refusal(
+        "graph",
+        ControlOperationRefusal::runtime_failed("the runtime could not read its own records"),
+    );
+    assert_eq!(failed.refusal_code(), Some("runtime_failed"));
+    assert_eq!(super::the_rest_answer_to(Err(failed)).status(), 500);
 }

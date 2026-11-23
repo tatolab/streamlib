@@ -398,13 +398,9 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
             params_naming_no_loaded_stream,
         )
         .await;
-        let refused: Value = serde_json::from_str(&body).expect("the refusal is JSON");
-        let status = streamlib_control_contract::the_http_status_of_a_control_error(
-            refused["code"].as_i64().expect("the refusal's code"),
-        );
         assert!(
-            status_line.contains(&format!(" {status} ")),
-            "{params_naming_no_loaded_stream}: {status_line}"
+            status_line.contains(" 422 "),
+            "{params_naming_no_loaded_stream}: {status_line}: {body}"
         );
         assert!(
             body.contains("first") && body.contains("second"),
