@@ -562,10 +562,12 @@ fn a_refusal_names_both_ends_and_both_types() {
     );
 }
 
-/// A refusal no stated conversion bridges names the node the family table places between
-/// the two ends' families.
+/// A refusal between two unencoded types no stated conversion bridges names no node.
+///
+/// Mental-revert: naming a node by the two ends' families tells a person to place a
+/// `ChannelsToRecords`, which the runtime does not register.
 #[test]
-fn a_refusal_no_stated_conversion_bridges_names_the_node_between_the_families() {
+fn a_refusal_no_stated_conversion_bridges_names_no_node_between_the_families() {
     let PinLinkOutcome::Refused(refusal) =
         the_outcome_between(&PinType::Audio {}, &PinType::String {})
     else {
@@ -573,7 +575,7 @@ fn a_refusal_no_stated_conversion_bridges_names_the_node_between_the_families() 
     };
     let words = refusal.to_string();
     assert!(
-        words.contains("place a ChannelsToRecords node between them"),
+        words.contains("no node type converts between them"),
         "{words}"
     );
 }

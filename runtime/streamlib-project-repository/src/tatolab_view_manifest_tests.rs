@@ -316,6 +316,42 @@ fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
     );
 }
 
+/// A port of a bundle of numbers, a record of named numbers to or from a node, rides Records,
+/// whole, as one map of its members; a bundle holding a Texture rides no message a view reads.
+///
+/// Mental-revert: finding the family with `PortFamily::carrying` alone refuses the bundle of
+/// numbers, which no built-in type's family carries.
+#[test]
+fn a_port_of_a_bundle_of_numbers_rides_records_and_one_holding_a_texture_is_refused() {
+    let camera = json!({ "type": "bundle", "members": [
+        { "name": "yaw", "member_type": { "type": "float" } },
+        { "name": "burst", "member_type": { "type": "integer" } },
+    ] });
+    let manifest = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "camera", "pin_type": camera }]),
+    ))
+    .expect("a bundle of numbers opens");
+    assert_eq!(manifest.outputs[0].family, PortFamily::Records);
+    assert_eq!(
+        manifest.outputs[0].pin_type,
+        Some(serde_json::from_value(camera).expect("a bundle pin type"))
+    );
+
+    let refusal = read_tatolab_view_manifest(&a_node_view_declaring(
+        "1.1",
+        json!([{ "name": "framed", "pin_type": { "type": "bundle", "members": [
+            { "name": "label", "member_type": { "type": "string" } },
+            { "name": "picture", "member_type": { "type": "texture" } },
+        ] } }]),
+    ))
+    .expect_err("a bundle holding a Texture travels as a Bundle frame");
+    assert!(
+        refusal.contains("rides no message a view's port reads or writes"),
+        "{refusal}"
+    );
+}
+
 #[test]
 fn a_port_with_no_pin_type_or_family_or_one_that_disagrees_is_refused_at_the_port() {
     for (outputs, expected) in [

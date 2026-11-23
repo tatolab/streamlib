@@ -105,6 +105,51 @@ fn a_port_declared_by_family_is_a_warning_naming_the_pin_type_to_write_and_the_c
     );
 }
 
+/// A Records port declared by `family` alone is told it may be a bundle of small members, the
+/// type a record of named numbers is, beside the built-in types a Records message carries; a
+/// Channels port, which carries no whole bundle, is not.
+///
+/// Mental-revert: listing only the built-in types leaves a port carrying a record of named
+/// numbers with no type in the advice that it could write.
+#[test]
+fn a_records_port_declared_by_family_is_told_it_may_be_a_bundle_of_small_members() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_directory = workspace.path().join("acme");
+    a_project_named(&project_directory, "acme");
+    a_view_folder_holding(
+        &project_directory,
+        "stage",
+        r#"{"contract": "1.1", "title": "Stage", "entry": "index.html", "placement": "node",
+  "inputs": [{"name": "station", "family": "records"}, {"name": "gain", "family": "channels"}]}"#,
+    );
+
+    let checked = check_a_projects_view_manifests(&project_directory, None).unwrap();
+
+    let words_of = |port: &str| {
+        checked
+            .findings
+            .iter()
+            .find(|finding| finding.port.as_deref() == Some(port))
+            .map(|finding| finding.words.clone())
+            .unwrap_or_default()
+    };
+    let station = words_of("station");
+    assert!(
+        station.contains(
+            "a `records` port carries one of `string`, `menu`, `asset`, `trigger`, or a `bundle` \
+             of small members, as a record of named numbers is, written `{\"type\": \"bundle\", \
+             \"members\": [{\"name\": \"<name>\", \"member_type\": {\"type\": \"float\"}}, ...]}`: \
+             write the one it carries as its `pin_type`"
+        ),
+        "{station}"
+    );
+    let gain = words_of("gain");
+    assert!(
+        gain.contains("a `channels` port carries one of") && !gain.contains("`bundle`"),
+        "{gain}"
+    );
+}
+
 #[test]
 fn a_manifest_that_does_not_open_fails_the_check_with_the_readers_words() {
     let workspace = tempfile::tempdir().unwrap();

@@ -18,9 +18,8 @@ pub mod video_frame;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use pin_type_conversion::{
-    AudioToTensor, ChannelsToRecords, ChannelsToRecordsConfig, RecordsToChannels,
-    RecordsToChannelsConfig, TensorToAudio, TensorToAudioSettings, TensorToTexture,
-    TensorToTextureSettings, TextureToTensor,
+    AudioToTensor, TensorToAudio, TensorToAudioSettings, TensorToTexture, TensorToTextureSettings,
+    TextureToTensor,
 };
 pub use video_frame::VideoFrame;
 
@@ -121,8 +120,6 @@ pub fn register_the_conversion_node_types() {
         .register_a_conversion_casting_a_saved_value::<FloatToBoolean::Node>(the_number_cast);
     NODE_REGISTRY.register::<pin_type_conversion::AudioToTensor::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::TensorToAudio::Node>();
-    NODE_REGISTRY.register::<pin_type_conversion::ChannelsToRecords::Node>();
-    NODE_REGISTRY.register::<pin_type_conversion::RecordsToChannels::Node>();
     NODE_REGISTRY.register::<pin_type_conversion::TextureToTensor::Node>();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     NODE_REGISTRY.register::<pin_type_conversion::TextureFormatConvert::Node>();

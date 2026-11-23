@@ -4,9 +4,9 @@
 //! The compatibility record of graph documents: every golden document in
 //! `golden_graph_documents/` reads on this build, holds a UUID for its stream
 //! asset and each node, is written in the canonical form this build writes of it
-//! once upgraded to the current shape, and loads once its module nodes are taken
-//! out by UUID. A golden is never edited; a change to the document's shape adds
-//! one beside it.
+//! once upgraded to the current shape, and loads once its module nodes and its nodes of a
+//! built-in type this runtime does not register are taken out by UUID. A golden is never
+//! edited; a change to the document's shape adds one beside it.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,9 @@ use streamlib::sdk::descriptors::NodeClassImportPath;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::runtime::Runner;
 use streamlib_media_builtins::register_media_builtin_node_types;
+
+mod golden_test_support;
+use golden_test_support::is_taken_out_before_a_load;
 
 /// Each golden graph document's SHA-256, pinned as it was added.
 const GOLDEN_GRAPH_DOCUMENT_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
@@ -86,17 +89,18 @@ fn without_the_nodes_of_the_uuids(
     remaining
 }
 
-/// The UUIDs of the nodes in `graph_document` whose type a module declares, which a
-/// runtime with no interpreter cannot describe.
-fn module_node_uuids_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
+/// The UUIDs of the nodes in `graph_document` taken out before it loads, as
+/// [`is_taken_out_before_a_load`] says.
+fn node_uuids_taken_out_before_a_load_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
     graph_document["nodes"]
         .as_array()
         .expect("a document holds nodes")
         .iter()
         .filter(|node| {
-            !NodeClassImportPath::new(node["type"].as_str().expect("a node has a type"))
-                .expect("a type names a class")
-                .names_a_built_in_node()
+            is_taken_out_before_a_load(
+                &NodeClassImportPath::new(node["type"].as_str().expect("a node has a type"))
+                    .expect("a type names a class"),
+            )
         })
         .map(|node| node["id"].as_str().expect("a node has a UUID").to_string())
         .collect()
@@ -104,8 +108,8 @@ fn module_node_uuids_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
 
 /// A golden reads whole with a UUID on its asset and every node, is the canonical
 /// document this build writes of it once upgraded to the current shape, and with its
-/// module nodes taken out by UUID, the built-ins left load on a runtime with no
-/// interpreter.
+/// module nodes and its nodes of a built-in type this runtime does not register taken out by
+/// UUID, the built-ins left load on a runtime with no interpreter.
 #[test]
 fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
     register_media_builtin_node_types();
@@ -140,10 +144,10 @@ fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
 
         let built_ins_only = GraphSnapshot::from_graph_document(without_the_nodes_of_the_uuids(
             &recorded_graph_document,
-            &module_node_uuids_in(&recorded_graph_document),
+            &node_uuids_taken_out_before_a_load_in(&recorded_graph_document),
         ))
         .unwrap_or_else(|refusal| {
-            panic!("{path:?} without its module nodes no longer reads: {refusal}")
+            panic!("{path:?} without the nodes taken out before a load no longer reads: {refusal}")
         });
         if built_ins_only.nodes.is_empty() {
             continue;

@@ -144,7 +144,7 @@ impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
                 pin_type
                     .validate()
                     .map_err(|why| format!("`pin_type`: {why}"))?;
-                let Some(carried) = PortFamily::carrying(pin_type) else {
+                let Some(carried) = PortFamily::carrying_a_whole_value_of(pin_type) else {
                     return Err(format!(
                         "`pin_type`: a {pin_type} rides no message a view's port reads or \
                          writes; a view declares a port of a type a link carries"
