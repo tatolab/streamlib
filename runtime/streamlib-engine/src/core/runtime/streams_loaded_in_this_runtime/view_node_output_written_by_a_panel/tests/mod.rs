@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,9 +9,7 @@ use serial_test::serial;
 use streamlib_ipc_types::{
     DataChannelPayloadDescriptorKind, MessageReadFromAReservedSlot, OutputPortViewerReader,
 };
-use streamlib_project_repository::{
-    PROJECT_FILE_NAME, PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME, TatolabProjectFile,
-};
+use streamlib_project_repository::{PROJECT_FILE_NAME, TatolabProjectFile};
 
 use super::*;
 use crate::core::descriptors::{NodeClassImportPath, PortFamily};
@@ -24,7 +21,8 @@ use crate::core::nodes::NodeSpec;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::{Runner, RuntimeOperations};
 use crate::core::test_support::{
-    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, a_view_in,
+    ensure_test_mocks_registered,
 };
 use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
@@ -77,18 +75,6 @@ fn the_level_manifest() -> Value {
     })
 }
 
-fn a_view_folder_in(project_directory: &Path, view_folder_name: &str, manifest: &Value) {
-    let folder = project_directory
-        .join(PROJECT_VIEWS_DIRECTORY)
-        .join(view_folder_name);
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(
-        folder.join(TATOLAB_VIEW_MANIFEST_FILE_NAME),
-        serde_json::to_vec(manifest).unwrap(),
-    )
-    .unwrap();
-}
-
 /// A stream `a` of the project `acme-dj`, whose `views/` holds `deck` and a `broken` view that
 /// does not open.
 struct AStreamOfAProjectBringingViews {
@@ -109,11 +95,11 @@ impl AStreamOfAProjectBringingViews {
                 .unwrap(),
         )
         .unwrap();
-        a_view_folder_in(project_directory.path(), "deck", &the_deck_manifest());
-        a_view_folder_in(project_directory.path(), "level", &the_level_manifest());
-        a_view_folder_in(project_directory.path(), "pulse", &the_pulse_manifest());
-        a_view_folder_in(project_directory.path(), "board", &the_board_manifest());
-        a_view_folder_in(
+        a_view_in(project_directory.path(), "deck", &the_deck_manifest());
+        a_view_in(project_directory.path(), "level", &the_level_manifest());
+        a_view_in(project_directory.path(), "pulse", &the_pulse_manifest());
+        a_view_in(project_directory.path(), "board", &the_board_manifest());
+        a_view_in(
             project_directory.path(),
             "broken",
             &json!({ "contract": "1.0", "entry": "index.html", "placement": "node" }),

@@ -13,6 +13,9 @@ use crate::core::runtime::{
     LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, StreamLoadObservingInterrupts,
     TheMachinesShutdownEscalationClearedOnDrop,
 };
+use crate::core::test_support::{
+    THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY, a_view_that_does_not_open_in,
+};
 use serial_test::serial;
 
 #[test]
@@ -365,7 +368,7 @@ fn a_load_after_one_a_machine_shutdown_interrupted_describes_normally() {
 }
 
 /// A load naming a view that does not open beside a type its node code cannot describe refuses
-/// each by name, each refusal said once.
+/// each by name, each refusal on a line of its own after the type it refuses.
 ///
 /// Mental-revert: refusing the view alone drops why the other type was not described.
 #[test]
@@ -375,17 +378,7 @@ fn a_view_that_does_not_open_beside_a_type_not_described_refuses_both_with_each_
     let view_type = import_path(&format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:stage"));
     let project_directory = tempfile::tempdir().expect("a project directory");
     let options = a_stream_with_no_environment(project_directory.path());
-    let stage_folder = project_directory
-        .path()
-        .join(streamlib_project_repository::PROJECT_VIEWS_DIRECTORY)
-        .join("stage");
-    std::fs::create_dir_all(&stage_folder).unwrap();
-    std::fs::write(
-        stage_folder.join(streamlib_project_repository::TATOLAB_VIEW_MANIFEST_FILE_NAME),
-        r#"{"contract": "1.1", "title": "Stage", "entry": "index.html", "placement": "node",
-            "inputs": [{"name": "video", "family": "image"}]}"#,
-    )
-    .unwrap();
+    a_view_that_does_not_open_in(project_directory.path(), "stage");
 
     let refusal = the_refusal_of(
         Runner::new()
@@ -395,15 +388,26 @@ fn a_view_that_does_not_open_beside_a_type_not_described_refuses_both_with_each_
     );
 
     let (node_types, refusal) = refused_node_types(refusal);
-    assert_eq!(node_types, [python_type, view_type]);
+    assert_eq!(node_types, [python_type.clone(), view_type.clone()]);
+    let lines: Vec<&str> = refusal.lines().collect();
     assert_eq!(
-        refusal.matches("no stream environment").count(),
-        1,
+        lines.len(),
+        2,
+        "each refusal on a line of its own: {refusal}"
+    );
+    assert!(
+        lines[0].starts_with(&format!("`{}`: ", python_type.as_str()))
+            && lines[0].contains("no stream environment")
+            && !lines[0].contains(THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY),
         "{refusal}"
     );
-    assert_eq!(
-        refusal.matches("older `family` field").count(),
-        1,
+    assert!(
+        lines[1].starts_with(&format!(
+            "`{}`: the view `{}`",
+            view_type.as_str(),
+            view_type.as_str()
+        )) && lines[1].contains(THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY)
+            && !lines[1].contains("no stream environment"),
         "{refusal}"
     );
 }

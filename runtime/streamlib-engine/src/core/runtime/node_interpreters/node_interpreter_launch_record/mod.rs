@@ -225,8 +225,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         node_types: &[NodeClassImportPath],
         lend_directory: Option<&Path>,
     ) -> Result<()> {
-        let mut views_no_node_takes: Vec<NodeClassImportPath> = Vec::new();
-        let mut why_no_node_takes_each_view: Vec<String> = Vec::new();
+        let mut views_no_node_takes: Vec<(NodeClassImportPath, String)> = Vec::new();
         let mut node_types_of_node_code: Vec<NodeClassImportPath> = Vec::new();
         for node_type in node_types {
             match self
@@ -234,8 +233,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
                 .why_no_node_takes_the_view(node_type)
             {
                 Some(why_no_node_takes_it) => {
-                    views_no_node_takes.push(node_type.clone());
-                    why_no_node_takes_each_view.push(why_no_node_takes_it);
+                    views_no_node_takes.push((node_type.clone(), why_no_node_takes_it));
                 }
                 None => node_types_of_node_code.push(node_type.clone()),
             }
@@ -247,22 +245,21 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         if views_no_node_takes.is_empty() {
             return described;
         }
+        let refusal_of_each_view = views_no_node_takes
+            .into_iter()
+            .map(|(view_type, why_no_node_takes_it)| (vec![view_type], why_no_node_takes_it));
         match described {
-            Ok(()) => Err(Error::NodeTypesNotDescribed {
-                node_types: views_no_node_takes,
-                refusal: why_no_node_takes_each_view.join(" "),
-            }),
+            Ok(()) => Err(node_types_not_described_each_with_its_refusal(
+                refusal_of_each_view.collect(),
+            )),
             Err(Error::NodeTypesNotDescribed {
-                mut node_types,
+                node_types,
                 refusal,
-            }) => {
-                node_types.extend(views_no_node_takes);
-                why_no_node_takes_each_view.insert(0, refusal);
-                Err(Error::NodeTypesNotDescribed {
-                    node_types,
-                    refusal: why_no_node_takes_each_view.join(" "),
-                })
-            }
+            }) => Err(node_types_not_described_each_with_its_refusal(
+                std::iter::once((node_types, refusal))
+                    .chain(refusal_of_each_view)
+                    .collect(),
+            )),
             Err(refusal) => Err(refusal),
         }
     }
@@ -320,6 +317,36 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             );
         }
         Ok(())
+    }
+}
+
+/// One refusal of every type `refusals` names, in its order: the only refusal's words alone, or
+/// each refusal on a line of its own after the types it refuses, as the interpreter's refusal of
+/// several types reads.
+fn node_types_not_described_each_with_its_refusal(
+    refusals: Vec<(Vec<NodeClassImportPath>, String)>,
+) -> Error {
+    let refusal = match refusals.as_slice() {
+        [(_, the_only_refusal)] => the_only_refusal.clone(),
+        several_refusals => several_refusals
+            .iter()
+            .map(|(node_types, refusal)| {
+                let node_types_refused = node_types
+                    .iter()
+                    .map(|node_type| format!("`{}`", node_type.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{node_types_refused}: {refusal}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    Error::NodeTypesNotDescribed {
+        node_types: refusals
+            .into_iter()
+            .flat_map(|(node_types, _)| node_types)
+            .collect(),
+        refusal,
     }
 }
 

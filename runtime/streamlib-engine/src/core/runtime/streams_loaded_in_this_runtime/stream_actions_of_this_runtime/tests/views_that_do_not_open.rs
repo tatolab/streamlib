@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::test_support::{
+    THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY, a_view_that_does_not_open_in,
+};
 
 /// A project whose view does not open, beside a node type its interpreter describes, opens with
 /// that type described and only the view's node held, in the `Error` state, carrying the view's
@@ -22,17 +25,7 @@ fn a_view_that_does_not_open_holds_only_its_own_node_and_the_rest_is_described()
         serde_json::json!({"name": "stage", "type": view_type}),
     ]);
     let project = ProjectWithGraphDocuments::holding(graph);
-    let stage_folder = project
-        .path()
-        .join(streamlib_project_repository::PROJECT_VIEWS_DIRECTORY)
-        .join("stage");
-    std::fs::create_dir_all(&stage_folder).unwrap();
-    std::fs::write(
-        stage_folder.join(streamlib_project_repository::TATOLAB_VIEW_MANIFEST_FILE_NAME),
-        r#"{"contract": "1.1", "title": "Stage", "entry": "index.html", "placement": "node",
-            "inputs": [{"name": "video", "family": "image"}]}"#,
-    )
-    .unwrap();
+    a_view_that_does_not_open_in(project.path(), "stage");
     let describe_document = serde_json::json!({
         "described_node_types": [{
             "import_path": described_type.as_str(),
@@ -84,7 +77,7 @@ fn a_view_that_does_not_open_holds_only_its_own_node_and_the_rest_is_described()
     assert!(
         stage_placeholder
             .why_its_node_code_did_not_describe_it
-            .contains("older `family` field"),
+            .contains(THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY),
         "{}",
         stage_placeholder.why_its_node_code_did_not_describe_it
     );
@@ -113,7 +106,9 @@ fn a_view_that_does_not_open_holds_only_its_own_node_and_the_rest_is_described()
         "{failed_because}"
     );
     assert_eq!(
-        failed_because.matches("older `family` field").count(),
+        failed_because
+            .matches(THE_REFUSAL_OF_A_PORT_DECLARED_BY_FAMILY)
+            .count(),
         1,
         "{failed_because}"
     );
