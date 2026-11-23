@@ -73,6 +73,11 @@ from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
 from ._pin_type_narrowing import FlowsAsValue, PinAnnotationNotTaken, PinTypeNarrowing
 from ._pin_type_narrowing import an_output_flowing_as_a_value_by, pin_type_narrowed_by
 from ._pin_typed_by_a_setting import declaration_of_a_pin_a_setting_types
+from ._pin_typed_by_a_type_parameter import (
+    output_pin_type_found_from_an_input,
+    the_flow_a_function_input_reads,
+    the_one_type_a_class_type_parameter_binds,
+)
 from ._pin_value_stored_form import (
     PIN_TYPE_DESCRIPTION_BY_NAME as _PIN_TYPE_DESCRIPTION_BY_NAME,
     PinValueNotTaken,
@@ -81,7 +86,6 @@ from ._pin_value_stored_form import (
 from ._pin_types import (
     INTEGER_BOUNDS_OF_EACH_SIZE,
     INTEGER_SIZES_ONLY_AN_ELEMENT_HOLDS,
-    PIN_TYPE_SPELLINGS,
     PIN_VALUE_CLASSES,
     STREAM_PIN_TYPE_CLASSES,
     ExactNumberSize,
@@ -415,8 +419,12 @@ class _PinReading:
                 )
         type_parameter = written_type if isinstance(written_type, typing.TypeVar) else None
         if self._direction == "output":
-            pin_type = self._output_pin_type_found_from_an_input(
-                written_type, type_parameter, input_ports_of_each_type_parameter
+            pin_type = output_pin_type_found_from_an_input(
+                pin_named=self._pin_named,
+                written_type=written_type,
+                type_parameter=type_parameter,
+                input_ports_of_each_type_parameter=input_ports_of_each_type_parameter,
+                refusal=self._refusal,
             )
             declaration: PinDeclarationOnTheWire = {"pin_type": pin_type, "flow": "value"}
             self._state_former_names(declaration, metadata)
@@ -457,40 +465,26 @@ class _PinReading:
         optional: bool,
         input_ports_of_each_type_parameter: "Mapping[typing.TypeVar, Sequence[str]]",
     ) -> DeclaredPin:
-        """A class node's pin typed by the class's type parameter, which is bound to one pin
-        type: an input of that type, or an output carrying the type linked into the one input
-        the parameter also types."""
-        name = type_parameter.__name__
-        bound = type_parameter.__bound__
-        if (
-            optional
-            or type_parameter.__constraints__
-            or bound is None
-            or bound is object
-            or _is_a_union(bound)
-        ):
-            raise self._refusal(
-                f"{self._pin_named} is typed `{name}`"
-                + (" | None" if optional else "")
-                + f", and a class node's pin typed by a type parameter carries the one pin type "
-                f"the parameter is bound to. To fix: bind it to one type, `class "
-                f"{self._node}[{name}: Texture]`, and type the pin `{name}`.",
-                "pin_type_not_read_yet",
-            )
-        for entry in metadata:
-            if not isinstance(entry, (Description, FormerlyNamed)):
-                raise self._refusal(
-                    f"{self._pin_named} is typed `{name}`, which its link finds the type of, and "
-                    f"carries {entry!r}, which only a pin of one type takes. To fix: drop it; "
-                    f"such a pin takes `FormerlyNamed` and `Description`.",
-                    "pin_annotation_not_taken",
-                )
+        """A class node's pin typed by its type parameter: an input of the one type it is bound
+        to, or an output carrying the type linked into the one input it also types."""
+        bound = the_one_type_a_class_type_parameter_binds(
+            pin_named=self._pin_named,
+            node=self._node,
+            type_parameter=type_parameter,
+            metadata=metadata,
+            optional=optional,
+            refusal=self._refusal,
+        )
         pin_type = self._a_member_pin_type(bound, limit="bound to")
         flow = self._flow_of(_PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]], pin_type)
         declaration: PinDeclarationOnTheWire = {
             "pin_type": (
-                self._output_pin_type_found_from_an_input(
-                    type_parameter, type_parameter, input_ports_of_each_type_parameter
+                output_pin_type_found_from_an_input(
+                    pin_named=self._pin_named,
+                    written_type=type_parameter,
+                    type_parameter=type_parameter,
+                    input_ports_of_each_type_parameter=input_ports_of_each_type_parameter,
+                    refusal=self._refusal,
                 )
                 if self._direction == "output"
                 else {"kind": "is", "pin_type": pin_type}
@@ -530,7 +524,7 @@ class _PinReading:
             if _is_a_union(bound):
                 return self._one_of(typing.get_args(bound), limit="bound to")
             pin_type = self._a_member_pin_type(bound, limit="bound to")
-            return {"kind": "is", "pin_type": pin_type}, _the_flow_a_function_input_reads(pin_type)
+            return {"kind": "is", "pin_type": pin_type}, the_flow_a_function_input_reads(pin_type)
         if written_type is object:
             return {"kind": "any"}, "value"
         return self._one_of(typing.get_args(written_type))
@@ -548,7 +542,7 @@ class _PinReading:
                     "pin_annotation_repeated",
                 )
             pin_types.append(pin_type)
-        return {"kind": "one_of", "pin_types": pin_types}, _the_flow_a_function_input_reads(
+        return {"kind": "one_of", "pin_types": pin_types}, the_flow_a_function_input_reads(
             pin_types[0]
         )
 
@@ -581,38 +575,6 @@ class _PinReading:
             self._exact_size_among(metadata),
             limit=limit,
         )
-
-    def _output_pin_type_found_from_an_input(
-        self,
-        written_type: object,
-        type_parameter: Optional[typing.TypeVar],
-        input_ports_of_each_type_parameter: "Mapping[typing.TypeVar, Sequence[str]]",
-    ) -> DeclaredPinType:
-        if type_parameter is None:
-            raise self._refusal(
-                f"{self._pin_named} is typed {_name_of(written_type)}, and an output carries "
-                f"one type, the one it states or the one linked into an input it hands on. To "
-                f"fix: type it as one type, or by a type parameter that also types that input, "
-                f"`def Gate[PinValue](value: PinValue) -> PinValue`.",
-                "output_type_found_from_no_input",
-            )
-        input_ports = input_ports_of_each_type_parameter.get(type_parameter, ())
-        if not input_ports:
-            raise self._refusal(
-                f"{self._pin_named} is typed `{type_parameter.__name__}`, which types no input, "
-                f"so no link finds its type. To fix: type the input whose value it hands on "
-                f"`{type_parameter.__name__}`.",
-                "output_type_found_from_no_input",
-            )
-        if len(input_ports) > 1:
-            raise self._refusal(
-                f"{self._pin_named} is typed `{type_parameter.__name__}`, which types the inputs "
-                f"{', '.join(f'`{port}`' for port in input_ports)}, and an output takes the type "
-                f"linked into one of them. To fix: a type parameter for each input, typing the "
-                f"output by the one it hands on.",
-                "type_parameter_types_several_inputs",
-            )
-        return {"kind": "same_as_input", "input_port_name": input_ports[0]}
 
     def _written_type_metadata_and_optional(
         self, annotation: object
@@ -1024,12 +986,6 @@ class _PinReading:
         return row.python_forms[0]
 
 
-# The pin types that hold no stored value, so only a pin carries them.
-_PIN_TYPE_NAMES_ONLY_A_PIN_CARRIES: Final[frozenset[str]] = frozenset(
-    spelling.pin_type_name for spelling in PIN_TYPE_SPELLINGS if spelling.only_a_pin_carries
-)
-
-
 def _default_of(field: "dataclasses.Field[object]") -> object:
     """A dataclass field's default, made by its factory when it has one; `NO_DEFAULT` for none."""
     if field.default is not dataclasses.MISSING:
@@ -1042,10 +998,3 @@ def _default_of(field: "dataclasses.Field[object]") -> object:
 def _is_a_value_class_of_parts(written_type: object) -> typing.TypeGuard[type[PinValueOfParts]]:
     return written_type in PIN_VALUE_CLASSES
 
-
-def _the_flow_a_function_input_reads(pin_type: PinType) -> PinFlow:
-    """How a function's input of `pin_type` reads: a type only a pin carries as a Value, since a
-    function reads the newest message on each input, and any other type by its first flow."""
-    if pin_type["type"] in _PIN_TYPE_NAMES_ONLY_A_PIN_CARRIES:
-        return "value"
-    return _PIN_TYPE_DESCRIPTION_BY_NAME[pin_type["type"]].flows[0]
