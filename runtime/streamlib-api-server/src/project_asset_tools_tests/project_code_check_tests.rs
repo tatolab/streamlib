@@ -92,8 +92,7 @@ async fn a_project_whose_interpreter_is_not_made_is_answered_not_fully_checked()
 }
 
 #[tokio::test]
-async fn a_views_port_declared_by_family_is_a_warning_naming_the_pin_type_and_the_verdict_still_passes()
- {
+async fn a_views_port_declared_by_family_fails_the_verdict_naming_the_port_and_the_pin_type() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
     the_projects_interpreter_prints(
         &served.project_directory(),
@@ -110,22 +109,20 @@ async fn a_views_port_declared_by_family_is_a_warning_naming_the_pin_type_and_th
 
     let checked = served.answered("check_project_code", json!({})).await;
 
-    assert_eq!(checked["verdict"], "passed", "{checked}");
+    assert_eq!(checked["verdict"], "failed", "{checked}");
     assert_eq!(
         checked["checks"][1],
-        json!({ "check": "extension_manifest", "state": "passed" })
+        json!({ "check": "extension_manifest", "state": "failed" })
     );
     let finding = &checked["findings"][0];
     assert_eq!(finding["check"], "extension_manifest");
-    assert_eq!(finding["finding_code"], "port_declared_by_family");
-    assert_eq!(finding["severity"], "warning");
+    assert_eq!(finding["finding_code"], "view_manifest_refused");
+    assert_eq!(finding["severity"], "error");
     assert_eq!(finding["path"], "views/monitor/tatolab_view.json");
-    assert_eq!(finding["port"], "picture");
+    let words = finding["words"].as_str().unwrap();
     assert!(
-        finding["words"]
-            .as_str()
-            .unwrap()
-            .contains(r#"write `"pin_type": {"type": "texture"}`"#),
+        words.contains("port `picture` is declared by the older `family` field")
+            && words.contains(r#"write `"pin_type": {"type": "texture"}`"#),
         "{finding}"
     );
     assert_eq!(

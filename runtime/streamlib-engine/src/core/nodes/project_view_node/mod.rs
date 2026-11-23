@@ -104,10 +104,20 @@ pub(crate) fn the_node_type_of_a_project_view(
 
 /// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
 /// output's name, family and description, a setting read each run that takes no wire and holds
-/// no saved value, and returned to no value at Stop, since what a panel writes is live data.
+/// no saved value, and returned to no value at Stop, since what a panel writes is live data. It
+/// takes a value of the output's pin type where that type holds one; an Audio block or a Tensor,
+/// which holds none, it takes as the output's family carries it.
 fn the_input_of_an_output_a_panel_writes(port: &TatolabViewDeclaredPort) -> PortDescriptor {
+    let pin_declaration = if port.pin_type.holds_a_stored_value() {
+        PinDeclaration {
+            flow: PinFlow::Value,
+            ..PinDeclaration::exactly(port.pin_type.clone())
+        }
+    } else {
+        carried_as_a_value(Vec::new())
+    };
     the_port_a_view_declares(port)
-        .with_pin_declaration(carried_as_a_value(Vec::new()))
+        .with_pin_declaration(pin_declaration)
         .with_input_mode(NodeInputMode::SettingOnly {
             read: SettingReadTime::EachRun,
         })
@@ -152,16 +162,18 @@ fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
     }
 }
 
-/// The pin an output `port`, one a panel writes, declares: exactly its pin type where it names
-/// one, read as a value, which keeps its last message for a reader that connects later; else
-/// a value of any type, its family alone deciding what it takes.
+/// The pin an output `port`, one a panel writes, declares, read as a value, which keeps its last
+/// message for a reader that connects later: exactly its pin type where that type flows as a
+/// value; else, for an Audio block, which flows only as a stream, a value of any type, its
+/// family alone deciding what it takes.
 fn written_as_a_value(port: &TatolabViewDeclaredPort) -> PinDeclaration {
-    match &port.pin_type {
-        Some(pin_type) => PinDeclaration {
+    if port.pin_type.flows().contains(&PinFlow::Value) {
+        PinDeclaration {
             flow: PinFlow::Value,
-            ..PinDeclaration::exactly(pin_type.clone())
-        },
-        None => carried_as_a_value(Vec::new()),
+            ..PinDeclaration::exactly(port.pin_type.clone())
+        }
+    } else {
+        carried_as_a_value(Vec::new())
     }
 }
 
@@ -231,18 +243,15 @@ fn the_config_schema_of_a_view_node(settings: Option<&JsonValue>) -> JsonValue {
     config_schema
 }
 
-/// The port `port` declares, of its family, and of exactly its pin type where it names one.
+/// The port `port` declares: of exactly its pin type, and of the family that type is carried as.
 fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
-    let declared = PortDescriptor::new(
+    PortDescriptor::new(
         port.name.clone(),
         port.description.clone().unwrap_or_default(),
         false,
         PortFamilyDeclaration::of_family(port.family),
-    );
-    match &port.pin_type {
-        Some(pin_type) => declared.with_pin_declaration(PinDeclaration::exactly(pin_type.clone())),
-        None => declared,
-    }
+    )
+    .with_pin_declaration(PinDeclaration::exactly(port.pin_type.clone()))
 }
 
 /// The node that is the source of the values a client sets, a stream's top-level `GraphInput` or a

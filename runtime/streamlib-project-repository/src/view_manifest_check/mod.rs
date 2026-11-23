@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The `extension_manifest` check of `check_project_code`: each `tatolab_view.json` of a project's
-//! own views, read as the runtime reads it when the view opens, and each port it still declares
-//! by the older `family` field.
+//! own views, read as the runtime reads it when the view opens.
 
 use std::path::Path;
 
 use serde_json::Value;
-use streamlib_node_schema::pin_type::{BuiltInPinTypeName, built_in_pin_type};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckRun, ProjectCodeCheckSeverity,
     ProjectCodeCheckState, ProjectFileChecked,
@@ -19,10 +17,7 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_views::{
     PROJECT_VIEWS_DIRECTORY, TATOLAB_VIEW_MANIFEST_FILE_NAME, every_view_a_project_brings_itself,
 };
-use crate::tatolab_view_manifest::{
-    TatolabViewDeclaredPort, VIEW_CONTRACT_READ_MAJOR, VIEW_CONTRACT_READ_MINOR,
-    read_tatolab_view_manifest,
-};
+use crate::tatolab_view_manifest::read_tatolab_view_manifest;
 
 /// What the `extension_manifest` check found: how it ended, each finding, and each manifest it
 /// read, with the hash of its bytes.
@@ -35,9 +30,8 @@ pub struct ViewManifestsChecked {
 
 /// Check the `tatolab_view.json` of each view in the own `views/` of the project at
 /// `project_directory`, or of those among `paths`, each a path in the project: a manifest the
-/// runtime does not open is an `error`, and a port it declares by `family` alone a `warning`
-/// naming the `pin_type` to write. An import's views are its own project's to fix, and are
-/// left out.
+/// runtime does not open is an `error`, in the words the runtime refuses it in. An import's
+/// views are its own project's to fix, and are left out.
 pub fn check_a_projects_view_manifests(
     project_directory: &Path,
     paths: Option<&[String]>,
@@ -54,43 +48,36 @@ pub fn check_a_projects_view_manifests(
         if paths.is_some_and(|paths| !paths.contains(&manifest_path)) {
             continue;
         }
-        let finding = |finding_code: &str,
-                       severity: ProjectCodeCheckSeverity,
-                       words: String,
-                       port: Option<&str>| ProjectCodeCheckFinding {
+        let refusal = |finding_code: &str, words: String| ProjectCodeCheckFinding {
             check: ProjectCodeCheckKind::ExtensionManifest,
             finding_code: finding_code.to_owned(),
-            severity,
+            severity: ProjectCodeCheckSeverity::Error,
             words,
             path: manifest_path.clone(),
             line: None,
             column: None,
             node_type: Some(view.view_type.clone()),
-            port: port.map(str::to_owned),
+            port: None,
         };
         let bytes = match std::fs::read(view.folder.join(TATOLAB_VIEW_MANIFEST_FILE_NAME)) {
             Ok(bytes) => bytes,
             Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {
-                findings.push(finding(
+                findings.push(refusal(
                     "view_manifest_missing",
-                    ProjectCodeCheckSeverity::Error,
                     format!(
                         "the view's folder `{PROJECT_VIEWS_DIRECTORY}/{view_folder_name}` has no \
                          `{TATOLAB_VIEW_MANIFEST_FILE_NAME}`, so the view does not open"
                     ),
-                    None,
                 ));
                 continue;
             }
             Err(unreadable) => {
-                findings.push(finding(
+                findings.push(refusal(
                     "view_manifest_refused",
-                    ProjectCodeCheckSeverity::Error,
                     format!(
                         "the view does not open: `{TATOLAB_VIEW_MANIFEST_FILE_NAME}` cannot be \
                          read: {unreadable}"
                     ),
-                    None,
                 ));
                 continue;
             }
@@ -99,39 +86,20 @@ pub fn check_a_projects_view_manifests(
             path: manifest_path.clone(),
             content_sha256: content_sha256_of(&bytes),
         });
-        let manifest = serde_json::from_slice::<Value>(&bytes)
+        if let Err(why) = serde_json::from_slice::<Value>(&bytes)
             .map_err(|not_json| format!("it is not JSON: {not_json}"))
-            .and_then(|manifest_json| read_tatolab_view_manifest(&manifest_json));
-        let manifest = match manifest {
-            Ok(manifest) => manifest,
-            Err(why) => {
-                findings.push(finding(
-                    "view_manifest_refused",
-                    ProjectCodeCheckSeverity::Error,
-                    format!("the view does not open: {why}"),
-                    None,
-                ));
-                continue;
-            }
-        };
-        for port in manifest.inputs.iter().chain(&manifest.outputs) {
-            if port.pin_type.is_none() {
-                findings.push(finding(
-                    "port_declared_by_family",
-                    ProjectCodeCheckSeverity::Warning,
-                    the_words_of_a_port_declared_by_family(port),
-                    Some(&port.name),
-                ));
-            }
+            .and_then(|manifest_json| read_tatolab_view_manifest(&manifest_json))
+        {
+            findings.push(refusal(
+                "view_manifest_refused",
+                format!("the view does not open: {why}"),
+            ));
         }
     }
-    let state = if findings
-        .iter()
-        .any(|finding| finding.severity == ProjectCodeCheckSeverity::Error)
-    {
-        ProjectCodeCheckState::Failed
-    } else {
+    let state = if findings.is_empty() {
         ProjectCodeCheckState::Passed
+    } else {
+        ProjectCodeCheckState::Failed
     };
     Ok(ViewManifestsChecked {
         run: ProjectCodeCheckRun {
@@ -143,46 +111,6 @@ pub fn check_a_projects_view_manifests(
         findings,
         files_checked,
     })
-}
-
-/// What a port declared by `family` alone writes in its place: the one pin type the family's
-/// messages carry where there is one, as an Image port's Texture; else the types it may become,
-/// none picked, since a guessed type can refuse a link that works today.
-fn the_words_of_a_port_declared_by_family(port: &TatolabViewDeclaredPort) -> String {
-    let family = port.family.wire_name();
-    let to_write = format!(
-        "in place of `\"family\": \"{family}\"`, with `\"contract\": \
-         \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_READ_MINOR}\"`"
-    );
-    let pin_types: Vec<&str> = port
-        .family
-        .the_pin_types_it_carries()
-        .into_iter()
-        .map(the_quoted_wire_name_of)
-        .collect();
-    match pin_types.as_slice() {
-        [pin_type] => format!(
-            "port `{}` is declared by the older `family` field; write `\"pin_type\": \
-             {{\"type\": {pin_type}}}` {to_write}",
-            port.name
-        ),
-        _ => format!(
-            "port `{}` is declared by the older `family` field; a `{family}` port carries one \
-             of {}: write the one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, \
-             {to_write}",
-            port.name,
-            pin_types
-                .iter()
-                .map(|pin_type| format!("`{}`", pin_type.trim_matches('"')))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-/// The name `name` is written by in a pin type's `type`, quoted, from the contract's one list.
-fn the_quoted_wire_name_of(name: BuiltInPinTypeName) -> &'static str {
-    built_in_pin_type(name).typescript_form
 }
 
 #[cfg(test)]

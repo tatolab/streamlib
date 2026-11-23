@@ -62,9 +62,15 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
         "contract": "1.1", "title": "DJ Deck", "description": "Two decks and a crossfader.",
         "icon": "icon.svg", "preview": "preview.png", "entry": "index.html", "placement": "node",
         "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" } }],
-        "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+        "outputs": [{ "name": "crossfader", "pin_type": { "type": "tensor" }, "range": [-1, 1] }],
     });
     a_view_folder_in(cell.path(), "deck", &deck_manifest);
+    a_view_folder_in(
+        cell.path(),
+        "older",
+        &json!({ "contract": "1.0", "title": "Older", "entry": "index.html", "placement": "node",
+                 "inputs": [{ "name": "picture", "family": "image" }] }),
+    );
     let call = |tool_name: &'static str, arguments: Value| {
         let operations = engine.operations_on_the_loaded_streams();
         async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
@@ -88,7 +94,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     assert_eq!(listed["project"], json!(cell.project), "{listed}");
     assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
     let views = listed["views"].as_array().expect("a list of views");
-    assert_eq!(views.len(), 3, "{listed}");
+    assert_eq!(views.len(), 4, "{listed}");
     assert_eq!(
         views[0],
         json!({
@@ -100,10 +106,25 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
             "icon": "icon.svg", "preview": "preview.png", "placement": "node",
             "inputs": [{ "name": "waveform", "family": "channels", "pin_type": { "type": "audio" },
                          "description": null, "range": null }],
-            "outputs": [{ "name": "crossfader", "family": "array", "description": null, "range": [-1.0, 1.0] }],
+            "outputs": [{ "name": "crossfader", "family": "array", "pin_type": { "type": "tensor" },
+                          "description": null, "range": [-1.0, 1.0] }],
             "manifest": deck_manifest,
         })
     );
+    assert_eq!(
+        views[1]["view_type"],
+        format!("{TEST_PROJECT_NAME}:older"),
+        "{listed}"
+    );
+    assert_eq!(views[1]["opens"], false, "{listed}");
+    assert_eq!(
+        views[1]["not_opened_because"],
+        "`inputs[0]`: port `picture` is declared by the older `family` field, which a view's \
+         port no longer names; write `\"pin_type\": {\"type\": \"texture\"}` in place of \
+         `\"family\": \"image\"`, with `\"contract\": \"1.1\"`.",
+        "a view whose port is declared by `family` is listed with the reader's words: {listed}"
+    );
+    let views = &views[1..];
     assert_eq!(views[1]["view_type"], "levels:broken", "{listed}");
     assert_eq!(views[1]["opens"], false, "{listed}");
     assert_eq!(views[1]["import_folder"], folder, "{listed}");
@@ -152,7 +173,7 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
         &json!({
             "contract": "1.1", "title": "Deck", "entry": "index.html", "placement": "node",
             "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" } }],
-            "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+            "outputs": [{ "name": "crossfader", "pin_type": { "type": "tensor" }, "range": [-1, 1] }],
         }),
     );
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");

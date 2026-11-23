@@ -26,10 +26,10 @@ fn a_view_read_from(view_type: &str, manifest_json: JsonValue) -> ProjectViewFol
 
 fn the_deck_manifest() -> JsonValue {
     json!({
-        "contract": "1.0", "title": "DJ Deck", "description": "Two turntables and a crossfader.",
+        "contract": "1.1", "title": "DJ Deck", "description": "Two turntables and a crossfader.",
         "entry": "index.html", "placement": "node",
-        "inputs": [{ "name": "waveform", "family": "channels", "description": "What plays." }],
-        "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1],
+        "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" }, "description": "What plays." }],
+        "outputs": [{ "name": "crossfader", "pin_type": { "type": "tensor" }, "range": [-1, 1],
                       "description": "Left to right." }],
         "settings": { "type": "object",
                       "properties": { "bpm": { "type": "number", "default": 120 } } }
@@ -185,8 +185,8 @@ fn a_view_that_does_not_open_or_is_placed_in_an_area_is_no_node_type_and_says_wh
 fn an_image_or_packets_output_has_no_input_of_its_name_and_is_no_value() {
     let mut manifest = the_deck_manifest();
     manifest["outputs"] = json!([
-        { "name": "preview", "family": "image" },
-        { "name": "crossfader", "family": "array" }
+        { "name": "preview", "pin_type": { "type": "texture" } },
+        { "name": "crossfader", "pin_type": { "type": "tensor" } }
     ]);
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", manifest))
         .expect("a node view that opens is a node type");
@@ -226,13 +226,13 @@ fn the_monitor_manifest() -> JsonValue {
     json!({
         "contract": "1.1", "title": "Monitor", "entry": "index.html", "placement": "node",
         "inputs": [{ "name": "picture", "pin_type": { "type": "texture" } },
-                   { "name": "gain", "family": "channels" }],
+                   { "name": "gain", "pin_type": { "type": "float" } }],
         "outputs": [{ "name": "caption", "pin_type": { "type": "string" } }]
     })
 }
 
 #[test]
-fn a_port_whose_view_names_its_pin_type_is_exactly_that_type_and_one_by_family_alone_is_untyped() {
+fn a_port_of_a_view_is_exactly_the_pin_type_it_names() {
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
         "acme-dj:monitor",
         the_monitor_manifest(),
@@ -274,11 +274,18 @@ fn a_port_whose_view_names_its_pin_type_is_exactly_that_type_and_one_by_family_a
                 }),
                 Some(PinFlow::Stream),
             ),
-            ("gain".to_string(), vec![PortFamily::Channels], None, None),
+            (
+                "gain".to_string(),
+                vec![PortFamily::Channels],
+                Some(DeclaredPinType::Is {
+                    pin_type: PinType::Float { exact_size: None }
+                }),
+                Some(PinFlow::Value),
+            ),
             (
                 "caption".to_string(),
                 vec![PortFamily::Records],
-                Some(DeclaredPinType::Any),
+                Some(string()),
                 Some(PinFlow::Value)
             ),
         ]
@@ -339,10 +346,10 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
         "acme-dj:board",
         json!({
-            "contract": "1.0", "title": "Board", "entry": "index.html", "placement": "node",
-            "outputs": [{ "name": "beat", "family": "channels" },
-                        { "name": "cue", "family": "records" },
-                        { "name": "fader", "family": "array" }]
+            "contract": "1.1", "title": "Board", "entry": "index.html", "placement": "node",
+            "outputs": [{ "name": "beat", "pin_type": { "type": "audio" } },
+                        { "name": "cue", "pin_type": { "type": "string" } },
+                        { "name": "fader", "pin_type": { "type": "tensor" } }]
         }),
     ))
     .expect("a node view that opens is a node type");
@@ -369,7 +376,7 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
         "beat".into(),
         json!({ "samples": [[0.0, 0.0, 0.0]], "sample_rate": 48000 }),
     );
-    input_values.insert("cue".into(), json!({ "track": "drop" }));
+    input_values.insert("cue".into(), json!("drop"));
     input_values.insert("fader".into(), json!([[1], [2, 3]]));
 
     let refusal = board

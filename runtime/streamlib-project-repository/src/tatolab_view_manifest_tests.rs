@@ -92,13 +92,13 @@ fn the_runtime_judges_every_view_contract_example_as_the_view_sdk_does() {
 
 fn a_node_view_manifest() -> Value {
     json!({
-        "contract": "1.0",
+        "contract": "1.1",
         "title": "DJ Deck",
         "icon": "icon.svg",
         "entry": "index.html",
         "placement": "node",
-        "inputs": [{ "name": "waveform", "family": "channels" }],
-        "outputs": [{ "name": "fader", "family": "array", "range": [0, 1] }],
+        "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" } }],
+        "outputs": [{ "name": "fader", "pin_type": { "type": "tensor" }, "range": [0, 1] }],
         "capabilities": ["camera", "camera"],
     })
 }
@@ -135,7 +135,7 @@ fn a_sandbox_or_network_hosts_are_refused_since_every_view_runs_with_full_access
         manifest[field] = value;
 
         let refusal =
-            read_tatolab_view_manifest(&manifest).expect_err("view contract 1.0 has neither");
+            read_tatolab_view_manifest(&manifest).expect_err("view contract 1.1 has neither");
 
         assert!(
             refusal.starts_with("`tatolab_view.json`:")
@@ -153,8 +153,8 @@ fn each_way_a_manifest_falls_short_is_named_by_its_field() {
         "entry": "../escape.html",
         "placement": "area",
         "outputs": [
-            { "name": "Fader", "family": "records", "range": [1, 0] },
-            { "name": "Fader", "family": "image" },
+            { "name": "Fader", "pin_type": { "type": "string" }, "range": [1, 0] },
+            { "name": "Fader", "pin_type": { "type": "texture" } },
         ],
     }))
     .expect_err("nothing about it opens");
@@ -193,8 +193,8 @@ fn a_settings_declaration_whose_setting_gives_no_default_does_not_open() {
 fn an_output_named_after_one_of_its_inputs_is_refused_by_name() {
     let mut manifest = a_node_view_manifest();
     manifest["outputs"] = json!([
-        { "name": "fader", "family": "array" },
-        { "name": "waveform", "family": "channels" }
+        { "name": "fader", "pin_type": { "type": "tensor" } },
+        { "name": "waveform", "pin_type": { "type": "float" } }
     ]);
 
     let refusal = read_tatolab_view_manifest(&manifest)
@@ -228,12 +228,12 @@ fn an_output_a_panel_writes_named_after_one_of_its_settings_is_refused_by_name()
 fn an_image_or_packets_output_named_after_one_of_its_inputs_is_refused_by_name() {
     let mut manifest = a_node_view_manifest();
     manifest["inputs"] = json!([
-        { "name": "preview", "family": "image" },
-        { "name": "midi", "family": "packets" }
+        { "name": "preview", "pin_type": { "type": "texture" } },
+        { "name": "midi", "pin_type": { "type": "encoded_video" } }
     ]);
     manifest["outputs"] = json!([
-        { "name": "preview", "family": "image" },
-        { "name": "midi", "family": "packets" }
+        { "name": "preview", "pin_type": { "type": "texture" } },
+        { "name": "midi", "pin_type": { "type": "encoded_video" } }
     ]);
 
     let refusal = read_tatolab_view_manifest(&manifest)
@@ -253,8 +253,8 @@ fn an_image_or_packets_output_named_after_one_of_its_inputs_is_refused_by_name()
 fn an_image_or_packets_output_may_share_its_name_with_a_setting() {
     let mut manifest = a_node_view_manifest();
     manifest["outputs"] = json!([
-        { "name": "preview", "family": "image" },
-        { "name": "midi", "family": "packets" }
+        { "name": "preview", "pin_type": { "type": "texture" } },
+        { "name": "midi", "pin_type": { "type": "encoded_video" } }
     ]);
     manifest["settings"] = json!({
         "type": "object",
@@ -286,8 +286,8 @@ fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
         "1.1",
         json!([
             { "name": "picture", "pin_type": { "type": "texture" } },
-            { "name": "level", "family": "channels", "pin_type": { "type": "float" } },
-            { "name": "fader", "family": "array" },
+            { "name": "level", "pin_type": { "type": "float" } },
+            { "name": "weights", "pin_type": { "type": "tensor" } },
         ]),
     ))
     .expect("a 1.1 view opens");
@@ -302,31 +302,36 @@ fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
             (
                 "picture",
                 PortFamily::Image,
-                Some(PinType::Texture {
+                PinType::Texture {
                     pixel_formats: vec![]
-                })
+                }
             ),
             (
                 "level",
                 PortFamily::Channels,
-                Some(PinType::Float { exact_size: None })
+                PinType::Float { exact_size: None }
             ),
-            ("fader", PortFamily::Array, None),
+            ("weights", PortFamily::Array, PinType::Tensor {}),
         ]
     );
 }
 
 #[test]
-fn a_port_with_no_pin_type_or_family_or_one_that_disagrees_is_refused_at_the_port() {
+fn a_port_with_no_pin_type_or_one_that_also_names_a_family_is_refused_at_the_port() {
     for (outputs, expected) in [
         (
             json!([{ "name": "level" }]),
-            "`outputs[0]`: a port names the `pin_type` it carries, or the older `family`.",
+            "`outputs[0]`: port `level` names the `pin_type` it carries.",
+        ),
+        (
+            json!([{ "name": "level", "family": "channels", "pin_type": { "type": "float" } }]),
+            "`outputs[0]`: port `level` names the older `family` field beside its `pin_type`; \
+             drop `family`, which the `pin_type` sets.",
         ),
         (
             json!([{ "name": "level", "family": "records", "pin_type": { "type": "float" } }]),
-            "`outputs[0]`: `family` is `records`, and a Float is carried as `channels`; drop \
-             `family`, which the `pin_type` sets.",
+            "`outputs[0]`: port `level` names the older `family` field beside its `pin_type`; \
+             drop `family`, which the `pin_type` sets.",
         ),
         (
             json!([{ "name": "items", "pin_type": { "type": "list_of", "element_type": { "type": "float" } } }]),
@@ -341,6 +346,40 @@ fn a_port_with_no_pin_type_or_family_or_one_that_disagrees_is_refused_at_the_por
             .expect_err("the port is refused");
         assert!(refusal.contains(expected), "{expected} in {refusal}");
     }
+}
+
+#[test]
+fn a_port_declared_by_family_is_refused_naming_the_port_the_field_and_the_pin_type_to_write() {
+    for (contract, outputs, expected) in [
+        (
+            "1.1",
+            json!([{ "name": "picture", "family": "image" }]),
+            "`outputs[0]`: port `picture` is declared by the older `family` field, which a view's \
+             port no longer names; write `\"pin_type\": {\"type\": \"texture\"}` in place of \
+             `\"family\": \"image\"`, with `\"contract\": \"1.1\"`.",
+        ),
+        (
+            "1.0",
+            json!([{ "name": "gain", "family": "channels" }]),
+            "`outputs[0]`: port `gain` is declared by the older `family` field, which a view's \
+             port no longer names; a `channels` port carries one of `boolean`, `integer`, \
+             `float`, `color`, `vector`, `rectangle`, `transform`, `audio`: write the one it \
+             carries as its `pin_type`, as `{\"type\": \"<type>\"}`, in place of \
+             `\"family\": \"channels\"`, with `\"contract\": \"1.1\"`.",
+        ),
+    ] {
+        let refusal = read_tatolab_view_manifest(&a_node_view_declaring(contract, outputs))
+            .expect_err("a port names its pin type");
+        assert_eq!(refusal, expected);
+    }
+}
+
+#[test]
+fn a_view_built_for_contract_one_point_zero_that_declares_no_port_still_opens() {
+    let manifest = read_tatolab_view_manifest(&a_node_view_declaring("1.0", json!([])))
+        .expect("everything a portless 1.0 view uses is still in the contract");
+    assert_eq!(manifest.contract, "1.0");
+    assert!(manifest.outputs.is_empty());
 }
 
 #[test]
