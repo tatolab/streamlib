@@ -102,13 +102,13 @@ impl PinGroupDescriptor {
     }
 
     /// How many slots the group has on a node: following its wires when a slot holds an input
-    /// that takes a wire, else set by the node's input named after the group.
+    /// that is no setting, else set by the node's input named after the group.
     pub fn slot_count(&self) -> PinGroupSlotCount {
-        if self.inputs.iter().any(|input| {
-            !input
-                .input_mode
-                .is_some_and(NodeInputMode::is_a_setting_read_each_run)
-        }) {
+        if self
+            .inputs
+            .iter()
+            .any(|input| !input.input_mode.is_some_and(NodeInputMode::is_a_setting))
+        {
             PinGroupSlotCount::FollowsItsWires
         } else {
             PinGroupSlotCount::SetByItsInput
@@ -250,5 +250,57 @@ impl PinGroupDescriptor {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a_float_input(input_mode: Option<NodeInputMode>) -> PortDescriptor {
+        let input = PortDescriptor::new(
+            "opacity",
+            "",
+            false,
+            PortFamilyDeclaration::of_family(PortFamily::Channels),
+        )
+        .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }));
+        match input_mode {
+            Some(input_mode) => input.with_input_mode(input_mode),
+            None => input,
+        }
+    }
+
+    fn a_group_of(inputs: Vec<PortDescriptor>, outputs: Vec<PortDescriptor>) -> PinGroupDescriptor {
+        PinGroupDescriptor::new("layers", "", inputs, outputs)
+    }
+
+    #[test]
+    fn a_slot_holding_an_input_that_takes_a_wire_follows_its_wires() {
+        for input_mode in [
+            None,
+            Some(NodeInputMode::WireOrValue),
+            Some(NodeInputMode::WireOnly),
+        ] {
+            assert_eq!(
+                a_group_of(vec![a_float_input(input_mode)], Vec::new()).slot_count(),
+                PinGroupSlotCount::FollowsItsWires
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_holding_only_settings_or_outputs_has_its_count_set() {
+        for read in [SettingReadTime::AtSetup, SettingReadTime::EachRun] {
+            let setting = a_float_input(Some(NodeInputMode::SettingOnly { read }));
+            assert_eq!(
+                a_group_of(vec![setting], Vec::new()).slot_count(),
+                PinGroupSlotCount::SetByItsInput
+            );
+        }
+        assert_eq!(
+            a_group_of(Vec::new(), vec![a_float_input(None)]).slot_count(),
+            PinGroupSlotCount::SetByItsInput
+        );
     }
 }

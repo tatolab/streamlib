@@ -43,6 +43,7 @@ from ._pin_type_choice import PinTypeChoice as PinTypeChoice
 from ._pin_declaration import NodeDeclarationRefusal as NodeDeclarationRefusal
 from ._class_node_pins import InputPin as InputPin
 from ._class_node_pins import OutputPin as OutputPin
+from ._class_node_pins import PinGroup as PinGroup
 from ._input_declaration_annotations import InputValueLifetime as InputValueLifetime
 from ._input_declaration_annotations import SettingOnly as SettingOnly
 from ._input_declaration_annotations import StreamDelivery as StreamDelivery
@@ -279,6 +280,7 @@ __all__ = [
     "InputPin",
     "InputValueLifetime",
     "OutputPin",
+    "PinGroup",
     "SettingOnly",
     "StreamDelivery",
     "Tensor",

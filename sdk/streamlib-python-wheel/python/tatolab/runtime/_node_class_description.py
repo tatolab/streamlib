@@ -123,6 +123,7 @@ SHADER_NODE_KIND = "shader"
 DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE = (
     ("category", "__tatolab_node_category__"),
     ("conversion", "__tatolab_node_conversion__"),
+    ("pin_groups", "__tatolab_node_pin_groups__"),
 )
 
 

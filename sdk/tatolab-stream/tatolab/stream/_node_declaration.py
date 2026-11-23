@@ -28,7 +28,7 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
-from ._class_node_declaration import read_class_node_ports_and_members
+from ._class_node_declaration import read_class_node_ports_members_and_pin_groups
 from ._function_node_declaration import FunctionNode, declare_function_node
 from ._node_meta_declaration import (
     PROCESS_NODE_KIND,
@@ -70,6 +70,10 @@ NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
 NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
 # The field or pin behind each port of a class under bare `@node`, which its helper builds it from.
 NODE_DECLARATION_CLASS_NODE_MEMBERS_STAMP = "__tatolab_class_node_members__"
+# The pin groups of a class under bare `@node`: as the runtime reads them, and as its helper
+# builds each slot.
+NODE_DECLARATION_PIN_GROUPS_STAMP = "__tatolab_node_pin_groups__"
+NODE_DECLARATION_CLASS_NODE_PIN_GROUPS_STAMP = "__tatolab_class_node_pin_groups__"
 
 # Every kind stamps these, by the role each plays in the declaration.
 _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
@@ -376,15 +380,17 @@ class NodeDeclarationDecorator:
                     f"{getattr(class_under_decoration, '__name__', class_under_decoration)!r} is "
                     f"not a class. A function takes `@node` bare."
                 )
-            input_ports, output_ports, members = read_class_node_ports_and_members(
-                class_under_decoration
+            input_ports, output_ports, members, pin_groups = (
+                read_class_node_ports_members_and_pin_groups(class_under_decoration)
             )
             setattr(class_under_decoration, NODE_DECLARATION_CLASS_NODE_MEMBERS_STAMP, members)
+            setattr(class_under_decoration, NODE_DECLARATION_CLASS_NODE_PIN_GROUPS_STAMP, pin_groups)
             return _stamp_a_class_node(
                 class_under_decoration,
                 declared_by="@node",
                 input_ports=input_ports,
                 output_ports=output_ports,
+                pin_groups=[pin_group.declared for pin_group in pin_groups],
                 config_class=None,
                 **class_keywords,  # pyright: ignore[reportArgumentType]
             )
@@ -653,9 +659,11 @@ def _stamp_a_class_node(
     interval_ms: int,
     scheduling: Optional[str],
     paced_by_real_time: bool,
+    pin_groups: "Optional[list[dict[str, Any]]]" = None,
 ) -> NodeClassUnderDeclaration:
-    """Stamp `node_class` as a class node of `input_ports` and `output_ports`, which runs in a
-    process of its own, under the grammar of `declared_by`, the decorator that read its ports."""
+    """Stamp `node_class` as a class node of `input_ports`, `output_ports` and `pin_groups`, which
+    runs in a process of its own, under the grammar of `declared_by`, the decorator that read its
+    ports."""
     declared_meta = take_node_meta_held_for_the_kind_decorator(node_class)
     conversion = the_conversion_a_node_states(
         node_class.__name__,
@@ -686,7 +694,11 @@ def _stamp_a_class_node(
         node_class,
         NODE_DECLARATION_EXECUTION_STAMP,
         _resolve_execution(
-            execution, interval_ms, node_class, has_input_ports=bool(input_ports)
+            execution,
+            interval_ms,
+            node_class,
+            has_input_ports=bool(input_ports)
+            or any(pin_group["inputs"] for pin_group in pin_groups or ()),
         ),
     )
     setattr(
@@ -701,6 +713,7 @@ def _stamp_a_class_node(
     )
     setattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, input_ports)
     setattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
+    setattr(node_class, NODE_DECLARATION_PIN_GROUPS_STAMP, pin_groups or [])
 
     return node_class
 
