@@ -59,14 +59,16 @@ fn why_it_did_not_run(cast: std::result::Result<Value, SavedValueNotCast>) -> St
 }
 
 #[test]
-fn the_cast_names_the_conversion_its_input_and_the_saved_value_to_the_bootstrap() {
+fn the_cast_names_the_conversion_and_a_request_file_holding_its_input_and_the_saved_value() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let where_it_runs = where_a_stub_interpreter_running("exit 0", &project_directory);
+    let request_file =
+        saved_value_cast_request_file(&conversion(), "level", &serde_json::json!(0.1))
+            .expect("the request is written");
 
     let command = saved_value_cast_command(
         &conversion(),
-        "level",
-        &serde_json::json!(0.1),
+        request_file.path(),
         &where_it_runs.stream_environment,
         &where_it_runs.lend_directory,
     )
@@ -82,9 +84,62 @@ fn the_cast_names_the_conversion_its_input_and_the_saved_value_to_the_bootstrap(
         .unwrap_or_else(|| panic!("the cast argument is passed: {arguments:?}"));
     assert_eq!(arguments[at + 1], CONVERSION, "{arguments:?}");
     assert_eq!(
-        serde_json::from_str::<Value>(&arguments[at + 2]).expect("the request is JSON"),
+        std::path::Path::new(&arguments[at + 2]),
+        request_file.path(),
+        "{arguments:?}"
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &std::fs::read(request_file.path()).expect("the request file reads")
+        )
+        .expect("the request is JSON"),
         serde_json::json!({ "input": "level", "value": 0.1 }),
         "the keys the bootstrap reads"
+    );
+}
+
+/// A String saved value longer than Linux lets one command-line argument be, 128 KiB, still
+/// reaches the body whole: the stub interpreter answers with the length of the request file
+/// it was handed, and the file is gone once the cast answers.
+///
+/// Mental-revert: passing the request as one argument fails the interpreter's start with
+/// `E2BIG`, and the cast is refused as not run.
+#[test]
+#[serial]
+fn a_saved_value_too_long_for_one_argument_reaches_the_body_whole() {
+    const LONGER_THAN_ONE_ARGUMENT: usize = 200 * 1024;
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let request_file_named = project_directory.path().join("request-file-named");
+    let where_it_runs = where_a_stub_interpreter_running(
+        &format!(
+            r#"for argument; do request="$argument"; done
+printf '%s' "$request" > '{}'
+printf '{{"cast": %s}}
+' "$(wc -c < "$request")""#,
+            request_file_named.display()
+        ),
+        &project_directory,
+    );
+    let saved_value = serde_json::json!("x".repeat(LONGER_THAN_ONE_ARGUMENT));
+
+    let cast = the_saved_value_cast_of_a_function_node_conversion(
+        conversion(),
+        "level".to_owned(),
+        where_it_runs,
+    )
+    .cast(&saved_value, &PinType::String {});
+
+    let request_length = serde_json::to_string(&serde_json::json!({
+        "input": "level",
+        "value": saved_value,
+    }))
+    .expect("the request serializes")
+    .len();
+    assert_eq!(cast, Ok(serde_json::json!(request_length)));
+    let request_file = std::fs::read_to_string(&request_file_named).expect("the stub named it");
+    assert!(
+        !std::path::Path::new(&request_file).exists(),
+        "the request file `{request_file}` outlived its cast"
     );
 }
 

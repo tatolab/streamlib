@@ -331,17 +331,20 @@ def describe_installed_modules_onto_stdout() -> int:
     return 0
 
 
-def cast_a_saved_value_onto_stdout(import_path: str, request: str) -> int:
+def cast_a_saved_value_onto_stdout(import_path: str, request_file: str) -> int:
     """Print one JSON document of the saved value the conversion `import_path` names casts; 0.
 
-    `request` is `{"input": <the conversion's wired input>, "value": <the saved value>}`.
+    `request_file` is the path of a file holding `{"input": <the conversion's wired input>,
+    "value": <the saved value>}`, which the engine writes so a saved value too long for one
+    command-line argument still reaches the body, and removes once the cast answers.
     Wire contract with the engine: stdout carries exactly `{"cast": <the value cast>}`;
     `{"not_cast_because": <why, in words>}` when the body ran and gave no cast of the value;
     or `{"not_run_because": <why, in words>}` when the body cannot run out of stream or its
     module does not import. The keys are the `SAVED_VALUE_CAST_*_KEY` constants.
     """
     described_document_fd = _reserve_stdout_for_the_described_document()
-    asked = json.loads(request)
+    with open(request_file, encoding="utf-8") as request:
+        asked = json.load(request)
     cast_document: "dict[str, Any]"
     try:
         conversion = load_node_class(import_path)
@@ -465,7 +468,7 @@ def main(arguments: "list[str]") -> int:
         _write_a_bootstrap_fatal_to_raw_stderr(
             f"a node interpreter takes no arguments, `{DESCRIBE_ARGUMENT}` and "
             f"import paths, `{DESCRIBE_INSTALLED_MODULES_ARGUMENT}` alone, or "
-            f"`{CAST_A_SAVED_VALUE_ARGUMENT}`, an import path and a request; it was given "
+            f"`{CAST_A_SAVED_VALUE_ARGUMENT}`, an import path and a request file; it was given "
             f"{arguments!r}"
         )
         return 1
