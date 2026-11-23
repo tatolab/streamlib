@@ -71,11 +71,20 @@ pub fn moved_to_the_front<Item>(
 pub fn list_audio_capture_devices(
     backend: &dyn AudioDeviceBackend,
 ) -> Result<Vec<AudioCaptureDevice>> {
-    let listing = backend.list_capture_devices()?;
-    Ok(with_the_default_output_monitor_alias(
-        listing.devices,
-        listing.default_output_monitor_device_id.as_deref(),
-    ))
+    Ok(backend
+        .list_capture_devices()?
+        .devices_with_the_default_output_monitor_alias())
+}
+
+impl AudioCaptureDeviceListing {
+    /// The devices as a client sees them: with an entry for [`DEFAULT_OUTPUT_MONITOR_DEVICE_ID`]
+    /// ahead of the first monitor where this listing names a default output's monitor.
+    pub fn devices_with_the_default_output_monitor_alias(self) -> Vec<AudioCaptureDevice> {
+        with_the_default_output_monitor_alias(
+            self.devices,
+            self.default_output_monitor_device_id.as_deref(),
+        )
+    }
 }
 
 /// `listed` with an entry for [`DEFAULT_OUTPUT_MONITOR_DEVICE_ID`] ahead of the first monitor,

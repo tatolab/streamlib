@@ -4,7 +4,7 @@
 //! The PipeWire arm's capture devices: the session's audio sources, and each sink's monitor under
 //! the `<sink>.monitor` id a capture stream opens it by.
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
 use crate::core::context::{
     AudioCaptureDevice, AudioCaptureDeviceKind, AudioCaptureDeviceListing, moved_to_the_front,
@@ -17,15 +17,20 @@ mod listing_shim {
 
     pub(super) type AudioNodeListed = unsafe extern "C" fn(
         context: *mut c_void,
+        registry_id: u32,
         node_name: *const c_char,
         node_description: *const c_char,
         media_class: *const c_char,
     );
 
+    /// What the listing calls, on PipeWire's thread loop, for each global the session removes.
+    pub(super) type GlobalRemoved = unsafe extern "C" fn(context: *mut c_void, registry_id: u32);
+
     unsafe extern "C" {
         pub(super) fn streamlib_pipewire_list_audio_nodes(
             entry_points: *const *mut c_void,
             on_node_listed: AudioNodeListed,
+            on_global_removed: GlobalRemoved,
             context: *mut c_void,
             default_sink_name: *mut c_char,
             default_source_name: *mut c_char,
@@ -34,6 +39,9 @@ mod listing_shim {
             failure_text_capacity: usize,
         ) -> c_int;
         pub(super) fn streamlib_pipewire_max_monitored_sink_name_bytes() -> usize;
+        pub(super) fn streamlib_pipewire_sink_name_length_of_monitor_device_id(
+            device_id: *const c_char,
+        ) -> usize;
     }
 
     #[cfg(test)]
@@ -55,6 +63,19 @@ const DEFAULT_NODE_NAME_CAPACITY: usize = 256;
 
 /// Whether a capture stream can open `sink_name`'s monitor: the audio shim refuses a sink name
 /// that does not fit its buffer, so such a sink's monitor is not listed.
+/// Whether the audio shim reads `device_id` as a sink's monitor, as it does any id ending in
+/// `.monitor`. A source named that way cannot be opened by its own name, so it is not listed.
+fn opens_as_a_monitor(device_id: &str) -> bool {
+    let Ok(device_id) = CString::new(device_id) else {
+        return false;
+    };
+    // SAFETY: `device_id` is NUL-terminated and outlives the call.
+    unsafe {
+        listing_shim::streamlib_pipewire_sink_name_length_of_monitor_device_id(device_id.as_ptr())
+            > 0
+    }
+}
+
 fn a_monitor_of_it_opens(sink_name: &str) -> bool {
     // SAFETY: the shim returns a compile-time constant.
     sink_name.len() < unsafe { listing_shim::streamlib_pipewire_max_monitored_sink_name_bytes() }
@@ -95,7 +116,10 @@ impl PipeWireAudioNodesListed {
     /// default output's monitor.
     pub(super) fn capture_device_listing(&self) -> AudioCaptureDeviceListing {
         let inputs = moved_to_the_front(
-            self.nodes.iter().filter(|node| node.captures()).collect(),
+            self.nodes
+                .iter()
+                .filter(|node| node.captures() && !opens_as_a_monitor(&node.node_name))
+                .collect(),
             |node| Some(node.node_name.as_str()) == self.default_source_name.as_deref(),
         )
         .into_iter()
@@ -140,35 +164,52 @@ fn monitor_device_id_of(sink_name: &str) -> String {
     format!("{sink_name}{MONITOR_DEVICE_ID_SUFFIX}")
 }
 
+/// The audio nodes announced so far, each by its registry id, in the order they were announced.
+type AudioNodesByRegistryId = Vec<(u32, PipeWireAudioNode)>;
+
 /// What the shim calls on PipeWire's thread loop for each audio node, with the loop's lock held
 /// while the caller waits.
 ///
 /// Must not unwind: this is a plain `extern "C"` boundary.
 unsafe extern "C" fn record_a_listed_audio_node(
     context: *mut c_void,
+    registry_id: u32,
     node_name: *const c_char,
     node_description: *const c_char,
     media_class: *const c_char,
 ) {
-    // SAFETY: the context is the listing's own `Vec`, which only this callback touches until the
+    // SAFETY: the context is the listing's own nodes, which only these callbacks touch until the
     // shim returns; each string is NUL-terminated and valid for the length of the call, and
     // only the description may be null.
     unsafe {
-        let nodes = &mut *context.cast::<Vec<PipeWireAudioNode>>();
+        let nodes = &mut *context.cast::<AudioNodesByRegistryId>();
         let owned = |text: *const c_char| CStr::from_ptr(text).to_string_lossy().into_owned();
-        nodes.push(PipeWireAudioNode {
-            node_name: owned(node_name),
-            node_description: (!node_description.is_null()).then(|| owned(node_description)),
-            media_class: owned(media_class),
-        });
+        nodes.push((
+            registry_id,
+            PipeWireAudioNode {
+                node_name: owned(node_name),
+                node_description: (!node_description.is_null()).then(|| owned(node_description)),
+                media_class: owned(media_class),
+            },
+        ));
     }
+}
+
+/// What the shim calls on PipeWire's thread loop for each global the session removes while it
+/// is listed: a node gone before the listing ends is not listed.
+///
+/// Must not unwind: this is a plain `extern "C"` boundary.
+unsafe extern "C" fn forget_a_removed_global(context: *mut c_void, registry_id: u32) {
+    // SAFETY: as for `record_a_listed_audio_node`.
+    let nodes = unsafe { &mut *context.cast::<AudioNodesByRegistryId>() };
+    nodes.retain(|(listed_id, _)| *listed_id != registry_id);
 }
 
 /// Ask the session for its audio nodes and default nodes, in one round trip.
 pub(super) fn audio_nodes_of_the_session(
     entry_points: &PipeWireLibraryEntryPoints,
 ) -> Result<PipeWireAudioNodesListed> {
-    let mut nodes: Vec<PipeWireAudioNode> = Vec::new();
+    let mut nodes: AudioNodesByRegistryId = Vec::new();
     let mut default_sink_name = [0u8; DEFAULT_NODE_NAME_CAPACITY];
     let mut default_source_name = [0u8; DEFAULT_NODE_NAME_CAPACITY];
     let mut failure_text = ShimFailureText::new();
@@ -180,6 +221,7 @@ pub(super) fn audio_nodes_of_the_session(
         listing_shim::streamlib_pipewire_list_audio_nodes(
             entry_points.as_ptr(),
             record_a_listed_audio_node,
+            forget_a_removed_global,
             (&raw mut nodes).cast::<c_void>(),
             default_sink_name.as_mut_ptr().cast::<c_char>(),
             default_source_name.as_mut_ptr().cast::<c_char>(),
@@ -195,7 +237,7 @@ pub(super) fn audio_nodes_of_the_session(
         )));
     }
     Ok(PipeWireAudioNodesListed {
-        nodes,
+        nodes: nodes.into_iter().map(|(_, node)| node).collect(),
         default_sink_name: node_name_written_into(&default_sink_name),
         default_source_name: node_name_written_into(&default_source_name),
     })

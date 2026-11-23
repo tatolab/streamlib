@@ -237,3 +237,57 @@ fn a_key_too_long_to_read_is_skipped_and_the_name_after_it_still_read() {
         Some("alsa_output.usb-headset")
     );
 }
+
+#[test]
+fn a_source_the_open_path_would_read_as_a_monitor_is_not_listed() {
+    let mut session = a_session();
+    session.nodes.push(a_node(
+        "loopback.monitor",
+        Some("A loopback"),
+        "Audio/Source",
+    ));
+    assert_eq!(listed_devices(&session), listed_devices(&a_session()));
+}
+
+#[test]
+fn a_node_the_session_removes_before_the_listing_ends_is_dropped_and_the_rest_keep_their_order() {
+    let mut nodes: AudioNodesByRegistryId = Vec::new();
+    let context = (&raw mut nodes).cast::<c_void>();
+    let name = |text: &str| CString::new(text).unwrap();
+    let (sink, source, other_sink) = (name("sink-a"), name("source-a"), name("sink-b"));
+    let (sink_class, source_class) = (name("Audio/Sink"), name("Audio/Source"));
+    // SAFETY: `context` is `nodes`, and every string outlives its call.
+    unsafe {
+        record_a_listed_audio_node(
+            context,
+            30,
+            sink.as_ptr(),
+            std::ptr::null(),
+            sink_class.as_ptr(),
+        );
+        record_a_listed_audio_node(
+            context,
+            31,
+            source.as_ptr(),
+            std::ptr::null(),
+            source_class.as_ptr(),
+        );
+        record_a_listed_audio_node(
+            context,
+            32,
+            other_sink.as_ptr(),
+            std::ptr::null(),
+            sink_class.as_ptr(),
+        );
+        forget_a_removed_global(context, 30);
+        forget_a_removed_global(context, 99);
+    }
+    let names: Vec<(u32, String)> = nodes
+        .into_iter()
+        .map(|(id, node)| (id, node.node_name))
+        .collect();
+    assert_eq!(
+        names,
+        [(31, "source-a".to_owned()), (32, "sink-b".to_owned())]
+    );
+}

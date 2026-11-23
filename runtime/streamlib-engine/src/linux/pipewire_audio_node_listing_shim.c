@@ -43,6 +43,7 @@ struct StreamLibPipeWireAudioNodeListing {
     struct spa_hook registry_listener;
     struct spa_hook default_metadata_listener;
     StreamLibPipeWireAudioNodeListed on_node_listed;
+    StreamLibPipeWireGlobalRemoved on_global_removed;
     void *context;
     char *default_sink_name;
     char *default_source_name;
@@ -141,7 +142,7 @@ static void on_registry_global(void *data, uint32_t id, uint32_t permissions, co
         const char *node_description = spa_dict_lookup(props, PW_KEY_NODE_DESCRIPTION);
         if (node_description == NULL)
             node_description = spa_dict_lookup(props, PW_KEY_NODE_NICK);
-        listing->on_node_listed(listing->context, node_name, node_description, media_class);
+        listing->on_node_listed(listing->context, id, node_name, node_description, media_class);
         return;
     }
 
@@ -153,9 +154,16 @@ static void on_registry_global(void *data, uint32_t id, uint32_t permissions, co
     }
 }
 
+static void on_registry_global_remove(void *data, uint32_t id)
+{
+    struct StreamLibPipeWireAudioNodeListing *listing = data;
+    listing->on_global_removed(listing->context, id);
+}
+
 static const struct pw_registry_events registry_events = {
     PW_VERSION_REGISTRY_EVENTS,
     .global = on_registry_global,
+    .global_remove = on_registry_global_remove,
 };
 
 static void on_core_done(void *data, uint32_t id, int seq)
@@ -236,6 +244,7 @@ static void ask_the_session(struct StreamLibPipeWireAudioNodeListing *listing)
 
 int streamlib_pipewire_list_audio_nodes(const void *const *entry_points,
                                         StreamLibPipeWireAudioNodeListed on_node_listed,
+                                        StreamLibPipeWireGlobalRemoved on_global_removed,
                                         void *context, char *default_sink_name,
                                         char *default_source_name,
                                         size_t default_node_name_capacity, char *failure_text,
@@ -245,6 +254,7 @@ int streamlib_pipewire_list_audio_nodes(const void *const *entry_points,
     memset(&listing, 0, sizeof(listing));
     streamlib_pipewire_copy_entry_points(&listing.entry_points, entry_points);
     listing.on_node_listed = on_node_listed;
+    listing.on_global_removed = on_global_removed;
     listing.context = context;
     listing.default_sink_name = default_sink_name;
     listing.default_source_name = default_source_name;

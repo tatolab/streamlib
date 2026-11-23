@@ -12,6 +12,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "pipewire_entry_points.h"
 
@@ -20,19 +21,26 @@ extern "C" {
 #endif
 
 /// What the listing calls, on PipeWire's thread loop, for each node whose `media.class` starts
-/// with `Audio/`. `node_description` is NULL where the node carries none. Each string is valid
-/// only for the length of the call.
-typedef void (*StreamLibPipeWireAudioNodeListed)(void *context, const char *node_name,
+/// with `Audio/`, by its registry id. `node_description` is NULL where the node carries none.
+/// Each string is valid only for the length of the call.
+typedef void (*StreamLibPipeWireAudioNodeListed)(void *context, uint32_t registry_id,
+                                                 const char *node_name,
                                                  const char *node_description,
                                                  const char *media_class);
 
-/// List the session's audio nodes to `on_node_listed`, and fill `default_sink_name` and
+/// What the listing calls, on PipeWire's thread loop, for each global the session removes before
+/// the listing ends, so a node it announced and then removed is dropped from the list.
+typedef void (*StreamLibPipeWireGlobalRemoved)(void *context, uint32_t registry_id);
+
+/// List the session's audio nodes to `on_node_listed`, and each removed global to
+/// `on_global_removed`, and fill `default_sink_name` and
 /// `default_source_name`, each `default_node_name_capacity` bytes, with the nodes the `default`
 /// metadata names, each empty where it names none or a name too long to fit rather than one
 /// truncated into another node's. Returns 0 once the session has answered, and non-zero with `failure_text` filled when
 /// it could not be asked or did not answer.
 int streamlib_pipewire_list_audio_nodes(const void *const *entry_points,
                                         StreamLibPipeWireAudioNodeListed on_node_listed,
+                                        StreamLibPipeWireGlobalRemoved on_global_removed,
                                         void *context, char *default_sink_name,
                                         char *default_source_name,
                                         size_t default_node_name_capacity, char *failure_text,
