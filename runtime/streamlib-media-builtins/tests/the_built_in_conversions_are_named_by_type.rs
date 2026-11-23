@@ -139,6 +139,8 @@ fn no_built_in_is_listed_under_a_retired_conversion_name() {
         "ArrayToImage",
         "ChannelsToArray",
         "ArrayToChannels",
+        "ChannelsToRecords",
+        "RecordsToChannels",
     ] {
         let retired_type = NodeClassImportPath::of_built_in_node(retired_name);
         assert!(

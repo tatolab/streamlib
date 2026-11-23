@@ -378,7 +378,7 @@ def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_a
                 "nodes": [
                     {
                         "name": "pattern",
-                        "type": _built_in_nodes.ChannelsToRecords.type,
+                        "type": _built_in_nodes.TensorToAudio.type,
                         "config": {"channel_names": ["level"], "widht": 640},
                     }
                 ],
@@ -387,7 +387,7 @@ def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_a
     )
 
     assert "node `pattern`" in refusal
-    assert "`tatolab.stream:ChannelsToRecords`" in refusal
+    assert "`tatolab.stream:TensorToAudio`" in refusal
     assert "`widht`" in refusal
 
 

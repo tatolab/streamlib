@@ -42,10 +42,10 @@ from tatolab.stream._exposed_name_cast import (
 
 from stream_graph_builder_streams import (
     BRIGHTNESS_READER_TYPE,
-    CHANNELS_TO_RECORDS_TYPE,
     FRAME_INVERTER_TYPE,
     NESTED_CONFIG,
-    RIG_CHANNELS_TO_RECORDS,
+    RIG_CHANNEL_NAMES,
+    TENSOR_TO_AUDIO_TYPE,
     StandInMarker,
     UndecoratedFilter,
     a_configured_stream,
@@ -81,7 +81,7 @@ class KeyComparedByIdentity(str):
 
 @graph_generator
 def a_native_marker(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.ChannelsToRecords, config=RIG_CHANNELS_TO_RECORDS)
+    stream_builder.add(tatolab.stream.TensorToAudio, input_values=RIG_CHANNEL_NAMES)
 
 
 @graph_generator
@@ -282,9 +282,9 @@ def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None
 def test_a_native_marker_is_the_type_its_class_carries() -> None:
     assert run_graph_generator(a_native_marker)["nodes"] == [
         {
-            "name": "channelstorecords",
-            "type": CHANNELS_TO_RECORDS_TYPE,
-            "input_values": RIG_CHANNELS_TO_RECORDS,
+            "name": "tensortoaudio",
+            "type": TENSOR_TO_AUDIO_TYPE,
+            "input_values": RIG_CHANNEL_NAMES,
         },
     ]
 

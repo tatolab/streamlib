@@ -19,8 +19,6 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.82", default-fea
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 rmp-serde = { workspace = true }
-# A Records message is a msgpack map the conversion nodes read and write as values.
-rmpv = { workspace = true }
 tracing = { workspace = true }
 
 [features]

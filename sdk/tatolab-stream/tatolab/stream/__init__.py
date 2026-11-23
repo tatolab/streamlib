@@ -76,14 +76,10 @@ from ._project_asset_uuid import ProjectAssetUuid as ProjectAssetUuid
 from ._built_in_nodes import AudioToTensor as AudioToTensor
 from ._built_in_nodes import BooleanToFloat as BooleanToFloat
 from ._built_in_nodes import BooleanToInteger as BooleanToInteger
-from ._built_in_nodes import ChannelsToRecords as ChannelsToRecords
-from ._built_in_nodes import ChannelsToRecordsConfig as ChannelsToRecordsConfig
 from ._built_in_nodes import FloatToBoolean as FloatToBoolean
 from ._built_in_nodes import FloatToInteger as FloatToInteger
 from ._built_in_nodes import IntegerToBoolean as IntegerToBoolean
 from ._built_in_nodes import IntegerToFloat as IntegerToFloat
-from ._built_in_nodes import RecordsToChannels as RecordsToChannels
-from ._built_in_nodes import RecordsToChannelsConfig as RecordsToChannelsConfig
 from ._built_in_nodes import TensorToAudio as TensorToAudio
 from ._built_in_nodes import TensorToTexture as TensorToTexture
 from ._built_in_nodes import TextureFormatConvert as TextureFormatConvert
@@ -207,8 +203,6 @@ __all__ = [
     "CastFromMessagePayloadBytes",
     "Channels",
     "ChannelsBlock",
-    "ChannelsToRecords",
-    "ChannelsToRecordsConfig",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
@@ -316,8 +310,6 @@ __all__ = [
     "RayTracingKernel",
     "RealTimeStreamClock",
     "Records",
-    "RecordsToChannels",
-    "RecordsToChannelsConfig",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "ScaledStreamClock",

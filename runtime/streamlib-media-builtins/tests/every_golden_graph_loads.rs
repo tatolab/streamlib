@@ -101,6 +101,13 @@ fn without_the_nodes(
     remaining
 }
 
+/// Each built-in node type a golden places that this runtime no longer has, with no typed form to
+/// be renamed to.
+const REMOVED_BUILT_IN_NODE_TYPES: &[&str] = &[
+    "tatolab.stream:ChannelsToRecords",
+    "tatolab.stream:RecordsToChannels",
+];
+
 /// Load `graph` as the one stream of a fresh engine, in a project directory of
 /// its own.
 fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Result<()> {
@@ -114,18 +121,20 @@ fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Resul
         .map(drop)
 }
 
-/// The names of the nodes in `graph_document` whose type a module declares:
-/// each runs in its own helper process from an installed distribution, which a
-/// runtime with no interpreter cannot describe.
-fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
+/// The names of the nodes in `graph_document` whose type a module declares, each run in its
+/// own helper process from an installed distribution, which a runtime with no interpreter cannot
+/// describe, or is a built-in type since removed.
+fn module_and_removed_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
     graph_document["nodes"]
         .as_array()
         .expect("a graph holds nodes")
         .iter()
         .filter(|node| {
-            !NodeClassImportPath::new(node["type"].as_str().expect("a node has a type"))
-                .expect("a type names a class")
-                .names_a_built_in_node()
+            let node_type = node["type"].as_str().expect("a node has a type");
+            REMOVED_BUILT_IN_NODE_TYPES.contains(&node_type)
+                || !NodeClassImportPath::new(node_type)
+                    .expect("a type names a class")
+                    .names_a_built_in_node()
         })
         .map(|node| {
             node["name"]
@@ -136,8 +145,8 @@ fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
         .collect()
 }
 
-/// A golden reads whole, and with its module nodes taken out, any built-ins
-/// left load on a runtime with no interpreter.
+/// A golden reads whole, and with its module nodes and the nodes of a removed built-in type taken
+/// out, any built-ins left load on a runtime with no interpreter.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_node_types();
@@ -148,10 +157,10 @@ fn every_golden_graph_loads_on_this_floor() {
             .unwrap_or_else(|refusal| panic!("{path:?} no longer reads: {refusal}"));
         let graph_document = without_the_nodes(
             &recorded_graph_document,
-            &module_node_names_in(&recorded_graph_document),
+            &module_and_removed_node_names_in(&recorded_graph_document),
         );
         let graph = GraphSnapshot::from_graph_document(graph_document).unwrap_or_else(|refusal| {
-            panic!("{path:?} without its module nodes no longer reads: {refusal}")
+            panic!("{path:?} without its module and removed nodes no longer reads: {refusal}")
         });
         if graph.nodes.is_empty() {
             continue;

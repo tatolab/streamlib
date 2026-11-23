@@ -10,7 +10,6 @@ A stream's identity is the import path of its function,
 from types import MappingProxyType
 from typing import Any
 
-import tatolab.stream
 from stream_graph_builder_nodes import (
     FrameFilters,
     FrameInverter,
@@ -21,8 +20,8 @@ from tatolab.stream import (
 )
 
 
-CHANNELS_TO_RECORDS_TYPE = "tatolab.stream:ChannelsToRecords"
-RIG_CHANNELS_TO_RECORDS: tatolab.stream.ChannelsToRecordsConfig = {"channel_names": ["level"]}
+TENSOR_TO_AUDIO_TYPE = "tatolab.stream:TensorToAudio"
+RIG_CHANNEL_NAMES: "dict[str, Any]" = {"channel_names": ["level"]}
 
 
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"

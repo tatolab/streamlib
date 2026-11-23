@@ -596,8 +596,6 @@ pub(crate) fn node_placed_between_families(from: PortFamily, to: PortFamily) -> 
         (Array, Image) => one_node("place a TensorToTexture node between them"),
         (Channels, Array) => one_node("place an AudioToTensor node between them"),
         (Array, Channels) => one_node("place a TensorToAudio node between them"),
-        (Channels, Records) => one_node("place a ChannelsToRecords node between them"),
-        (Records, Channels) => one_node("place a RecordsToChannels node between them"),
         (Image, Packets) => codec_nodes(EncodedMedia::Video, CodecDirection::Encode),
         (Packets, Image) => codec_nodes(EncodedMedia::Video, CodecDirection::Decode),
         (Channels, Packets) => codec_nodes(EncodedMedia::Audio, CodecDirection::Encode),

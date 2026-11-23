@@ -32,9 +32,9 @@ from tatolab.stream._stream_graph_builder import is_graph_generator
 
 from stream_graph_builder_streams import (
     BRIGHTNESS_READER_TYPE,
-    CHANNELS_TO_RECORDS_TYPE,
     FRAME_INVERTER_TYPE,
-    RIG_CHANNELS_TO_RECORDS,
+    RIG_CHANNEL_NAMES,
+    StandInMarker,
     UndecoratedFilter,
     a_configured_stream,
     every_kind_of_node,
@@ -66,7 +66,7 @@ THE_STREAM_BUILDING_FAILURE = StreamBuildingFailure("the camera rig is unplugged
 @graph_generator
 def camera_rig(stream_builder: StreamBuilder) -> None:
     """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
-    source = stream_builder.add(tatolab.stream.ChannelsToRecords, config=RIG_CHANNELS_TO_RECORDS)
+    source = stream_builder.add(StandInMarker, config=RIG_CHANNEL_NAMES)
     inverter = stream_builder.add(FrameInverter)
     first_reader = stream_builder.add(BrightnessReader)
     backup_reader = stream_builder.add(BrightnessReader, name="Backup Meter")
@@ -116,9 +116,9 @@ def test_a_stream_compiles_to_its_graph() -> None:
         "stream": "camera_rig",
         "nodes": [
             {
-                "name": "channelstorecords",
-                "type": CHANNELS_TO_RECORDS_TYPE,
-                "input_values": RIG_CHANNELS_TO_RECORDS,
+                "name": "standinmarker",
+                "type": StandInMarker.type,
+                "input_values": RIG_CHANNEL_NAMES,
             },
             {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "input_values": {}},
             {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "input_values": {}},
@@ -132,7 +132,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
         ],
         "links": [
             {
-                "source": {"node": "channelstorecords", "port": "track"},
+                "source": {"node": "standinmarker", "port": "track"},
                 "target": {"node": "frameinverter", "port": "video_from_upstream"},
             },
             {
@@ -144,7 +144,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
                 "target": {"node": "backup-meter", "port": "video_from_upstream"},
             },
             {
-                "source": {"node": "channelstorecords", "port": "track"},
+                "source": {"node": "standinmarker", "port": "track"},
                 "target": {"node": "frameinverter-2", "port": "video_from_upstream"},
             },
             {

@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, ClassVar, Literal, TypedDict
+from typing import Annotated, ClassVar, Literal
 
 from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
 from ._class_node_pins import InputPin, OutputPin
@@ -21,14 +21,10 @@ __all__ = [
     "AudioToTensor",
     "BooleanToFloat",
     "BooleanToInteger",
-    "ChannelsToRecords",
-    "ChannelsToRecordsConfig",
     "FloatToBoolean",
     "FloatToInteger",
     "IntegerToBoolean",
     "IntegerToFloat",
-    "RecordsToChannels",
-    "RecordsToChannelsConfig",
     "TensorToAudio",
     "TensorToTexture",
     "TextureFormatConvert",
@@ -124,36 +120,6 @@ class BooleanToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
             Description("Each Boolean as 0 or 1"),
         ]
     ]
-
-
-class ChannelsToRecordsConfig(TypedDict, total=False):
-    """`ChannelsToRecords`'s config: the keys `stream_builder.add` takes."""
-
-    channel_names: list[str]
-    """The key each channel's value is written under, in the block's channel order.
-
-    Default: `["value"]`.
-    """
-
-
-class ChannelsToRecords(BuiltInNode[ChannelsToRecordsConfig]):
-    """Converts each Channels block on `channels` into one Records message on `records`
-    holding the block's last sample of each channel as a float, keyed by that channel's
-    name in `channel_names`: latest-value control, such as a sensor's reading or a
-    fader's position, read by a node that takes Records. A block whose channel count is
-    not the number of names is refused and writes nothing; a block of no samples writes
-    nothing.
-
-    Inputs:
-        `channels` (newest): The Channels blocks whose latest values are read.
-
-    Outputs:
-        `records`: One record per block: each channel's last sample under its name.
-
-    Config: `ChannelsToRecordsConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:ChannelsToRecords"
 
 
 class FloatToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
@@ -271,45 +237,6 @@ class IntegerToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
             Description("Each Integer as the Float of the same value"),
         ]
     ]
-
-
-class RecordsToChannelsConfig(TypedDict, total=False):
-    """`RecordsToChannels`'s config: the keys `stream_builder.add` takes."""
-
-    channel_names: list[str]
-    """The record keys read, one channel each, in channel order.
-
-    Default: `["value"]`.
-    """
-
-    sample_rate: int
-    """The sample rate `channels` states, in samples per second per channel.
-
-    Default: `48000`.
-    """
-
-
-class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
-    """Converts each Records message on `records` into a Channels block of one `f64`
-    sample per channel on `channels`, one channel per key in `channel_names`:
-    latest-value control, such as a parameter an agent or a UI sets, read by a node that
-    takes Channels. A key the record leaves out keeps its channel's latest value, 0
-    until a record names it; a key not in `channel_names` is ignored. A value is an
-    integer or a float, or a boolean read as 1 or 0; a record that is not a map of
-    string keys, or that holds another value under a name, is refused and writes
-    nothing. Each block's start sample is the record's stamp since the first record's,
-    counted at `sample_rate`, and always past the block before it.
-
-    Inputs:
-        `records` (newest): The records whose named values are read.
-
-    Outputs:
-        `channels`: One sample per record of each channel in `channel_names`.
-
-    Config: `RecordsToChannelsConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:RecordsToChannels"
 
 
 class TensorToAudio(BuiltInNode[InputValuesOfATypedBuiltInNode]):

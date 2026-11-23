@@ -483,18 +483,22 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
 ):
     """The runtime's load fails a config its built-in does not take, naming
     the node and the setting, before the engine starts, and records the stream
-    failed. It is still the app's problem, not a launcher crash."""
+    failed. It is still the app's problem, not a launcher crash. A class carrying
+    the built-in's type hands the config to the runtime past the typed class's own
+    check."""
     app_directory = make_tatolab_project(
         {
             "stream.py": (
-                "from tatolab.stream import ChannelsToRecords, StreamBuilder, graph_generator\n"
+                "from tatolab.stream import StreamBuilder, graph_generator\n"
+                "\n"
+                "\n"
+                "class TensorToAudioByItsType:\n"
+                '    type = "tatolab.stream:TensorToAudio"\n'
                 "\n"
                 "\n"
                 "@graph_generator\n"
                 "def main(stream_builder: StreamBuilder) -> None:\n"
-                "    stream_builder.add(\n"
-                '        ChannelsToRecords, config={"channel_names": 7}\n'
-                "    )\n"
+                '    stream_builder.add(TensorToAudioByItsType, config={"widht": 640})\n'
             )
         }
     )
@@ -509,8 +513,8 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
         f"an engine-side failure must not arrive as a launcher traceback; it was:\n{failed_because}"
     )
     assert failed_stream_id == stream_id_of_the_project(app_directory)
-    assert "`tatolab.stream:ChannelsToRecords`" in failed_because, failed_because
-    assert "channel_names: invalid type" in failed_because, failed_because
+    assert "`tatolab.stream:TensorToAudio`" in failed_because, failed_because
+    assert "`widht`" in failed_because, failed_because
     assert ENGINE_STARTED_LOG_LINE not in tatolabd.stderr_text
     [listed] = tatolabd.local_api_client().list_streams()
     assert (listed["stream"], listed["state"]) == (failed_stream_id, "failed"), listed

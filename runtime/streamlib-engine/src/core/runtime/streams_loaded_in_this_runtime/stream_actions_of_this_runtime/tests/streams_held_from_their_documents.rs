@@ -887,3 +887,62 @@ fn shader_nodes_in_a_cycle_fail_on_their_nodes_and_the_stream_plays() {
     );
     assert!(!the_record_of(state_directory.path(), &camera).is_failed());
 }
+
+/// A saved project whose document places a built-in this runtime no longer has, as
+/// `ChannelsToRecords` and `RecordsToChannels` were removed with no typed form, still opens: its
+/// stream is held from its document, the node held as written in the `Error` state, and `graph`
+/// names its type.
+///
+/// Mental-revert: refusing the open of a project whose load is refused leaves no stream held,
+/// so `graph` has no node to name the type.
+#[test]
+#[serial]
+fn a_saved_graph_placing_a_built_in_this_runtime_lacks_opens_holding_it_in_error() {
+    for removed_node_type in [
+        "tatolab.stream:ChannelsToRecords",
+        "tatolab.stream:RecordsToChannels",
+    ] {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let mut graph = the_graph_of_a_stream_named("camera");
+        graph["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": "removed",
+                "type": removed_node_type,
+                "input_values": {"channel_names": ["level"]},
+            }));
+        let project = ProjectWithGraphDocuments::holding(graph);
+        let camera = project.stream_id_of("camera");
+
+        a_project_opened_on(&runner, &project);
+
+        let held = runner
+            .loaded_stream_of_the_id(&camera)
+            .expect("the stream is held from its document");
+        assert!(held.is_held_stopped(), "{removed_node_type}");
+        let render = held.to_json().unwrap();
+        let removed = render["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["name"] == "removed")
+            .unwrap_or_else(|| panic!("`graph` shows no node `removed`: {render}"));
+        assert_eq!(removed["type"], removed_node_type, "{removed}");
+        assert_eq!(removed["components"]["state"], "Error", "{removed}");
+        let listed = runner
+            .list_streams()
+            .into_iter()
+            .find(|listed| listed.stream_id == camera)
+            .unwrap();
+        assert_eq!(listed.state, StreamListingState::Failed);
+        assert!(
+            listed
+                .failed_because
+                .as_deref()
+                .is_some_and(|why| why.contains(&format!("`{removed_node_type}`"))),
+            "{listed:?}"
+        );
+    }
+}
