@@ -18,7 +18,7 @@ import {
   TatolabRuntimeClient,
   controlAnswerResult,
 } from "../index.js";
-import { DISCOVERED, describedRuntime, startALocalApiThatAnswersOnlyWhenTold, untilTrue } from "./local_api_stand_in.mjs";
+import { DISCOVERED, startALocalApiThatAnswersOnlyWhenTold, untilTrue } from "./local_api_stand_in.mjs";
 
 const CLIENT_NAME = "contract mismatch test";
 
@@ -166,6 +166,9 @@ test("a connected client names the revision `discover` answered when an experime
   }
 });
 
+/** What a runtime built before the contract had a revision answers `describe_runtime` with: no key added since. */
+const A_DESCRIPTION_FROM_BEFORE_THE_REVISION = { version: "0.68.82", build_id: "stand-in", up_for_ms: 1 };
+
 test("a runtime built before the contract had a revision, which refuses `contract_revision`, is named the older side", async () => {
   const refusedAsARuntimeBeforeTheRevisionRefusesIt = {
     code: -32602,
@@ -183,7 +186,7 @@ test("a runtime built before the contract had a revision, which refuses `contrac
     await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
     const describing = localApi.requestsHeardOnTheConnection[0];
     assert.equal(describing.method, "describe_runtime");
-    localApi.answerOnTheConnection(describing.id, describedRuntime("0.68.82"));
+    localApi.answerOnTheConnection(describing.id, A_DESCRIPTION_FROM_BEFORE_THE_REVISION);
     await assert.rejects(connecting, (refusal) => {
       assert.ok(refusal instanceof ControlContractMismatch, `${refusal}`);
       assert.deepEqual(refusal.mismatch, {
