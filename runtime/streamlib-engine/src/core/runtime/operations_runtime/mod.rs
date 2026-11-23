@@ -13,7 +13,6 @@ use super::operations::{
     BoxFuture, GraphEditBatch, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
 };
 use super::runtime::TokioRuntimeVariant;
-use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::{NodeClassImportPath, PinGroupDescriptor};
@@ -521,21 +520,6 @@ impl LoadedStreamInThisRuntime {
             spec,
             ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
         ))
-    }
-
-    /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
-    /// code, as [`Self::reconcile_the_live_graph_to_the_graph_document`] does.
-    pub(super) fn reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
-        self: &Arc<Self>,
-        graph_document: serde_json::Value,
-        links_it_makes: LinksAReconcileMakes,
-    ) -> Result<()> {
-        let stream = Arc::clone(self);
-        self.block_on_the_engines_tokio_runtime(async move {
-            stream
-                .reconcile_the_live_graph_to_the_graph_document(graph_document, links_it_makes)
-                .await
-        })
     }
 }
 

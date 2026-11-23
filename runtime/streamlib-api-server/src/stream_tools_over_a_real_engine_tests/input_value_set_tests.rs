@@ -73,6 +73,10 @@ pub(super) fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDoc
     }))
 }
 
+/// A tool's answer, or its refusal as the wire carries it.
+pub(super) type AToolAnswerOrItsRefusal =
+    std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>>;
+
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     /// The answer of the tool `tool_name` sent `arguments`, or its refusal as the wire carries it.
     pub(super) async fn the_answer_or_the_refusal_of(
@@ -92,6 +96,40 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             )));
         }
         Ok(crate::mcp::tests::first_text_block_json(&tool_result))
+    }
+
+    /// The answer of the tool `tool_name` sent `arguments`, or its refusal, sent from a thread
+    /// and a runtime of its own; `None` when it has not answered within `within`, so a call
+    /// that blocks for ever fails the test, which a timeout on the test's own runtime cannot
+    /// tell while the call blocks the worker it waits on.
+    pub(super) fn the_answer_or_the_refusal_within(
+        &self,
+        within: std::time::Duration,
+        tool_name: &'static str,
+        arguments: Value,
+    ) -> Option<AToolAnswerOrItsRefusal> {
+        let operations_on_the_loaded_streams = self.operations_on_the_loaded_streams();
+        let (answered, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime of the call's own");
+            let tool_result = runtime.block_on(tool_call_result(
+                operations_on_the_loaded_streams,
+                tool_name,
+                arguments,
+            ));
+            let outcome = if tool_result["isError"] == true {
+                Err(Box::new(crate::mcp::tests::the_refusal_of_a_tool_result(
+                    &tool_result,
+                )))
+            } else {
+                Ok(crate::mcp::tests::first_text_block_json(&tool_result))
+            };
+            let _ = answered.send(outcome);
+        });
+        answer.recv_timeout(within).ok()
     }
 }
 

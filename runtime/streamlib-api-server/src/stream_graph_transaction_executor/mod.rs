@@ -63,6 +63,7 @@ pub(crate) use graph_request_refusals::{
 mod fragments_a_changed_module_defines;
 mod graph_input_retype_carrying_its_saved_value;
 pub(crate) use fragments_a_changed_module_defines::the_refresh_of_each_fragment_a_changed_module_defines;
+use graph_input_retype_carrying_its_saved_value::SavedValueRetypesWorkedOutBeforeTheEdit;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
@@ -544,6 +545,16 @@ impl StreamGraphTransactionExecutor<'_> {
                     .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             ),
         };
+        let requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)> = requests
+            .into_iter()
+            .zip(stream_id_of_each_request.iter().cloned())
+            .collect();
+        let saved_value_retypes_worked_out_before_the_edit = self
+            .the_saved_value_retypes_worked_out_before_the_edit(
+                &requests_and_the_stream_id_each_names,
+                stream_locations,
+                project_repository.as_ref(),
+            );
         let mut project_repository_held = project_repository.as_ref().map(|held| held.lock());
         if let Some(project_repository_held) = project_repository_held.as_deref()
             && let Some(applied_before) = project_repository_held
@@ -555,10 +566,11 @@ impl StreamGraphTransactionExecutor<'_> {
             ));
         }
         let applied = self.apply_the_requests(
-            requests
-                .into_iter()
-                .zip(stream_id_of_each_request.iter().cloned())
-                .collect(),
+            request_application::TheRequestsOfATransaction {
+                requests_and_the_stream_id_each_names,
+                saved_value_retypes_worked_out_before_the_edit:
+                    &saved_value_retypes_worked_out_before_the_edit,
+            },
             mode,
             author,
             idempotency_key,

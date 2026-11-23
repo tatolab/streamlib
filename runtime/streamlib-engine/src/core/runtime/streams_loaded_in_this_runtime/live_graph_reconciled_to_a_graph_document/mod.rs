@@ -114,6 +114,19 @@ impl LinksAReconcileMakes {
     }
 }
 
+/// Whether the caller of a reconcile rebuilds, once it commits, each kept node a setting read
+/// at setup leaves to rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::core::runtime) enum KeptNodesLeftToRebuild {
+    /// Rebuilt by the caller, so a kept node left to rebuild is not handed the document's values
+    /// live: the ports it was built with may carry another type than its values now choose,
+    /// and its rebuild reads them.
+    RebuiltByTheCaller,
+    /// Not rebuilt by the caller, so each kept node is handed the document's values live, and
+    /// a node that does not take them fails the reconcile.
+    HandedTheirValuesLive,
+}
+
 /// One node the live graph holds, as a reconcile compares it to the document's.
 pub(in crate::core::runtime) struct LiveNodeAsTheGraphHoldsIt {
     pub(in crate::core::runtime) node_run_id: NodeRunId,
@@ -161,19 +174,41 @@ impl LoadedStreamInThisRuntime {
     /// makes as a saved graph's, as `links_it_makes` says, is kept when its pin types or Image
     /// formats alone refuse it and its ports' families take it, and is set aside, not made, when
     /// the engine cannot wire it; so is a link the stream held set aside before, and a link the
-    /// live graph keeps that the engine cannot wire once the reconcile made its links.
+    /// live graph keeps that the engine cannot wire once the reconcile made its links. A kept
+    /// node left to rebuild is handed its values, or left to its rebuild, as `left_to_rebuild`
+    /// says.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         graph_document: Value,
         links_it_makes: LinksAReconcileMakes,
+        left_to_rebuild: KeptNodesLeftToRebuild,
     ) -> Result<()> {
-        self.in_one_commit(
-            self.reconcile_the_live_graph_within_the_graph_edits_held(
-                graph_document,
-                links_it_makes,
-            ),
-        )
+        self.in_one_commit(self.reconcile_the_live_graph_within_the_graph_edits_held(
+            graph_document,
+            links_it_makes,
+            left_to_rebuild,
+        ))
         .await
+    }
+
+    /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
+    /// code, as [`Self::reconcile_the_live_graph_to_the_graph_document`] does.
+    pub(in crate::core::runtime) fn reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
+        self: &Arc<Self>,
+        graph_document: serde_json::Value,
+        links_it_makes: LinksAReconcileMakes,
+        left_to_rebuild: KeptNodesLeftToRebuild,
+    ) -> Result<()> {
+        let stream = Arc::clone(self);
+        self.block_on_the_engines_tokio_runtime(async move {
+            stream
+                .reconcile_the_live_graph_to_the_graph_document(
+                    graph_document,
+                    links_it_makes,
+                    left_to_rebuild,
+                )
+                .await
+        })
     }
 
     /// Reconcile the live graph to `graph_document` within the graph edits the running task
@@ -182,6 +217,7 @@ impl LoadedStreamInThisRuntime {
         &self,
         mut graph_document: Value,
         links_it_makes: LinksAReconcileMakes,
+        left_to_rebuild: KeptNodesLeftToRebuild,
     ) -> Result<()> {
         if let Value::Object(document) = &mut graph_document {
             let stream_asset = self.stream_location().stream_asset;
@@ -405,6 +441,9 @@ impl LoadedStreamInThisRuntime {
                     node_run_id: live_node.node_run_id.clone(),
                     pins: document_pins,
                     studio: document_node.studio.clone(),
+                    handed_over_now: left_to_rebuild
+                        == KeptNodesLeftToRebuild::HandedTheirValuesLive
+                        || !self.is_left_to_rebuild(&live_node.node_run_id),
                 });
             }
         }

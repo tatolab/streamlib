@@ -25,7 +25,7 @@ pub use built_in_pin_types::{
 };
 pub use pin_conversion::{
     PinConversion, PinConversionOutputPick, PinConversionOutputPicked, PinConversionRefusal,
-    PinConversionSavedValueCast,
+    PinConversionSavedValueCast, SavedValueNotCast,
 };
 pub use pin_declaration::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PinDeclaration, PinFlow, PinNumberRange,

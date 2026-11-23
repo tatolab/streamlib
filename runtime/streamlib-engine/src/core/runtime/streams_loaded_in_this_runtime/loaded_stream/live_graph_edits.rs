@@ -588,17 +588,21 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
     Err(not_handed_over)
 }
 
-/// The saved values and the studio fields a reconcile sets on one node it keeps.
+/// The saved values and the studio fields a reconcile sets on one node it keeps, and whether
+/// the running node is handed them now: a node left to rebuild is not, since the ports it was
+/// built with may carry another type than its values now choose, and its rebuild reads them.
 pub(in crate::core::runtime) struct SavedValuesOfAKeptNode {
     pub(in crate::core::runtime) node_run_id: NodeRunId,
     pub(in crate::core::runtime) pins: serde_json::Map<String, serde_json::Value>,
     pub(in crate::core::runtime) studio: serde_json::Map<String, serde_json::Value>,
+    pub(in crate::core::runtime) handed_over_now: bool,
 }
 
 /// Set the saved values and the studio fields of each of `kept_nodes`, nodes a reconcile keeps,
 /// in the graph `graph` locks, and hand each node what its inputs read now: each island
-/// evaluating it under the write lock, its helper or itself with the lock released. Its caller
-/// holds the stream's one input value change at a time. Every node is set and handed its values
+/// evaluating it under the write lock, its helper or itself with the lock released; a node not
+/// to be handed them now, left to the rebuild that reads them, is only set. Its caller holds
+/// the stream's one input value change at a time. Every node is set and handed its values
 /// even when one is refused, and the refusals are answered together after the last, so the
 /// graph holds the document's values and the reconcile does not report a refusal as done.
 pub(in crate::core::runtime) fn set_the_saved_values_of_each_kept_node_and_hand_them_over(
@@ -642,6 +646,9 @@ fn set_the_saved_values_of_a_kept_node_and_hand_them_over(
     ) else {
         return Ok(());
     };
+    if !kept_node.handed_over_now {
+        return Ok(());
+    }
     let put_the_former_values_back = |graph: &mut Graph| {
         set_the_pins_and_studio_fields(
             graph,
