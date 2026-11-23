@@ -15,6 +15,10 @@ const READING_SINK: &str = "VerdictCheckReadingSink";
 const LABEL_SOURCE: &str = "VerdictCheckLabelSource";
 const FRAMED_READING_SINK: &str = "VerdictCheckFramedReadingSink";
 const TENSOR_SOURCE: &str = "VerdictCheckTensorSource";
+const PICTURE_SOURCE: &str = "VerdictCheckPictureSource";
+const PICTURE_SINK: &str = "VerdictCheckPictureSink";
+const METERED_PICTURE_SOURCE: &str = "VerdictCheckMeteredPictureSource";
+const METERED_PICTURE_SINK: &str = "VerdictCheckMeteredPictureSink";
 
 fn a_member(name: &str, member_type: PinType) -> BundleMember {
     BundleMember {
@@ -76,6 +80,46 @@ fn register_the_bundle_fixture_node_types() {
             class_path(TENSOR_SOURCE),
             Vec::new(),
             vec![a_typed_port("frame", PinType::Tensor {})],
+        ));
+    });
+}
+
+fn a_texture() -> PinType {
+    PinType::Texture {
+        pixel_formats: Vec::new(),
+    }
+}
+
+/// A picture with the level metered off it: a Texture beside a Float.
+fn a_metered_picture() -> PinType {
+    PinType::Bundle {
+        members: vec![a_member("picture", a_texture()), a_member("level", float())],
+    }
+}
+
+fn register_the_picture_fixture_node_types() {
+    static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
+    register_the_bundle_fixture_node_types();
+    REGISTERED_ONCE_PER_PROCESS.call_once(|| {
+        register(a_node_type(
+            class_path(PICTURE_SOURCE),
+            Vec::new(),
+            vec![a_typed_port("picture", a_texture())],
+        ));
+        register(a_node_type(
+            class_path(PICTURE_SINK),
+            vec![a_typed_port("picture", a_texture())],
+            Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(METERED_PICTURE_SOURCE),
+            Vec::new(),
+            vec![a_typed_port("metered", a_metered_picture())],
+        ));
+        register(a_node_type(
+            class_path(METERED_PICTURE_SINK),
+            vec![a_typed_port("metered", a_metered_picture())],
+            Vec::new(),
         ));
     });
 }
@@ -378,4 +422,55 @@ fn a_link_into_a_tensor_member_is_refused() {
         "{refused}"
     );
     assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A Texture member rides its own row of the Bundle frame the input's port builds, so a link
+/// ending at it connects beside a link into a number member.
+///
+/// Mental-revert: judging a Texture member as one that travels only as messages refuses it.
+#[test]
+fn a_link_into_a_texture_member_connects_beside_a_number_member() {
+    register_the_picture_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let picture = a_node_of(&compiler, class_path(PICTURE_SOURCE));
+    let level = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let sink = a_node_of(&compiler, class_path(METERED_PICTURE_SINK));
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(picture, "picture"),
+        InputLinkPortRef::new(sink.clone(), "metered").at_member(Some("picture".to_owned())),
+    )
+    .expect("the member `picture` is a Texture");
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(level, "value"),
+        InputLinkPortRef::new(sink, "metered").at_member(Some("level".to_owned())),
+    )
+    .expect("the member `level` holds a value");
+
+    assert_eq!(
+        the_members_the_links_end_at(&compiler),
+        vec![Some("picture".to_owned()), Some("level".to_owned())]
+    );
+}
+
+#[test]
+fn a_link_from_a_texture_member_into_a_texture_input_connects() {
+    register_the_picture_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(METERED_PICTURE_SOURCE));
+    let sink = a_node_of(&compiler, class_path(PICTURE_SINK));
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(source, "metered").at_member(Some("picture".to_owned())),
+        InputLinkPortRef::new(sink, "picture"),
+    )
+    .expect("the member `picture` is a Texture");
+
+    assert_eq!(
+        the_members_the_links_start_at(&compiler),
+        vec![Some("picture".to_owned())]
+    );
 }

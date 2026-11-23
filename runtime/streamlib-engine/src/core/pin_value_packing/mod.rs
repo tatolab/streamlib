@@ -37,6 +37,7 @@ mod bundle_packing;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use bundle_frame_packing::refuse_a_heavy_member_message_of_another_kind;
 pub use bundle_frame_packing::{
     BundleFrameReadAsItsBundle, HeavyMemberOfABundleFrame, HeavyMemberReadOffABundleFrame,
     the_bundle_a_bundle_frame_carries, the_bundle_frame_of_a_bundle,

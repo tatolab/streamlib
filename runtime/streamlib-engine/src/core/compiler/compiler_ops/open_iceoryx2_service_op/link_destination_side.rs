@@ -112,6 +112,17 @@ pub(crate) fn read_the_destination_of_a_link(
              longer holds, so it is not wired"
         )));
     }
+    if let Some(member_put_at_the_read) = &member_put_at_the_read
+        && member_put_at_the_read.put_into == WhatTheMembersArePutInto::TheMembersTheLinksCarried
+        && member_put_at_the_read.bundle.holds_a_heavy_member()
+    {
+        return Err(Error::InvalidLink(format!(
+            "the link into `{delivery_declared_by}` ends at member `{}` of a {}, which holds a \
+             Texture, Audio or encoded member, and a function node's island reads no such \
+             bundle, so it is not wired",
+            member_put_at_the_read.member.name, member_put_at_the_read.bundle
+        )));
+    }
     Ok(DestinationOfALinkAsItsWiringReadsIt {
         dest_proc_id,
         dest_port,

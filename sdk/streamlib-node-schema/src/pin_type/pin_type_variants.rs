@@ -8,7 +8,8 @@ use crate::error::{SchemaError, SchemaResult};
 
 /// What a port carries, as an author, a person and a client name it.
 ///
-/// The set is closed: a named type and a bundle are how a project adds its own.
+/// The set is closed to a project: a named type and a bundle are how a project adds its own. A
+/// later runtime may add a built-in type, which a client of an earlier revision reads as it is.
 // A type with nothing to state is an empty struct variant: serde ignores the keys beside the tag
 // of an internally tagged unit variant, and refuses them on a struct variant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,7 +18,8 @@ use crate::error::{SchemaError, SchemaResult};
     derive(schemars_1::JsonSchema),
     schemars(
         crate = "schemars_1",
-        transform = crate::pin_type::bundle_members_json_schema::state_what_a_bundle_member_may_be
+        transform = crate::pin_type::bundle_members_json_schema::state_what_a_bundle_member_may_be,
+        extend("x-may-grow" = true)
     )
 )]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]

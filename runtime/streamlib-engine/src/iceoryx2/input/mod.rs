@@ -42,6 +42,7 @@ mod member_put_at_the_read;
 mod member_taken_at_the_read;
 mod queued_trigger_fires;
 
+use member_put_at_the_read::NewestOfEachMemberPutAtTheRead;
 pub use member_put_at_the_read::{
     BundleMembersAtTheRead, MemberPutAtTheRead, WhatTheMembersArePutInto,
 };
@@ -289,9 +290,9 @@ struct PortConfig {
     /// to the reader, until the reader counts that bag lost. `None` before any
     /// read, after the count, and for a bag no link delivered or a window.
     dropped_bag_counter_of_the_bag_last_handed_to_the_reader: Option<InboundLinkDroppedBagCounter>,
-    /// The newest value each link ending at a member of the bundle this port reads has carried,
-    /// by member; empty for a port no such link feeds.
-    newest_value_of_each_member_put_at_the_read: serde_json::Map<String, serde_json::Value>,
+    /// The newest of each member the links ending at members of the bundle this port reads have
+    /// carried; empty for a port no such link feeds.
+    newest_of_each_member_put_at_the_read: NewestOfEachMemberPutAtTheRead,
 }
 
 /// How one port windows what arrives on it.

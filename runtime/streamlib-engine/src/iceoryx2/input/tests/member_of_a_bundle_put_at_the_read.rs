@@ -5,25 +5,20 @@
 //! newest value each has carried, stamped as the message that arrived last.
 
 use serde_json::{Value, json};
+use streamlib_ipc_types::DataChannelPayloadDescriptor;
 
 use super::*;
-use crate::core::descriptors::{BundleMember, PinType};
+use crate::core::descriptors::PinType;
 use crate::core::pin_value_packing::{
-    PackedPinValueRef, pack_pin_value, the_members_of_a_bundle_a_records_message_carries,
-    unpack_pin_value,
+    PackedPinValueRef, pack_pin_value, the_bundle_a_bundle_frame_carries,
+    the_members_of_a_bundle_a_records_message_carries, unpack_pin_value,
 };
 
 fn a_reading() -> PinType {
-    let member = |name: &str, member_type: PinType, default_value| BundleMember {
-        name: name.to_owned(),
-        member_type,
-        meaning: None,
-        default_value,
-    };
     PinType::Bundle {
         members: vec![
-            member("level", PinType::Float { exact_size: None }, None),
-            member("label", PinType::String {}, Some(json!("unnamed"))),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
+            a_bundle_member("label", PinType::String {}, Some(json!("unnamed"))),
         ],
     }
 }
@@ -42,12 +37,23 @@ fn a_link_into_the_member(
     member: &str,
     put_into: WhatTheMembersArePutInto,
 ) -> TestChannelPublisherNumberingItsSends {
+    a_link_into_a_member_of(mailboxes, &a_reading(), member, put_into)
+}
+
+/// A link into `member` of port `in`, which reads `bundle` whole or as `put_into` says, and its
+/// publisher.
+fn a_link_into_a_member_of(
+    mailboxes: &InputMailboxesInner,
+    bundle: &PinType,
+    member: &str,
+    put_into: WhatTheMembersArePutInto,
+) -> TestChannelPublisherNumberingItsSends {
     let (publisher, subscriber) = open_channel_for_one_link(&format!("into/{member}"), 4);
     if !mailboxes.has_port("in") {
         mailboxes.add_port("in", 16, ReadMode::ReadNextInOrder);
     }
-    let PinType::Bundle { members } = a_reading() else {
-        unreachable!("a reading is a bundle")
+    let PinType::Bundle { members } = bundle.clone() else {
+        unreachable!("the input reads a bundle")
     };
     let member_declared = members
         .into_iter()
@@ -61,7 +67,7 @@ fn a_link_into_the_member(
         BundleMembersAtTheRead {
             taken_from_its_output: None,
             put_into_its_input: Some(MemberPutAtTheRead {
-                bundle: a_reading(),
+                bundle: bundle.clone(),
                 member: member_declared,
                 put_into,
             }),
@@ -284,5 +290,280 @@ fn a_member_no_link_has_carried_reads_the_value_set_on_the_input() {
     assert_eq!(
         the_bundles_read(&mailboxes),
         vec![(json!({ "level": 0.9, "label": "kitchen" }), 5)]
+    );
+}
+
+/// A picture with the level metered off it: a Texture beside a Float.
+fn a_metered_picture() -> PinType {
+    PinType::Bundle {
+        members: vec![
+            a_bundle_member("picture", a_texture(), None),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
+        ],
+    }
+}
+
+fn publish_a_level(publisher: &TestChannelPublisherNumberingItsSends, level: f64, stamp: i64) {
+    let packed = pack_pin_value(&PinType::Float { exact_size: None }, &json!(level), 0).unwrap();
+    publish_a_message(publisher, packed.payload_descriptor, &packed.payload, stamp);
+}
+
+/// Each Bundle frame `in` hands its reader, read as `bundle`: its small members, each heavy
+/// member's descriptor and bytes by name, and its stamp.
+fn the_bundle_frames_read(
+    mailboxes: &InputMailboxesInner,
+    bundle: &PinType,
+) -> Vec<(
+    Value,
+    Vec<(String, DataChannelPayloadDescriptor, Vec<u8>)>,
+    i64,
+)> {
+    std::iter::from_fn(|| mailboxes.read_raw_from_inbound_link("in").unwrap())
+        .map(|(message, _)| {
+            let read = the_bundle_a_bundle_frame_carries(
+                bundle,
+                PackedPinValueRef {
+                    payload_descriptor: &message.payload_descriptor,
+                    payload: &message.payload,
+                },
+            )
+            .unwrap();
+            let heavy_members = read
+                .heavy_members
+                .iter()
+                .map(|heavy| (heavy.name.clone(), heavy.descriptor, heavy.payload.to_vec()))
+                .collect();
+            (
+                Value::Object(read.small_members),
+                heavy_members,
+                message.timestamp_ns,
+            )
+        })
+        .collect()
+}
+
+fn the_picture(
+    descriptor: DataChannelPayloadDescriptor,
+) -> (String, DataChannelPayloadDescriptor, Vec<u8>) {
+    ("picture".to_owned(), descriptor, Vec::new())
+}
+
+/// A Texture wired into one member and a number into another arrive as one Bundle frame,
+/// the picture by the pool slot it names, the number beside it, stamped as the message that
+/// arrived last.
+///
+/// Mental-revert: unpacking the Texture's message as a stored value refuses it, so the port
+/// drops every picture and hands its reader nothing.
+#[test]
+fn a_texture_and_a_number_wired_into_members_arrive_as_one_bundle_frame() {
+    let mailboxes = InputMailboxesInner::new();
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let into_level = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+
+    publish_a_level(&into_level, 0.5, 3);
+    let read_before_a_picture = the_bundle_frames_read(&mailboxes, &a_metered_picture());
+    publish_a_message(&into_picture, an_image_frame(4, 19), &[], 5);
+    let read_with_the_picture = the_bundle_frames_read(&mailboxes, &a_metered_picture());
+    publish_a_level(&into_level, 0.75, 7);
+
+    assert_eq!(read_before_a_picture, Vec::new());
+    assert_eq!(
+        read_with_the_picture,
+        vec![(
+            json!({ "level": 0.5 }),
+            vec![the_picture(an_image_frame(4, 19))],
+            5
+        )]
+    );
+    assert_eq!(
+        the_bundle_frames_read(&mailboxes, &a_metered_picture()),
+        vec![(
+            json!({ "level": 0.75 }),
+            vec![the_picture(an_image_frame(4, 19))],
+            7
+        )]
+    );
+    assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-picture"), Some(&0));
+}
+
+/// A newer picture replaces the one the port holds, so the bundle never names a slot its
+/// producer has since handed out again, and the port holds one picture however many arrive.
+///
+/// Mental-revert: keeping the first picture held hands the reader slot 4 at generation 19 after
+/// generation 20 arrived.
+#[test]
+fn a_newer_texture_replaces_the_one_the_port_holds() {
+    let mailboxes = InputMailboxesInner::new();
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let into_level = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    publish_a_level(&into_level, 0.5, 3);
+    for generation in 19..=20 {
+        publish_a_message(&into_picture, an_image_frame(4, generation), &[], 5);
+    }
+
+    let read = the_bundle_frames_read(&mailboxes, &a_metered_picture());
+
+    assert_eq!(
+        read.last().map(|(_, heavy, _)| heavy.clone()),
+        Some(vec![the_picture(an_image_frame(4, 20))])
+    );
+}
+
+/// The member a removed link carried is forgotten, a picture as a number is, so the port holds
+/// no picture past its link and hands no bundle without one.
+///
+/// Mental-revert: forgetting only the small members keeps the last picture held and hands it on
+/// with the next level.
+#[test]
+fn a_texture_link_removed_takes_its_picture_out_of_the_port() {
+    let mailboxes = InputMailboxesInner::new();
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let into_level = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    publish_a_message(&into_picture, an_image_frame(4, 19), &[], 3);
+    publish_a_level(&into_level, 0.5, 5);
+    the_bundle_frames_read(&mailboxes, &a_metered_picture());
+
+    mailboxes.remove_channel_link("L-picture");
+    publish_a_level(&into_level, 0.6, 7);
+
+    assert_eq!(
+        the_bundle_frames_read(&mailboxes, &a_metered_picture()),
+        Vec::new()
+    );
+}
+
+/// A message on a Texture member's link that is no Image frame is dropped and counted, and the
+/// picture held before it stays.
+#[test]
+fn a_message_of_another_kind_into_a_texture_member_is_dropped_and_counted() {
+    let mailboxes = InputMailboxesInner::new();
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let into_level = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    publish_a_message(&into_picture, an_image_frame(4, 19), &[], 3);
+    publish_one_frame(&into_picture, "picture", b"no picture");
+    publish_a_level(&into_level, 0.5, 5);
+
+    assert_eq!(
+        the_bundle_frames_read(&mailboxes, &a_metered_picture()),
+        vec![(
+            json!({ "level": 0.5 }),
+            vec![the_picture(an_image_frame(4, 19))],
+            5
+        )]
+    );
+    assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-picture"), Some(&1));
+}
+
+/// An Audio member rides its own row of the frame, its samples copied as its link carried them.
+#[test]
+fn an_audio_block_wired_into_a_member_rides_the_bundle_frame_with_its_samples() {
+    let a_sound_with_its_label = PinType::Bundle {
+        members: vec![
+            a_bundle_member("sound", PinType::Audio {}, None),
+            a_bundle_member("label", PinType::String {}, Some(json!("unnamed"))),
+        ],
+    };
+    let mailboxes = InputMailboxesInner::new();
+    let into_sound = a_link_into_a_member_of(
+        &mailboxes,
+        &a_sound_with_its_label,
+        "sound",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let block = a_sound_block();
+    let samples = the_sound_samples();
+
+    publish_a_message(&into_sound, block, &samples, 9);
+
+    assert_eq!(
+        the_bundle_frames_read(&mailboxes, &a_sound_with_its_label),
+        vec![(
+            json!({ "label": "unnamed" }),
+            vec![("sound".to_owned(), block, samples)],
+            9
+        )]
+    );
+}
+
+/// A Texture member stating a default still waits for its picture: a default never stands in
+/// for a Texture, so a number arriving first builds no bundle, and is no loss either.
+///
+/// Mental-revert: reading the Texture's default as the member having arrived packs a frame
+/// lacking the picture's row, which is refused, so every number is dropped and counted.
+#[test]
+fn a_defaulted_texture_member_not_yet_arrived_builds_no_bundle_and_drops_nothing() {
+    let a_picture_defaulted = PinType::Bundle {
+        members: vec![
+            a_bundle_member("picture", a_texture(), Some(json!({}))),
+            a_bundle_member("level", PinType::Float { exact_size: None }, None),
+        ],
+    };
+    let mailboxes = InputMailboxesInner::new();
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_picture_defaulted,
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let into_level = a_link_into_a_member_of(
+        &mailboxes,
+        &a_picture_defaulted,
+        "level",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+
+    publish_a_level(&into_level, 0.5, 3);
+    let read_before_a_picture = the_bundle_frames_read(&mailboxes, &a_picture_defaulted);
+    publish_a_message(&into_picture, an_image_frame(4, 19), &[], 5);
+
+    assert_eq!(read_before_a_picture, Vec::new());
+    assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-level"), Some(&0));
+    assert_eq!(
+        the_bundle_frames_read(&mailboxes, &a_picture_defaulted),
+        vec![(
+            json!({ "level": 0.5 }),
+            vec![the_picture(an_image_frame(4, 19))],
+            5
+        )]
     );
 }

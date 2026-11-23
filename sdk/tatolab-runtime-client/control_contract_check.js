@@ -71,6 +71,14 @@ function isPresent(value, key) {
   return Object.hasOwn(value, key) && value[key] !== undefined;
 }
 
+/** The property an object alternative is told apart by: the one property it, or the component its `$ref` names, states a `const` for; `undefined` for any other. */
+function theTagOf(alternative) {
+  const schema = typeof alternative?.$ref === "string" ? referencedComponentSchema(alternative.$ref) : alternative;
+  if (!isAJsonObject(schema) || schema.type !== "object" || !isAJsonObject(schema.properties)) return undefined;
+  const tags = Object.entries(schema.properties).filter(([, propertySchema]) => isAJsonObject(propertySchema) && Object.hasOwn(propertySchema, "const"));
+  return tags.length === 1 ? tags[0][0] : undefined;
+}
+
 function theAlternativesOf(schema) {
   return schema.oneOf ?? schema.anyOf;
 }
@@ -117,7 +125,10 @@ class ControlContractReader {
     return this.readAgainstItsKeywords(schema, read, path, alsoKnownKeys, keysCheckedElsewhere);
   }
 
-  /** A set marked `x-may-grow`, read: a value of its members' own JSON type it does not name reads as its last member, as the runtime reads one. */
+  /**
+   * A set marked `x-may-grow`, read: a value of its members' own JSON type it does not name reads as its last member, as the runtime reads one;
+   * in a set of objects each named by a tag, an object whose tag names no member is one a later runtime added, and reads as it is.
+   */
   readASetThatMayGrow(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere) {
     const closedSetReader = new ControlContractReader(this.direction);
     const read = closedSetReader.readAgainstItsKeywords(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere);
@@ -126,6 +137,15 @@ class ControlContractReader {
     const lastMember = alternatives.at(-1);
     if (lastMember !== undefined && Object.hasOwn(lastMember, "const") && jsonTypeOf(lastMember.const) === jsonTypeOf(value)) {
       return lastMember.const;
+    }
+    if (
+      isAJsonObject(value) &&
+      alternatives.length > 0 &&
+      alternatives.every((alternative) => theTagOf(alternative) !== undefined) &&
+      !alternatives.some((alternative) => this.isTheAlternativeItsTagNames(alternative, value)) &&
+      alternatives.every((alternative) => typeof value[theTagOf(alternative)] === "string")
+    ) {
+      return value;
     }
     this.issues.push(...closedSetReader.issues);
     return value;

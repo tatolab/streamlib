@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 45
+    "x-contract-revision": 46
   },
   "methods": [
     {
@@ -10411,7 +10411,8 @@
             "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes\na wire."
           }
         ],
-        "description": "What a port carries, as an author, a person and a client name it.\n\nThe set is closed: a named type and a bundle are how a project adds its own."
+        "description": "What a port carries, as an author, a person and a client name it.\n\nThe set is closed to a project: a named type and a bundle are how a project adds its own. A\nlater runtime may add a built-in type, which a client of an earlier revision reads as it is.",
+        "x-may-grow": true
       },
       "IntegerSize": {
         "oneOf": [
