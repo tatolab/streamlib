@@ -87,10 +87,13 @@ class NodeOutputPortReference:
 
     node_name: str
     port_name: str
+    member_name: str | None = None
+    """The member of the port's bundle the link starts at, as the bundle names it; `None` for the whole port."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
         object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
+        _refuse_a_member_name_that_is_not_a_string(self.member_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,10 +102,13 @@ class NodeInputPortReference:
 
     node_name: str
     port_name: str
+    member_name: str | None = None
+    """The member of the port's bundle the link ends at, as the bundle names it; `None` for the whole port."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
         object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
+        _refuse_a_member_name_that_is_not_a_string(self.member_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,21 +118,35 @@ class NodeReference:
     name: str
     typed_pins: TypedNodePins | None = field(default=None, compare=False, repr=False)
     """The pins the node declares when it is a typed node, which its port names are checked against."""
+    input_values: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
+    """The node's input values as recorded, which choose the bundle a port's members are checked against."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _cast_name(self.name, "node name"))
 
-    def output(self, port_name: str) -> NodeOutputPortReference:
-        """Name one of this node's output ports, cast as `@node.process` declared it; on a typed node, one it declares."""
+    def output(self, port_name: str, *, member: str | None = None) -> NodeOutputPortReference:
+        """Name one of this node's output ports, cast as `@node.process` declared it; on a typed node, one it declares.
+
+        `member` names one member of the port's bundle, the link starting at it alone; on a
+        typed node, one the bundle has.
+        """
         if self.typed_pins is not None:
             port_name = self.typed_pins.port_named(_cast_name(port_name, "port name"), "output")
-        return NodeOutputPortReference(self.name, port_name)
+            if member is not None:
+                member = self.typed_pins.member_named(port_name, "output", member, self.input_values)
+        return NodeOutputPortReference(self.name, port_name, member)
 
-    def input(self, port_name: str) -> NodeInputPortReference:
-        """Name one of this node's input ports, cast as `@node.process` declared it; on a typed node, one it declares."""
+    def input(self, port_name: str, *, member: str | None = None) -> NodeInputPortReference:
+        """Name one of this node's input ports, cast as `@node.process` declared it; on a typed node, one it declares.
+
+        `member` names one member of the port's bundle, the link ending at it alone; on a
+        typed node, one the bundle has.
+        """
         if self.typed_pins is not None:
             port_name = self.typed_pins.port_named(_cast_name(port_name, "port name"), "input")
-        return NodeInputPortReference(self.name, port_name)
+            if member is not None:
+                member = self.typed_pins.member_named(port_name, "input", member, self.input_values)
+        return NodeInputPortReference(self.name, port_name, member)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,20 +156,24 @@ class GraphFragmentReference(NodeReference):
     input_port_names: tuple[str, ...] = ()
     output_port_names: tuple[str, ...] = ()
 
-    def output(self, port_name: str) -> NodeOutputPortReference:
-        """Name one of the Outputs the fragment's `GraphOutput` nodes declare."""
+    def output(self, port_name: str, *, member: str | None = None) -> NodeOutputPortReference:
+        """Name one of the Outputs the fragment's `GraphOutput` nodes declare; `member` is refused."""
         return NodeOutputPortReference(
-            self.name, self._declared_port(port_name, self.output_port_names, "Output")
+            self.name, self._declared_port(port_name, self.output_port_names, "Output", member)
         )
 
-    def input(self, port_name: str) -> NodeInputPortReference:
-        """Name one of the Inputs the fragment's `GraphInput` nodes declare."""
+    def input(self, port_name: str, *, member: str | None = None) -> NodeInputPortReference:
+        """Name one of the Inputs the fragment's `GraphInput` nodes declare; `member` is refused."""
         return NodeInputPortReference(
-            self.name, self._declared_port(port_name, self.input_port_names, "Input")
+            self.name, self._declared_port(port_name, self.input_port_names, "Input", member)
         )
 
     def _declared_port(
-        self, port_name: str, declared_port_names: tuple[str, ...], port_kind: str
+        self,
+        port_name: str,
+        declared_port_names: tuple[str, ...],
+        port_kind: str,
+        member: str | None,
     ) -> str:
         cast = _cast_name(port_name, "port name")
         if cast not in declared_port_names:
@@ -157,6 +181,12 @@ class GraphFragmentReference(NodeReference):
             raise ValueError(
                 f"fragment `{self.name}` declares no {port_kind} `{cast}`; its graph "
                 f"generator's {port_kind}s are: {declared}"
+            )
+        if member is not None:
+            raise ValueError(
+                f"fragment `{self.name}`'s {port_kind} `{cast}` is wired whole, and is named "
+                f"member `{member}`. To fix: wire the member inside the fragment's graph "
+                f"generator, at the node whose bundle holds it"
             )
         return cast
 
@@ -317,7 +347,9 @@ class StreamBuilder:
             class_short_name=node_class.__name__,
         )
         self._recorded_nodes_by_name[node_name] = recorded_node
-        return NodeReference(node_name, typed_pins=typed_pins)
+        return NodeReference(
+            node_name, typed_pins=typed_pins, input_values=input_values_as_json_object
+        )
 
     def _place_the_graph_generator(
         self,
@@ -504,7 +536,10 @@ class StreamBuilder:
         self, end: NodeOutputPortReference | NodeInputPortReference
     ) -> dict[str, str]:
         self._refuse_a_node_this_stream_does_not_hold(end.node_name)
-        return {"node": end.node_name, "port": end.port_name}
+        link_end = {"node": end.node_name, "port": end.port_name}
+        if end.member_name is not None:
+            link_end["member"] = end.member_name
+        return link_end
 
     def _interface_port_names(self, interface_node_type: str) -> tuple[str, ...]:
         return tuple(
@@ -551,6 +586,14 @@ def _cast_name(name: str, what_the_name_names: str) -> str:
             f"`{_type_name_as_written(name)}` — pass the name as a str"
         )
     return cast_exposed_name_to_url_safe(name)
+
+
+def _refuse_a_member_name_that_is_not_a_string(member_name: object) -> None:
+    if member_name is not None and not isinstance(member_name, str):
+        raise TypeError(
+            f"a member name is a str; got {member_name!r}, of type "
+            f"`{_type_name_as_written(member_name)}` — pass the member as its bundle names it"
+        )
 
 
 def _not_a_node_refusal(node_class: object) -> str:
