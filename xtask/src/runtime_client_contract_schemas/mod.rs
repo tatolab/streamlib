@@ -184,15 +184,22 @@ fn refuse_what_the_checker_does_not_know(
                 bail!("{place_of_the_keyword} is not a list of property names")
             }
             SET_THAT_MAY_GROW_MARK => {
-                let its_last_member_is_a_constant = keywords
-                    .get("oneOf")
-                    .and_then(Value::as_array)
+                let members = keywords.get("oneOf").and_then(Value::as_array);
+                let its_last_member_is_a_constant = members
                     .and_then(|members| members.last())
                     .is_some_and(|last| last.get("const").is_some());
-                if *stated != Value::Bool(true) || !its_last_member_is_a_constant {
+                let each_member_is_an_object_its_tag_names = members.is_some_and(|members| {
+                    members.iter().all(|member| {
+                        the_tag_of_an_object_member(member, component_schemas).is_some()
+                    })
+                });
+                if *stated != Value::Bool(true)
+                    || !(its_last_member_is_a_constant || each_member_is_an_object_its_tag_names)
+                {
                     bail!(
                         "{place_of_the_keyword} marks no `oneOf` of constants whose last a member \
-                         it does not name could read as"
+                         it does not name could read as, nor one of objects each named by the \
+                         constant of one property, whose unknown tag a client reads as it is"
                     );
                 }
             }
@@ -208,6 +215,32 @@ fn refuse_what_the_checker_does_not_know(
         }
     }
     Ok(())
+}
+
+/// The property a member of a `oneOf` is told apart by, with its constant: the one property its
+/// object, or the component its `$ref` names, states a `const` for.
+fn the_tag_of_an_object_member<'schema>(
+    member: &'schema Value,
+    component_schemas: &'schema Map<String, Value>,
+) -> Option<(&'schema str, &'schema Value)> {
+    let member = match member
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| reference.strip_prefix(COMPONENT_SCHEMA_REFERENCE_PREFIX))
+    {
+        Some(name) => component_schemas.get(name)?,
+        None => member,
+    };
+    if member.get("type") != Some(&Value::String("object".to_owned())) {
+        return None;
+    }
+    let mut tags = member
+        .get("properties")?
+        .as_object()?
+        .iter()
+        .filter_map(|(name, property)| property.get("const").map(|tag| (name.as_str(), tag)));
+    let tag = tags.next()?;
+    tags.next().is_none().then_some(tag)
 }
 
 /// `schema` as the checker reads it: no `description`, and a `default` only where the client

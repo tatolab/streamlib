@@ -6,7 +6,8 @@
 /**
  * What a port carries, as an author, a person and a client name it.
  * 
- * The set is closed: a named type and a bundle are how a project adds its own.
+ * The set is closed to a project: a named type and a bundle are how a project adds its own. A
+ * later runtime may add a built-in type, which a client of an earlier revision reads as it is.
  */
 export type PinType = {
   type: "boolean";
