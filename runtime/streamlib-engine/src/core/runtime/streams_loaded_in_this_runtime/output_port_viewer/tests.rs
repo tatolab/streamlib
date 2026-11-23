@@ -529,8 +529,13 @@ fn a_viewer_of_a_channels_port_reads_every_block_and_any_other_port_the_latest()
 }
 
 impl ARunningCameraWithNoLinks {
-    /// Give output `port_name` exactly `pin_type`, as a port declaring it does.
-    fn type_the_output(&self, port_name: &str, pin_type: crate::core::descriptors::PinType) {
+    /// Give output `port_name` exactly `pin_type`, as a port declaring it does, or no pin type,
+    /// as a port declaring only its family does.
+    fn retype_the_output(
+        &self,
+        port_name: &str,
+        pin_type: Option<crate::core::descriptors::PinType>,
+    ) {
         self.stream.compiler.scope(|graph, _tx| {
             let port = graph
                 .traversal_mut()
@@ -543,17 +548,35 @@ impl ARunningCameraWithNoLinks {
                 .find(|port| port.name == port_name)
                 .expect("the node has the port");
             port.declared_pin_type = None;
-            port.pin = Some(crate::core::descriptors::ResolvedPin {
+            port.pin = pin_type.map(|pin_type| crate::core::descriptors::ResolvedPin {
                 flow: pin_type.default_flow(),
                 pin_type,
             });
         });
     }
+
+    /// The pin type and the reading a viewer of output `port_name` is answered, once the port
+    /// carries `pin_type`.
+    fn viewed_as(
+        &self,
+        port_name: &str,
+        pin_type: Option<crate::core::descriptors::PinType>,
+    ) -> (
+        Option<crate::core::descriptors::PinType>,
+        OutputPortViewerReads,
+    ) {
+        self.retype_the_output(port_name, pin_type);
+        let viewer = self
+            .open_a_viewer(port_name)
+            .expect("a running node's port opens a viewer");
+        let hand_off = viewer.hand_off().clone();
+        (hand_off.pin_type, hand_off.viewer_reads)
+    }
 }
 
 /// A viewer of a typed port is answered the port's pin type and reads every message of an Audio
 /// port and the latest of any other type, a number carried on Channels included; a port with no
-/// pin type answers none.
+/// pin type answers none and reads by its family, every message of a Channels port.
 ///
 /// Mental-revert: read by family alone, the Float port, which carries Channels, reads every
 /// message, and no answer names a pin type.
@@ -563,31 +586,26 @@ fn a_viewer_of_a_typed_port_is_answered_its_pin_type_and_reads_every_message_onl
     use crate::core::descriptors::PinType;
 
     let records_camera = ARunningCameraWithNoLinks::load();
-    let untyped = records_camera.open_a_viewer("out1").unwrap();
-    assert_eq!(untyped.hand_off().pin_type, None);
-    drop(untyped);
+    assert_eq!(
+        records_camera.viewed_as("out1", None),
+        (None, OutputPortViewerReads::LatestMessage)
+    );
     drop(records_camera);
 
     let tone = ARunningCameraWithNoLinks::load_running::<
         crate::core::test_support::MockChannelsSourceNode::Node,
     >(crate::core::test_support::MockChannelsSourceNode::node_class_import_path());
-    let viewed_as = |pin_type: PinType| {
-        tone.type_the_output("audio", pin_type);
-        let viewer = tone
-            .open_a_viewer("audio")
-            .expect("a typed port opens a viewer");
-        let hand_off = viewer.hand_off().clone();
-        drop(viewer);
-        (hand_off.pin_type, hand_off.viewer_reads)
-    };
-
     assert_eq!(
-        viewed_as(PinType::Audio {}),
+        tone.viewed_as("audio", None),
+        (None, OutputPortViewerReads::EveryMessage)
+    );
+    assert_eq!(
+        tone.viewed_as("audio", Some(PinType::Audio {})),
         (Some(PinType::Audio {}), OutputPortViewerReads::EveryMessage)
     );
     let float = PinType::Float { exact_size: None };
     assert_eq!(
-        viewed_as(float.clone()),
+        tone.viewed_as("audio", Some(float.clone())),
         (Some(float), OutputPortViewerReads::LatestMessage)
     );
 }
