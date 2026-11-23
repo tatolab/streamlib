@@ -82,18 +82,18 @@ def remap_with_typed_pins(
     return low + x * (high - low)
 
 
-@node.function
-def is_positive(x: float) -> bool:
+@node
+def is_positive(x: float = 0.0) -> bool:
     return x > 0.0
 
 
-@node.function
-def build_an_object(x: float) -> float:
+@node
+def build_an_object(x: float = 0.0) -> float:
     return float(len(repr(object()))) + x
 
 
-@node.function
-def square_root(x: float) -> float:
+@node
+def square_root(x: float = 0.0) -> float:
     if x < 0.0:
         raise ValueError("a negative number has no real square root")
     return math.sqrt(x)
@@ -134,7 +134,7 @@ def offset_by_seed(x: float = 0.0, *, config: SeededConfig) -> float:
     return x + config.seed
 
 
-@node.function
+@node
 def count_from(start: int = 2**53 + 1) -> int:
     return start
 
@@ -371,20 +371,20 @@ class CallsSoFar:
     calls: int = 0
 
 
-@node.function
+@node
 def count_calls_by_spelling_them(step: float = 1.0, *, previous: State[CallsSoFar]) -> Stateful[int, CallsSoFar]:
     calls = previous.calls + int(step) + len(repr(object())) * 0
     return calls, CallsSoFar(calls)
 
 
-@node.function
-def refuse_a_negative_spelling(x: float) -> float:
+@node
+def refuse_a_negative_spelling(x: float = 0.0) -> float:
     if x < 0.0:
         raise ValueError(f"{x!r} is negative")
     return float(len(repr(x)))
 
 
-@node.function
+@node
 def take_an_optional_level(level: "float | None" = None) -> float:
     return 0.0 if level is None else level
 
@@ -470,7 +470,7 @@ def test_a_body_run_as_python_that_raises_keeps_its_state():
     assert refusing.evaluate([1.5], 0) == [3.0]
 
 
-@node.function
+@node
 def spell_a_positional_level(level: float = 0.75, /) -> float:
     return level + len(repr(object())) * 0
 
@@ -485,7 +485,7 @@ class LabelsKept:
     labels: list = field(default_factory=list)
 
 
-@node.function
+@node
 def keep_a_label_unless_negative(x: float = 1.0, *, previous: State[LabelsKept]) -> Stateful[int, LabelsKept]:
     previous.labels.append(repr(x))
     if x < 0.0:
@@ -493,7 +493,7 @@ def keep_a_label_unless_negative(x: float = 1.0, *, previous: State[LabelsKept])
     return len(previous.labels), previous
 
 
-@node.function
+@node
 def jump_the_count_past_an_f64(step: float = 1.0, *, previous: State[CallsSoFar]) -> Stateful[float, CallsSoFar]:
     return step + len(repr(object())) * 0, CallsSoFar(previous.calls + 2**53 + 1)
 

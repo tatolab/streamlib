@@ -745,8 +745,8 @@ def test_a_promoted_stateful_function_node_keeps_its_state_through_a_live_config
     )
 
 
-@node.function
-def passes_its_process_input_through(process: float) -> float:
+@node
+def passes_its_process_input_through(process: float = 0.0) -> float:
     return process
 
 
