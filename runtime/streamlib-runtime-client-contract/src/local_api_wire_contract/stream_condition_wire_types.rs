@@ -176,6 +176,9 @@ pub enum DiagnosticKindOnTheWire {
     /// shows the document's graph, each part the running graph does not hold yet carrying
     /// `live: false`, and the stream takes the edit when its playback stops.
     EditNotLive,
+    /// A link the running graph holds that could not be wired, so its reader reads nothing
+    /// from it: the words say why, in the words of the end that refused it.
+    LinkNotWired,
     /// A problem of a kind this client does not know; the runtime never sends it. Its `words`
     /// say what it is, and its `recovery` what recovers from it.
     // `#[serde(other)]` holds only on the last variant, so a new kind goes above this one.
@@ -191,7 +194,7 @@ impl DiagnosticKindOnTheWire {
             Self::LoadRefused | Self::NodeTypeNotDescribed | Self::NodeRaising => {
                 DiagnosticRecoveryOnTheWire::FixTheCode
             }
-            Self::StartRefused | Self::NodeFailed | Self::EditNotLive => {
+            Self::StartRefused | Self::NodeFailed | Self::EditNotLive | Self::LinkNotWired => {
                 DiagnosticRecoveryOnTheWire::RestartThePlayback
             }
             Self::LinkRefused => DiagnosticRecoveryOnTheWire::FixTheLink,

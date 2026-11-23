@@ -576,7 +576,7 @@ export interface DiagnosticOnTheWire {
  * What a problem is. The set grows: a kind a client does not know reads as `other`, shown by
  * its `words` and recovered by its `recovery`.
  */
-export type DiagnosticKindOnTheWire = "project_venv_not_made" | "load_refused" | "start_refused" | "node_type_not_described" | "link_refused" | "keeps_crashing_the_runtime" | "recorded_by_an_earlier_runtime" | "node_failed" | "node_raising" | "node_not_ready" | "edit_not_live" | "other";
+export type DiagnosticKindOnTheWire = "project_venv_not_made" | "load_refused" | "start_refused" | "node_type_not_described" | "link_refused" | "keeps_crashing_the_runtime" | "recorded_by_an_earlier_runtime" | "node_failed" | "node_raising" | "node_not_ready" | "edit_not_live" | "link_not_wired" | "other";
 
 /**
  * Where a problem applies.
@@ -8271,7 +8271,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 39;
+export declare const CONTROL_CONTRACT_REVISION: 41;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

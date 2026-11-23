@@ -36,7 +36,8 @@ use crate::core::compiler::compiler_ops::function_node_promotion::{
 use crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_config_fields_its_node_exposes_as_inputs;
 use crate::core::compiler::compiler_ops::running_node_restart::{
     RunningNodesALiveEditRestarts, forget_the_build_of_each_node_restarted,
-    the_running_nodes_a_rebuild_restarts, unwire_each_link_of_the_nodes_restarted,
+    hold_each_link_to_wire_again_as_pending, the_running_nodes_a_rebuild_restarts,
+    unwire_each_link_of_the_nodes_restarted,
 };
 use crate::core::compiler::compiler_ops::shader_node_island::{
     place_each_shader_node_island_on_its_host, the_running_shader_nodes_a_live_edit_restarts,
@@ -589,6 +590,13 @@ fn stop_each_node_restarted(
         .cloned()
         .collect();
     forget_the_build_of_each_node_restarted(&mut graph, &rebuilt_node_ids);
+    let wired_again: Vec<LinkUniqueId> = nodes_restarted
+        .links
+        .iter()
+        .filter(|link_id| plan.links_to_add.contains(link_id))
+        .cloned()
+        .collect();
+    hold_each_link_to_wire_again_as_pending(&mut graph, &wired_again);
     Ok(still_held_by_an_abandoned_thread)
 }
 
