@@ -286,3 +286,15 @@ def test_a_node_grouped_twice_is_refused_naming_the_group_it_belongs_to() -> Non
 def test_a_stream_groups_no_node_of_its_own() -> None:
     with pytest.raises(ValueError, match="a stream's own groups are made with `add_group`"):
         run_graph_generator(invert_twice_grouped)
+
+
+def test_a_member_named_on_a_fragment_s_port_is_refused_naming_the_port() -> None:
+    soft = StreamBuilder("rig").add(invert_twice, name="soft")
+
+    with pytest.raises(
+        ValueError,
+        match=r"fragment `soft`'s Output `video` is wired whole, and is named member `level`",
+    ):
+        soft.output("video", member="level")
+    with pytest.raises(ValueError, match=r"fragment `soft`'s Input `video` is wired whole"):
+        soft.input("video", member="level")
