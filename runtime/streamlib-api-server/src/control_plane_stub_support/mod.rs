@@ -756,7 +756,8 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 mod graph_mutations_recorded_by_a_stub;
 pub(crate) use graph_mutations_recorded_by_a_stub::{
     ArmedAddNodeRefusal, ArmedRefusalOfEachEditTheDocumentsHoldFirst,
-    GraphEditsOfAStubAppliedOneByOne, RecordedEditsHeldNotLive, graph_mutation_ops_record_the_call,
+    GraphEditsOfAStubAppliedOneByOne, RecordedEditsHeldNotLive, RecordedRebuildsAndTheArmedRefusal,
+    graph_mutation_ops_record_the_call,
 };
 
 /// The target of every tracing span and event raised on the calling thread

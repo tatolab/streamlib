@@ -245,3 +245,46 @@ fn a_setting_set_on_a_stream_not_started_is_read_at_its_start() {
     assert_eq!(setups[0].get("kernel_size"), Some(&json!(5)));
     stream.stop().expect("the stream stops");
 }
+
+/// A node left to rebuild when its stream stops waits on no rebuild once the stream starts
+/// again: the start builds it from the value set, and a rebuild after it rebuilds nothing.
+///
+/// Mental-revert: keeping the nodes left to rebuild across the stop rebuilds the node again
+/// after the start built it.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_node_left_to_rebuild_when_its_stream_stops_is_built_once_by_the_next_start() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let (_runner, stream, node) =
+        a_stream_holding_a_node_reading_its_settings_at_setup(project_directory.path(), true);
+    set(&stream, node, "kernel_size", json!(5)).expect("the running node takes the kernel size");
+    let left_to_rebuild = stream
+        .the_live_nodes()
+        .into_iter()
+        .find(|held| held.node_uuid == node)
+        .expect("the stream holds the node")
+        .node_run_id;
+    assert!(stream.is_left_to_rebuild(&left_to_rebuild));
+
+    stream
+        .stop_playback_keeping_the_graph()
+        .expect("the stream's playback stops");
+    assert!(!stream.is_left_to_rebuild(&left_to_rebuild));
+    stream.start().expect("the stream starts again");
+    stream
+        .wait_until_every_node_is_running(Duration::from_secs(30))
+        .expect("the node runs");
+
+    assert_eq!(
+        rebuild(&stream).expect("nothing is left to rebuild"),
+        Vec::<Uuid>::new()
+    );
+    let setups = the_settings_each_setup_read(node);
+    assert_eq!(setups.len(), 2, "one setup at each start: {setups:?}");
+    assert_eq!(setups[1].get("kernel_size"), Some(&json!(5)));
+    stream.stop().expect("the stream stops");
+}

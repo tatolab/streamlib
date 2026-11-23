@@ -147,14 +147,15 @@ const LEVEL_NODE_UUID: &str = "8d8d8d8d-8d8d-4d8d-8d8d-8d8d8d8d8d8d";
 /// next transaction answers too.
 ///
 /// Mental-revert: rebuilding `blur` in the retype's own reversal, while the batch still holds
-/// the stream's one writer, waits for ever, holding the project's lock.
-#[tokio::test(flavor = "multi_thread")]
+/// the stream's one writer, waits for ever, holding the project's lock, and the transaction
+/// does not answer within the minute.
+#[test]
 #[serial_test::serial(nodes_reading_their_settings_at_setup)]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn a_retype_refused_after_a_set_left_a_node_to_rebuild_answers_and_builds_it_back() {
+fn a_retype_refused_after_a_set_left_a_node_to_rebuild_answers_and_builds_it_back() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     streamlib_media_builtins::register_the_conversion_node_types();
     forget_every_setup_run();
@@ -173,12 +174,10 @@ async fn a_retype_refused_after_a_set_left_a_node_to_rebuild_answers_and_builds_
     let stream_id = engine.a_stream_started_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
     let answered_within_a_minute = |operations: Value| {
-        tokio::time::timeout(
+        engine.the_answer_or_the_refusal_within(
             std::time::Duration::from_secs(60),
-            engine.the_answer_or_the_refusal_of(
-                "transact",
-                json!({ "author": an_agent_named("alice"), "operations": operations }),
-            ),
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": operations }),
         )
     };
 
@@ -187,7 +186,6 @@ async fn a_retype_refused_after_a_set_left_a_node_to_rebuild_answers_and_builds_
         { "operation": "set_node_input_value", "stream": stream_asset, "node": LEVEL_NODE_UUID,
           "input": "pin_type", "value": { "type": "string" } },
     ]))
-    .await
     .expect("the transaction answers")
     .expect_err("a String holding a range is refused");
 
@@ -214,7 +212,6 @@ async fn a_retype_refused_after_a_set_left_a_node_to_rebuild_answers_and_builds_
         "kernel_size",
         json!(7)
     )]))
-    .await
     .expect("the next transaction answers")
     .expect("the next kernel size is set");
 }

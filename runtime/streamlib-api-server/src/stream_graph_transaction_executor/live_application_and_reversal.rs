@@ -76,13 +76,16 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Make each of `operations`, each by the loaded stream it changes, on that running stream,
     /// once the project's graph documents hold it. A running stream that refuses one holds it,
     /// and each later one of that stream, as an edit not live yet, which `graph` draws and its
-    /// diagnostics list until its playback stops and brings it to its document.
+    /// diagnostics list until its playback stops and brings it to its document. Each stream
+    /// that took one then rebuilds every node they left to rebuild, whatever they were: a
+    /// reconcile an operation goes through leaves its rebuild to this caller. A rebuild it
+    /// refuses holds each operation the stream took as not live.
     pub(super) fn make_live_what_the_documents_now_hold(
         &self,
         operations: Vec<(String, StreamGraphOperation)>,
     ) {
         let mut refusal_of_each_stream_that_refused: HashMap<String, String> = HashMap::new();
-        let mut sets_made_live_on_each_stream: BTreeMap<
+        let mut made_live_on_each_stream: BTreeMap<
             String,
             (Arc<dyn RuntimeOperations>, Vec<StreamGraphOperation>),
         > = BTreeMap::new();
@@ -126,20 +129,13 @@ impl StreamGraphTransactionExecutor<'_> {
                 refusal_of_each_stream_that_refused.insert(stream_id, refusal);
                 continue;
             }
-            if matches!(
-                held_if_refused,
-                StreamGraphOperation::SetNodeInputValue { .. }
-                    | StreamGraphOperation::SetPinValue { .. }
-                    | StreamGraphOperation::SetNodeConfig { .. }
-            ) {
-                sets_made_live_on_each_stream
-                    .entry(stream_id)
-                    .or_insert_with(|| (Arc::clone(&stream_operations), Vec::new()))
-                    .1
-                    .push(held_if_refused);
-            }
+            made_live_on_each_stream
+                .entry(stream_id)
+                .or_insert_with(|| (Arc::clone(&stream_operations), Vec::new()))
+                .1
+                .push(held_if_refused);
         }
-        for (stream_id, (stream_operations, sets)) in sets_made_live_on_each_stream {
+        for (stream_id, (stream_operations, made_live)) in made_live_on_each_stream {
             let Err(refusal) = self
                 .async_runtime
                 .block_on(stream_operations.rebuild_each_node_a_setting_read_at_setup_changed())
@@ -153,8 +149,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 "the project's graph documents hold a setting its running node did not build \
                  with; the stream holds it not live until its playback stops"
             );
-            for set in &sets {
-                stream_operations.hold_an_edit_its_document_holds_not_live(set, &refusal);
+            for operation in &made_live {
+                stream_operations.hold_an_edit_its_document_holds_not_live(operation, &refusal);
             }
         }
     }

@@ -397,6 +397,8 @@ impl LoadedStreamInThisRuntime {
         *self.runtime_context.lock() = None;
 
         *self.status.lock() = RuntimeStatus::Stopped;
+        // A start builds each node from its saved values, so none waits on a rebuild.
+        self.nodes_a_setting_read_at_setup_rebuilds.lock().clear();
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopped);
         tracing::info!("[stop] The stream `{}` stopped", self.stream_id());
         (node_removal_outcome, nodes_torn_down, links_torn_down)
