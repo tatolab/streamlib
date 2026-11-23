@@ -84,24 +84,26 @@ pub(crate) fn the_function_node_pool_descriptor(
 /// one that runs in the app process, which runs no node code, a shader node,
 /// which the stream's shader evaluator runs with no node code, or a class
 /// driven manually, whose native half reads without the Python interpreter's
-/// lock, fed an island that runs a node as Python.
+/// lock, fed an island that runs a node as Python; or into a setting its
+/// reader reads at setup, which the engine reads in the reader's place.
 pub(crate) fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     graph.traversal().e(link_id).first().is_some_and(|link| {
         the_function_node_pool_evaluates_an_island_from_into(
             graph,
             link.source().node_run_id(),
-            link.to_port().node_run_id(),
+            link.to_port(),
         )
     })
 }
 
-/// Whether a link from `source_id` into `reader_id` carries an island the stream's function
-/// node pool evaluates, as [`needs_the_function_node_pool`] judges a link already made.
+/// Whether a link from `source_id` into `to` carries an island the stream's function node pool
+/// evaluates, as [`needs_the_function_node_pool`] judges a link already made.
 pub(crate) fn the_function_node_pool_evaluates_an_island_from_into(
     graph: &Graph,
     source_id: &NodeRunId,
-    reader_id: &NodeRunId,
+    to: &InputLinkPortRef,
 ) -> bool {
+    let reader_id = to.node_run_id();
     if !runs_inside_the_read_of_each_node_it_feeds(graph, source_id)
         || runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
     {
@@ -113,7 +115,9 @@ pub(crate) fn the_function_node_pool_evaluates_an_island_from_into(
     if matches!(reader.node_kind(), Some(NodeKind::Function { .. })) {
         return false;
     }
-    if reader.node_kind() == Some(NodeKind::Shader) {
+    if reader.node_kind() == Some(NodeKind::Shader)
+        || graph.is_a_setting_read_at_setup(reader_id, to.port_name())
+    {
         return true;
     }
     let node_types = graph.node_types_this_stream_resolves();
@@ -235,7 +239,9 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
 }
 
 /// Replace `link_id` with a link from its island into a new input of the pool
-/// and a link from the matching new output of the pool into its reader.
+/// and a link from the matching new output of the pool into its reader. A
+/// carry into a setting read at setup is written as the pool sets up too, so
+/// its reader, set up after the pool, is built with what the island computes.
 fn carry_one_link_through_the_pool(
     graph: &mut Graph,
     pool_id: &NodeRunId,
@@ -260,6 +266,8 @@ fn carry_one_link_through_the_pool(
                 .find(|port| port.name == source.port_name())
         })
         .is_some_and(|port| port.family.family_follows_input_port.is_some());
+    let feeds_a_setting_read_at_setup =
+        graph.is_a_setting_read_at_setup(destination.node_run_id(), destination.port_name());
     let family =
         the_family_a_link_out_of_an_output_carries(graph, source.node_run_id(), source.port_name())
             .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Channels));
@@ -309,6 +317,9 @@ fn carry_one_link_through_the_pool(
         if let (Some(carry), Some(carry_family)) = (carry.as_object_mut(), carry_family.as_object())
         {
             carry.extend(carry_family.clone());
+            if feeds_a_setting_read_at_setup {
+                carry.insert("written_at_setup".to_owned(), JsonValue::Bool(true));
+            }
         }
         carries.push(carry);
     }

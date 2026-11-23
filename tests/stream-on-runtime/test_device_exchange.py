@@ -352,7 +352,7 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_tatolabd_runni
     The second claim is the real one — a consumer holding a frame while the
     producer runs 16 frames past it still reads the pixels it was delivered,
     because the checkout lease keeps the pool off that slot. The probe takes
-    that lease by reading through its `Image` port attribute; a read by name
+    that lease by reading through its Texture pin; a read by name
     takes no claim, and a probe reading that way would assert a lease it never
     held.
 

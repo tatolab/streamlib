@@ -193,32 +193,32 @@ class _RayTracingKernelProbeBase:
 
     # Declared, not merely assigned: `setup` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
-    gpu_full_access: GpuContextFullAccess
-    kernel: RayTracingKernel
-    bottom_level_structure: AccelerationStructureHandle
-    top_level_structure: AccelerationStructureHandle
-    traced_output: GpuSurfaceHandle
+    _gpu_full_access: GpuContextFullAccess
+    _kernel: RayTracingKernel
+    _bottom_level_structure: AccelerationStructureHandle
+    _top_level_structure: AccelerationStructureHandle
+    _traced_output: GpuSurfaceHandle
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
-            self.gpu_full_access = gpu
+            self._gpu_full_access = gpu
             try:
-                self.bottom_level_structure = gpu.build_triangles_blas(
+                self._bottom_level_structure = gpu.build_triangles_blas(
                     vertices=TRIANGLE_VERTICES,
                     indices=TRIANGLE_INDICES,
                     label="python-triangle-blas",
                 )
-                self.top_level_structure = gpu.build_tlas(
-                    instances=[{"blas": self.bottom_level_structure}],
+                self._top_level_structure = gpu.build_tlas(
+                    instances=[{"blas": self._bottom_level_structure}],
                     label="python-triangle-tlas",
                 )
-                self.kernel = _traced_triangle_kernel(gpu, DECLARED_BINDINGS)
+                self._kernel = _traced_triangle_kernel(gpu, DECLARED_BINDINGS)
             except Exception as refusal:  # noqa: BLE001 — reported, then skipped on
                 if RAY_TRACING_UNAVAILABLE in str(refusal):
                     return {"ray_tracing_unavailable": str(refusal)}
                 raise
-            self.traced_output = gpu.acquire_texture(
+            self._traced_output = gpu.acquire_texture(
                 SURFACE_WIDTH,
                 SURFACE_HEIGHT,
                 TRACED_OUTPUT_FORMAT,
@@ -233,10 +233,10 @@ class _RayTracingKernelProbeBase:
 
     def trace_the_conformance_grid(self) -> None:
         """The one trace every probe here spells the same way."""
-        self.kernel.trace(
+        self._kernel.trace(
             bindings={
-                SCENE_BINDING: self.top_level_structure,
-                TRACED_OUTPUT_BINDING: self.traced_output,
+                SCENE_BINDING: self._top_level_structure,
+                TRACED_OUTPUT_BINDING: self._traced_output,
             },
             grid=(SURFACE_WIDTH, SURFACE_HEIGHT, 1),
         )
@@ -246,7 +246,7 @@ class _RayTracingKernelProbeBase:
 
 
 @node.meta(description="Builds a BLAS and a TLAS and traces them into a storage image")
-@node.process(execution="manual")
+@node(execution="manual")
 class TracedTriangleProbe(_RayTracingKernelProbeBase):
     """The demo: a Python node builds a scene and traces it.
 
@@ -263,21 +263,21 @@ class TracedTriangleProbe(_RayTracingKernelProbeBase):
         self.trace_the_conformance_grid()
         return {
             "traced": True,
-            "binding_names": list(self.kernel.binding_names),
-            "bottom_level_label": self.bottom_level_structure.label,
-            "top_level_label": self.top_level_structure.label,
-            "traced_output_surface_id": self.traced_output.surface_id,
+            "binding_names": list(self._kernel.binding_names),
+            "bottom_level_label": self._bottom_level_structure.label,
+            "top_level_label": self._top_level_structure.label,
+            "traced_output_surface_id": self._traced_output.surface_id,
         }
 
 
 @node.meta(description="Every way of getting a trace's bindings wrong, refused by name")
-@node.process(execution="manual")
+@node(execution="manual")
 class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
     """Unknown, missing and kind-mismatched, each raising with a message naming
     what the shaders actually declare."""
 
     def observe(self) -> dict:
-        gpu = self.gpu_full_access
+        gpu = self._gpu_full_access
         grid = (SURFACE_WIDTH, SURFACE_HEIGHT, 1)
 
         unknown_at_construction = _refusal_of(
@@ -300,24 +300,24 @@ class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
         )
 
         unknown_at_trace = _refusal_of(
-            lambda: self.kernel.trace(
+            lambda: self._kernel.trace(
                 bindings={
-                    SCENE_BINDING: self.top_level_structure,
-                    TRACED_OUTPUT_BINDING: self.traced_output,
-                    "ambient_occlusion_radius": self.traced_output,
+                    SCENE_BINDING: self._top_level_structure,
+                    TRACED_OUTPUT_BINDING: self._traced_output,
+                    "ambient_occlusion_radius": self._traced_output,
                 },
                 grid=grid,
             )
         )
         missing_output_at_trace = _refusal_of(
-            lambda: self.kernel.trace(
-                bindings={SCENE_BINDING: self.top_level_structure},
+            lambda: self._kernel.trace(
+                bindings={SCENE_BINDING: self._top_level_structure},
                 grid=grid,
             )
         )
         missing_scene_at_trace = _refusal_of(
-            lambda: self.kernel.trace(
-                bindings={TRACED_OUTPUT_BINDING: self.traced_output},
+            lambda: self._kernel.trace(
+                bindings={TRACED_OUTPUT_BINDING: self._traced_output},
                 grid=grid,
             )
         )
@@ -332,12 +332,12 @@ class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
             "missing_output_at_trace": missing_output_at_trace,
             "missing_scene_at_trace": missing_scene_at_trace,
             "traced_after_the_refusals": True,
-            "binding_names": list(self.kernel.binding_names),
+            "binding_names": list(self._kernel.binding_names),
         }
 
 
 @node.meta(description="A binding declared for a stage this kernel has no module for")
-@node.process(execution="manual")
+@node(execution="manual")
 class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
     """The ticket's named validation case, at the line it belongs to.
 
@@ -349,7 +349,7 @@ class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
     """
 
     def observe(self) -> dict:
-        gpu = self.gpu_full_access
+        gpu = self._gpu_full_access
 
         def declare_the_scene_for_a_stage_this_kernel_has_no_module_for() -> None:
             _traced_triangle_kernel(
@@ -378,7 +378,7 @@ class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
 
 
 @node.meta(description="A uniform-buffer binding a trace cannot name a surface for")
-@node.process(execution="manual")
+@node(execution="manual")
 class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
     """A uniform-buffer binding is reflected, and refused at the trace.
 
@@ -388,7 +388,7 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
     """
 
     def observe(self) -> dict:
-        tinted = self.gpu_full_access.create_ray_tracing_kernel(
+        tinted = self._gpu_full_access.create_ray_tracing_kernel(
             stages=[
                 {"stage": "ray_gen", "source": RAY_GENERATION_WITH_A_UNIFORM_BUFFER_SLANG},
                 {"stage": "miss", "source": MISS_SLANG},
@@ -402,9 +402,9 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
         buffer_kind_binding = _refusal_of(
             lambda: tinted.trace(
                 bindings={
-                    SCENE_BINDING: self.top_level_structure,
-                    TRACED_OUTPUT_BINDING: self.traced_output,
-                    buffer_binding: self.traced_output,
+                    SCENE_BINDING: self._top_level_structure,
+                    TRACED_OUTPUT_BINDING: self._traced_output,
+                    buffer_binding: self._traced_output,
                 },
                 grid=(SURFACE_WIDTH, SURFACE_HEIGHT, 1),
             )
@@ -417,36 +417,36 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
 
 
 @node.meta(description="An acceleration structure is named by its handle, or not at all")
-@node.process(execution="manual")
+@node(execution="manual")
 class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
     """Nothing publishes an acceleration structure for another node to
     resolve, so a surface id is not a spelling for one — and the structure a
     trace binds is the top-level one, which is what holds the instances."""
 
     def observe(self) -> dict:
-        gpu = self.gpu_full_access
+        gpu = self._gpu_full_access
         grid = (SURFACE_WIDTH, SURFACE_HEIGHT, 1)
 
         a_surface_where_a_structure_belongs = _refusal_of(
-            lambda: self.kernel.trace(
+            lambda: self._kernel.trace(
                 bindings={
-                    SCENE_BINDING: self.traced_output,
-                    TRACED_OUTPUT_BINDING: self.traced_output,
+                    SCENE_BINDING: self._traced_output,
+                    TRACED_OUTPUT_BINDING: self._traced_output,
                 },
                 grid=grid,
             )
         )
         a_bottom_level_structure_at_the_trace = _refusal_of(
-            lambda: self.kernel.trace(
+            lambda: self._kernel.trace(
                 bindings={
-                    SCENE_BINDING: self.bottom_level_structure,
-                    TRACED_OUTPUT_BINDING: self.traced_output,
+                    SCENE_BINDING: self._bottom_level_structure,
+                    TRACED_OUTPUT_BINDING: self._traced_output,
                 },
                 grid=grid,
             )
         )
         a_top_level_structure_as_an_instance = _refusal_of(
-            lambda: gpu.build_tlas(instances=[{"blas": self.top_level_structure}])
+            lambda: gpu.build_tlas(instances=[{"blas": self._top_level_structure}])
         )
         vertices_that_are_not_triangles = _refusal_of(
             lambda: gpu.build_triangles_blas(
@@ -478,7 +478,7 @@ RAY_TRACING_TIER_ABSENT = "the ray-tracing tier is absent"
 
 
 @node.meta(description="Ray-tracing constructors refuse at setup() naming the absent tier")
-@node.process(execution="manual")
+@node(execution="manual")
 class RayTracingTierAbsentRefusalProbe:
     """Each ray-tracing constructor called from `setup()`, answered or refused.
 

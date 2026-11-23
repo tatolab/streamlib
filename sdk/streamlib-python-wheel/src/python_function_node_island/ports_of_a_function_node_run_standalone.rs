@@ -188,3 +188,38 @@ pub(crate) fn hand_an_unread_message_on(
 ) -> PyResult<()> {
     link_data_access.hand_a_message_on_unread(python, output_port, &message.message.message)
 }
+
+/// Whether `message` carries what `other` does: the same payload, described the same way,
+/// whatever each was stamped with and, for a Channels block, whichever sample it starts at.
+#[pyfunction]
+#[pyo3(signature = (*, message, other))]
+pub(crate) fn an_unread_message_carries_what_another_does(
+    message: &UnreadMessageAFunctionNodeHandsOn,
+    other: &UnreadMessageAFunctionNodeHandsOn,
+) -> bool {
+    let (message, other) = (&message.message.message, &other.message.message);
+    message.payload_bytes == other.payload_bytes
+        && described_the_same_whichever_sample_it_starts_at(
+            &message.payload_descriptor,
+            &other.payload_descriptor,
+        )
+}
+
+/// Whether `descriptor` and `other` describe one payload alike, a Channels block's first
+/// sample left out.
+fn described_the_same_whichever_sample_it_starts_at(
+    descriptor: &DataChannelPayloadDescriptor,
+    other: &DataChannelPayloadDescriptor,
+) -> bool {
+    let is_a_channels_block = DataChannelPayloadDescriptorKind::from_wire(descriptor.kind)
+        == Some(DataChannelPayloadDescriptorKind::ChannelsBlock);
+    if descriptor.kind != other.kind || !is_a_channels_block {
+        return descriptor == other;
+    }
+    let from_its_first_sample =
+        |descriptor: &DataChannelPayloadDescriptor| ChannelsBlockDescriptorBody {
+            start_sample: 0,
+            ..ChannelsBlockDescriptorBody::from_descriptor_body(&descriptor.body)
+        };
+    from_its_first_sample(descriptor) == from_its_first_sample(other)
+}

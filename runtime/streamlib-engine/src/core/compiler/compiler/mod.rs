@@ -988,3 +988,6 @@ mod abandoned_shader_node_restart_tests;
 
 #[cfg(test)]
 mod transaction_held_for_one_commit_tests;
+
+#[cfg(test)]
+mod nodes_set_up_after_the_sources_of_their_wired_settings_tests;

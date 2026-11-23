@@ -159,6 +159,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        python_function_node_island::an_unread_message_carries_what_another_does,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_input_port_pin_values::read_each_unlinked_input_port_as_its_pin_value,
         module
     )?)?;

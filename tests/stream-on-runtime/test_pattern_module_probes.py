@@ -3,35 +3,36 @@
 
 """Probe that reads the test pattern module's frames from a node interpreter.
 
-Reports the first two Image frames it receives as one JSON marker line on
+Reports the first two Texture frames it receives as one JSON marker line on
 `tatolabd`'s standard error — the boundary under test is one node's
 device frames reaching a Python node in an interpreter of its own.
 """
 
 import dataclasses
 import json
+from typing import Annotated
 
-from tatolab.stream import Image, Input, log, node
+from tatolab.stream import InputPin, StreamDelivery, Texture, log, node
 
 RESULT_MARKER = "MARKER:FRAMES_SEEN "
 
 
-@node.process
+@node
 class ImageFrameProbe:
-    """Reports the first two Image frames the test pattern publishes."""
+    """Reports the first two Texture frames the test pattern publishes."""
 
-    video_from_upstream = Input(Image, delivery="ordered")
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
-        self.frames_seen = []
+        self._frames_seen = []
 
     def process(self, ctx) -> None:
-        if len(self.frames_seen) >= 2:
+        if len(self._frames_seen) >= 2:
             return
-        frame = ctx.inputs.read(self.video_from_upstream)
+        frame = self.video_from_upstream.read()
         if frame is None:
             return
-        self.frames_seen.append(
+        self._frames_seen.append(
             {
                 "surface_id": frame.surface_id,
                 "width": frame.width,
@@ -41,5 +42,5 @@ class ImageFrameProbe:
                 "timestamp_ns": frame.timestamp_ns,
             }
         )
-        if len(self.frames_seen) == 2:
-            log.info(RESULT_MARKER + json.dumps(self.frames_seen))
+        if len(self._frames_seen) == 2:
+            log.info(RESULT_MARKER + json.dumps(self._frames_seen))

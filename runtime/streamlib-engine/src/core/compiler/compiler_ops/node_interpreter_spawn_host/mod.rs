@@ -215,6 +215,9 @@ pub(crate) struct NodeInterpreterSpawnHost {
     /// own belt-and-braces call cannot make it a second time.
     shutdown_was_already_asked_of_this_helper: bool,
     link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
+    /// Whether the helper evaluates the function node it runs as a standalone node once as it
+    /// sets up, as [`FunctionNodePromotedToItsOwnProcessComponent::evaluated_at_setup`] says.
+    its_function_node_is_evaluated_at_setup: bool,
     /// The node's catalog entries, which the helper replaces and reads over
     /// its bridge; each helper it starts gets leases of its own.
     what_the_node_reaches: WhatAHelperPlacedNodeReaches,
@@ -719,6 +722,7 @@ pub(crate) fn spawn_host_for_graph_node(
             store_of_the_node: None,
         },
         link_wiring,
+        its_function_node_is_evaluated_at_setup: false,
         #[cfg(target_os = "macos")]
         surface_share_admission_of_the_helper_process: None,
     }
@@ -741,7 +745,7 @@ pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
                 node.id
             ))
         })?;
-    let host = spawn_host_for_graph_node(
+    let mut host = spawn_host_for_graph_node(
         function_node_import_path,
         descriptor,
         ExecutionConfig::new(promotion.process_execution),
@@ -762,6 +766,7 @@ pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
             node.id.to_string(),
             Arc::clone(&promotion.how_its_own_helper_ran_it),
         )]);
+    host.its_function_node_is_evaluated_at_setup = promotion.evaluated_at_setup;
     Ok(host)
 }
 

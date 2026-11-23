@@ -41,6 +41,39 @@ use super::{
 };
 
 impl NodeInterpreterSpawnHost {
+    /// The setup command its helper is sent, carrying `ports`, the board it writes loss counts
+    /// on and the stream clock it reads.
+    pub(super) fn the_setup_command_to_its_helper(
+        &self,
+        ports: serde_json::Value,
+        loss_count_board: serde_json::Value,
+        stream_clock_named_to_the_helper: serde_json::Value,
+    ) -> serde_json::Value {
+        // The helper's writer keeps the last message of each, as a native node's does.
+        let output_ports_keeping_their_last_message: Vec<&str> = self
+            .descriptor
+            .outputs
+            .iter()
+            .filter(|output_port| output_port.flows_as_a_value())
+            .map(|output_port| output_port.name.as_str())
+            .collect();
+        serde_json::json!({
+            // The engine's own constant: the escalate dispatch reads
+            // this exact spelling to decide that a window may be
+            // minted, and a rename on one side alone would refuse
+            // every window silently.
+            "cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
+            "capability": "full",
+            "config": self.node_configuration.clone().unwrap_or(serde_json::Value::Null),
+            "node_run_id": self.node_run_id,
+            "ports": ports,
+            "loss_count_board": loss_count_board,
+            "output_ports_keeping_their_last_message": output_ports_keeping_their_last_message,
+            "function_node_evaluated_at_setup": self.its_function_node_is_evaluated_at_setup,
+            "stream_clock": stream_clock_named_to_the_helper,
+        })
+    }
+
     /// Build the command that becomes the child.
     ///
     /// Separate from the spawn so what a child inherits is assertable without
@@ -395,39 +428,17 @@ impl NodeInterpreterSpawnHost {
             },
         )?;
 
-        let config = self
-            .node_configuration
-            .clone()
-            .unwrap_or(serde_json::Value::Null);
-        // The helper's writer keeps the last message of each, as a native node's does.
-        let output_ports_keeping_their_last_message: Vec<&str> = self
-            .descriptor
-            .outputs
-            .iter()
-            .filter(|output_port| output_port.flows_as_a_value())
-            .map(|output_port| output_port.name.as_str())
-            .collect();
         // Through the envelope, so the links it carries go out with this
         // command and every link held behind it is handed over after.
         let setup_command_sent = self
             .link_wiring
             .send_the_setup_command_then_hand_every_later_link_over(
                 |ports| {
-                    bridge.send(&serde_json::json!({
-                        // The engine's own constant: the escalate dispatch reads
-                        // this exact spelling to decide that a window may be
-                        // minted, and a rename on one side alone would refuse
-                        // every window silently.
-                        "cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
-                        "capability": "full",
-                        "config": config,
-                        "node_run_id": self.node_run_id,
-                        "ports": ports,
-                        "loss_count_board": loss_count_board,
-                        "output_ports_keeping_their_last_message":
-                            output_ports_keeping_their_last_message,
-                        "stream_clock": stream_clock_named_to_the_helper,
-                    }))
+                    bridge.send(&self.the_setup_command_to_its_helper(
+                        ports,
+                        loss_count_board,
+                        stream_clock_named_to_the_helper,
+                    ))
                 },
                 bridge.link_delivery_to_this_subprocess(&self.node_display_name),
             );
