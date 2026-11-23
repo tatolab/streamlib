@@ -40,6 +40,8 @@ const UNTYPED_PASS_ON: &str = "FoundAnotherWayUntypedPassOn";
 const IMAGE_STRING_SINK: &str = "FoundAnotherWayImageStringSink";
 const FAMILY_SET_IN_CONFIG_SOURCE: &str = "FoundAnotherWayFamilySetInConfigSource";
 const CHANNELS_FLOAT_SINK: &str = "FoundAnotherWayChannelsFloatSink";
+/// A node whose input `value`, typed by its setting `kind`, takes a wire or a value.
+const CHOSEN_SINK_TAKING_A_VALUE: &str = "FoundAnotherWayChosenSinkTakingAValue";
 /// The output of a `PASS_ON` node, which takes the type of its input `value`.
 const PASSED_ON: &str = "passed_on";
 
@@ -172,6 +174,20 @@ fn register_the_fixture_node_types() {
                         PortFamilyDeclaration::of_family(PortFamily::Image),
                     )
                     .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
+                ],
+                Vec::new(),
+            ),
+            a_node_type(
+                CHOSEN_SINK_TAKING_A_VALUE,
+                vec![
+                    a_type_choice(),
+                    a_port(
+                        "value",
+                        DeclaredPinType::SetByInput {
+                            input_name: "kind".to_owned(),
+                        },
+                    )
+                    .with_input_mode(NodeInputMode::WireOrValue),
                 ],
                 Vec::new(),
             ),
@@ -738,4 +754,48 @@ fn a_connect_waits_while_an_input_value_change_is_made() {
         .join()
         .expect("the connect does not panic")
         .expect("a String to a String connects once the change is made");
+}
+
+/// A value set on an input whose setting chooses a bundle is handed to its node as that bundle,
+/// each member it leaves out reading its own default.
+///
+/// Mental-revert: reading the input by the pin it states, which is none, hands its node nothing,
+/// so MakeBundle's set `label` read as its default on the rig.
+#[test]
+fn a_value_set_on_an_input_a_setting_types_as_a_bundle_is_handed_to_its_node() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let reading = PinType::Bundle {
+        members: vec![
+            crate::core::descriptors::BundleMember {
+                name: "level".to_owned(),
+                member_type: float(),
+                meaning: None,
+                default_value: None,
+            },
+            crate::core::descriptors::BundleMember {
+                name: "label".to_owned(),
+                member_type: PinType::String {},
+                meaning: None,
+                default_value: Some(json!("unnamed")),
+            },
+        ],
+    };
+    let mut pins = choosing(reading);
+    pins.insert("value".to_owned(), json!({"level": 0.5, "label": "set"}));
+    let sink = a_node_holding(&compiler, CHOSEN_SINK_TAKING_A_VALUE, pins);
+
+    let handed = compiler.scope(|graph, _tx| {
+        let node = graph
+            .traversal()
+            .v(&sink)
+            .first()
+            .expect("the node is held");
+        crate::core::graph::input_values::the_unlinked_input_values(graph, node)
+    });
+
+    assert_eq!(
+        handed.get("value"),
+        Some(&json!({"level": 0.5, "label": "set"}))
+    );
 }
