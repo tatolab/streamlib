@@ -262,9 +262,12 @@ mod tests {
         let health = assert_the_local_api_socket_answers_health(local_api_socket_path).await;
         assert_eq!(health.body, b"ok");
 
-        let graph =
-            http_exchange_over_unix_socket(local_api_socket_path, "GET /api/graph HTTP/1.1", b"")
-                .await;
+        let graph = http_exchange_over_unix_socket(
+            local_api_socket_path,
+            "POST /api/operations/graph HTTP/1.1",
+            b"{}",
+        )
+        .await;
         assert!(graph.status_line.contains(" 200 "), "{}", graph.status_line);
     }
 

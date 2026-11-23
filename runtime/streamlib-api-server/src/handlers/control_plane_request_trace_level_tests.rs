@@ -8,11 +8,11 @@
 //! `RUST_LOG=tower_http=debug` brings all three records back.
 
 use super::router_surface_tests::control_plane_router_over_a_stub_runtime;
-use super::*;
 use crate::control_plane_stub_support::CapturedTracingTargets;
 use axum::body::Body;
-use axum::http::Request;
+use axum::http::{Request, StatusCode};
 use serial_test::serial;
+use streamlib_runtime_client_contract::local_api_wire_contract::control_rest_operation_route_path;
 use tower::ServiceExt;
 
 fn serve_one_graph_request() {
@@ -24,8 +24,9 @@ fn serve_one_graph_request() {
         let response = control_plane_router_over_a_stub_runtime()
             .oneshot(
                 Request::builder()
-                    .uri("/api/graph")
-                    .body(Body::empty())
+                    .method("POST")
+                    .uri(control_rest_operation_route_path("graph"))
+                    .body(Body::from("{}"))
                     .expect("the graph request builds"),
             )
             .await

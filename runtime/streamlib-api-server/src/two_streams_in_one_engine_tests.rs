@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 #[cfg(feature = "machine-directories-under-a-test-root")]
-use crate::control_plane_stub_support::http_get_over_the_local_api_socket;
+use crate::control_plane_stub_support::http_post_over_the_local_api_socket;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::Result;
@@ -18,6 +18,8 @@ use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OperationsOnTheStreamsLoadedInThisRuntime,
     OptionsForLoadingOneStream, Runner, StreamLocation,
 };
+#[cfg(feature = "machine-directories-under-a-test-root")]
+use streamlib_runtime_client_contract::local_api_wire_contract::control_rest_operation_route_path;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 use streamlib_runtime_client_contract::machine_directories_test_root::TestMachineRoot;
 use uuid::Uuid;
@@ -364,16 +366,20 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
     let served = crate::serve_the_local_api_for_an_engine(&loaded.engine)
         .expect("the local API binds the fixed socket under this run's test machine root");
 
-    let (status_line, body) =
-        http_get_over_the_local_api_socket(&local_api_socket_path, "/api/graph?stream=second")
-            .await;
+    let graph_route = control_rest_operation_route_path("graph");
+    let (status_line, body) = http_post_over_the_local_api_socket(
+        &local_api_socket_path,
+        &graph_route,
+        r#"{"stream": "second"}"#,
+    )
+    .await;
     assert!(status_line.contains(" 200 "), "{status_line}");
     assert!(
         body.contains("idle-in-second") && !body.contains("idle-in-first"),
         "{body}"
     );
     let (status_line, body) =
-        http_get_over_the_local_api_socket(&local_api_socket_path, "/api/graph").await;
+        http_post_over_the_local_api_socket(&local_api_socket_path, &graph_route, "").await;
     assert!(status_line.contains(" 200 "), "{status_line}");
     assert!(
         body.contains("idle-in-first") && body.contains("idle-in-second"),
@@ -385,23 +391,20 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
         loaded.engine.describe_this_runtime().machine,
         "the graph route names the machine `describe_runtime` does"
     );
-    for request_naming_no_loaded_stream in [
-        "/api/graph?stream=third",
-        "/api/graph?stream=",
-        "/api/registry?stream=..",
-    ] {
-        let (status_line, body) = http_get_over_the_local_api_socket(
+    for params_naming_no_loaded_stream in [r#"{"stream": "third"}"#, r#"{"stream": ""}"#] {
+        let (status_line, body) = http_post_over_the_local_api_socket(
             &local_api_socket_path,
-            request_naming_no_loaded_stream,
+            &graph_route,
+            params_naming_no_loaded_stream,
         )
         .await;
         assert!(
-            status_line.contains(" 404 "),
-            "{request_naming_no_loaded_stream}: {status_line}"
+            status_line.contains(" 422 "),
+            "{params_naming_no_loaded_stream}: {status_line}"
         );
         assert!(
             body.contains("first") && body.contains("second"),
-            "{request_naming_no_loaded_stream}: {body}"
+            "{params_naming_no_loaded_stream}: {body}"
         );
     }
 

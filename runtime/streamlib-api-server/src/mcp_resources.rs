@@ -4,9 +4,9 @@
 //! The MCP resources the runtime serves beside its tools: its node catalog and
 //! its live graph, each rendered at the moment it is read.
 //!
-//! Each is read-only and exposes nothing the control plane does not already
-//! serve — the node catalog is `/api/registry`'s document without a stream,
-//! the graph is the `graph` tool's without one.
+//! Each is read-only. The graph is the `graph` operation's answer without a
+//! stream; the node catalog is each native node type's descriptor, then each
+//! loaded stream's own.
 
 use std::sync::Arc;
 

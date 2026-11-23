@@ -10,7 +10,6 @@ use crate::PortFamily;
 
 /// An Image stream's frame rate, as a rational number of frames per second.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ImageStreamFrameRate {
     pub numerator: u32,
@@ -20,7 +19,6 @@ pub struct ImageStreamFrameRate {
 /// An HDR stream's content light level, in cd/m² (CTA-861.3, the H.265
 /// `content_light_level_info` SEI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ImageStreamContentLightLevel {
     /// MaxCLL: the brightest pixel of the stream.
@@ -33,7 +31,6 @@ pub struct ImageStreamContentLightLevel {
 /// H.265 `mastering_display_colour_volume` SEI's units: chromaticity in steps
 /// of 0.00002, luminance in steps of 0.0001 cd/m².
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ImageStreamMasteringDisplayColourVolume {
     /// The green, blue and red primaries' x, in the SEI's order.
@@ -50,7 +47,6 @@ pub struct ImageStreamMasteringDisplayColourVolume {
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ImageStreamFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,7 +60,6 @@ pub struct ImageStreamFacts {
 /// What a Packets output states about its stream before its first unit, for a
 /// decoder or a muxer; every field optional.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PacketsStreamFacts {
     /// The codec with its profile and level, as an RFC 6381 `codecs`
@@ -90,7 +85,6 @@ pub struct PacketsStreamFacts {
 
 /// An output port's stream facts, tagged by the family they belong to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(tag = "family", rename_all = "snake_case")]
 pub enum PortStreamFacts {
     Image(ImageStreamFacts),

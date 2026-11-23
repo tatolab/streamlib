@@ -120,7 +120,7 @@ fn a_helper_destination_is_notified_by_both_kinds_of_source_whatever_its_child_r
 /// Driven through the real seam end to end — the destination-side wiring
 /// the compiler op runs, a real channel service, the source's own
 /// `write_bytes_with_timestamp`, the destination's own `receive_pending` — so what is
-/// asserted is the rendering a `GET /api/graph` reader gets, not a counter
+/// asserted is the rendering a `graph` call reads, not a counter
 /// poked by hand. Fail-without-fix: drop the publish step from
 /// `wire_rust_dest` and the node renders no `metrics` at all, so a run that
 /// lost three of its four bags reads exactly like a healthy one.

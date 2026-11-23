@@ -505,7 +505,7 @@ impl std::fmt::Display for Graph {
 }
 
 impl Graph {
-    /// Render this graph as the `/api/graph` payload, on the machine named
+    /// Render this graph as the `graph` operation answers it, on the machine named
     /// `machine`: the graph as it was given, so the stream's function node pool
     /// renders under `function_node_pool` rather than as a node, and each link
     /// it carries renders once, as the link it was given.

@@ -3,11 +3,11 @@
 
 """A client of the machine's runtime's local API, from the suite venv alone.
 
-Nothing here imports `tatolab.runtime`: the plain HTTP routes (`/health`,
-`/api/graph`, `/api/registry`) are read with the standard library over the Unix
-socket, and MCP is the official MCP Python SDK's streamable-HTTP client over the
-same socket. One runtime holds every stream loaded into it, so a route or wait
-about one stream's graph names that stream; `/api/graph` without one answers
+Nothing here imports `tatolab.runtime`: `/health` and the JSON-RPC route
+`/control` are reached with the standard library over the Unix socket, and MCP
+is the official MCP Python SDK's streamable-HTTP client over the same socket.
+One runtime holds every stream loaded into it, so a call or wait about one
+stream's graph names that stream; `graph` without one answers
 `{"machine", "streams": [...]}`. A graph's nodes carry their state at
 `components["state"]`, its links at `state`.
 """
@@ -19,7 +19,6 @@ import http.client
 import json
 import socket
 import time
-import urllib.parse
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any, TypeVar
@@ -56,6 +55,9 @@ McpAnswer = TypeVar("McpAnswer")
 #: The JSON-RPC route every control operation is a method of.
 CONTROL_JSON_RPC_ROUTE = "/control"
 
+#: The MCP resource holding every node type each loaded stream can add, with its descriptor.
+NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
+
 #: The MCP tool that runs any operation the runtime serves to agents, by name.
 CALL_OPERATION_TOOL_NAME = "call_operation"
 
@@ -69,6 +71,14 @@ def call_operation_tool_call(
 
 class LocalApiRefusedTheRequest(Exception):
     """A local API route answered with a status other than 200."""
+
+
+class LocalApiRefusedTheCall(LocalApiRefusedTheRequest):
+    """A control operation answered with a JSON-RPC error, held as `error`."""
+
+    def __init__(self, method: str, error: "dict[str, Any]") -> None:
+        super().__init__(f"`{method}` was refused: {error}")
+        self.error = error
 
 
 def mcp_error_raised_in(raised: BaseException) -> MCPError:
@@ -139,31 +149,25 @@ class LocalApiClient:
             )
         answered = json.loads(body)
         if "error" in answered:
-            raise LocalApiRefusedTheRequest(f"`{method}` was refused: {answered['error']}")
+            raise LocalApiRefusedTheCall(method, answered["error"])
         return answered["result"]
-
-    def get_json(self, route: str) -> Any:
-        """GET `route` and return its JSON body; any status but 200 raises."""
-        return json.loads(self.get_text(route))
 
     def health(self) -> str:
         """`GET /health`: `ok` from a local API that answers."""
         return self.get_text("/health")
 
     def graph(self, stream: "str | None" = None) -> "dict[str, Any]":
-        """`GET /api/graph`: the stream's live graph — its nodes, links, exposures
-        and the machine's name — or, with no stream, `{"machine", "streams"}`."""
-        if stream is None:
-            return self.get_json("/api/graph")
-        return self.get_json(f"/api/graph?stream={urllib.parse.quote(stream, safe='')}")
+        """`graph`: the stream's live graph — its nodes, links, exposures and the
+        machine's name — or, with no stream, `{"machine", "streams"}`."""
+        return self.control_call("graph", {} if stream is None else {"stream": stream})
 
     def graph_of_a_stream_holding_one(self, stream: str) -> "dict[str, Any] | None":
-        """`stream`'s graph, as `graph` answers it; `None` when the runtime holds no graph for it,
-        as for a stream recorded failed before its graph loaded."""
+        """`stream`'s graph, as `graph` answers it; `None` when the runtime refuses it, holding no
+        graph for it, as for a stream recorded failed before its graph loaded."""
         try:
             return self.graph(stream)
-        except LocalApiRefusedTheRequest as refusal:
-            if " answered 404:" in str(refusal):
+        except LocalApiRefusedTheCall as refusal:
+            if refusal.error.get("data", {}).get("refusal_code") in ("refused", "stream_not_found"):
                 return None
             raise
 
@@ -188,13 +192,24 @@ class LocalApiClient:
             )
             time.sleep(STREAM_ACTION_FOLLOW_POLL_SECONDS)
 
-    def registry(self, stream: "str | None" = None) -> Any:
-        """`GET /api/registry`: the node types the stream can add — the native
-        ones, then those described in its own interpreter — or, with no stream,
-        `{"nodes", "streams"}`: the native types, then each loaded stream's own."""
-        if stream is None:
-            return self.get_json("/api/registry")
-        return self.get_json(f"/api/registry?stream={urllib.parse.quote(stream, safe='')}")
+    def node_catalog(self, stream: str) -> "dict[str, Any]":
+        """MCP `streamlib://node-catalog`: the node types the loaded stream can add, each with
+        its descriptor, as `{"nodes": [...]}` — the native ones, then those described in its own
+        interpreter, then those its installed modules declare."""
+
+        async def read(client: Client) -> Any:
+            return (await client.read_resource(NODE_CATALOG_RESOURCE_URI)).contents
+
+        (contents,) = self.answer_over_mcp(read)
+        catalog = json.loads(contents.text)
+        (of_the_stream,) = [each for each in catalog["streams"] if each["stream"] == stream]
+        return {
+            "nodes": [
+                *catalog["nodes"],
+                *of_the_stream["nodes"],
+                *(installed["node"] for installed in of_the_stream["installed"]),
+            ]
+        }
 
     def answer_over_mcp(
         self,

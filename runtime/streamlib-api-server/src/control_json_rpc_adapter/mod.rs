@@ -19,22 +19,18 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
-    CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, CONTROL_OPERATION_FAILED_ERROR_CODE,
-    CONTROL_OPERATION_REFUSED_ERROR_CODE, ControlContractVersionMismatch, ControlNotification,
-    ControlOperationCall, ControlOperationCallParseRefusal, InputValueChanged,
-    InputValueChangedNotificationParams, JSON_RPC_INVALID_PARAMS_ERROR_CODE,
-    JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE, PROJECT_LOG_RECORDS_PER_NOTIFICATION,
-    ProjectChangeKindOnTheWire, ProjectChanged, ProjectChangedNotificationParams,
-    ProjectLogRecordsWritten, ProjectLogRecordsWrittenNotificationParams,
-    StreamActionChangeKindOnTheWire, StreamActionChanged, StreamActionChangedNotificationParams,
-    StreamGraphChangeKindOnTheWire, StreamGraphChanged, StreamGraphChangedNotificationParams,
+    ControlNotification, InputValueChanged, InputValueChangedNotificationParams,
+    JSON_RPC_INVALID_REQUEST_ERROR_CODE, JSON_RPC_PARSE_ERROR_CODE,
+    PROJECT_LOG_RECORDS_PER_NOTIFICATION, ProjectChangeKindOnTheWire, ProjectChanged,
+    ProjectChangedNotificationParams, ProjectLogRecordsWritten,
+    ProjectLogRecordsWrittenNotificationParams, StreamActionChangeKindOnTheWire,
+    StreamActionChanged, StreamActionChangedNotificationParams, StreamGraphChangeKindOnTheWire,
+    StreamGraphChanged, StreamGraphChangedNotificationParams,
 };
 use streamlib_project_repository::{
     ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,
 };
-use streamlib_runtime_client_contract::local_api_wire_contract::{
-    NodeTypeOfOneProjectSource, ProjectActionRefusalOnTheWire, SuggestedOperationCall,
-};
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeTypeOfOneProjectSource;
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
 };
@@ -43,10 +39,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::control_operation_dispatcher::{
-    ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
-    ControlRequestOrigin,
-};
+use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlRequestOrigin};
 use crate::control_subscriptions_of_one_connection::{
     ControlSubscriptionsOfOneConnection, HeardOfAFollowedStream, ProjectLogNextPush,
     WhatAConnectionFollowsOfAStream,
@@ -56,6 +49,9 @@ use crate::notifications_sent_at_most_once_each_interval::{
     A_VALUE_CHANGE_TOLD_AS_EDITED_AT_MOST_EVERY, NotificationsSentAtMostOnceEachInterval,
     ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY,
 };
+use crate::one_control_call_answered::{
+    ControlCallError, the_origin_of_a_request_answered_once, the_outcome_of_one_control_call,
+};
 use crate::stream_graph_drops_raises_and_link_states::{
     STREAM_GRAPH_DROPS_RAISES_AND_LINK_STATES_SAMPLED_EVERY,
     StreamGraphDropsRaisesAndLinkStatesLastSampled,
@@ -64,11 +60,11 @@ use crate::stream_graph_drops_raises_and_link_states::{
 
 mod what_a_control_request_names;
 
-use what_a_control_request_names::{the_client_name_a_request_sent, the_contract_a_request_names};
+pub(crate) use what_a_control_request_names::{
+    the_client_name_a_request_sent, the_contract_a_request_names,
+};
 
 const JSON_RPC_VERSION: &str = "2.0";
-const JSON_RPC_PARSE_ERROR_CODE: i64 = -32700;
-const JSON_RPC_INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 /// How many answers and notifications one WebSocket may have waiting to be written.
 const CONTROL_WEBSOCKET_OUTGOING_MESSAGE_CAPACITY: usize = 256;
@@ -115,38 +111,21 @@ async fn answer_one_control_json_rpc_post(
     request_headers: HeaderMap,
     request_body: Bytes,
 ) -> Response {
-    let request_origin = ControlRequestOrigin {
-        client_name: the_client_name_a_request_sent(&request_headers),
-        subscriptions: None,
-        viewers_held_open: None,
-    };
-    let answer = match the_contract_a_request_names(&request_headers) {
-        Err(why) => Some(a_json_rpc_error(
-            Value::Null,
-            JSON_RPC_INVALID_REQUEST_ERROR_CODE,
-            why,
-            None,
-        )),
-        Ok(client_contract) => {
-            match dispatcher.refuse_a_client_of_another_contract(client_contract) {
-                Err(mismatch) => Some(the_json_rpc_error_of_a_contract_version_mismatch(
-                    Value::Null,
-                    mismatch,
-                )),
-                Ok(()) => match serde_json::from_slice::<Value>(&request_body) {
-                    Ok(message) => {
-                        the_answer_to_one_json_rpc_message(&dispatcher, &request_origin, message)
-                            .await
-                    }
-                    Err(not_json) => Some(a_json_rpc_error(
-                        Value::Null,
-                        JSON_RPC_PARSE_ERROR_CODE,
-                        format!("the request body is not JSON: {not_json}"),
-                        None,
-                    )),
-                },
+    let answer = match the_origin_of_a_request_answered_once(&dispatcher, &request_headers) {
+        Err(why) => Some(a_json_rpc_error(Value::Null, why)),
+        Ok(request_origin) => match serde_json::from_slice::<Value>(&request_body) {
+            Ok(message) => {
+                the_answer_to_one_json_rpc_message(&dispatcher, &request_origin, message).await
             }
-        }
+            Err(not_json) => Some(a_json_rpc_error(
+                Value::Null,
+                ControlCallError::new(
+                    JSON_RPC_PARSE_ERROR_CODE,
+                    format!("the request body is not JSON: {not_json}"),
+                    None,
+                ),
+            )),
+        },
     };
     match answer {
         Some(answer) => (StatusCode::OK, axum::Json(answer)).into_response(),
@@ -302,9 +281,7 @@ async fn read_and_answer_requests_until_the_client_closes(
                 }
                 Err(why_not_a_message) => Some(a_json_rpc_error(
                     Value::Null,
-                    JSON_RPC_PARSE_ERROR_CODE,
-                    why_not_a_message,
-                    None,
+                    ControlCallError::new(JSON_RPC_PARSE_ERROR_CODE, why_not_a_message, None),
                 )),
             };
             if let Some(answer) = answer {
@@ -844,12 +821,13 @@ async fn the_answer_to_one_json_rpc_message(
     request_origin: &ControlRequestOrigin,
     message: Value,
 ) -> Option<Value> {
+    let an_invalid_request = |why: &str| {
+        ControlCallError::new(JSON_RPC_INVALID_REQUEST_ERROR_CODE, why.to_owned(), None)
+    };
     let Value::Object(mut message) = message else {
         return Some(a_json_rpc_error(
             Value::Null,
-            JSON_RPC_INVALID_REQUEST_ERROR_CODE,
-            "a request is one JSON-RPC 2.0 object; batches are not served".to_owned(),
-            None,
+            an_invalid_request("a request is one JSON-RPC 2.0 object; batches are not served"),
         ));
     };
     let request_id = message.remove("id");
@@ -857,111 +835,35 @@ async fn the_answer_to_one_json_rpc_message(
     if message.get("jsonrpc").and_then(Value::as_str) != Some(JSON_RPC_VERSION) {
         return Some(a_json_rpc_error(
             id_to_answer,
-            JSON_RPC_INVALID_REQUEST_ERROR_CODE,
-            "`jsonrpc` must be \"2.0\"".to_owned(),
-            None,
+            an_invalid_request("`jsonrpc` must be \"2.0\""),
         ));
     }
     let Some(Value::String(method_name)) = message.remove("method") else {
         return Some(a_json_rpc_error(
             id_to_answer,
-            JSON_RPC_INVALID_REQUEST_ERROR_CODE,
-            "`method` must be a string".to_owned(),
-            None,
+            an_invalid_request("`method` must be a string"),
         ));
     };
-    let answer = match ControlOperationCall::parse(&method_name, message.remove("params")) {
-        Err(parse_refusal) => a_json_rpc_error(
-            id_to_answer,
-            match parse_refusal {
-                ControlOperationCallParseRefusal::NoSuchMethod { .. } => {
-                    JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE
-                }
-                ControlOperationCallParseRefusal::InvalidParams { .. } => {
-                    JSON_RPC_INVALID_PARAMS_ERROR_CODE
-                }
-            },
-            parse_refusal.to_string(),
-            Some(the_data_of_a_refusal(
-                parse_refusal.the_refusal_on_the_wire(),
-            )),
-        ),
-        Ok(call) => match dispatcher.dispatch(call, request_origin).await {
-            Err(refusal) => the_json_rpc_error_of_a_refusal(id_to_answer, &method_name, refusal),
-            Ok(answered) => json!({
-                "jsonrpc": JSON_RPC_VERSION,
-                "id": id_to_answer,
-                "result": the_result_of_an_answer(answered),
-            }),
-        },
+    let answer = match the_outcome_of_one_control_call(
+        dispatcher,
+        request_origin,
+        &method_name,
+        message.remove("params"),
+    )
+    .await
+    {
+        Err(why) => a_json_rpc_error(id_to_answer, why),
+        Ok(result) => json!({
+            "jsonrpc": JSON_RPC_VERSION,
+            "id": id_to_answer,
+            "result": result,
+        }),
     };
     request_id.map(|_| answer)
 }
 
-fn the_result_of_an_answer(answered: ControlOperationAnswer) -> Value {
-    serde_json::to_value(answered)
-        .unwrap_or_else(|_| unreachable!("a result type always serializes to JSON"))
-}
-
-/// The JSON-RPC error of `refusal`: the runtime's words as its message, the contract mismatch as
-/// code 3's `data`, and the refusal on the wire as every other code's.
-fn the_json_rpc_error_of_a_refusal(
-    request_id: Value,
-    action: &str,
-    refusal: ControlOperationRefusal,
-) -> Value {
-    let code = match refusal {
-        ControlOperationRefusal::ContractVersionMismatch(mismatch) => {
-            return the_json_rpc_error_of_a_contract_version_mismatch(request_id, mismatch);
-        }
-        ControlOperationRefusal::RefusedAction(_) => CONTROL_OPERATION_REFUSED_ERROR_CODE,
-        ControlOperationRefusal::Coded { .. } => CONTROL_OPERATION_FAILED_ERROR_CODE,
-    };
-    let runtime_words = refusal.to_string();
-    a_json_rpc_error(
-        request_id,
-        code,
-        runtime_words,
-        Some(the_data_of_a_refusal(
-            refusal.into_the_refusal_on_the_wire(action),
-        )),
-    )
-}
-
-fn the_json_rpc_error_of_a_contract_version_mismatch(
-    request_id: Value,
-    mismatch: ControlContractVersionMismatch,
-) -> Value {
-    a_json_rpc_error(
-        request_id,
-        CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
-        mismatch.to_string(),
-        serde_json::to_value(mismatch).ok(),
-    )
-}
-
-/// `refusal` as `/control` carries it: a suggested call is kept only when `/control` serves its
-/// operation, so a discovery tool only an agent reaches is never suggested here. Its params need
-/// no second read: `the_suggested_call` makes only a suggestion whose params read.
-fn the_data_of_a_refusal(mut refusal: ProjectActionRefusalOnTheWire) -> Value {
-    refusal.suggested_call =
-        refusal
-            .suggested_call
-            .take()
-            .filter(|SuggestedOperationCall { operation, .. }| {
-                streamlib_control_contract::CONTROL_OPERATIONS
-                    .iter()
-                    .any(|declaration| declaration.method_name == operation)
-            });
-    refusal.the_refusal_as_json()
-}
-
-fn a_json_rpc_error(request_id: Value, code: i64, message: String, data: Option<Value>) -> Value {
-    let mut error = json!({ "code": code, "message": message });
-    if let Some(data) = data {
-        error["data"] = data;
-    }
-    json!({ "jsonrpc": JSON_RPC_VERSION, "id": request_id, "error": error })
+fn a_json_rpc_error(request_id: Value, error: ControlCallError) -> Value {
+    json!({ "jsonrpc": JSON_RPC_VERSION, "id": request_id, "error": error.into_json() })
 }
 
 #[cfg(test)]

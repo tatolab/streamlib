@@ -12,7 +12,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use crate::control_operation_dispatcher::ContractAClientNames;
 
 /// The client's name, as the request's header names it.
-pub(super) fn the_client_name_a_request_sent(request_headers: &HeaderMap) -> Option<String> {
+pub(crate) fn the_client_name_a_request_sent(request_headers: &HeaderMap) -> Option<String> {
     request_headers
         .get(CONTROL_CLIENT_NAME_HEADER_NAME)
         .and_then(|value| value.to_str().ok())
@@ -20,7 +20,7 @@ pub(super) fn the_client_name_a_request_sent(request_headers: &HeaderMap) -> Opt
 }
 
 /// The contract the request's headers name, refused when a header is not a whole number.
-pub(super) fn the_contract_a_request_names(
+pub(crate) fn the_contract_a_request_names(
     request_headers: &HeaderMap,
 ) -> Result<ContractAClientNames, String> {
     Ok(ContractAClientNames::named(

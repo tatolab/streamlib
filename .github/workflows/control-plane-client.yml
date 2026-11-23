@@ -1,7 +1,7 @@
 name: Control-plane client
 
 # Generates the TypeScript client for the control plane's REST surface from the
-# api-server's OpenAPI spec. Not called on release: nothing consumes what it
+# REST description the control contract generates. Not called on release: nothing consumes what it
 # publishes today, so it stays dispatch-only until a consumer exists.
 on:
   workflow_dispatch:
@@ -23,12 +23,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # generate_openapi links the api-server, which pulls in streamlib-engine;
-      # its build.rs compiles its shaders through the staged Slang compiler and
-      # it links Vulkan, its dependency
-      # iceoryx2-pal-posix runs bindgen — which needs libclang and clang's
-      # builtin headers — and the audio path links opus. The same Linux engine dep set
-      # as ci.yml.
+      # generate_openapi is engine-free, but `cargo run` resolves the whole
+      # workspace, whose engine crates' build scripts compile shaders through the
+      # staged Slang compiler and link Vulkan; iceoryx2-pal-posix runs bindgen —
+      # which needs libclang and clang's builtin headers — and the audio path links
+      # opus. The same Linux engine dep set as ci.yml.
       # `cmake` and `ninja-build` build aws-lc-sys's C. Explicit rather than
       # leaning on the runner image having either, whose contents move.
       - name: Install system dependencies
@@ -82,7 +81,7 @@ jobs:
 
       - name: Generate OpenAPI spec
         run: |
-          cargo run --bin generate_openapi
+          cargo run -p streamlib-control-contract --bin generate_openapi
           if ! python3 -m json.tool dist/schemas/openapi.json > /dev/null; then
             echo "✗ OpenAPI spec is INVALID"
             exit 1
