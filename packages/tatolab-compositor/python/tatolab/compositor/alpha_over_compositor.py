@@ -3,40 +3,39 @@
 
 """`AlphaOverCompositor`: video layers stacked back to front, in premultiplied alpha, on the GPU.
 
-Each arriving frame is copied by the engine into a texture this node owns, so
-a held layer never pins its producer's pool. Each `layer_0` frame then runs one
-compute dispatch over the canvas, which reads every layer that has sent a frame
-and writes the composite into a texture from the node's output pool.
+Its layers are a pin group that grows as it is wired, each layer a picture with its place on
+the canvas and its opacity. Each arriving frame is copied by the engine into a texture this
+node owns, so a held layer never pins its producer's pool. Each frame of the backmost layer
+then runs the composite: one compute dispatch over the canvas for up to eight layers, and for
+more, each further dispatch laying up to seven more over the composite so far, so any number
+of layers fits Vulkan's guaranteed push-constant block.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import struct
-from collections.abc import Mapping
-from typing import Annotated, Any
+from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
     ComputeKernel,
     Description,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
-    Image,
     ImageFrame,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
     NumberRange,
-    Output,
+    OutputPin,
+    PinGroup,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
-
-ALPHA_OVER_LAYER_COUNT = 8
-"""How many `layer_N` inputs an `AlphaOverCompositor` has, `layer_0` the backmost."""
-
-LAYER_INPUT_PORT_NAMES = tuple(f"layer_{index}" for index in range(ALPHA_OVER_LAYER_COUNT))
 
 _COMPOSITE_TEXTURE_FORMAT = "rgba8_unorm"
 _COMPOSITE_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
@@ -50,29 +49,37 @@ _COMPOSITE_OUTPUT_BINDING_NAME = "composite_output"
 # One std430 `LayerPlacement`: `int2 offset`, `float opacity`, `int present`.
 _LAYER_PLACEMENT_STRUCT = struct.Struct("<iifi")
 
-# Eight placements fill Vulkan's guaranteed 128-byte `maxPushConstantsSize` exactly,
-# which is what caps the layer count.
-_PUSH_CONSTANT_BLOCK_BYTE_SIZE = _LAYER_PLACEMENT_STRUCT.size * ALPHA_OVER_LAYER_COUNT
+MOST_TEXTURES_ONE_DISPATCH_LAYERS = 8
+"""How many textures one dispatch lays over one another: eight placements fill Vulkan's
+guaranteed 128-byte `maxPushConstantsSize` exactly."""
+
+# A dispatch after the first lays the composite so far first, at the canvas's origin.
+_COMPOSITE_SO_FAR_PLACEMENT = (0, 0, 1.0)
 
 
-def _layer_texture_binding_name(layer_index: int) -> str:
-    return f"layer_{layer_index}_texture"
+def _texture_binding_name(texture_index: int) -> str:
+    return f"layer_{texture_index}_texture"
 
 
-def alpha_over_compute_kernel_slang() -> str:
-    """The compositor's compute kernel: every layer over the one below it, onto transparent black."""
-    layer_texture_declarations = "".join(
-        f"[[vk::binding({index}, 0)]] Sampler2D {_layer_texture_binding_name(index)};\n"
-        for index in range(ALPHA_OVER_LAYER_COUNT)
+def alpha_over_compute_kernel_slang(texture_count: int) -> str:
+    """The compute kernel laying `texture_count` textures over one another onto transparent black."""
+    if not 1 <= texture_count <= MOST_TEXTURES_ONE_DISPATCH_LAYERS:
+        raise ValueError(
+            f"AlphaOverCompositor: one dispatch lays 1 to {MOST_TEXTURES_ONE_DISPATCH_LAYERS} "
+            f"textures, not {texture_count}"
+        )
+    texture_declarations = "".join(
+        f"[[vk::binding({index}, 0)]] Sampler2D {_texture_binding_name(index)};\n"
+        for index in range(texture_count)
     )
-    layer_applications = "".join(
-        f"    composite = layer_over(composite, {_layer_texture_binding_name(index)}, "
+    texture_applications = "".join(
+        f"    composite = layer_over(composite, {_texture_binding_name(index)}, "
         f"placements.layers[{index}], at);\n"
-        for index in range(ALPHA_OVER_LAYER_COUNT)
+        for index in range(texture_count)
     )
     return (
-        f"{layer_texture_declarations}"
-        f"[[vk::binding({ALPHA_OVER_LAYER_COUNT}, 0)]] [format(\"rgba8\")] RWTexture2D<float4> "
+        f"{texture_declarations}"
+        f"[[vk::binding({texture_count}, 0)]] [format(\"rgba8\")] RWTexture2D<float4> "
         f"{_COMPOSITE_OUTPUT_BINDING_NAME};\n"
         "struct LayerPlacement {\n"
         "    int2 offset;\n"
@@ -80,7 +87,7 @@ def alpha_over_compute_kernel_slang() -> str:
         "    int present;\n"
         "};\n"
         "struct AlphaOverLayerPlacements {\n"
-        f"    LayerPlacement layers[{ALPHA_OVER_LAYER_COUNT}];\n"
+        f"    LayerPlacement layers[{texture_count}];\n"
         "};\n"
         "[[vk::push_constant]] ConstantBuffer<AlphaOverLayerPlacements> placements;\n"
         "float4 layer_over(float4 below, Sampler2D layer_texture, LayerPlacement placement, int2 at) {\n"
@@ -108,108 +115,59 @@ def alpha_over_compute_kernel_slang() -> str:
         "        return;\n"
         "    }\n"
         "    float4 composite = float4(0.0);\n"
-        f"{layer_applications}"
+        f"{texture_applications}"
         f"    {_COMPOSITE_OUTPUT_BINDING_NAME}[at] = composite;\n"
         "}\n"
     )
 
 
-def _is_plain_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+def layers_of_each_dispatch(layer_count: int) -> "list[range]":
+    """The layers each dispatch of a composite of `layer_count` layers lays, back to front: up to
+    eight in the first, then up to seven over the composite so far in each one after it."""
+    dispatches: "list[range]" = []
+    first_layer = 0
+    while first_layer < layer_count:
+        room = MOST_TEXTURES_ONE_DISPATCH_LAYERS - (1 if dispatches else 0)
+        dispatches.append(range(first_layer, min(first_layer + room, layer_count)))
+        first_layer = dispatches[-1].stop
+    return dispatches
 
 
-def _is_plain_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def texture_count_of_a_dispatch(dispatch_index: int, layers: range) -> int:
+    """How many textures a dispatch binds: its layers, and the composite so far after the first."""
+    return len(layers) + (1 if dispatch_index else 0)
 
 
-@dataclasses.dataclass
-class AlphaOverLayerPlacement:
-    """Where one layer sits on the canvas and how much of it shows."""
+@dataclass(frozen=True)
+class AlphaOverLayer:
+    """One layer: its picture, where it sits on the canvas and how much of it shows."""
 
+    picture: InputPin[
+        Annotated[
+            Texture,
+            StreamDelivery("newest"),
+            Description(
+                "The layer's picture, read as premultiplied RGBA; the backmost layer's frames "
+                "set the composite's cadence, and every other layer's newest frame is held"
+            ),
+        ]
+    ]
     x: Annotated[int, Description("Canvas column of the layer's left edge; negative clips it.")] = 0
     y: Annotated[int, Description("Canvas row of the layer's top edge; negative clips it.")] = 0
     opacity: Annotated[
         float,
-        Description("0.0 hides the layer, 1.0 shows it as it arrives."),
         NumberRange(minimum=0.0, maximum=1.0),
+        Description("0.0 hides the layer, 1.0 shows it as it arrives."),
     ] = 1.0
-
-    def __post_init__(self) -> None:
-        if not _is_plain_int(self.x) or not _is_plain_int(self.y):
-            raise ValueError(
-                f"AlphaOverLayerPlacement: x and y are whole canvas pixels, got "
-                f"x={self.x!r} y={self.y!r}"
-            )
-        if not _is_plain_number(self.opacity) or not 0.0 <= self.opacity <= 1.0:
-            raise ValueError(
-                f"AlphaOverLayerPlacement: opacity is a number from 0.0 to 1.0, got "
-                f"{self.opacity!r}"
-            )
-        self.opacity = float(self.opacity)
-
-
-@dataclasses.dataclass
-class AlphaOverCompositorConfig:
-    """What an `AlphaOverCompositor` is configured with."""
-
-    width: Annotated[
-        int,
-        Description("Canvas width in pixels; every composite is this wide."),
-        NumberRange(minimum=1),
-    ] = 1920
-    height: Annotated[
-        int,
-        Description("Canvas height in pixels; every composite is this tall."),
-        NumberRange(minimum=1),
-    ] = 1080
-    layers: Annotated[
-        "list[AlphaOverLayerPlacement]",
-        Description("Entry N places `layer_N`; a layer with no entry sits at 0,0 at full opacity."),
-    ] = dataclasses.field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        for dimension_name, dimension in (("width", self.width), ("height", self.height)):
-            if not _is_plain_int(dimension) or dimension < 1:
-                raise ValueError(
-                    f"AlphaOverCompositorConfig: {dimension_name} is a canvas size in "
-                    f"pixels, at least 1, got {dimension!r}"
-                )
-        if len(self.layers) > ALPHA_OVER_LAYER_COUNT:
-            raise ValueError(
-                f"AlphaOverCompositorConfig: {len(self.layers)} layer placements, but "
-                f"the compositor has {ALPHA_OVER_LAYER_COUNT} inputs, `layer_0` to "
-                f"`layer_{ALPHA_OVER_LAYER_COUNT - 1}`"
-            )
-        self.layers = [
-            AlphaOverLayerPlacement(**placement) if isinstance(placement, Mapping) else placement
-            for placement in self.layers
-        ]
-        for index, placement in enumerate(self.layers):
-            if not isinstance(placement, AlphaOverLayerPlacement):
-                raise ValueError(
-                    f"AlphaOverCompositorConfig: layers[{index}] is a map of x, y and "
-                    f"opacity, got {placement!r}"
-                )
-
-    def placement_of_layer(self, layer_index: int) -> AlphaOverLayerPlacement:
-        """The placement `layer_index` composites at."""
-        if layer_index < len(self.layers):
-            return self.layers[layer_index]
-        return AlphaOverLayerPlacement()
 
 
 def pack_layer_placements(
-    config: AlphaOverCompositorConfig, layer_index_has_a_frame: "list[bool]"
+    placements: "list[tuple[int, int, float, bool]]",
 ) -> bytes:
-    """The kernel's push-constant block: each layer's placement, and whether it has a frame."""
+    """One dispatch's push-constant block: each texture's `x`, `y`, `opacity` and whether it has a frame."""
     return b"".join(
-        _LAYER_PLACEMENT_STRUCT.pack(
-            placement.x, placement.y, placement.opacity, int(has_a_frame)
-        )
-        for placement, has_a_frame in (
-            (config.placement_of_layer(index), layer_index_has_a_frame[index])
-            for index in range(ALPHA_OVER_LAYER_COUNT)
-        )
+        _LAYER_PLACEMENT_STRUCT.pack(x, y, opacity, int(has_a_frame))
+        for x, y, opacity, has_a_frame in placements
     )
 
 
@@ -226,7 +184,7 @@ class _LayerLandingTexture:
         )
         self.newest_frame_texture: "GpuSurfaceHandle | None" = None
 
-    def land(self, gpu_limited_access: GpuContextLimitedAccess, frame: ImageFrame, port_name: str) -> None:
+    def land(self, gpu_limited_access: GpuContextLimitedAccess, frame: ImageFrame, layer: int) -> None:
         landing_texture = self._landing_ring.next_texture_for_this_frame(
             gpu_limited_access, frame.width, frame.height
         )
@@ -235,132 +193,135 @@ class _LayerLandingTexture:
         except RuntimeError as copy_refusal:
             raise ValueError(
                 f"AlphaOverCompositor: the frame {frame.surface_id!r} ({frame.width}x"
-                f"{frame.height}) on `{port_name}` could not be copied into an "
+                f"{frame.height}) on layer {layer} could not be copied into an "
                 f"{_LAYER_LANDING_TEXTURE_FORMAT} layer texture: {copy_refusal}"
             ) from copy_refusal
         self.newest_frame_texture = landing_texture
 
 
 @node.meta(
-    description="Layers up to eight video inputs back to front, in premultiplied alpha, on the GPU",
+    description="Layers any number of video inputs back to front, in premultiplied alpha, on the GPU",
 )
-@node.process
+@node
 class AlphaOverCompositor:
-    """`layer_0` to `layer_7` over one another onto transparent black, on `layer_0`'s cadence.
+    """Its layers over one another onto transparent black, on the backmost layer's cadence.
 
-    Each `layer_0` frame yields one composite carrying its timestamp. Every other
-    layer contributes its newest frame, held until a newer one arrives; a layer
-    that has never sent a frame is left out. Frames are read as premultiplied RGBA.
+    Each frame of layer 0 yields one composite carrying its timestamp. Every other layer
+    contributes its newest frame, held until a newer one arrives; a layer that has never sent a
+    frame is left out. Frames are read as premultiplied RGBA. The canvas size and each layer's
+    place and opacity are read at each composite, so a change shows from the next one on; a
+    change in how many layers are wired rebuilds the node, its kernels built for that many.
     """
 
-    def __init__(self, config: AlphaOverCompositorConfig) -> None:
-        self._config = config
-        self._layer_landing_textures = [
-            _LayerLandingTexture() for _ in range(ALPHA_OVER_LAYER_COUNT)
+    width: Annotated[
+        int,
+        NumberRange(minimum=1),
+        Description("Canvas width in pixels; every composite is this wide."),
+    ] = 1920
+    height: Annotated[
+        int,
+        NumberRange(minimum=1),
+        Description("Canvas height in pixels; every composite is this tall."),
+    ] = 1080
+    layers: PinGroup[AlphaOverLayer]
+    video: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(_COMPOSITE_TEXTURE_FORMAT),
+            Description("The composite, premultiplied RGBA at the canvas size"),
         ]
+    ]
+
+    def __init__(self) -> None:
+        self._layer_landing_textures = [_LayerLandingTexture() for _ in self.layers]
         self._composite_ring = NodeOutputTextureRing(
             _COMPOSITE_TEXTURE_FORMAT, _COMPOSITE_TEXTURE_USAGE
         )
-        self._compute_kernel: "ComputeKernel | None" = None
-
-    layer_0 = Input(
-        Image, delivery="newest", description="The backmost layer; each frame yields one composite"
-    )
-    layer_1 = Input(
-        Image, delivery="newest", description="Layered over layer_0; its newest frame is held"
-    )
-    layer_2 = Input(
-        Image, delivery="newest", description="Layered over layer_1; its newest frame is held"
-    )
-    layer_3 = Input(
-        Image, delivery="newest", description="Layered over layer_2; its newest frame is held"
-    )
-    layer_4 = Input(
-        Image, delivery="newest", description="Layered over layer_3; its newest frame is held"
-    )
-    layer_5 = Input(
-        Image, delivery="newest", description="Layered over layer_4; its newest frame is held"
-    )
-    layer_6 = Input(
-        Image, delivery="newest", description="Layered over layer_5; its newest frame is held"
-    )
-    layer_7 = Input(
-        Image, delivery="newest", description="The frontmost layer; its newest frame is held"
-    )
-    video = Output(
-        Image,
-        formats=(_COMPOSITE_TEXTURE_FORMAT,),
-        description="The composite, premultiplied RGBA at the configured canvas size",
-    )
+        # Two composites so far, one read while the other is written, for a dispatch after the first.
+        self._composite_so_far_rings = (
+            NodeOutputTextureRing(_COMPOSITE_TEXTURE_FORMAT, _COMPOSITE_TEXTURE_USAGE, depth=1),
+            NodeOutputTextureRing(_COMPOSITE_TEXTURE_FORMAT, _COMPOSITE_TEXTURE_USAGE, depth=1),
+        )
+        self._dispatches = layers_of_each_dispatch(len(self.layers))
+        self._compute_kernel_by_texture_count: "dict[int, ComputeKernel]" = {}
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        bindings = {
-            _layer_texture_binding_name(index): "sampled_texture"
-            for index in range(ALPHA_OVER_LAYER_COUNT)
-        }
-        bindings[_COMPOSITE_OUTPUT_BINDING_NAME] = "storage_image"
-        self._compute_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=alpha_over_compute_kernel_slang(),
-            push_constant_size=_PUSH_CONSTANT_BLOCK_BYTE_SIZE,
-            bindings=bindings,
-        )
-
-    def configure(self, config: AlphaOverCompositorConfig) -> None:
-        """Take a new canvas size or new placements while running, from the next composite on."""
-        self._config = config
+        for dispatch_index, layers in enumerate(self._dispatches):
+            texture_count = texture_count_of_a_dispatch(dispatch_index, layers)
+            if texture_count in self._compute_kernel_by_texture_count:
+                continue
+            bindings = {
+                _texture_binding_name(index): "sampled_texture" for index in range(texture_count)
+            }
+            bindings[_COMPOSITE_OUTPUT_BINDING_NAME] = "storage_image"
+            self._compute_kernel_by_texture_count[texture_count] = (
+                ctx.gpu_full_access.create_compute_kernel(
+                    source=alpha_over_compute_kernel_slang(texture_count),
+                    push_constant_size=_LAYER_PLACEMENT_STRUCT.size * texture_count,
+                    bindings=bindings,
+                )
+            )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        if not self.layers:
+            return
         gpu_limited_access = ctx.gpu_limited_access
-        for layer_index in range(1, ALPHA_OVER_LAYER_COUNT):
-            self._land_newest_frame_of_layer(ctx, gpu_limited_access, layer_index)
-        backmost_frame = ctx.inputs.read(self.layer_0)
+        for layer_index in range(1, len(self.layers)):
+            frame = self.layers[layer_index].picture.read()
+            if frame is not None:
+                self._layer_landing_textures[layer_index].land(gpu_limited_access, frame, layer_index)
+        backmost_frame = self.layers[0].picture.read()
         if backmost_frame is None:
             return
-        self._layer_landing_textures[0].land(
-            gpu_limited_access, backmost_frame, LAYER_INPUT_PORT_NAMES[0]
+        self._layer_landing_textures[0].land(gpu_limited_access, backmost_frame, 0)
+        composite = self._composite(gpu_limited_access)
+        self.video.write(
+            ImageFrameToWrite.of_texture(composite, backmost_frame.colour),
+            timestamp_ns=backmost_frame.timestamp_ns,
         )
-        composite = self._composite(gpu_limited_access, backmost_frame)
-        ctx.outputs.write(self.video, composite, timestamp_ns=backmost_frame.timestamp_ns)
 
-    def _land_newest_frame_of_layer(
-        self,
-        ctx: RuntimeContextLimitedAccess,
-        gpu_limited_access: GpuContextLimitedAccess,
-        layer_index: int,
-    ) -> None:
-        port_name = LAYER_INPUT_PORT_NAMES[layer_index]
-        frame = ctx.inputs.read(getattr(self, port_name))
-        if frame is not None:
-            self._layer_landing_textures[layer_index].land(gpu_limited_access, frame, port_name)
-
-    def _composite(
-        self, gpu_limited_access: GpuContextLimitedAccess, backmost_frame: ImageFrame
-    ) -> ImageFrameToWrite:
-        assert self._compute_kernel is not None, "setup() builds the kernel before any process()"
+    def _composite(self, gpu_limited_access: GpuContextLimitedAccess) -> GpuSurfaceHandle:
         newest_frame_textures = [
             landing.newest_frame_texture for landing in self._layer_landing_textures
         ]
         backmost_texture = newest_frame_textures[0]
         assert backmost_texture is not None
-        canvas_width, canvas_height = self._config.width, self._config.height
-        composite_texture = self._composite_ring.next_texture_for_this_frame(
-            gpu_limited_access, canvas_width, canvas_height
-        )
-        # A layer with no frame yet still needs a texture bound; the kernel never reads it.
-        bindings: "dict[str, GpuSurfaceHandle | str]" = {
-            _layer_texture_binding_name(index): texture or backmost_texture
-            for index, texture in enumerate(newest_frame_textures)
-        }
-        bindings[_COMPOSITE_OUTPUT_BINDING_NAME] = composite_texture
-        self._compute_kernel.dispatch(
-            bindings=bindings,
-            group_count=(
-                _workgroups_covering(canvas_width),
-                _workgroups_covering(canvas_height),
-                1,
-            ),
-            push_constants=pack_layer_placements(
-                self._config, [texture is not None for texture in newest_frame_textures]
-            ),
-        )
-        return ImageFrameToWrite.of_texture(composite_texture, backmost_frame.colour)
+        canvas_width, canvas_height = self.width, self.height
+        composite_so_far: "GpuSurfaceHandle | None" = None
+        for dispatch_index, layers in enumerate(self._dispatches):
+            is_the_last = dispatch_index == len(self._dispatches) - 1
+            ring = (
+                self._composite_ring
+                if is_the_last
+                else self._composite_so_far_rings[dispatch_index % 2]
+            )
+            written = ring.next_texture_for_this_frame(
+                gpu_limited_access, canvas_width, canvas_height
+            )
+            # A layer with no frame yet still needs a texture bound; the kernel never reads it.
+            textures: "list[GpuSurfaceHandle]" = []
+            placements: "list[tuple[int, int, float, bool]]" = []
+            if composite_so_far is not None:
+                textures.append(composite_so_far)
+                placements.append((*_COMPOSITE_SO_FAR_PLACEMENT, True))
+            for layer_index in layers:
+                layer = self.layers[layer_index]
+                texture = newest_frame_textures[layer_index]
+                textures.append(texture or backmost_texture)
+                placements.append((layer.x, layer.y, layer.opacity, texture is not None))
+            bindings: "dict[str, GpuSurfaceHandle | str]" = {
+                _texture_binding_name(index): texture for index, texture in enumerate(textures)
+            }
+            bindings[_COMPOSITE_OUTPUT_BINDING_NAME] = written
+            self._compute_kernel_by_texture_count[len(textures)].dispatch(
+                bindings=bindings,
+                group_count=(
+                    _workgroups_covering(canvas_width),
+                    _workgroups_covering(canvas_height),
+                    1,
+                ),
+                push_constants=pack_layer_placements(placements),
+            )
+            composite_so_far = written
+        assert composite_so_far is not None
+        return composite_so_far

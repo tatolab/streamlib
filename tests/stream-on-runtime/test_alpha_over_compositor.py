@@ -123,3 +123,19 @@ def test_nothing_is_published_until_layer_0_sends_a_frame(start_tatolabd_running
     observation = run_scenario(start_tatolabd_running_stream, "layer_0_never_sends")
 
     assert observation["composites_received"] == 0
+
+
+def test_layers_past_the_eighth_are_laid_over_the_first_eight_in_order(
+    start_tatolabd_running_stream,
+):
+    """Fail-without-fix: drop the dispatch after the first and the ninth and tenth layers'
+    squares are missing; lay them under the composite so far and the grey covers them."""
+    layers = alpha_over_compositor_streams.LAYERS_BY_SCENARIO["ten_layers"]
+    observed = composited_pixels(run_scenario(start_tatolabd_running_stream, "ten_layers"))
+
+    assert channels_off_the_reference(observed, reference_composite(layers)) == 0
+    assert observed[7, 5].tolist() == list(OPAQUE_RED), "the ninth layer shows"
+    red, blue = observed[9, 7][0], observed[9, 7][2]
+    assert abs(red - 128) <= CHANNEL_TOLERANCE and abs(blue - 128) <= CHANNEL_TOLERANCE, (
+        "the tenth layer, at half opacity, lies over the ninth"
+    )

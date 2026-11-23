@@ -300,7 +300,7 @@ def _add_a_test_pattern_into_virtual_cameras(
     taking the other door.
     """
     pattern = stream_builder.add(
-        TestPatternSource, config={"width": width, "height": height}
+        TestPatternSource, input_values={"width": width, "height": height}
     )
     for camera_name in camera_names:
         sink = stream_builder.add(

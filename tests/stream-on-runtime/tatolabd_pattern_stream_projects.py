@@ -41,7 +41,7 @@ from tatolab.testpattern import TestPatternSource
 @graph_generator
 def {stream_function_name}(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
-        TestPatternSource, name="pattern", config={{"width": 320, "height": 180}}
+        TestPatternSource, name="pattern", input_values={{"width": 320, "height": 180}}
     )
     reader = stream_builder.add(PatternFrameReader, name="reader")
     stream_builder.connect(pattern.output("video"), reader.input("video_from_upstream"))

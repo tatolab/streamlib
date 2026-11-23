@@ -13,7 +13,7 @@ from class_node_type_parameter_probes import HandsOnEachPicture, ReportsThePictu
 def a_test_pattern_handed_on_by_a_class_typed_by_its_parameter(
     stream_builder: StreamBuilder,
 ) -> None:
-    pattern = stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
+    pattern = stream_builder.add(TestPatternSource, input_values={"width": 320, "height": 180})
     hand_on = stream_builder.add(HandsOnEachPicture, name="hand-on")
     reader = stream_builder.add(ReportsThePicturesItReads, name="reader")
     stream_builder.connect(pattern.output("video"), hand_on.input("picture_in"))

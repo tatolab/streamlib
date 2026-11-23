@@ -13,8 +13,10 @@ use serde_json::{Map, Value};
 
 use crate::stream_graph_document::GRAPH_INPUT_NODE_TYPE;
 
+use inputs_moved_onto_pin_group_slots::INPUTS_MOVED_ONTO_PIN_GROUP_SLOTS;
 use merged_inputs::{MERGED_INPUTS, MergedInput};
 
+mod inputs_moved_onto_pin_group_slots;
 mod merged_inputs;
 #[cfg(feature = "history")]
 pub(crate) mod recorded_transaction;
@@ -179,7 +181,8 @@ const RENAMED_NODE_TYPES: &[(&str, &str)] = &[
 /// At every level of a fragment, each node of a renamed type takes its new type, and its
 /// `config` and `pins` fold into `input_values`: a name `input_values` already holds wins, then
 /// `pins`, then `config`. Then the old inputs that became one take it, the merged value or the
-/// combining node a wired part keeps. It never refuses: a node it has nothing to do for is left
+/// combining node a wired part keeps, and the numbered inputs that became a pin group's slots
+/// move onto them, wires and values. It never refuses: a node it has nothing to do for is left
 /// as written.
 pub fn upgrade_stream_document_in_place(document: &mut Value) -> bool {
     upgrade_the_document_with(document, MERGED_INPUTS)
@@ -203,6 +206,12 @@ fn upgrade_the_document_with(document: &mut Value, merged_inputs: &[MergedInput]
     if let Some(nodes) = level.get_mut("nodes").and_then(Value::as_array_mut) {
         any_changed |=
             merged_inputs::the_inputs_of_the_level_merged(nodes, &mut links, merged_inputs);
+        any_changed |=
+            inputs_moved_onto_pin_group_slots::the_inputs_of_the_level_moved_onto_their_slots(
+                nodes,
+                &mut links,
+                INPUTS_MOVED_ONTO_PIN_GROUP_SLOTS,
+            );
     }
     if had_links || !links.is_empty() {
         level.insert("links".to_owned(), Value::Array(links));
@@ -298,6 +307,12 @@ fn upgrade_a_node_with(node: &mut Value, merged_inputs: &[MergedInput]) -> bool 
             merged_inputs,
             &mut Vec::new(),
         );
+        any_changed |=
+            inputs_moved_onto_pin_group_slots::the_inputs_of_a_node_moved_onto_their_slots(
+                node,
+                &mut [],
+                INPUTS_MOVED_ONTO_PIN_GROUP_SLOTS,
+            );
     }
     any_changed
 }

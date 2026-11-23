@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`TestPatternSource`'s declaration, config, placements and push-constant block, with no GPU.
+"""`TestPatternSource`'s declaration, settings, placements and push-constant block, with no GPU.
 
 The pixels are proven on a runtime by the integration suite's
 `tests/stream-on-runtime/test_test_pattern_module.py`.
@@ -9,22 +9,23 @@ The pixels are proven on a runtime by the integration suite's
 
 import importlib.metadata
 import struct
+from pathlib import Path
 
-import pytest
-
-from tatolab.stream._node_config_schema import derive_config_class_json_schema
+import tatolab.testpattern
+from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
 )
+from tatolab.stream._node_type_source_reader import read_retired_declarations_from_module_source
 from tatolab.stream import StreamBuilder, run_graph_generator, graph_generator
 from tatolab.testpattern import (
+    LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS,
     POTATO_SPRITE,
     SAMPLE_STREAM_CAPTION_PANEL,
     OverlayTopLeftInTheFrame,
     TestPatternSource,
-    TestPatternSourceConfig,
     caption_panel_top_left,
     pack_push_constants_for_frame,
     potato_sprite_top_left_at_frame,
@@ -32,21 +33,42 @@ from tatolab.testpattern import (
 )
 
 
-def test_the_node_is_a_continuous_source_with_one_rgba8_image_output():
+def the_port(name: str) -> dict:
+    ports = [
+        *getattr(TestPatternSource, NODE_DECLARATION_INPUT_PORTS_STAMP),
+        *getattr(TestPatternSource, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+    ]
+    return next(port for port in ports if port["name"] == name)
+
+
+def test_the_node_is_a_continuous_source_with_one_rgba8_texture_output():
     output_ports = getattr(TestPatternSource, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
 
-    assert getattr(TestPatternSource, NODE_DECLARATION_INPUT_PORTS_STAMP) == []
     assert [port["name"] for port in output_ports] == ["video"]
-    assert output_ports[0]["family"] == {"family": "image", "formats": ["rgba8_unorm"]}
+    assert the_port("video")["pin_declaration"]["pin_type"] == {
+        "kind": "is",
+        "pin_type": {"type": "texture", "pixel_formats": ["rgba8_unorm"]},
+    }
     assert getattr(TestPatternSource, NODE_DECLARATION_EXECUTION_STAMP) == {
         "mode": "continuous",
         "interval_ms": 33,
     }
 
 
+def test_the_module_declares_its_node_in_no_retired_form():
+    module_path = Path(tatolab.testpattern.__file__)
+
+    assert (
+        read_retired_declarations_from_module_source(
+            "tatolab.testpattern", str(module_path), module_path.read_text()
+        )
+        == []
+    )
+
+
 @graph_generator
 def a_test_pattern(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(TestPatternSource, config={"width": 640})
+    stream_builder.add(TestPatternSource, input_values={"width": 640})
 
 
 def test_a_stream_names_the_source_by_the_type_the_module_publishes():
@@ -57,45 +79,28 @@ def test_a_stream_names_the_source_by_the_type_the_module_publishes():
     ]
 
 
-def test_the_config_defaults_to_720p_and_publishes_each_fields_type_description_and_default():
-    assert (TestPatternSourceConfig().width, TestPatternSourceConfig().height) == (1280, 720)
-    config_schema = derive_config_class_json_schema(TestPatternSourceConfig)
-
-    for field_name, default, description in [
+def test_the_frame_size_defaults_to_720p_and_is_an_integer_input_of_1_to_16k_pixels_read_each_frame():
+    for name, default, description in [
         ("width", 1280, "Frame width in pixels."),
         ("height", 720, "Frame height in pixels."),
     ]:
-        rendered = config_schema["properties"][field_name]
-        assert rendered["type"] == "integer", field_name
-        assert rendered["default"] == default, field_name
-        assert rendered["description"] == description, field_name
+        port = the_port(name)
+        assert port["pin_declaration"]["pin_type"]["pin_type"]["type"] == "integer", name
+        assert port["pin_default"] == default, name
+        assert port["description"] == description, name
+        assert port["pin_declaration"]["annotations"]["range"] == {
+            "minimum": 1,
+            "maximum": LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS,
+        }, name
+        assert port["input_mode"] == {"mode": "wire_or_value"}, name
 
 
-@pytest.mark.parametrize(
-    "config_keys, refused_naming",
-    [
-        ({"width": 0}, "width"),
-        ({"height": 16_385}, "height"),
-        ({"width": True}, "width"),
-        ({"height": 720.0}, "height"),
-    ],
-)
-def test_a_frame_side_the_source_cannot_render_is_refused_naming_it(config_keys, refused_naming):
-    with pytest.raises(ValueError, match=refused_naming):
-        TestPatternSourceConfig(**config_keys)
+def test_a_source_built_with_a_frame_size_renders_it():
+    source = construct_class_node(
+        TestPatternSource, field_values={"width": 640, "height": 360}, pins={"video": object()}
+    )
 
-
-def test_a_setting_the_source_does_not_take_is_refused():
-    with pytest.raises(TypeError, match="fps"):
-        TestPatternSourceConfig(fps=60)  # type: ignore[call-arg]
-
-
-def test_a_running_source_takes_a_new_frame_size():
-    source = TestPatternSource(TestPatternSourceConfig())
-
-    source.configure(TestPatternSourceConfig(width=640, height=360))
-
-    assert (source._config.width, source._config.height) == (640, 360)
+    assert (source.width, source.height) == (640, 360)
 
 
 def test_the_baked_overlays_are_the_extents_their_names_say():

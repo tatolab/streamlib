@@ -44,7 +44,7 @@ def pattern_linked_from_a_port_it_lacks_into_an_encoder(stream_builder: StreamBu
 @graph_generator
 def named_pattern_into_a_named_sink(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
-        TestPatternSource, name="Loaded Pattern", config={"width": 320, "height": 180}
+        TestPatternSource, name="Loaded Pattern", input_values={"width": 320, "height": 180}
     )
     sink = stream_builder.add(LoadedFrameSink, name="Loaded Sink")
     stream_builder.connect(pattern.output("video"), sink.input("video_from_upstream"))

@@ -18,7 +18,7 @@
       },
       "target": {
         "node": "b1e8c9a3-12cd-43d0-838c-1d8bce0348fb",
-        "port": "layer_0"
+        "port": "layers.0.picture"
       }
     },
     {
@@ -28,7 +28,7 @@
       },
       "target": {
         "node": "b1e8c9a3-12cd-43d0-838c-1d8bce0348fb",
-        "port": "layer_1"
+        "port": "layers.1.picture"
       }
     }
   ],
@@ -69,14 +69,9 @@
       "id": "b1e8c9a3-12cd-43d0-838c-1d8bce0348fb",
       "input_values": {
         "height": 1080,
-        "layers": [
-          {},
-          {
-            "opacity": 1.0,
-            "x": 80,
-            "y": 772
-          }
-        ],
+        "layers.1.opacity": 1.0,
+        "layers.1.x": 80,
+        "layers.1.y": 772,
         "width": 1920
       },
       "name": "alphaovercompositor",
