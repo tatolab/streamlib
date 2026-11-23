@@ -590,13 +590,7 @@ fn stop_each_node_restarted(
         .cloned()
         .collect();
     forget_the_build_of_each_node_restarted(&mut graph, &rebuilt_node_ids);
-    let wired_again: Vec<LinkUniqueId> = nodes_restarted
-        .links
-        .iter()
-        .filter(|link_id| plan.links_to_add.contains(link_id))
-        .cloned()
-        .collect();
-    hold_each_link_to_wire_again_as_pending(&mut graph, &wired_again);
+    hold_each_link_to_wire_again_as_pending(&mut graph, nodes_restarted, &plan.links_to_add);
     Ok(still_held_by_an_abandoned_thread)
 }
 

@@ -542,7 +542,7 @@ fn a_restarted_source_feeding_a_windowed_reader_opens_its_channel_at_the_windowe
     .expect("the source restarts");
     assert_eq!(restarted.links, std::slice::from_ref(&windowed.link_id));
     unwire_each_link_of_the_nodes_restarted(&mut graph, &restarted).expect("the link unwires");
-    hold_each_link_to_wire_again_as_pending(&mut graph, &restarted.links);
+    hold_each_link_to_wire_again_as_pending(&mut graph, &restarted, &restarted.links);
     attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
 
     open_iceoryx2_service(

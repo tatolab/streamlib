@@ -218,12 +218,20 @@ pub(crate) fn unwire_each_link_of_the_nodes_restarted(
     Ok(())
 }
 
-/// Hold each of `links`, unwired for a restart and wired again by the same compile, as pending:
+/// Hold each link of `restarted` that `links_to_add` wires again in the same compile as pending:
 /// a channel out of a restarted node is sized by the links it is wired for, and a link left
 /// disconnected does not count, so a channel into a windowed reader would be opened shallower
 /// than the reader's ring.
-pub(crate) fn hold_each_link_to_wire_again_as_pending(graph: &mut Graph, links: &[LinkUniqueId]) {
-    for link_id in links {
+pub(crate) fn hold_each_link_to_wire_again_as_pending(
+    graph: &mut Graph,
+    restarted: &RunningNodesALiveEditRestarts,
+    links_to_add: &[LinkUniqueId],
+) {
+    for link_id in restarted
+        .links
+        .iter()
+        .filter(|link_id| links_to_add.contains(link_id))
+    {
         if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
             link.insert(LinkStateComponent(LinkState::Pending));
         }
