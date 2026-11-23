@@ -111,7 +111,6 @@ fn the_graph_of_a_stream_named(stream_name: &str) -> Value {
         "nodes": [{
             "name": "source",
             "type": StreamToolsTestSource::node_class_import_path().as_str(),
-            "config": {},
         }],
         "links": [],
     })

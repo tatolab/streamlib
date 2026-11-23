@@ -79,9 +79,9 @@ pub(super) fn a_project_whose_main_stream_holds_a_camera_and_a_model() -> Projec
         "stream": "main",
         "nodes": [
             { "id": CAMERA_NODE_UUID, "name": "camera", "type": node_type.as_str(),
-              "config": {}, "studio": { "position": [0.0, 0.0] } },
+              "studio": { "position": [0.0, 0.0] } },
             { "id": MODEL_NODE_UUID, "name": "model", "type": node_type.as_str(),
-              "config": {}, "studio": { "position": [200.0, 100.0] } },
+              "studio": { "position": [200.0, 100.0] } },
         ],
         "links": [],
     }))
@@ -620,7 +620,7 @@ async fn a_link_needing_a_convert_node_on_a_stream_taking_its_edits_later_is_ref
     let mut graph = project.the_graph_document_of("main");
     graph["nodes"].as_array_mut().expect("nodes").push(json!({
         "id": SPARE_NODE_UUID, "name": "spare",
-        "type": ConvertNodeTestEnd::node_class_import_path().as_str(), "config": {},
+        "type": ConvertNodeTestEnd::node_class_import_path().as_str(),
     }));
     project.write_the_graph_document(graph);
     let stream_asset = project.stream_asset_of("main");
@@ -848,7 +848,7 @@ async fn a_convert_node_an_island_would_feed_is_refused_by_check_link_as_connect
     let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
     let mut graph = project.the_graph_document_of("main");
     graph["nodes"].as_array_mut().expect("nodes").push(json!({
-        "id": TENSOR_ISLAND_UUID, "name": "island", "type": TENSOR_ISLAND_TYPE, "config": {},
+        "id": TENSOR_ISLAND_UUID, "name": "island", "type": TENSOR_ISLAND_TYPE,
     }));
     project.write_the_graph_document(graph);
     engine.a_stream_loaded_from_its_graph_document(&project, "main");

@@ -60,9 +60,8 @@ fn a_project_saved_under_the_names_the_pins_had() -> ProjectWithGraphDocuments {
         "stream": "main",
         "nodes": [
             { "id": DIMMER_NODE_UUID, "name": "dimmer", "type": node_type.as_str(),
-              "config": {}, "pins": { "level": 0.3 } },
-            { "id": FADER_NODE_UUID, "name": "fader", "type": node_type.as_str(),
-              "config": {} },
+              "input_values": { "level": 0.3 } },
+            { "id": FADER_NODE_UUID, "name": "fader", "type": node_type.as_str() },
         ],
         "links": [
             { "source": { "node": DIMMER_NODE_UUID, "port": "out" },
@@ -395,9 +394,8 @@ fn a_stream_holding_one_link_and_one_input_under_several_names(stream_name: &str
         "stream": stream_name,
         "nodes": [
             { "id": DIMMER_NODE_UUID, "name": "dimmer", "type": node_type.as_str(),
-              "config": {}, "pins": { "level": 0.3, "volume": 0.9 } },
-            { "id": FADER_NODE_UUID, "name": "fader", "type": node_type.as_str(),
-              "config": {} },
+              "input_values": { "level": 0.3, "volume": 0.9 } },
+            { "id": FADER_NODE_UUID, "name": "fader", "type": node_type.as_str() },
         ],
         "links": [
             { "source": { "node": DIMMER_NODE_UUID, "port": "out" },
@@ -509,7 +507,7 @@ async fn a_request_inside_a_placed_stream_reaches_a_link_saved_there_under_old_p
         "stream": "main",
         "nodes": [
             { "id": PLACEMENT_NODE_UUID, "name": "sub", "type": STREAM_FRAGMENT_NODE_TYPE,
-              "config": { "stream": { "asset": project.stream_asset_of("sub") } } },
+              "input_values": { "stream": { "asset": project.stream_asset_of("sub") } } },
         ],
         "links": [],
     }));

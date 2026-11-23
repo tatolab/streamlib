@@ -99,12 +99,10 @@ fn the_graph_of_a_stream_of_a_source_linked_into_a_sink(stream_name: &str) -> se
             {
                 "name": "source",
                 "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
-                "config": {},
             },
             {
                 "name": "sink",
                 "type": MockInputOnlyNode::Node::node_class_import_path().as_str(),
-                "config": {},
             },
         ],
         "links": [{
@@ -569,7 +567,6 @@ fn an_edit_a_playing_stream_did_not_take_shows_not_live_and_lands_when_its_playb
         .push(serde_json::json!({
             "name": "second_sink",
             "type": MockInputOnlyNode::Node::node_class_import_path().as_str(),
-            "config": {},
         }));
     edited["links"]
         .as_array_mut()
@@ -691,7 +688,7 @@ fn the_graph_of_a_stream_holding_a_graph_input_saving(
     serde_json::json!({
         "stream": "levels",
         "nodes": [{ "id": LEVEL_NODE_UUID, "name": "level", "type": "tatolab.stream:GraphInput",
-                    "config": { "port": "level", "pin_type": pin_type, "value": value } }],
+                    "input_values": { "port": "level", "pin_type": pin_type, "value": value } }],
         "links": [],
     })
 }

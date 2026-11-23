@@ -32,10 +32,10 @@ fn a_project_whose_main_stream_holds_a_float_input(linked: bool) -> ProjectWithG
         "nodes": [
             { "id": WARMTH_BASE_NODE_UUID, "name": "warmth_base",
               "type": "tatolab.stream:GraphInput",
-              "config": { "port": "warmth_base", "pin_type": { "type": "float" },
+              "input_values": { "port": "warmth_base", "pin_type": { "type": "float" },
                           "value": 0.1, "range": [0, 1] } },
             { "id": WARMTH_NODE_UUID, "name": "warmth",
-              "type": InputValueTestNode::node_class_import_path().as_str(), "config": {} },
+              "type": InputValueTestNode::node_class_import_path().as_str() },
         ],
         "links": links,
     }))
@@ -187,7 +187,7 @@ pub(super) fn a_project_whose_main_stream_holds_an_input_saving(
     ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
         "nodes": [{ "id": WARMTH_BASE_NODE_UUID, "name": "warmth_base",
-                    "type": "tatolab.stream:GraphInput", "config": config }],
+                    "type": "tatolab.stream:GraphInput", "input_values": config }],
         "links": [],
     }))
 }
@@ -704,7 +704,10 @@ async fn a_retype_refused_partway_leaves_the_type_the_value_and_the_history_as_t
     );
     let document_after = project.the_graph_document_of("main");
     assert_eq!(document_after, document_before);
-    assert_eq!(document_after["nodes"][0]["config"]["value"], json!(0.1));
+    assert_eq!(
+        document_after["nodes"][0]["input_values"]["value"],
+        json!(0.1)
+    );
     let undone = engine
         .the_answer_or_the_refusal_of(
             "undo",

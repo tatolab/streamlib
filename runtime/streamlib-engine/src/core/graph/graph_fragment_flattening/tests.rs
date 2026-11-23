@@ -46,16 +46,16 @@ fn blur_then_tint_fragment() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
             {"name": "source", "type": GRAPH_INPUT_NODE_TYPE,
-             "config": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "family": "image"}},
             {"id": BLUR_UUID, "name": "blur", "type": "looks.nodes:Blur",
-             "config": {"radius": 8}},
+             "input_values": {"radius": 8}},
             {"id": TINT_UUID, "name": "tint", "type": TINT_NODE_TYPE,
-             "config": {
+             "input_values": {
                  "reads_radius_of": {"node": "blur"},
                  "label_shaped_like_a_reference": {"node": "blur"},
              }},
             {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "config": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "family": "image"}},
         ],
         "links": [
             {"source": {"node": "source", "port": "value"},
@@ -71,19 +71,19 @@ fn blur_then_tint_fragment() -> serde_json::Value {
 fn a_camera_through_look_holding_soft_into_a_display() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
-            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
+            {"name": "camera", "type": "tatolab.camera:CameraSource"},
             {"id": LOOK_UUID, "name": "look", "type": "looks.generators:look",
-             "config": {}, "studio": {"x": 40},
+             "studio": {"x": 40},
              "fragment": {
                  "nodes": [
                      {"name": "source", "type": GRAPH_INPUT_NODE_TYPE,
-                      "config": {"port": "video", "family": "image"}},
+                      "input_values": {"port": "video", "family": "image"}},
                      {"id": SOFT_UUID, "name": "soft",
                       "type": "looks.generators:blur_then_tint",
-                      "config": {"radius": 8},
+                      "input_values": {"radius": 8},
                       "fragment": blur_then_tint_fragment()},
                      {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE,
-                      "config": {"port": "video", "family": "image"}},
+                      "input_values": {"port": "video", "family": "image"}},
                  ],
                  "links": [
                      {"source": {"node": "source", "port": "value"},
@@ -92,7 +92,7 @@ fn a_camera_through_look_holding_soft_into_a_display() -> serde_json::Value {
                       "target": {"node": "out", "port": "value"}},
                  ],
              }},
-            {"name": "display", "type": "tatolab.display:Display", "config": {}},
+            {"name": "display", "type": "tatolab.display:Display"},
         ],
         "links": [
             {"source": {"node": "camera", "port": "video"},
@@ -180,7 +180,7 @@ fn a_node_reference_inside_a_fragment_names_the_node_by_its_path_at_the_keys_its
 #[test]
 fn a_marked_node_reference_naming_a_node_outside_the_fragment_is_left_as_written() {
     let mut graph = a_camera_through_look_holding_soft_into_a_display();
-    graph["nodes"][1]["fragment"]["nodes"][1]["fragment"]["nodes"][2]["config"]["reads_radius_of"] =
+    graph["nodes"][1]["fragment"]["nodes"][1]["fragment"]["nodes"][2]["input_values"]["reads_radius_of"] =
         serde_json::json!({"node": "camera"});
     let flattening = flattened(graph).expect("flattens");
     let tint = flattening
@@ -203,7 +203,7 @@ fn a_set_variable_inside_a_fragment_names_its_referenced_node_by_its_path() {
         .unwrap()
         .push(serde_json::json!({
             "name": "set-blur", "type": SET_VARIABLE_NODE_TYPE,
-            "config": {"variable": "blur", "node_reference": {"node": "blur"}},
+            "input_values": {"variable": "blur", "node_reference": {"node": "blur"}},
         }));
     let flattening = flattened(graph).expect("flattens");
     let setter = flattening
@@ -572,10 +572,9 @@ fn node_types_describing_a_blur_with_an_input() -> NodeTypesOneStreamResolves {
 #[test]
 fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_pin() {
     let mut graph = a_camera_through_look_holding_soft_into_a_display();
-    graph["nodes"][1]["config"] = serde_json::json!({"strength": 2});
-    graph["nodes"][1]["pins"] = serde_json::json!({"video": 1});
-    graph["nodes"][1]["fragment"]["nodes"][1]["fragment"]["nodes"][1]["pins"] =
-        serde_json::json!({"amount": 3});
+    graph["nodes"][1]["input_values"] = serde_json::json!({"strength": 2, "video": 1});
+    graph["nodes"][1]["fragment"]["nodes"][1]["fragment"]["nodes"][1]["input_values"]["amount"] =
+        serde_json::json!(3);
     let flattening = flattened(graph).expect("flattens");
     let mut render = a_render_of(&flattening.graph_the_runtime_runs);
     render.nodes.retain(|node| node.id != BLUR_UUID);
@@ -607,15 +606,14 @@ fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_
 fn a_camera_into_look_feeding_blur_and_tint() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
-            {"name": "camera", "type": "tatolab.camera:CameraSource", "config": {}},
-            {"id": LOOK_UUID, "name": "look", "type": "looks.generators:look", "config": {},
+            {"name": "camera", "type": "tatolab.camera:CameraSource"},
+            {"id": LOOK_UUID, "name": "look", "type": "looks.generators:look",
              "fragment": {
                  "nodes": [
                      {"name": "source", "type": GRAPH_INPUT_NODE_TYPE,
-                      "config": {"port": "video", "family": "image"}},
-                     {"id": BLUR_UUID, "name": "blur", "type": "looks.nodes:Blur",
-                      "config": {}},
-                     {"id": TINT_UUID, "name": "tint", "type": TINT_NODE_TYPE, "config": {}},
+                      "input_values": {"port": "video", "family": "image"}},
+                     {"id": BLUR_UUID, "name": "blur", "type": "looks.nodes:Blur"},
+                     {"id": TINT_UUID, "name": "tint", "type": TINT_NODE_TYPE},
                  ],
                  "links": [
                      {"source": {"node": "source", "port": "value"},
@@ -687,7 +685,7 @@ fn a_placed_stream_renders_its_stream_setting_as_an_input_reading_the_asset_it_p
     let placed_asset = serde_json::json!({"asset": "0b8f6f2e-9a51-4d3c-8f0e-2f6b4c1d7a10"});
     let mut graph = a_camera_through_look_holding_soft_into_a_display();
     graph["nodes"][1]["type"] = serde_json::json!(STREAM_FRAGMENT_NODE_TYPE);
-    graph["nodes"][1]["config"] = serde_json::json!({"stream": placed_asset});
+    graph["nodes"][1]["input_values"] = serde_json::json!({"stream": placed_asset});
     let flattening = flattened(graph).expect("flattens");
     let mut render = a_render_of(&flattening.graph_the_runtime_runs);
     flattening
@@ -727,9 +725,10 @@ fn a_placed_stream_renders_its_stream_setting_as_an_input_reading_the_asset_it_p
 fn a_placed_look_whose_input_is_named(input_port: &str) -> serde_json::Value {
     let mut graph = a_camera_through_look_holding_soft_into_a_display();
     graph["nodes"][1]["type"] = serde_json::json!(STREAM_FRAGMENT_NODE_TYPE);
-    graph["nodes"][1]["config"] =
+    graph["nodes"][1]["input_values"] =
         serde_json::json!({"stream": {"asset": "0b8f6f2e-9a51-4d3c-8f0e-2f6b4c1d7a10"}});
-    graph["nodes"][1]["fragment"]["nodes"][0]["config"]["port"] = serde_json::json!(input_port);
+    graph["nodes"][1]["fragment"]["nodes"][0]["input_values"]["port"] =
+        serde_json::json!(input_port);
     graph["links"][0]["target"]["port"] = serde_json::json!(input_port);
     graph
 }

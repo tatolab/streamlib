@@ -76,7 +76,7 @@ fn a_load_listing_a_referrer_before_the_node_it_names_loads() {
             {
                 "name": "camera-track",
                 "type": track_import_path.as_str(),
-                "config": {"gateway": {"node": "cloudflare"}}
+                "input_values": {"gateway": {"node": "cloudflare"}}
             },
             {"name": "cloudflare", "type": gateway.as_str()}
         ]
@@ -105,7 +105,7 @@ fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
             {
                 "name": "camera-track",
                 "type": track_import_path.as_str(),
-                "config": {"gateway": {"node": "cloudflare"}}
+                "input_values": {"gateway": {"node": "cloudflare"}}
             }
         ]
     });

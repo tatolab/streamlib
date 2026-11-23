@@ -680,16 +680,15 @@ fn a_look_fragment_whose_inner_grade_reads(
     fragment_with_each_node_uuid_kept_by_its_name(
         &json!({
             "nodes": [
-                { "name": "blur", "type": "nodes.blur:Node", "config": {} },
+                { "name": "blur", "type": "nodes.blur:Node" },
                 {
                     "name": "inner",
                     "type": "looks.inner:inner",
-                    "config": {},
                     "fragment": {
                         "nodes": [{
                             "name": "grade",
                             "type": "nodes.grade:Node",
-                            "config": { "lut": { "asset": lut } }
+                            "input_values": { "lut": { "asset": lut } }
                         }],
                         "links": []
                     }

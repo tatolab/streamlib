@@ -37,9 +37,12 @@ fn a_camera_variable_read_by_two_displays() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
             {"name": "camera", "type": "rig:Camera"},
-            {"name": "set-camera", "type": "tatolab.stream:SetVariable", "config": {"variable": "camera"}},
-            {"name": "get-camera", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}},
-            {"name": "get-camera-2", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}},
+            {"name": "set-camera", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "camera"}},
+            {"name": "get-camera", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "camera"}},
+            {"name": "get-camera-2", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "camera"}},
             {"name": "front", "type": "rig:Display"},
             {"name": "back", "type": "rig:Display"}
         ],
@@ -94,7 +97,7 @@ fn a_graph_with_no_variable_resolves_to_itself() {
 #[test]
 fn a_get_with_no_setter_is_refused_naming_it_and_the_variables_set() {
     let mut graph = a_camera_variable_read_by_two_displays();
-    graph["nodes"][3]["config"]["variable"] = serde_json::json!("microphone");
+    graph["nodes"][3]["input_values"]["variable"] = serde_json::json!("microphone");
     let refusal = refusal_of(graph);
     assert!(
         refusal.contains(
@@ -124,12 +127,12 @@ fn a_fragment_whose_tint_reads_the_variable_shade(
 ) -> serde_json::Value {
     let mut nodes = vec![
         serde_json::json!({"name": "source", "type": "tatolab.stream:GraphInput",
-                               "config": {"port": "video", "family": "image"}}),
+                               "input_values": {"port": "video", "family": "image"}}),
         serde_json::json!({"name": "get-shade", "type": "tatolab.stream:GetVariable",
-                               "config": {"variable": "shade"}}),
+                               "input_values": {"variable": "shade"}}),
         serde_json::json!({"name": "tint", "type": "rig:Tint"}),
         serde_json::json!({"name": "out", "type": "tatolab.stream:GraphOutput",
-                               "config": {"port": "video", "family": "image"}}),
+                               "input_values": {"port": "video", "family": "image"}}),
     ];
     nodes.extend(nodes_beside_the_tint.as_array().unwrap().iter().cloned());
     let mut links = vec![
@@ -149,7 +152,7 @@ fn a_shade_set_inside() -> serde_json::Value {
         serde_json::json!([
             {"name": "palette", "type": "rig:Palette"},
             {"name": "set-shade", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "shade"}},
+             "input_values": {"variable": "shade"}},
         ]),
         serde_json::json!([
             {"source": {"node": "palette", "port": "colour"},
@@ -216,7 +219,7 @@ fn a_get_inside_a_fragment_with_no_setter_on_its_level_reads_the_enclosing_one()
         serde_json::json!([
             {"name": "palette", "type": "rig:Palette"},
             {"name": "set-shade", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "shade"}},
+             "input_values": {"variable": "shade"}},
         ]),
         serde_json::json!([
             {"source": {"node": "palette", "port": "colour"},
@@ -239,9 +242,9 @@ fn a_setter_inside_a_fragment_shadows_the_enclosing_one_for_its_own_level_only()
         serde_json::json!([
             {"name": "grey", "type": "rig:Palette"},
             {"name": "set-shade", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "shade"}},
+             "input_values": {"variable": "shade"}},
             {"name": "get-shade", "type": "tatolab.stream:GetVariable",
-             "config": {"variable": "shade"}},
+             "input_values": {"variable": "shade"}},
             {"name": "swatch", "type": "rig:Display"},
         ]),
         serde_json::json!([
@@ -263,7 +266,7 @@ fn a_get_outside_a_fragment_never_reads_a_variable_set_inside_it() {
         &[("look", a_shade_set_inside())],
         serde_json::json!([
             {"name": "get-shade", "type": "tatolab.stream:GetVariable",
-             "config": {"variable": "shade"}},
+             "input_values": {"variable": "shade"}},
             {"name": "swatch", "type": "rig:Display"},
         ]),
         serde_json::json!([
@@ -288,11 +291,11 @@ fn a_variable_set_inside_a_fragment_leaves_it_through_a_graph_output() {
         serde_json::json!([
             {"name": "palette", "type": "rig:Palette"},
             {"name": "set-shade", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "shade"}},
+             "input_values": {"variable": "shade"}},
             {"name": "get-shade-out", "type": "tatolab.stream:GetVariable",
-             "config": {"variable": "shade"}},
+             "input_values": {"variable": "shade"}},
             {"name": "shade-out", "type": "tatolab.stream:GraphOutput",
-             "config": {"port": "shade", "family": "image"}},
+             "input_values": {"port": "shade", "family": "image"}},
         ]),
         serde_json::json!([
             {"source": {"node": "palette", "port": "colour"},
@@ -326,7 +329,7 @@ fn two_setters_of_one_variable_are_refused_naming_both() {
         .unwrap()
         .push(serde_json::json!(
             {"name": "set-camera-2", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "camera", "node_reference": {"node": "front"}}}
+             "input_values": {"variable": "camera", "node_reference": {"node": "front"}}}
         ));
     let refusal = refusal_of(graph);
     assert!(
@@ -340,8 +343,10 @@ fn two_setters_of_one_variable_are_refused_naming_both() {
 fn a_setter_holding_nothing_is_placed_and_a_link_reading_it_is_refused_naming_it() {
     let placed_alone = serde_json::json!({
         "nodes": [
-            {"name": "set-camera", "type": "tatolab.stream:SetVariable", "config": {"variable": "camera"}},
-            {"name": "get-camera", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}}
+            {"name": "set-camera", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "camera"}},
+            {"name": "get-camera", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "camera"}}
         ],
         "links": []
     });
@@ -370,7 +375,8 @@ fn a_setter_holding_nothing_is_placed_and_a_link_reading_it_is_refused_naming_it
 #[test]
 fn a_setter_holding_two_values_is_refused() {
     let mut holding_two = a_camera_variable_read_by_two_displays();
-    holding_two["nodes"][1]["config"]["node_reference"] = serde_json::json!({"node": "front"});
+    holding_two["nodes"][1]["input_values"]["node_reference"] =
+        serde_json::json!({"node": "front"});
     assert!(refusal_of(holding_two).contains("both from a link and from its `node_reference`"));
 }
 
@@ -379,10 +385,11 @@ fn a_gateway_variable_read_by_a_tracks_config() -> serde_json::Value {
         "nodes": [
             {"name": "cloudflare", "type": "rig:Gateway"},
             {"name": "set-connection", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
-            {"name": "get-connection", "type": "tatolab.stream:GetVariable", "config": {"variable": "connection"}},
+             "input_values": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
+            {"name": "get-connection", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "connection"}},
             {"name": "camera-track", "type": "rig:Track",
-             "config": {"gateway": {"node": "get-connection"}, "track": "camera"}}
+             "input_values": {"gateway": {"node": "get-connection"}, "track": "camera"}}
         ]
     })
 }
@@ -419,7 +426,7 @@ fn a_get_read_as_the_kind_of_value_its_variable_does_not_hold_is_refused() {
     );
 
     let mut config_reading_a_port = a_camera_variable_read_by_two_displays();
-    config_reading_a_port["nodes"][4]["config"] =
+    config_reading_a_port["nodes"][4]["input_values"] =
         serde_json::json!({"source": {"node": "get-camera"}});
     assert!(
         refusal_of(config_reading_a_port).contains("its variable `camera` holds a port's output")
@@ -488,11 +495,11 @@ fn a_link_out_of_a_setter_or_onto_another_port_is_refused() {
 #[test]
 fn a_variable_node_naming_no_variable_or_an_unknown_key_is_refused() {
     let mut no_variable = a_camera_variable_read_by_two_displays();
-    no_variable["nodes"][2]["config"] = serde_json::json!({});
+    no_variable["nodes"][2]["input_values"] = serde_json::json!({});
     assert!(refusal_of(no_variable).contains("`get-camera` names no variable"));
 
     let mut unknown_key = a_camera_variable_read_by_two_displays();
-    unknown_key["nodes"][2]["config"]["colour"] = serde_json::json!("red");
+    unknown_key["nodes"][2]["input_values"]["colour"] = serde_json::json!("red");
     assert!(refusal_of(unknown_key).contains("carries the config key `colour`"));
 }
 #[test]
@@ -519,8 +526,12 @@ fn a_link_into_a_get_is_refused_naming_where_a_variable_is_set() {
 #[test]
 fn a_get_nothing_reads_is_placed_with_no_setter_and_one_linked_is_refused() {
     let mut placed = a_camera_variable_read_by_two_displays();
-    placed["nodes"].as_array_mut().unwrap().push(serde_json::json!(
-            {"name": "get-camra", "type": "tatolab.stream:GetVariable", "config": {"variable": "camra"}}
+    placed["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!(
+            {"name": "get-camra", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "camra"}}
         ));
     let resolution = resolved(placed.clone()).expect("a get nothing reads is placed");
     assert_eq!(
@@ -543,7 +554,7 @@ fn a_get_nothing_reads_is_placed_with_no_setter_and_one_linked_is_refused() {
 #[test]
 fn a_node_reference_naming_a_get_at_any_depth_resolves() {
     let mut graph = a_gateway_variable_read_by_a_tracks_config();
-    graph["nodes"][3]["config"] =
+    graph["nodes"][3]["input_values"] =
         serde_json::json!({"routes": [{"gateway": {"node": "get-connection"}}]});
     let resolution = resolved(graph).unwrap();
     assert_eq!(
@@ -564,7 +575,7 @@ fn a_setter_holding_another_variable_node_is_refused() {
         .unwrap()
         .push(serde_json::json!(
             {"name": "set-alias", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "alias", "node_reference": {"node": "get-connection"}}}
+             "input_values": {"variable": "alias", "node_reference": {"node": "get-connection"}}}
         ));
     assert!(refusal_of(graph).contains("holds variable node `get-connection`"));
 }
@@ -615,7 +626,7 @@ fn a_variable_port_spelled_another_way_that_casts_to_value_resolves() {
 #[test]
 fn a_config_object_naming_no_castable_node_is_left_as_written() {
     let mut graph = a_camera_variable_read_by_two_displays();
-    graph["nodes"][4]["config"] = serde_json::json!({"metadata": {"node": ""}});
+    graph["nodes"][4]["input_values"] = serde_json::json!({"metadata": {"node": ""}});
     let resolution = resolved(graph).unwrap();
     assert_eq!(
         serde_json::Value::Object(
@@ -841,9 +852,12 @@ fn a_gets_variable_renders_as_a_menu_of_the_variables_it_may_read_and_its_value_
     let graph = serde_json::json!({
         "nodes": [
             {"name": "level", "type": "rig:Meter"},
-            {"name": "set-level", "type": "tatolab.stream:SetVariable", "config": {"variable": "level"}},
-            {"name": "set-gain", "type": "tatolab.stream:SetVariable", "config": {"variable": "gain"}},
-            {"name": "get-level", "type": "tatolab.stream:GetVariable", "config": {"variable": "level"}},
+            {"name": "set-level", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "level"}},
+            {"name": "set-gain", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "gain"}},
+            {"name": "get-level", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "level"}},
             {"name": "display", "type": "rig:Display"}
         ],
         "links": [
@@ -923,8 +937,9 @@ fn a_get_whose_setter_holds_a_node_renders_its_value_of_any_type() {
         "nodes": [
             {"name": "connection", "type": "rig:Connection"},
             {"name": "set-connection", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "connection", "node_reference": {"node": "connection"}}},
-            {"name": "get-connection", "type": "tatolab.stream:GetVariable", "config": {"variable": "connection"}}
+             "input_values": {"variable": "connection", "node_reference": {"node": "connection"}}},
+            {"name": "get-connection", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "connection"}}
         ],
         "links": []
     });

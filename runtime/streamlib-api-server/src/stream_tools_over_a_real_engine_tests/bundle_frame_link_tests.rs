@@ -115,9 +115,9 @@ fn a_project_whose_main_stream_holds_two_sources_and_a_send() -> ProjectWithGrap
     ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
         "nodes": [
-            { "id": FRAMED_SOURCE_UUID, "name": "frames", "type": FRAMED_SOURCE_TYPE, "config": {} },
-            { "id": READING_SOURCE_UUID, "name": "readings", "type": READING_SOURCE_TYPE, "config": {} },
-            { "id": SEND_UUID, "name": "send", "type": SEND_TYPE, "config": {} },
+            { "id": FRAMED_SOURCE_UUID, "name": "frames", "type": FRAMED_SOURCE_TYPE },
+            { "id": READING_SOURCE_UUID, "name": "readings", "type": READING_SOURCE_TYPE },
+            { "id": SEND_UUID, "name": "send", "type": SEND_TYPE },
         ],
         "links": [],
     }))

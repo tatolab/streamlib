@@ -27,9 +27,8 @@ fn a_document_of_a_linked_into_b(a_name: &str, b_name: &str, b_type: NodeClassIm
                 "id": NODE_A,
                 "name": a_name,
                 "type": MockOutputOnlyNode::node_class_import_path().as_str(),
-                "config": {},
             },
-            { "id": NODE_B, "name": b_name, "type": b_type.as_str(), "config": {} },
+            { "id": NODE_B, "name": b_name, "type": b_type.as_str() },
         ],
         "links": [{
             "source": { "node": a_name, "port": "out1" },
@@ -212,11 +211,11 @@ fn a_document_of_a_picture_link(source: &str, sink: &str, linked: bool) -> Value
     json!({
         "nodes": [
             {
-                "id": NODE_A, "name": "source", "config": {},
+                "id": NODE_A, "name": "source",
                 "type": a_saved_link_fixture_type(source).as_str(),
             },
             {
-                "id": NODE_B, "name": "sink", "config": {},
+                "id": NODE_B, "name": "sink",
                 "type": a_saved_link_fixture_type(sink).as_str(),
             },
         ],
@@ -842,13 +841,12 @@ fn a_document_feeding_an_island_into_the_app_process(switch_type: &str, linked: 
         MockInputOnlyNode::node_class_import_path(),
     );
     document["nodes"].as_array_mut().unwrap().push(json!({
-        "id": NODE_C, "name": "switch", "type": switch_type, "config": {},
+        "id": NODE_C, "name": "switch", "type": switch_type,
     }));
     document["nodes"].as_array_mut().unwrap().push(json!({
         "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "name": "view",
         "type": format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:program"),
-        "config": {},
     }));
     if linked {
         document["links"].as_array_mut().unwrap().push(json!({

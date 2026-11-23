@@ -55,11 +55,10 @@ fn a_project_whose_cue_input_a_recorder_reads(lifetime: &str) -> ProjectWithGrap
         "stream": "main",
         "nodes": [
             { "id": CUE_NODE_UUID, "name": "cue", "type": "tatolab.stream:GraphInput",
-              "config": { "port": "cue", "family": "records", "default": { "track": "intro" },
+              "input_values": { "port": "cue", "family": "records", "default": { "track": "intro" },
                           "lifetime": lifetime } },
             { "id": RECORDER_NODE_UUID, "name": "recorder",
-              "type": StreamToolsTestRecordsRecorder::node_class_import_path().as_str(),
-              "config": {} },
+              "type": StreamToolsTestRecordsRecorder::node_class_import_path().as_str() },
         ],
         "links": [
             { "source": { "node": "cue", "port": "value" },

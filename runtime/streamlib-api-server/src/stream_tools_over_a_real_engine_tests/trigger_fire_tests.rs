@@ -63,10 +63,9 @@ fn a_project_whose_main_stream_holds_an_unlinked_and_a_linked_trigger() -> Proje
     ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
         "nodes": [
-            { "id": BUTTON_NODE_UUID, "name": "button", "type": reader.as_str(), "config": {} },
-            { "id": SOURCE_NODE_UUID, "name": "leader", "type": reader.as_str(), "config": {} },
-            { "id": FOLLOWER_NODE_UUID, "name": "follower", "type": reader.as_str(),
-              "config": {} },
+            { "id": BUTTON_NODE_UUID, "name": "button", "type": reader.as_str() },
+            { "id": SOURCE_NODE_UUID, "name": "leader", "type": reader.as_str() },
+            { "id": FOLLOWER_NODE_UUID, "name": "follower", "type": reader.as_str() },
         ],
         "links": [
             { "source": { "node": "leader", "port": "fired" },

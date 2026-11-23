@@ -70,7 +70,7 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
     let mut graph = project.the_graph_document_of("main");
     graph["nodes"].as_array_mut().expect("nodes").push(json!({
         "id": VOLUME_GRAPH_INPUT_NODE_UUID, "name": "volume", "type": "tatolab.stream:GraphInput",
-        "config": { "port": "volume", "family": "channels" },
+        "input_values": { "port": "volume", "family": "channels" },
     }));
     project.write_the_graph_document(graph);
     engine.a_stream_loaded_from_its_graph_document(&project, "main");
@@ -125,15 +125,15 @@ async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_
     let nodes = graph["nodes"].as_array_mut().expect("nodes");
     nodes.push(json!({
         "id": LEVEL_GRAPH_OUTPUT_NODE_UUID, "name": "level-out",
-        "type": "tatolab.stream:GraphOutput", "config": { "port": "level" },
+        "type": "tatolab.stream:GraphOutput", "input_values": { "port": "level" },
     }));
     nodes.push(json!({
         "id": GAIN_SET_VARIABLE_NODE_UUID, "name": "gain-set",
-        "type": "tatolab.stream:SetVariable", "config": { "variable": "gain" },
+        "type": "tatolab.stream:SetVariable", "input_values": { "variable": "gain" },
     }));
     nodes.push(json!({
         "id": GAIN_GET_VARIABLE_NODE_UUID, "name": "gain-get",
-        "type": "tatolab.stream:GetVariable", "config": { "variable": "gain" },
+        "type": "tatolab.stream:GetVariable", "input_values": { "variable": "gain" },
     }));
     let links = graph["links"].as_array_mut().expect("links");
     for target in ["level-out", "gain-set"] {

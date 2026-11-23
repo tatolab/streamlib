@@ -74,7 +74,7 @@ fn register_the_loop_check_node_types_once() {
 /// `first`'s `number`, and a spare node of the same type.
 fn a_project_whose_main_stream_holds_two_typed_function_nodes() -> ProjectWithGraphDocuments {
     register_the_loop_check_node_types_once();
-    let node = |id: &str, name: &str| json!({ "id": id, "name": name, "type": TYPED_LOOP_TYPE, "config": {} });
+    let node = |id: &str, name: &str| json!({ "id": id, "name": name, "type": TYPED_LOOP_TYPE });
     ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
         "nodes": [node(FIRST_UUID, "first"), node(SECOND_UUID, "second"), node(SPARE_UUID, "spare")],

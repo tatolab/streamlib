@@ -17,9 +17,9 @@ fn a_stub_holding_a_camera_linked_to_an_effect() -> Arc<ControlPlaneMcpDispatchS
         "machine": crate::control_plane_stub_support::STUB_MACHINE_NAME,
         "nodes": [
             { "id": STUB_CAMERA_NODE_UUID, "name": "camera", "type": "tatolab.camera:Camera",
-              "config": { "fps": 30 }, "pins": {}, "studio": { "position": [0, 0] } },
+              "input_values": { "fps": 30 }, "studio": { "position": [0, 0] } },
             { "id": STUB_EFFECT_NODE_UUID, "name": "fx", "type": "nodes.fx:Fx",
-              "config": {}, "pins": { "strength": 0.5 } },
+              "input_values": { "strength": 0.5 } },
         ],
         "links": [
             { "id": "link-9", "source": { "node": "camera", "port": "video" },

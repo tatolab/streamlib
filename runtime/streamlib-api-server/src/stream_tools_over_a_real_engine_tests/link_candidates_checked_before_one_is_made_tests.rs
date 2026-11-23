@@ -260,8 +260,8 @@ async fn a_candidates_warning_carries_the_runtimes_words_for_it() {
     let project = ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
         "nodes": [
-            { "id": RGBA_UUID, "name": "rgba", "type": RGBA_TYPE, "config": {} },
-            { "id": TINT_UUID, "name": "tint", "type": TINT_TYPE, "config": {} },
+            { "id": RGBA_UUID, "name": "rgba", "type": RGBA_TYPE },
+            { "id": TINT_UUID, "name": "tint", "type": TINT_TYPE },
         ],
         "links": [],
     }));

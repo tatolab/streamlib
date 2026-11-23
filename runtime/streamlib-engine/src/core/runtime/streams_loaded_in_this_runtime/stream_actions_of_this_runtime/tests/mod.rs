@@ -106,7 +106,6 @@ fn the_graph_of_a_stream_named(stream_name: &str) -> serde_json::Value {
         "nodes": [{
             "name": "source",
             "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
-            "config": {},
         }],
         "links": [],
     })
@@ -120,7 +119,7 @@ fn the_graph_of_a_stream_naming_a_type_not_described(stream_name: &str) -> serde
     graph["nodes"] = serde_json::json!([source, {
         "name": "absent",
         "type": "tatolab.absent:AbsentNodeType",
-        "config": {"strength": 3},
+        "input_values": {"strength": 3},
     }]);
     graph
 }

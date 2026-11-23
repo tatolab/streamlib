@@ -111,7 +111,7 @@ fn a_node_of_a_type_not_described_renders_each_value_not_known_as_config_on_an_i
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
     let mut graph = the_graph_of_a_stream_naming_a_type_not_described("camera");
     graph["nodes"][1]["exposed_config_fields"] = serde_json::json!(["strength"]);
-    graph["nodes"][1]["pins"] = serde_json::json!({"gain": 2});
+    graph["nodes"][1]["input_values"]["gain"] = serde_json::json!(2);
     let project = ProjectWithGraphDocuments::holding(graph);
     let camera = project.stream_id_of("camera");
 
@@ -227,12 +227,10 @@ fn the_graph_of_a_source_linked_into_a_sink(
             "id": "7d3f1c1e-0a8b-4f3e-9a51-6c2b8f0e4a11",
             "name": "source",
             "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
-            "config": {},
         }, {
             "id": "1b9e6a52-3c4d-4e8f-8b07-2d5a9c1f7e33",
             "name": "sink",
             "type": crate::core::test_support::MockInputOnlyNode::Node::node_class_import_path().as_str(),
-            "config": {},
         }],
         "links": links,
     })
@@ -526,7 +524,7 @@ fn a_recorded_stream_linking_into_a_graph_inputs_value_is_held_with_that_link_se
             "id": "5e8c2b7a-1d4f-4c6e-9a3b-8f2d6c1e7a54",
             "name": "echo",
             "type": crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
-            "config": {"port": "echo", "family": "records"},
+            "input_values": {"port": "echo", "family": "records"},
         }));
     graph["links"]
         .as_array_mut()
@@ -576,7 +574,7 @@ fn a_stream_whose_load_is_refused_is_held_from_its_document_reading_none_of_its_
     graph["nodes"] = serde_json::json!([{
         "name": "source",
         "type": crate::core::test_support::MockSourceTakingOneSetting::Node::node_class_import_path().as_str(),
-        "config": {"frame_width": "wide"},
+        "input_values": {"frame_width": "wide"},
     }]);
     let project = ProjectWithGraphDocuments::holding(graph);
     let camera = project.stream_id_of("camera");
@@ -670,7 +668,6 @@ fn a_recorded_stream_whose_document_feeds_an_island_into_the_app_process_opens_a
             "id": "5e2a7c90-6b1d-4f4a-9c3e-8d7f2a1b0c55",
             "name": "switch",
             "type": a_native_function_node_type_of_records().as_str(),
-            "config": {},
         }));
     document["nodes"]
         .as_array_mut()
@@ -679,7 +676,6 @@ fn a_recorded_stream_whose_document_feeds_an_island_into_the_app_process_opens_a
             "id": "0c6f3d2e-9b1a-4e7d-8f2c-5a4b3c2d1e0f",
             "name": "program",
             "type": format!("{TEST_PROJECT_NAME}:program"),
-            "config": {},
         }));
     document["links"]
         .as_array_mut()
