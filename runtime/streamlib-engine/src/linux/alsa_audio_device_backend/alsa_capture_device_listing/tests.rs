@@ -32,6 +32,16 @@ fn the_capture_pcms_are_listed_default_first_with_each_description_on_one_line()
             Some("Output"),
         ),
         a_hint("dsnoop:CARD=Mic,DEV=0", None, Some("Input")),
+        a_hint(
+            "hw:CARD=PCH,DEV=0",
+            Some("HDA Intel PCH\nDirect hardware device"),
+            None,
+        ),
+        a_hint(
+            "plughw:CARD=PCH,DEV=0",
+            Some("HDA Intel PCH\nHardware device"),
+            None,
+        ),
     ]);
     let listed: Vec<(&str, &str)> = devices
         .iter()
@@ -40,7 +50,7 @@ fn the_capture_pcms_are_listed_default_first_with_each_description_on_one_line()
     assert_eq!(
         listed,
         [
-            ("default", "Default ALSA Output"),
+            ("default", "Default input"),
             (
                 "sysdefault:CARD=PCH",
                 "HDA Intel PCH, ALC892 Analog, Default Audio Device"
@@ -51,8 +61,9 @@ fn the_capture_pcms_are_listed_default_first_with_each_description_on_one_line()
             ),
             ("dsnoop:CARD=Mic,DEV=0", "dsnoop:CARD=Mic,DEV=0"),
         ],
-        "an output-only PCM and the discarding one are no inputs, and a PCM with no \
-         description is named by its id"
+        "an output-only PCM, the discarding one and the raw card ones are not listed, \
+         `default` is named for what it captures, and a PCM with no description is named by \
+         its id"
     );
     assert!(
         devices

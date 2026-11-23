@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::context::capture_and_playback_devices::audio_capture_device_listing::AudioCaptureDevice;
+use crate::core::context::capture_and_playback_devices::audio_capture_device_listing::AudioCaptureDeviceListing;
 use crate::core::context::capture_and_playback_devices::audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
@@ -36,13 +36,9 @@ impl AudioDeviceBackend for SilentNullAudioDeviceBackend {
         "silent-null"
     }
 
-    /// None: the default input is silence, and no device can be named.
-    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
-        Ok(Vec::new())
-    }
-
-    fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
-        Ok(None)
+    /// Nothing: the default input is silence, and no device can be named.
+    fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing> {
+        Ok(AudioCaptureDeviceListing::default())
     }
 
     fn open_capture_stream(

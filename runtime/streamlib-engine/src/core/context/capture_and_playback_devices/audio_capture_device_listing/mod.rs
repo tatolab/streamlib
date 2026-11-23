@@ -31,17 +31,50 @@ pub struct AudioCaptureDevice {
     pub kind: AudioCaptureDeviceKind,
 }
 
+impl AudioCaptureDevice {
+    /// The device `id` names, called by `name` where the backend gives it a non-empty one and by
+    /// its id otherwise.
+    pub fn named_or_by_id(id: String, name: Option<String>, kind: AudioCaptureDeviceKind) -> Self {
+        let name = name
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| id.clone());
+        Self { id, name, kind }
+    }
+}
+
+/// What a backend lists in one look at its devices: the capture devices, and the id of its
+/// default output's monitor among them, so the two cannot disagree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AudioCaptureDeviceListing {
+    /// The capture devices, inputs first, then output monitors, each with the backend's default
+    /// first.
+    pub devices: Vec<AudioCaptureDevice>,
+    /// The id of the default output's monitor, `None` where the backend captures no output's
+    /// monitor or has no default output.
+    pub default_output_monitor_device_id: Option<String>,
+}
+
+/// `items` with the first one `is_default` picks moved to the front, the rest in their order.
+pub fn moved_to_the_front<Item>(
+    mut items: Vec<Item>,
+    is_default: impl Fn(&Item) -> bool,
+) -> Vec<Item> {
+    if let Some(default_position) = items.iter().position(is_default) {
+        items[..=default_position].rotate_right(1);
+    }
+    items
+}
+
 /// Every capture device `backend` can open: its inputs, then the monitors of its outputs, the
 /// default output's monitor first under [`DEFAULT_OUTPUT_MONITOR_DEVICE_ID`] where the backend
 /// has one.
 pub fn list_audio_capture_devices(
     backend: &dyn AudioDeviceBackend,
 ) -> Result<Vec<AudioCaptureDevice>> {
-    let listed = backend.list_capture_devices()?;
-    let default_output_monitor = backend.default_output_monitor_device_id()?;
+    let listing = backend.list_capture_devices()?;
     Ok(with_the_default_output_monitor_alias(
-        listed,
-        default_output_monitor.as_deref(),
+        listing.devices,
+        listing.default_output_monitor_device_id.as_deref(),
     ))
 }
 
@@ -85,7 +118,9 @@ pub(crate) fn capture_request_with_the_default_output_monitor_resolved(
     }
     let resolved = the_default_output_monitor_or_its_refusal(
         backend.backend_name(),
-        backend.default_output_monitor_device_id()?,
+        backend
+            .list_capture_devices()?
+            .default_output_monitor_device_id,
     )?;
     tracing::info!(
         audio_backend = backend.backend_name(),

@@ -27,10 +27,10 @@ use libloading::Library;
 
 use crate::core::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureDevice,
-    AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream,
-    AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
-    DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
-    DeviceStreamLivenessReport, RequestedAudioStreamFormat,
+    AudioCaptureDeviceListing, AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest,
+    AudioPlaybackStream, AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff, DeviceBackendArmUnavailableReason, DeviceStreamFailureReason,
+    DeviceStreamFailureRecorder, DeviceStreamLivenessReport, RequestedAudioStreamFormat,
 };
 use crate::core::execution::ThreadPriority;
 use crate::core::media_clock::MediaClock;
@@ -583,15 +583,14 @@ impl AudioDeviceBackend for AlsaAudioDeviceBackend {
         "alsa"
     }
 
-    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
-        Ok(alsa_capture_devices_among(
-            alsa_capture_device_listing::pcm_hints_of(&self.entry_points)?,
-        ))
-    }
-
-    /// None: an ALSA PCM captures no output's monitor.
-    fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
-        Ok(None)
+    /// An ALSA PCM captures no output's monitor, so the listing names no default one.
+    fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing> {
+        Ok(AudioCaptureDeviceListing {
+            devices: alsa_capture_devices_among(alsa_capture_device_listing::pcm_hints_of(
+                &self.entry_points,
+            )?),
+            default_output_monitor_device_id: None,
+        })
     }
 
     fn open_capture_stream(

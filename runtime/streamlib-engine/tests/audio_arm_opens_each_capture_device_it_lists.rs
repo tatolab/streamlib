@@ -124,8 +124,9 @@ fn the_pipewire_arm_lists_the_default_sinks_monitor_behind_the_alias_that_resolv
         return;
     }
     let default_output_monitor = backend
-        .default_output_monitor_device_id()
+        .list_capture_devices()
         .expect("the session answers")
+        .default_output_monitor_device_id
         .expect("the session has a default sink");
     let ids: Vec<String> = list_audio_capture_devices(backend.as_ref())
         .expect("the arm lists its devices")

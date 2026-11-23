@@ -13,8 +13,8 @@ pub(crate) mod texture_pools_and_rings;
 pub use texture_pools_and_rings::texture_pool;
 
 pub use capture_and_playback_devices::audio_capture_device_listing::{
-    AudioCaptureDevice, AudioCaptureDeviceKind, DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
-    list_audio_capture_devices,
+    AudioCaptureDevice, AudioCaptureDeviceKind, AudioCaptureDeviceListing,
+    DEFAULT_OUTPUT_MONITOR_DEVICE_ID, list_audio_capture_devices, moved_to_the_front,
 };
 pub use capture_and_playback_devices::audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,

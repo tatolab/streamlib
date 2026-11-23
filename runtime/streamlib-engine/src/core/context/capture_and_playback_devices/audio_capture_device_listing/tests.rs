@@ -93,12 +93,11 @@ impl AudioDeviceBackend for BackendNamingTheDeviceItWasAskedFor {
         "naming"
     }
 
-    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
-        Ok(Vec::new())
-    }
-
-    fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
-        Ok(Some("sink.monitor".to_owned()))
+    fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing> {
+        Ok(AudioCaptureDeviceListing {
+            devices: Vec::new(),
+            default_output_monitor_device_id: Some("sink.monitor".to_owned()),
+        })
     }
 
     fn open_capture_stream(
@@ -175,5 +174,51 @@ fn the_alias_resolves_to_the_monitor_the_backend_names() {
     assert_eq!(
         the_default_output_monitor_or_its_refusal("pipewire", Some("sink.monitor".into())).unwrap(),
         "sink.monitor"
+    );
+}
+
+#[test]
+fn the_default_moves_to_the_front_and_the_rest_keep_their_order() {
+    assert_eq!(
+        moved_to_the_front(vec![1, 2, 3, 4], |item| *item == 3),
+        [3, 1, 2, 4]
+    );
+    assert_eq!(
+        moved_to_the_front(vec![1, 2, 3], |item| *item == 1),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        moved_to_the_front(vec![1, 2, 3], |item| *item == 9),
+        [1, 2, 3],
+        "no default leaves the order alone"
+    );
+    assert_eq!(
+        moved_to_the_front(vec![1, 3, 3], |item| *item == 3),
+        [3, 1, 3],
+        "only the first default moves"
+    );
+}
+
+#[test]
+fn a_device_with_no_name_or_a_blank_one_is_named_by_its_id() {
+    for name in [None, Some(String::new()), Some("  ".to_owned())] {
+        assert_eq!(
+            AudioCaptureDevice::named_or_by_id(
+                "hw-id".to_owned(),
+                name,
+                AudioCaptureDeviceKind::Input
+            )
+            .name,
+            "hw-id"
+        );
+    }
+    assert_eq!(
+        AudioCaptureDevice::named_or_by_id(
+            "hw-id".to_owned(),
+            Some("USB Microphone".to_owned()),
+            AudioCaptureDeviceKind::Input
+        )
+        .name,
+        "USB Microphone"
     );
 }

@@ -25,7 +25,7 @@ use objc2_core_foundation::{CFRetained, CFString};
 
 use crate::core::context::{
     AudioCaptureDevice, AudioCaptureDeviceKind, AudioDeviceStreamRequest, AudioSampleFormat,
-    AudioStreamFormat,
+    AudioStreamFormat, moved_to_the_front,
 };
 use crate::core::{Error, Result};
 
@@ -310,29 +310,22 @@ pub(super) fn capture_devices_default_first(
     devices: Vec<CoreAudioDevice>,
     default_object_id: Option<AudioObjectID>,
 ) -> Vec<AudioCaptureDevice> {
-    let mut devices: Vec<CoreAudioDevice> = devices
+    let devices: Vec<CoreAudioDevice> = devices
         .into_iter()
         .filter(|device| !device.uid.is_empty())
         .collect();
-    if let Some(default_position) = devices
-        .iter()
-        .position(|device| Some(device.object_id) == default_object_id)
-    {
-        let default_device = devices.remove(default_position);
-        devices.insert(0, default_device);
-    }
-    devices
-        .into_iter()
-        .map(|device| AudioCaptureDevice {
-            name: if device.name.is_empty() {
-                device.uid.clone()
-            } else {
-                device.name
-            },
-            id: device.uid,
-            kind: AudioCaptureDeviceKind::Input,
-        })
-        .collect()
+    moved_to_the_front(devices, |device| {
+        Some(device.object_id) == default_object_id
+    })
+    .into_iter()
+    .map(|device| {
+        AudioCaptureDevice::named_or_by_id(
+            device.uid,
+            Some(device.name),
+            AudioCaptureDeviceKind::Input,
+        )
+    })
+    .collect()
 }
 
 /// The UID of the system default device in `direction`, if one is set.

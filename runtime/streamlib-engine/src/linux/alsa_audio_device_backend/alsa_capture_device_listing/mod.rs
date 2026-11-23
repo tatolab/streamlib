@@ -4,7 +4,7 @@
 //! The ALSA PCMs a capture stream can open, read from libasound's device name hints.
 
 use super::*;
-use crate::core::context::AudioCaptureDeviceKind;
+use crate::core::context::{AudioCaptureDeviceKind, moved_to_the_front};
 
 /// One PCM as `snd_device_name_hint` describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,30 +21,37 @@ pub(super) struct AlsaPcmHint {
 /// an input.
 const DISCARDING_PCM_NAME: &str = "null";
 
-/// The capture devices among `hints`: each PCM that captures, `default` first and then in
-/// libasound's order, named by its description.
+/// What `default` is called in the list. libasound's own description of it reads "Default ALSA
+/// Output" on most machines, which misnames the PCM a capture stream opens.
+const DEFAULT_PCM_LISTED_NAME: &str = "Default input";
+
+/// The prefixes of the raw card PCMs. Each card's `sysdefault` and `dsnoop` PCMs already list
+/// it, in a form more than one stream can open at once, so these are left out of the list (they
+/// still open by id).
+const RAW_CARD_PCM_PREFIXES: [&str; 2] = ["hw:", "plughw:"];
+
+/// The capture devices among `hints`: each PCM that captures, but the raw card ones, `default`
+/// first and then in libasound's order, named by its description.
 pub(super) fn alsa_capture_devices_among(hints: Vec<AlsaPcmHint>) -> Vec<AudioCaptureDevice> {
-    let mut capture_hints: Vec<AlsaPcmHint> = hints
+    let mut names_seen = std::collections::HashSet::new();
+    let capture_hints: Vec<AlsaPcmHint> = hints
         .into_iter()
         .filter(|hint| hint.direction.as_deref() != Some("Output"))
         .filter(|hint| hint.name != DISCARDING_PCM_NAME)
+        .filter(|hint| {
+            !RAW_CARD_PCM_PREFIXES
+                .iter()
+                .any(|prefix| hint.name.starts_with(prefix))
+        })
+        .filter(|hint| names_seen.insert(hint.name.clone()))
         .collect();
-    let mut names_seen = std::collections::HashSet::new();
-    capture_hints.retain(|hint| names_seen.insert(hint.name.clone()));
-    if let Some(default_position) = capture_hints
-        .iter()
-        .position(|hint| hint.name == DEFAULT_PCM_NAME)
-    {
-        let default_hint = capture_hints.remove(default_position);
-        capture_hints.insert(0, default_hint);
-    }
-    capture_hints
+    moved_to_the_front(capture_hints, |hint| hint.name == DEFAULT_PCM_NAME)
         .into_iter()
-        .map(|hint| AudioCaptureDevice {
-            name: hint
-                .description
-                .as_deref()
-                .map(|description| {
+        .map(|hint| {
+            let name = if hint.name == DEFAULT_PCM_NAME {
+                Some(DEFAULT_PCM_LISTED_NAME.to_owned())
+            } else {
+                hint.description.as_deref().map(|description| {
                     description
                         .lines()
                         .map(str::trim)
@@ -52,16 +59,14 @@ pub(super) fn alsa_capture_devices_among(hints: Vec<AlsaPcmHint>) -> Vec<AudioCa
                         .collect::<Vec<_>>()
                         .join(", ")
                 })
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| hint.name.clone()),
-            id: hint.name,
-            kind: AudioCaptureDeviceKind::Input,
+            };
+            AudioCaptureDevice::named_or_by_id(hint.name, name, AudioCaptureDeviceKind::Input)
         })
         .collect()
 }
 
 /// Every PCM libasound's configuration and cards declare, as hints.
-pub(super) fn pcm_hints_of(entry_points: &Arc<AlsaLibraryEntryPoints>) -> Result<Vec<AlsaPcmHint>> {
+pub(super) fn pcm_hints_of(entry_points: &AlsaLibraryEntryPoints) -> Result<Vec<AlsaPcmHint>> {
     let mut hints: *mut *mut c_void = std::ptr::null_mut();
     // SAFETY: card -1 asks for every card; the interface is a NUL-terminated literal and `hints`
     // an owned out-parameter.

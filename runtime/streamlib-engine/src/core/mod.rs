@@ -49,11 +49,12 @@ pub mod utils;
 // Customer-facing modules.
 pub use context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureDevice,
-    AudioCaptureDeviceKind, AudioCaptureStream, AudioClock, AudioClockConfig, AudioDeviceBackend,
-    AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat, AudioStreamFormat,
-    AudioTickCallback, AudioTickContext, CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE,
-    CaptureDeviceAccessPrompting, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
-    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
+    AudioCaptureDeviceKind, AudioCaptureDeviceListing, AudioCaptureStream, AudioClock,
+    AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream,
+    AudioSampleFormat, AudioStreamFormat, AudioTickCallback, AudioTickContext,
+    CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE, CaptureDeviceAccessPrompting,
+    CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff, CapturedVideoFrameFromDevice,
+    CapturedVideoFrameHandOff, DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
     DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, DeviceBackendArmUnavailableReason,
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport, GpuContext,
     GpuContextFullAccess, GpuContextLimitedAccess, GpuPoolClaimTable, GpuPoolClaimTableRow,

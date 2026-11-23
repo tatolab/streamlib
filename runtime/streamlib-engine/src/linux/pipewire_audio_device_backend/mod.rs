@@ -12,7 +12,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::Arc;
 
 use crate::core::context::{
-    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureDevice,
+    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureDeviceListing,
     AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream,
     AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
@@ -198,14 +198,10 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         "pipewire"
     }
 
-    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
-        Ok(audio_node_listing::audio_nodes_of_the_session(&self.entry_points)?.capture_devices())
-    }
-
-    fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
+    fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing> {
         Ok(
             audio_node_listing::audio_nodes_of_the_session(&self.entry_points)?
-                .default_output_monitor_device_id(),
+                .capture_device_listing(),
         )
     }
 

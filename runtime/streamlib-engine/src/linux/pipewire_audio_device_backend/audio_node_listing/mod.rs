@@ -6,15 +6,14 @@
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 
-use crate::core::context::{AudioCaptureDevice, AudioCaptureDeviceKind};
+use crate::core::context::{
+    AudioCaptureDevice, AudioCaptureDeviceKind, AudioCaptureDeviceListing, moved_to_the_front,
+};
 use crate::core::{Error, Result};
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
 
 mod listing_shim {
     use std::ffi::{c_char, c_int, c_void};
-
-    /// `STREAMLIB_PIPEWIRE_MAX_DEFAULT_NODE_NAME_BYTES`.
-    pub(super) const MAX_DEFAULT_NODE_NAME_BYTES: usize = 256;
 
     pub(super) type AudioNodeListed = unsafe extern "C" fn(
         context: *mut c_void,
@@ -30,9 +29,11 @@ mod listing_shim {
             context: *mut c_void,
             default_sink_name: *mut c_char,
             default_source_name: *mut c_char,
+            default_node_name_capacity: usize,
             failure_text: *mut c_char,
             failure_text_capacity: usize,
         ) -> c_int;
+        pub(super) fn streamlib_pipewire_max_monitored_sink_name_bytes() -> usize;
     }
 
     #[cfg(test)]
@@ -48,6 +49,16 @@ mod listing_shim {
 /// What a capture `device_id` appends to a sink's name to open that sink's monitor, as the
 /// audio shim reads it.
 const MONITOR_DEVICE_ID_SUFFIX: &str = ".monitor";
+
+/// The room each default node name is read into. A longer name reads as no default.
+const DEFAULT_NODE_NAME_CAPACITY: usize = 256;
+
+/// Whether a capture stream can open `sink_name`'s monitor: the audio shim refuses a sink name
+/// that does not fit its buffer, so such a sink's monitor is not listed.
+fn a_monitor_of_it_opens(sink_name: &str) -> bool {
+    // SAFETY: the shim returns a compile-time constant.
+    sink_name.len() < unsafe { listing_shim::streamlib_pipewire_max_monitored_sink_name_bytes() }
+}
 
 /// One audio node the session's registry holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,13 +79,6 @@ impl PipeWireAudioNode {
     fn plays(&self) -> bool {
         self.media_class.starts_with("Audio/Sink") || self.media_class == "Audio/Duplex"
     }
-
-    fn name_a_person_reads(&self) -> &str {
-        self.node_description
-            .as_deref()
-            .filter(|description| !description.is_empty())
-            .unwrap_or(&self.node_name)
-    }
 }
 
 /// The session's audio nodes and the default sink and source its `default` metadata names.
@@ -86,58 +90,54 @@ pub(super) struct PipeWireAudioNodesListed {
 }
 
 impl PipeWireAudioNodesListed {
-    /// Every capture device among the nodes: the sources, the default one first, then each
-    /// sink's monitor, the default sink's first.
-    pub(super) fn capture_devices(&self) -> Vec<AudioCaptureDevice> {
-        let inputs = defaults_first(
-            self.nodes.iter().filter(|node| node.captures()),
-            self.default_source_name.as_deref(),
+    /// Every capture device among the nodes: the sources, the default one first, then the monitor
+    /// of each sink a capture stream can open, the default sink's first, and that one's id as the
+    /// default output's monitor.
+    pub(super) fn capture_device_listing(&self) -> AudioCaptureDeviceListing {
+        let inputs = moved_to_the_front(
+            self.nodes.iter().filter(|node| node.captures()).collect(),
+            |node| Some(node.node_name.as_str()) == self.default_source_name.as_deref(),
         )
-        .map(|node| AudioCaptureDevice {
-            id: node.node_name.clone(),
-            name: node.name_a_person_reads().to_owned(),
-            kind: AudioCaptureDeviceKind::Input,
+        .into_iter()
+        .map(|node| {
+            AudioCaptureDevice::named_or_by_id(
+                node.node_name.clone(),
+                node.node_description.clone(),
+                AudioCaptureDeviceKind::Input,
+            )
         });
-        let monitors = defaults_first(
-            self.nodes.iter().filter(|node| node.plays()),
-            self.default_sink_name.as_deref(),
-        )
-        .map(|node| AudioCaptureDevice {
-            id: monitor_device_id_of(&node.node_name),
-            name: format!("Monitor of {}", node.name_a_person_reads()),
-            kind: AudioCaptureDeviceKind::OutputMonitor,
+        let sinks = moved_to_the_front(
+            self.nodes
+                .iter()
+                .filter(|node| node.plays() && a_monitor_of_it_opens(&node.node_name))
+                .collect::<Vec<_>>(),
+            |node| Some(node.node_name.as_str()) == self.default_sink_name.as_deref(),
+        );
+        let default_output_monitor_device_id = sinks
+            .first()
+            .filter(|sink| Some(sink.node_name.as_str()) == self.default_sink_name.as_deref())
+            .map(|sink| monitor_device_id_of(&sink.node_name));
+        let monitors = sinks.into_iter().map(|sink| {
+            let sink = AudioCaptureDevice::named_or_by_id(
+                sink.node_name.clone(),
+                sink.node_description.clone(),
+                AudioCaptureDeviceKind::OutputMonitor,
+            );
+            AudioCaptureDevice {
+                id: monitor_device_id_of(&sink.id),
+                name: format!("Monitor of {}", sink.name),
+                kind: sink.kind,
+            }
         });
-        inputs.chain(monitors).collect()
-    }
-
-    /// The default sink's monitor id, where the default sink is among the nodes.
-    pub(super) fn default_output_monitor_device_id(&self) -> Option<String> {
-        let default_sink_name = self.default_sink_name.as_deref()?;
-        self.nodes
-            .iter()
-            .find(|node| node.plays() && node.node_name == default_sink_name)
-            .map(|node| monitor_device_id_of(&node.node_name))
+        AudioCaptureDeviceListing {
+            devices: inputs.chain(monitors).collect(),
+            default_output_monitor_device_id,
+        }
     }
 }
 
 fn monitor_device_id_of(sink_name: &str) -> String {
     format!("{sink_name}{MONITOR_DEVICE_ID_SUFFIX}")
-}
-
-/// `nodes` with the one named `default_name` moved to the front, the rest in registry order.
-fn defaults_first<'a>(
-    nodes: impl Iterator<Item = &'a PipeWireAudioNode>,
-    default_name: Option<&str>,
-) -> impl Iterator<Item = &'a PipeWireAudioNode> {
-    let mut nodes: Vec<&PipeWireAudioNode> = nodes.collect();
-    if let Some(default_position) = nodes
-        .iter()
-        .position(|node| Some(node.node_name.as_str()) == default_name)
-    {
-        let default_node = nodes.remove(default_position);
-        nodes.insert(0, default_node);
-    }
-    nodes.into_iter()
 }
 
 /// What the shim calls on PipeWire's thread loop for each audio node, with the loop's lock held
@@ -169,12 +169,12 @@ pub(super) fn audio_nodes_of_the_session(
     entry_points: &PipeWireLibraryEntryPoints,
 ) -> Result<PipeWireAudioNodesListed> {
     let mut nodes: Vec<PipeWireAudioNode> = Vec::new();
-    let mut default_sink_name = [0u8; listing_shim::MAX_DEFAULT_NODE_NAME_BYTES];
-    let mut default_source_name = [0u8; listing_shim::MAX_DEFAULT_NODE_NAME_BYTES];
+    let mut default_sink_name = [0u8; DEFAULT_NODE_NAME_CAPACITY];
+    let mut default_source_name = [0u8; DEFAULT_NODE_NAME_CAPACITY];
     let mut failure_text = ShimFailureText::new();
     let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
     // SAFETY: the table is fully resolved; `nodes` is touched only by the callback until the shim
-    // returns; the default-name buffers are the capacity the shim writes into, and the failure
+    // returns; the default-name buffers each hold the capacity passed beside them, and the failure
     // buffer's pointer and capacity come from the buffer itself.
     let refused: c_int = unsafe {
         listing_shim::streamlib_pipewire_list_audio_nodes(
@@ -183,6 +183,7 @@ pub(super) fn audio_nodes_of_the_session(
             (&raw mut nodes).cast::<c_void>(),
             default_sink_name.as_mut_ptr().cast::<c_char>(),
             default_source_name.as_mut_ptr().cast::<c_char>(),
+            DEFAULT_NODE_NAME_CAPACITY,
             failure_text_ptr,
             failure_text_capacity,
         )

@@ -46,6 +46,7 @@ struct StreamLibPipeWireAudioNodeListing {
     void *context;
     char *default_sink_name;
     char *default_source_name;
+    size_t default_node_name_capacity;
     /// The sequence number of the sync whose answer ends the listing.
     int pending_sync;
     /// Whether the default metadata was bound since the last sync was sent: its properties
@@ -70,8 +71,13 @@ bool streamlib_pipewire_node_name_of_default_metadata_value(const char *value, c
     if (spa_json_enter_object(&document, &object) <= 0)
         return false;
     char key[64];
-    while (spa_json_get_string(&object, key, sizeof(key)) > 0) {
-        if (strcmp(key, "name") == 0) {
+    const char *raw_key;
+    int raw_key_length;
+    while ((raw_key_length = spa_json_next(&object, &raw_key)) > 0) {
+        // A key too long for `key` is some other key, skipped with its value: it cannot be
+        // "name", and ending the parse at it would lose a "name" that follows.
+        bool key_fits = spa_json_parse_stringn(raw_key, raw_key_length, key, sizeof(key)) > 0;
+        if (key_fits && strcmp(key, "name") == 0) {
             if (spa_json_get_string(&object, node_name, (int)node_name_capacity) <= 0) {
                 node_name[0] = '\0';
                 return false;
@@ -94,10 +100,10 @@ static int on_default_metadata_property(void *data, uint32_t subject, const char
         return 0;
     if (strcmp(key, STREAMLIB_PIPEWIRE_DEFAULT_AUDIO_SINK_KEY) == 0)
         streamlib_pipewire_node_name_of_default_metadata_value(
-            value, listing->default_sink_name, STREAMLIB_PIPEWIRE_MAX_DEFAULT_NODE_NAME_BYTES);
+            value, listing->default_sink_name, listing->default_node_name_capacity);
     else if (strcmp(key, STREAMLIB_PIPEWIRE_DEFAULT_AUDIO_SOURCE_KEY) == 0)
         streamlib_pipewire_node_name_of_default_metadata_value(
-            value, listing->default_source_name, STREAMLIB_PIPEWIRE_MAX_DEFAULT_NODE_NAME_BYTES);
+            value, listing->default_source_name, listing->default_node_name_capacity);
     return 0;
 }
 
@@ -162,6 +168,11 @@ static void on_core_done(void *data, uint32_t id, int seq)
     if (listing->default_metadata_bound_since_the_last_sync) {
         listing->default_metadata_bound_since_the_last_sync = false;
         listing->pending_sync = pw_core_sync(listing->core, PW_ID_CORE, listing->pending_sync);
+        if (listing->pending_sync < 0) {
+            listing->failure_reason =
+                "the PipeWire session would not take the listing's sync for its defaults";
+            listing->entry_points.pw_thread_loop_signal(listing->thread_loop, false);
+        }
         return;
     }
     listing->answered = true;
@@ -226,7 +237,8 @@ static void ask_the_session(struct StreamLibPipeWireAudioNodeListing *listing)
 int streamlib_pipewire_list_audio_nodes(const void *const *entry_points,
                                         StreamLibPipeWireAudioNodeListed on_node_listed,
                                         void *context, char *default_sink_name,
-                                        char *default_source_name, char *failure_text,
+                                        char *default_source_name,
+                                        size_t default_node_name_capacity, char *failure_text,
                                         size_t failure_text_capacity)
 {
     struct StreamLibPipeWireAudioNodeListing listing;
@@ -236,6 +248,12 @@ int streamlib_pipewire_list_audio_nodes(const void *const *entry_points,
     listing.context = context;
     listing.default_sink_name = default_sink_name;
     listing.default_source_name = default_source_name;
+    listing.default_node_name_capacity = default_node_name_capacity;
+    if (default_node_name_capacity == 0) {
+        streamlib_pipewire_copy_failure_text(failure_text, failure_text_capacity,
+                                             "the listing was handed no room for default names");
+        return 1;
+    }
     default_sink_name[0] = '\0';
     default_source_name[0] = '\0';
 

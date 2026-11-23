@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::core::Result;
 use crate::core::context::capture_and_playback_devices::audio_capture_device_listing::{
-    AudioCaptureDevice, capture_request_with_the_default_output_monitor_resolved,
+    AudioCaptureDeviceListing, capture_request_with_the_default_output_monitor_resolved,
 };
 use crate::core::context::capture_and_playback_devices::device_backend_probe_chain::{
     DeviceBackendArm, first_device_backend_arm_that_opens_among,
@@ -288,14 +288,11 @@ pub trait AudioDeviceBackend: Send + Sync {
     /// The arm's name, for the one probe log line and for error text.
     fn backend_name(&self) -> &'static str;
 
-    /// The capture devices this backend can open, inputs first, each kind in
-    /// the order the backend's default picks from.
-    fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>>;
-
-    /// The id of the default output's monitor as a capture stream opens it, or
-    /// `None` where this backend captures no output's monitor or has no default
-    /// output.
-    fn default_output_monitor_device_id(&self) -> Result<Option<String>>;
+    /// The capture devices this backend can open, in one look: inputs first,
+    /// then output monitors, each with the backend's default first, and the id
+    /// of the default output's monitor among them. The default-monitor alias is
+    /// not included.
+    fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing>;
 
     /// Open a capture stream against the named device, or the backend's
     /// default when none is named.
@@ -424,11 +421,7 @@ mod tests {
             self.0
         }
 
-        fn list_capture_devices(&self) -> Result<Vec<AudioCaptureDevice>> {
-            unreachable!("the walk only ever opens the arm, never lists its devices")
-        }
-
-        fn default_output_monitor_device_id(&self) -> Result<Option<String>> {
+        fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing> {
             unreachable!("the walk only ever opens the arm, never lists its devices")
         }
 

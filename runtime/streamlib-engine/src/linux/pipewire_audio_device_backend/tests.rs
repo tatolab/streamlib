@@ -164,7 +164,7 @@ fn an_unsettled_rate_fraction_contributes_no_delay_rather_than_dividing_by_zero(
     assert_eq!(stamp, 1_000_000_000 - QUANTUM_NANOS);
 }
 
-fn monitored_sink_name_of(device_id: &str) -> Option<String> {
+pub(super) fn monitored_sink_name_of(device_id: &str) -> Option<String> {
     let device_id = CString::new(device_id).expect("a test device id has no NUL");
     let length = unsafe {
         audio_shim::streamlib_pipewire_sink_name_length_of_monitor_device_id(device_id.as_ptr())

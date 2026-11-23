@@ -19,10 +19,6 @@
 extern "C" {
 #endif
 
-/// Longest node name the default sink or source is read into. A longer one is read as no
-/// default rather than truncated into another node's name.
-#define STREAMLIB_PIPEWIRE_MAX_DEFAULT_NODE_NAME_BYTES 256
-
 /// What the listing calls, on PipeWire's thread loop, for each node whose `media.class` starts
 /// with `Audio/`. `node_description` is NULL where the node carries none. Each string is valid
 /// only for the length of the call.
@@ -31,13 +27,15 @@ typedef void (*StreamLibPipeWireAudioNodeListed)(void *context, const char *node
                                                  const char *media_class);
 
 /// List the session's audio nodes to `on_node_listed`, and fill `default_sink_name` and
-/// `default_source_name` with the nodes the `default` metadata names, each empty where it names
-/// none. Returns 0 once the session has answered, and non-zero with `failure_text` filled when
+/// `default_source_name`, each `default_node_name_capacity` bytes, with the nodes the `default`
+/// metadata names, each empty where it names none or a name too long to fit rather than one
+/// truncated into another node's. Returns 0 once the session has answered, and non-zero with `failure_text` filled when
 /// it could not be asked or did not answer.
 int streamlib_pipewire_list_audio_nodes(const void *const *entry_points,
                                         StreamLibPipeWireAudioNodeListed on_node_listed,
                                         void *context, char *default_sink_name,
-                                        char *default_source_name, char *failure_text,
+                                        char *default_source_name,
+                                        size_t default_node_name_capacity, char *failure_text,
                                         size_t failure_text_capacity);
 
 /// Read the node name out of a `default.audio.sink`-style metadata value, `{"name":"<node>"}`,
