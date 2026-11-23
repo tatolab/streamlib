@@ -109,10 +109,7 @@ pub(crate) fn the_node_type_of_a_project_view(
 /// which holds none, it takes as the output's family carries it.
 fn the_input_of_an_output_a_panel_writes(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     let pin_declaration = if port.pin_type.holds_a_stored_value() {
-        PinDeclaration {
-            flow: PinFlow::Value,
-            ..PinDeclaration::exactly(port.pin_type.clone())
-        }
+        exactly_as_a_value(&port.pin_type)
     } else {
         carried_as_a_value(Vec::new())
     };
@@ -162,16 +159,22 @@ fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
     }
 }
 
+/// A port of exactly `pin_type`, read as a value; an output so declared keeps its last message
+/// for a reader that connects later.
+fn exactly_as_a_value(pin_type: &PinType) -> PinDeclaration {
+    PinDeclaration {
+        flow: PinFlow::Value,
+        ..PinDeclaration::exactly(pin_type.clone())
+    }
+}
+
 /// The pin an output `port`, one a panel writes, declares, read as a value, which keeps its last
 /// message for a reader that connects later: exactly its pin type where that type flows as a
 /// value; else, for an Audio block, which flows only as a stream, a value of any type, its
 /// family alone deciding what it takes.
 fn written_as_a_value(port: &TatolabViewDeclaredPort) -> PinDeclaration {
     if port.pin_type.flows().contains(&PinFlow::Value) {
-        PinDeclaration {
-            flow: PinFlow::Value,
-            ..PinDeclaration::exactly(port.pin_type.clone())
-        }
+        exactly_as_a_value(&port.pin_type)
     } else {
         carried_as_a_value(Vec::new())
     }

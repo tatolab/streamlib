@@ -232,10 +232,12 @@ pub enum TatolabViewCapability {
     Microphone,
 }
 
-/// One way a manifest falls short of the view contract: the field it names and why.
+/// One way a manifest falls short of the view contract: the field it names, why, and the
+/// declared port that field lies in, by its name, when it lies in one.
 struct TatolabViewManifestIssue {
     field_path: String,
     why: String,
+    port: Option<String>,
 }
 
 /// Why a view's `tatolab_view.json` does not open: every way it falls short, and the name of the
@@ -264,7 +266,7 @@ pub(crate) fn read_tatolab_view_manifest_naming_the_port_it_refuses(
             let field_path =
                 the_field_a_serde_refusal_names(&not_the_contract, TATOLAB_VIEW_MANIFEST_FILE_NAME);
             TatolabViewManifestRefusal {
-                port: the_declared_port_a_field_lies_in(manifest_json, &field_path),
+                port: the_declared_port_a_path_lies_in(manifest_json, not_the_contract.path()),
                 words: format!("`{field_path}`: {}.", not_the_contract.into_inner()),
             }
         })?;
@@ -276,9 +278,7 @@ pub(crate) fn read_tatolab_view_manifest_naming_the_port_it_refuses(
                 .map(|issue| format!("`{}`: {}.", issue.field_path, issue.why))
                 .collect::<Vec<_>>()
                 .join(" "),
-            port: issues.iter().find_map(|issue| {
-                the_declared_port_a_field_lies_in(manifest_json, &issue.field_path)
-            }),
+            port: issues.iter().find_map(|issue| issue.port.clone()),
         });
     }
     manifest.title = manifest.title.trim().to_owned();
@@ -289,20 +289,26 @@ pub(crate) fn read_tatolab_view_manifest_naming_the_port_it_refuses(
     Ok(manifest)
 }
 
-/// The name of the declared port of `manifest_json` that `field_path`, as `inputs[0].pin_type`,
-/// lies in, when it lies in one that has a name.
-fn the_declared_port_a_field_lies_in(manifest_json: &Value, field_path: &str) -> Option<String> {
-    let (direction, after_the_direction) =
-        ["inputs", "outputs"].into_iter().find_map(|direction| {
-            field_path
-                .strip_prefix(direction)
-                .and_then(|rest| rest.strip_prefix('['))
-                .map(|rest| (direction, rest))
-        })?;
-    let index: usize = after_the_direction.split(']').next()?.parse().ok()?;
+/// The name of the declared port of `manifest_json` that `path`, where serde refused it, lies
+/// in, when it lies in one that has a name: its first steps are `inputs` or `outputs`, then an
+/// index.
+fn the_declared_port_a_path_lies_in(
+    manifest_json: &Value,
+    path: &serde_path_to_error::Path,
+) -> Option<String> {
+    let mut segments = path.iter();
+    let serde_path_to_error::Segment::Map { key: direction } = segments.next()? else {
+        return None;
+    };
+    let serde_path_to_error::Segment::Seq { index } = segments.next()? else {
+        return None;
+    };
+    if direction != "inputs" && direction != "outputs" {
+        return None;
+    }
     manifest_json
         .get(direction)?
-        .get(index)?
+        .get(*index)?
         .get("name")?
         .as_str()
         .map(str::to_owned)
@@ -310,16 +316,18 @@ fn the_declared_port_a_field_lies_in(manifest_json: &Value, field_path: &str) ->
 
 fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewManifestIssue> {
     let mut issues = Vec::new();
-    let mut issue = |field_path: String, why: &str| {
+    let mut issue = |field_path: String, why: &str, port: Option<&str>| {
         issues.push(TatolabViewManifestIssue {
             field_path,
             why: why.to_owned(),
+            port: port.map(str::to_owned),
         })
     };
     if !is_a_contract_version(&manifest.contract) {
         issue(
             "contract".into(),
             "it names the view contract the view was built for, as \"1.0\"",
+            None,
         );
     } else if !is_a_contract_version_this_runtime_reads(&manifest.contract) {
         issue(
@@ -327,10 +335,15 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             &format!(
                 "this runtime reads view contract {VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_READ_MINOR}"
             ),
+            None,
         );
     }
     if manifest.title.trim().is_empty() {
-        issue("title".into(), "it is the name the view-type menu lists");
+        issue(
+            "title".into(),
+            "it is the name the view-type menu lists",
+            None,
+        );
     }
     for (field, path) in [
         ("icon", manifest.icon.as_deref()),
@@ -343,6 +356,7 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             issue(
                 field.into(),
                 "it is a path inside the view's folder, with no `..` step, scheme or backslash",
+                None,
             );
         }
     }
@@ -353,22 +367,14 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
                 issue(
                     format!("{direction}[{index}].name"),
                     "a port name is lower-case letters, digits and underscores",
+                    Some(&port.name),
                 );
             }
             if !names_seen.insert(port.name.as_str()) {
                 issue(
                     format!("{direction}[{index}].name"),
                     &format!("`{}` is named twice", port.name),
-                );
-            }
-            if !names_a_minor_with_a_ports_pin_type(&manifest.contract) {
-                issue(
-                    format!("{direction}[{index}].pin_type"),
-                    &format!(
-                        "a port's `pin_type` is view contract \
-                         {VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}; \
-                         write `\"contract\": \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"
-                    ),
+                    Some(&port.name),
                 );
             }
             if let Some([lowest, highest]) = port.range {
@@ -376,16 +382,35 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
                     issue(
                         format!("{direction}[{index}].range"),
                         "a range is [lowest, highest], lowest first",
+                        Some(&port.name),
                     );
                 }
                 if port.family != PortFamily::Array {
                     issue(
                         format!("{direction}[{index}].range"),
                         "only an Array port carries a range",
+                        Some(&port.name),
                     );
                 }
             }
         }
+    }
+    let first_port = ["inputs", "outputs"]
+        .into_iter()
+        .zip([&manifest.inputs, &manifest.outputs])
+        .find_map(|(direction, ports)| Some((direction, ports.first()?)));
+    if let Some((direction, port)) = first_port
+        && !names_a_minor_with_a_ports_pin_type(&manifest.contract)
+    {
+        issue(
+            format!("{direction}[0].pin_type"),
+            &format!(
+                "a port's `pin_type` is view contract \
+                 {VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}; write \
+                 `\"contract\": \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"
+            ),
+            Some(&port.name),
+        );
     }
     for (index, output) in manifest.outputs.iter().enumerate() {
         if a_panel_writes(output.family) && !is_a_type_a_panel_writes_a_value_of(&output.pin_type) {
@@ -396,6 +421,7 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
                     output.family.wire_name(),
                     output.pin_type
                 ),
+                Some(&output.name),
             );
         }
     }
@@ -425,20 +451,21 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         } else {
             continue;
         };
-        issue(format!("outputs[{index}].name"), &why);
+        issue(format!("outputs[{index}].name"), &why, Some(name));
     }
     for (index, extension) in manifest.accepts.files.iter().enumerate() {
         if !is_a_file_extension(extension) {
             issue(
                 format!("accepts.files[{index}]"),
                 "an extension is lower case with its dot, as \".glb\"",
+                None,
             );
         }
     }
     if let Some(settings) = &manifest.settings
         && let Some((field_path, why)) = why_a_settings_declaration_is_not_one(settings)
     {
-        issue(field_path, why);
+        issue(field_path, why, None);
     }
     if manifest.placement == TatolabViewPlacement::Area
         && (!manifest.inputs.is_empty() || !manifest.outputs.is_empty())
@@ -446,6 +473,7 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         issue(
             "placement".into(),
             "an `area` view has no node, so it declares no inputs or outputs; a view with ports has `node` placement",
+            None,
         );
     }
     issues

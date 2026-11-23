@@ -436,9 +436,15 @@ fn an_unknown_pin_type_is_refused_by_name() {
 fn a_pin_type_in_a_view_built_for_contract_one_point_zero_is_refused_naming_the_minor_to_write() {
     let refusal = read_tatolab_view_manifest(&a_node_view_declaring(
         "1.0",
-        json!([{ "name": "level", "pin_type": { "type": "float" } }]),
+        json!([{ "name": "level", "pin_type": { "type": "float" } },
+               { "name": "gain", "pin_type": { "type": "float" } }]),
     ))
     .expect_err("1.0 has no pin_type");
+    assert_eq!(
+        refusal.matches("is view contract 1.1").count(),
+        1,
+        "the contract is named once, however many ports name a pin type: {refusal}"
+    );
     assert!(
         refusal.contains(
             "`outputs[0].pin_type`: a port's `pin_type` is view contract 1.1; write \

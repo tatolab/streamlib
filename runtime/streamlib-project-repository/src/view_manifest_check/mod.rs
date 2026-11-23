@@ -109,10 +109,13 @@ pub fn check_a_projects_view_manifests(
             ));
         }
     }
-    let state = if findings.is_empty() {
-        ProjectCodeCheckState::Passed
-    } else {
+    let state = if findings
+        .iter()
+        .any(|finding| finding.severity == ProjectCodeCheckSeverity::Error)
+    {
         ProjectCodeCheckState::Failed
+    } else {
+        ProjectCodeCheckState::Passed
     };
     Ok(ViewManifestsChecked {
         run: ProjectCodeCheckRun {
