@@ -331,3 +331,23 @@ fn a_wire_from_an_output_its_node_does_not_have_is_refused_listing_its_outputs()
         "{refusal}"
     );
 }
+
+/// Mental-revert: with no check of a member, the wire lowers to the whole node and the member
+/// it names is dropped unsaid.
+#[test]
+fn a_connection_wire_naming_a_member_is_refused() {
+    let refusal = resolved(json!({
+        "nodes": [
+            {"name": "cloudflare", "type": RELAY},
+            {"name": "camera-track", "type": TRACK}
+        ],
+        "links": [{
+            "source": {"node": "cloudflare", "port": "connection", "member": "session"},
+            "target": {"node": "camera-track", "port": "relay"}
+        }]
+    }))
+    .expect_err("a connection has no members")
+    .to_string();
+
+    assert!(refusal.contains("naming member `session`"), "{refusal}");
+}

@@ -74,6 +74,22 @@ impl LoadedStreamInThisRuntime {
             (StreamGraphOperation::Disconnect { link }, Some(as_given)) => link != as_given,
             _ => false,
         };
+        if let StreamGraphOperation::AddNode { node, links } = &graph_operation
+            && links.iter().any(|link| link.target.node == node.id)
+        {
+            // The added node's own inputs are read from its type, which a first use describes,
+            // to tell whether a link into one of them is a connection wire drawn first.
+            let node_type = NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
+                Error::GraphError(format!("node {} `type`: {refusal}", node.id))
+            })?;
+            describe_the_type_an_add_names_when_it_must(
+                &self.node_interpreter_launch_record,
+                &node_type,
+                self.lend_directory(),
+                ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+            )
+            .await?;
+        }
         if self.the_operation_is_drawn_before_the_live_graph_takes_it(&graph_operation) {
             return self
                 .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)

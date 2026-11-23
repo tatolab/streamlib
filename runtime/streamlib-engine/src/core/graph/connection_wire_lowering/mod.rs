@@ -87,6 +87,14 @@ impl GraphSnapshot {
                 lowered.links.push(link.clone());
                 continue;
             };
+            if let Some(member) = link.source.member.as_ref().or(link.target.member.as_ref()) {
+                return Err(Error::GraphError(format!(
+                    "`{}` is wired into `{}`, a connection input, naming member `{member}`, and a \
+                     connection is one node, with no members. To fix: wire the whole port",
+                    the_end_named(&link.source),
+                    the_end_named(&link.target)
+                )));
+            }
             let source_cast = cast_exposed_name_to_url_safe(&link.source.node)?;
             let output_cast = cast_exposed_name_to_url_safe(&link.source.port)?;
             let Some(output) = ports_of_each_node_by_cast
