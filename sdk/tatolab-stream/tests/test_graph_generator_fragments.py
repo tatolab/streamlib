@@ -194,7 +194,7 @@ def test_a_setting_the_generator_does_not_promote_is_refused_naming_those_it_doe
 
 def test_a_node_class_given_promoted_settings_is_refused_naming_input_values() -> None:
     with pytest.raises(TypeError, match=r"pass its values as `input_values=\{\.\.\.\}`"):
-        StreamBuilder("rig").add(FrameInverter, strength=3)  # pyright: ignore[reportCallIssue]
+        StreamBuilder("rig").add(FrameInverter, strength=3)  # pyright: ignore[reportArgumentType]
 
 
 def test_a_generator_given_config_is_refused_naming_keyword_settings() -> None:

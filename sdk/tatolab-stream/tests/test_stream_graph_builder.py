@@ -408,7 +408,7 @@ def test_an_instance_is_refused_naming_the_class_itself() -> None:
     with pytest.raises(
         TypeError, match="pass it itself rather than an instance"
     ):
-        StreamBuilder("rig").add(FrameInverter())  # pyright: ignore[reportArgumentType]
+        StreamBuilder("rig").add(FrameInverter())  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 @pytest.mark.parametrize(
@@ -465,7 +465,7 @@ def test_a_node_with_no_config_records_an_empty_object() -> None:
 
 def test_a_config_that_is_not_a_mapping_is_refused() -> None:
     with pytest.raises(TypeError, match="config must be a mapping"):
-        StreamBuilder("rig").add(StandInMarker, config=[("gain", 2)])  # pyright: ignore[reportArgumentType]
+        StreamBuilder("rig").add(StandInMarker, config=[("gain", 2)])  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 def test_a_config_value_json_cannot_carry_is_refused_naming_its_key_path() -> None:
