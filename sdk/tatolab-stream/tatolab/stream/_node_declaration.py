@@ -450,6 +450,7 @@ class NodeDeclarationDecorator:
                         kind=getattr(node_under_declaration, NODE_DECLARATION_KIND_STAMP),
                         input_ports=getattr(node_under_declaration, NODE_DECLARATION_INPUT_PORTS_STAMP),
                         output_ports=getattr(node_under_declaration, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+                        pin_groups=getattr(node_under_declaration, NODE_DECLARATION_PIN_GROUPS_STAMP, []),
                     )
                 for meta_key, stamped_value in stamped.items():
                     setattr(
@@ -672,6 +673,7 @@ def _stamp_a_class_node(
         kind=PROCESS_NODE_KIND,
         input_ports=input_ports,
         output_ports=output_ports,
+        pin_groups=pin_groups or [],
     )
 
     setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)

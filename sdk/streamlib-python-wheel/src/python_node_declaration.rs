@@ -61,6 +61,7 @@ mod tests {
             "input_ports": stamp("__tatolab_node_input_ports__")?,
             "output_ports": stamp("__tatolab_node_output_ports__")?,
             "conversion": stamp("__tatolab_node_conversion__")?,
+            "pin_groups": stamp("__tatolab_node_pin_groups__")?,
         }))
     }
 

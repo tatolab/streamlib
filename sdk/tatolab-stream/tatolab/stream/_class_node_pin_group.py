@@ -180,6 +180,7 @@ def read_a_pin_group(
             "pin_group_slot_not_a_frozen_dataclass",
         )
     _refuse_a_pin_group_inside_the_slot(node, attribute_name, slot_class)
+    _refuse_a_field_its_slot_is_not_built_with(node, attribute_name, slot_class)
     try:
         inputs, outputs, members = read_the_slot(slot_class)
     except NodeDeclarationRefusal as slot_refusal:
@@ -235,6 +236,20 @@ def _refuse_a_pin_group_inside_the_slot(node: str, attribute_name: str, slot_cla
                 f"group of its own. To fix: declare `{field.name}` as a second group on "
                 f"`{node}`.",
                 finding_code="pin_group_inside_a_slot",
+                node=node,
+                pin=f"{attribute_name}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{field.name}",
+            )
+
+
+def _refuse_a_field_its_slot_is_not_built_with(node: str, attribute_name: str, slot_class: type) -> None:
+    for field in dataclasses.fields(slot_class):
+        if not field.init:
+            raise NodeDeclarationRefusal(
+                f"`{node}`'s pin group `{attribute_name}` repeats `{slot_class.__name__}`, whose "
+                f"field `{field.name}` is left out of its `__init__`, and each slot is built "
+                f"with every pin and value it holds. To fix: drop `init=False` from "
+                f"`{field.name}`, or make it a property of the slot.",
+                finding_code="pin_group_slot_not_a_frozen_dataclass",
                 node=node,
                 pin=f"{attribute_name}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{field.name}",
             )

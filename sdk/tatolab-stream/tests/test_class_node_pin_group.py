@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -125,6 +125,21 @@ class Empty:
 @dataclass(frozen=True)
 class Nested:
     inner: PinGroup[Layer]
+
+
+@dataclass(frozen=True)
+class Derived:
+    picture: InputPin[Texture]
+    opacity: float = field(init=False, default=1.0)
+
+
+@dataclass(frozen=True)
+class Counted:
+    picture: InputPin[Texture]
+    weights: list[float] = field(default_factory=lambda: [float(next(_factory_calls))])
+
+
+_factory_calls = iter(range(100))
 
 
 def _a_kernel_sampling(layer_count: int) -> str:
@@ -328,6 +343,61 @@ def test_a_bare_pin_group_a_group_given_a_value_and_a_group_in_a_slot_are_refuse
     assert _refusal_of(given_a_value).finding_code == "pin_has_a_value"
     refusal = _refusal_of(nested)
     assert (refusal.finding_code, refusal.pin) == ("pin_group_inside_a_slot", "layers.inner")
+
+
+def test_a_slot_field_left_out_of_its_init_is_refused() -> None:
+    """Fail-without-fix: the slot reads, and setup fails building `Derived(opacity=1.0)`."""
+    refusal = _refusal_of(lambda: _a_class_node(layers=PinGroup[Derived], audio=InputPin[Texture]))
+    assert (refusal.finding_code, refusal.pin) == (
+        "pin_group_slot_not_a_frozen_dataclass",
+        "layers.opacity",
+    )
+
+
+def test_a_slot_fields_factory_gives_its_port_and_its_member_one_default() -> None:
+    """Fail-without-fix: call the factory for each, and the port's default is `[0.0]` while the
+    slot is built with `[1.0]`."""
+    stacked = _a_class_node(layers=PinGroup[Counted], audio=InputPin[Texture])
+    (pin_group,) = class_node_pin_groups(stacked)
+    (weights_port,) = [port for port in pin_group.declared["inputs"] if port["name"] == "weights"]
+    (weights_member,) = [member for member in pin_group.members if member.port == "weights"]
+    assert weights_port["pin_default"] == weights_member.default
+
+
+def test_a_conversion_declaring_a_pin_group_is_refused() -> None:
+    """Fail-without-fix: the conversion check reads only the node's own ports, so the slots'
+    inputs that take a wire pass unseen."""
+
+    def converts_with_layers() -> type:
+        @node.meta(conversion=True)
+        @node
+        class Stacked:
+            layers: PinGroup[Layer]
+            audio: InputPin[Texture]
+            mixed: OutputPin[Texture]
+
+            def process(self) -> None: ...
+
+        return Stacked
+
+    def layers_under_meta() -> type:
+        @node
+        @node.meta(conversion=True)
+        class Stacked:
+            layers: PinGroup[Layer]
+            audio: InputPin[Texture]
+            mixed: OutputPin[Texture]
+
+            def process(self) -> None: ...
+
+        return Stacked
+
+    for declare in (converts_with_layers, layers_under_meta):
+        refusal = _refusal_of(declare)
+        assert (refusal.finding_code, refusal.pin) == (
+            "conversion_not_one_input_to_one_output",
+            "layers",
+        )
 
 
 def test_the_declaration_check_answers_a_pin_group_on_a_function_node_with_its_finding(

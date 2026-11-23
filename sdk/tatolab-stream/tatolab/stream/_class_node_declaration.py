@@ -144,6 +144,7 @@ class _ClassNodeReading:
         self._port_spelling_by_cast_name: dict[str, str] = {}
         self._input_ports_of_each_type_parameter: dict[typing.TypeVar, list[str]] = {}
         self._input_port_by_name: dict[str, DeclaredPort] = {}
+        self._default_by_attribute: dict[str, object] = {}
         self.pin_groups: list[ClassNodePinGroup] = []
         """Each `PinGroup` the class declares, in declaration order, once `ports` has read them."""
 
@@ -374,13 +375,16 @@ class _ClassNodeReading:
         `slots=True` takes off the class, else the class attribute; `NO_DEFAULT` for none."""
         dataclass_fields: dict[str, Any] = getattr(self._node_class, "__dataclass_fields__", {})
         declared_field = dataclass_fields.get(attribute_name)
-        if declared_field is not None:
-            if declared_field.default is not dataclasses.MISSING:
-                return declared_field.default
-            if declared_field.default_factory is not dataclasses.MISSING:
-                return declared_field.default_factory()
+        if declared_field is None:
+            return getattr(self._node_class, attribute_name, NO_DEFAULT)
+        if declared_field.default is not dataclasses.MISSING:
+            return declared_field.default
+        if declared_field.default_factory is dataclasses.MISSING:
             return NO_DEFAULT
-        return getattr(self._node_class, attribute_name, NO_DEFAULT)
+        # A factory is called once, so the port's default and the member's are one value.
+        if attribute_name not in self._default_by_attribute:
+            self._default_by_attribute[attribute_name] = declared_field.default_factory()
+        return self._default_by_attribute[attribute_name]
 
     def _field(
         self, attribute_name: str, annotation: Any, description: Optional[str]
