@@ -13,12 +13,16 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 use streamlib_engine::core::context::{
-    AudioBlockRequestedByDevice, AudioClockConfig, AudioDeviceStreamRequest, AudioSampleFormat,
-    CaptureDeviceAccessPrompting, CapturedAudioBlockFromDevice, DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
-    RequestedAudioStreamFormat, SharedAudioDeviceBackend, SoftwareAudioClock,
-    list_audio_capture_devices, open_capture_stream_in_requested_format,
-    open_playback_stream_in_requested_format, probe_audio_device_backend,
+    AudioBlockRequestedByDevice, AudioSampleFormat, DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
+    open_playback_stream_in_requested_format,
+};
+use streamlib_engine::core::context::{
+    AudioClockConfig, AudioDeviceStreamRequest, CaptureDeviceAccessPrompting,
+    CapturedAudioBlockFromDevice, RequestedAudioStreamFormat, SharedAudioDeviceBackend,
+    SoftwareAudioClock, list_audio_capture_devices, open_capture_stream_in_requested_format,
+    probe_audio_device_backend,
 };
 
 #[path = "support/rig_only_capability_skip.rs"]
@@ -143,17 +147,22 @@ fn the_pipewire_arm_lists_the_default_sinks_monitor_behind_the_alias_that_resolv
 
 /// The tone played into the default output: loud enough to read back off its monitor far above
 /// silence, and quiet through a speaker.
+#[cfg(target_os = "linux")]
 const TONE_AMPLITUDE: f32 = 0.1;
 
+#[cfg(target_os = "linux")]
 const TONE_FREQUENCY_HZ: f32 = 440.0;
 
 /// How long the monitor is captured while the tone plays.
+#[cfg(target_os = "linux")]
 const MONITOR_CAPTURE_DURATION: Duration = Duration::from_millis(1500);
 
 /// The peak the monitor must reach: half the tone's, far above a silent output's zeros.
+#[cfg(target_os = "linux")]
 const MONITOR_PEAK_MINIMUM: f32 = TONE_AMPLITUDE / 2.0;
 
 /// The largest sample magnitude in one block of interleaved little-endian scalars.
+#[cfg(target_os = "linux")]
 fn peak_of(interleaved_sample_bytes: &[u8], sample_format: AudioSampleFormat) -> f32 {
     match sample_format {
         AudioSampleFormat::F32 => interleaved_sample_bytes
