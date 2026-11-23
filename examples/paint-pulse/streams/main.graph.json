@@ -1,4 +1,5 @@
 {
+  "asset": "e40a7c1c-2221-4bf6-8665-147c6a1b44c7",
   "links": [
     {
       "source": {
@@ -663,7 +664,7 @@
     {
       "id": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
       "name": "stage",
-      "type": "__PROJECT__:stage",
+      "type": "Paint Pulse:stage",
       "studio": {
         "contract": 1,
         "position": [
@@ -687,31 +688,25 @@
     {
       "id": "3a00bb94-a2d3-5771-8b18-987537156d3a",
       "name": "computer_audio",
-      "type": "__MICROPHONE__",
+      "type": "tatolab.microphone:MicrophoneSource",
       "studio": {
         "contract": 1,
         "position": [
           0,
           250
         ]
-      },
-      "input_values": {
-        "device_id": "E829E599-5A90-4208-B177-ED1AC8BD23A5"
       }
     },
     {
       "id": "885a7beb-6b16-5fc0-811b-1ab5dd758d72",
       "name": "room_mic",
-      "type": "__MICROPHONE__",
+      "type": "tatolab.microphone:MicrophoneSource",
       "studio": {
         "contract": 1,
         "position": [
           0,
           500
         ]
-      },
-      "input_values": {
-        "device_id": "BuiltInMicrophoneDevice"
       }
     },
     {
