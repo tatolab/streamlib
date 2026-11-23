@@ -9,7 +9,7 @@ from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCall
 from rust_function_node_fixture import RustGate
 from rust_function_node_fixture import ScaleAndOffset
 from helper_placement_function_nodes import Clamp, Gate, Lfo, Remap
-from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, graph_generator
+from tatolab.stream import FloatToInteger, SteppedStreamClock, StreamBuilder, graph_generator
 
 from helper_placement_nodes import (
     STEPPED_LFO_STEP_MS,
@@ -32,13 +32,13 @@ from helper_placement_nodes import (
     ReportsEachBatchOfItsConfiguredLevel,
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
-    ReportsItsOwnProcessRecordsSink,
-    ReportsTheCountRecordsItReadSink,
+    ReportsItsOwnProcessIntegerSink,
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
     ReportsTheCountsItReadInOrderSink,
+    ReportsTheCountsItReadSink,
     ReportsTheFunctionNodeValuesItReadSink,
     ReportsTheLevelItIsBuiltWith,
-    ReportsTheLevelRecordsItReadSink,
+    ReportsTheLevelsItReadSink,
     ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
     ReportsTheRecordsItReadSink,
@@ -108,11 +108,11 @@ def raw_message_payload_source_into_sink(stream_builder: StreamBuilder) -> None:
 
 
 @graph_generator
-def native_channels_to_records_into_python_records_sink(stream_builder: StreamBuilder) -> None:
-    """A native Channels-to-Records converter into a Python sink reporting its own process."""
-    to_records = stream_builder.add(ChannelsToRecords, config={"channel_names": ["level"]})
-    sink = stream_builder.add(ReportsItsOwnProcessRecordsSink)
-    stream_builder.connect(to_records.output("records"), sink.input("records_from_upstream"))
+def native_float_to_integer_into_python_integer_sink(stream_builder: StreamBuilder) -> None:
+    """A native Float-to-Integer converter into a Python sink reporting its own process."""
+    to_integer = stream_builder.add(FloatToInteger)
+    sink = stream_builder.add(ReportsItsOwnProcessIntegerSink)
+    stream_builder.connect(to_integer.output("cast"), sink.input("integers_from_upstream"))
 
 
 @graph_generator
@@ -144,10 +144,10 @@ def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
 
 
 @graph_generator
-def function_nodes_read_by_two_native_converters_into_python_records_sink(
+def function_nodes_read_by_two_native_converters_into_python_sink(
     stream_builder: StreamBuilder,
 ) -> None:
-    """`Lfo` into `Remap` into a native `ChannelsToRecords` into a Python class, and a second `Lfo` into a second converter.
+    """`Lfo` into `Remap` onto 0..100 into a native `FloatToInteger` into a Python class, and a second `Lfo` into a second converter.
 
     Neither converter runs in a helper, so neither can evaluate the island it
     reads: both islands go to the stream's one function node pool. Each
@@ -156,18 +156,14 @@ def function_nodes_read_by_two_native_converters_into_python_records_sink(
     """
     lfo = stream_builder.add(Lfo)
     second_lfo = stream_builder.add(Lfo, name="second-lfo")
-    remap = stream_builder.add(Remap)
-    first_converter = stream_builder.add(
-        ChannelsToRecords, config={"channel_names": ["level"]}, name="first-converter"
-    )
-    second_converter = stream_builder.add(
-        ChannelsToRecords, config={"channel_names": ["level"]}, name="second-converter"
-    )
-    sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
+    remap = stream_builder.add(Remap, input_values={"to_high": 100.0})
+    first_converter = stream_builder.add(FloatToInteger, name="first-converter")
+    second_converter = stream_builder.add(FloatToInteger, name="second-converter")
+    sink = stream_builder.add(ReportsTheLevelsItReadSink, name="sink")
     stream_builder.connect(lfo.output("result"), remap.input("x"))
-    stream_builder.connect(remap.output("result"), first_converter.input("channels"))
-    stream_builder.connect(second_lfo.output("result"), second_converter.input("channels"))
-    stream_builder.connect(first_converter.output("records"), sink.input("level_records"))
+    stream_builder.connect(remap.output("result"), first_converter.input("value"))
+    stream_builder.connect(second_lfo.output("result"), second_converter.input("value"))
+    stream_builder.connect(first_converter.output("cast"), sink.input("levels"))
 
 
 @graph_generator
@@ -226,31 +222,27 @@ def function_node_run_as_python_into_a_class_lending_it_to_native_code(
 def function_node_slower_than_the_pools_frame_interval_read_by_a_native_converter(
     stream_builder: StreamBuilder,
 ) -> None:
-    """A function node whose every call outlasts the pool's frame interval, read by a native `ChannelsToRecords` into a Python class."""
-    sleeper = stream_builder.add(SleepsPastThePoolsFrameInterval, name="sleeper")
-    converter = stream_builder.add(
-        ChannelsToRecords, config={"channel_names": ["level"]}, name="converter"
+    """A function node giving 5 after each call outlasts the pool's frame interval, read by a native `FloatToInteger` into a Python class."""
+    sleeper = stream_builder.add(
+        SleepsPastThePoolsFrameInterval, name="sleeper", input_values={"level": 5.0}
     )
-    sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
-    stream_builder.connect(sleeper.output("result"), converter.input("channels"))
-    stream_builder.connect(converter.output("records"), sink.input("level_records"))
+    converter = stream_builder.add(FloatToInteger, name="converter")
+    sink = stream_builder.add(ReportsTheLevelsItReadSink, name="sink")
+    stream_builder.connect(sleeper.output("result"), converter.input("value"))
+    stream_builder.connect(converter.output("cast"), sink.input("levels"))
 
 
 @graph_generator
 def pooled_counter_beside_a_pooled_node_that_hangs(stream_builder: StreamBuilder) -> None:
-    """A stateful counter and a node that hangs after its first calls, each read by a native `ChannelsToRecords`, so both run in the pool."""
+    """A stateful counter and a node that hangs after its first calls, each read by a native `FloatToInteger`, so both run in the pool."""
     counter = stream_builder.add(CountsItsOwnCalls, name="counter")
-    count_converter = stream_builder.add(
-        ChannelsToRecords, config={"channel_names": ["count"]}, name="count-converter"
-    )
-    sink = stream_builder.add(ReportsTheCountRecordsItReadSink, name="sink")
+    count_converter = stream_builder.add(FloatToInteger, name="count-converter")
+    sink = stream_builder.add(ReportsTheCountsItReadSink, name="sink")
     hanger = stream_builder.add(HangsAfterItsFirstCalls, name="hanger")
-    hanger_converter = stream_builder.add(
-        ChannelsToRecords, config={"channel_names": ["level"]}, name="hanger-converter"
-    )
-    stream_builder.connect(counter.output("result"), count_converter.input("channels"))
-    stream_builder.connect(count_converter.output("records"), sink.input("count_records"))
-    stream_builder.connect(hanger.output("result"), hanger_converter.input("channels"))
+    hanger_converter = stream_builder.add(FloatToInteger, name="hanger-converter")
+    stream_builder.connect(counter.output("result"), count_converter.input("value"))
+    stream_builder.connect(count_converter.output("cast"), sink.input("counts"))
+    stream_builder.connect(hanger.output("result"), hanger_converter.input("value"))
 
 
 @graph_generator
@@ -392,20 +384,18 @@ def python_source_through_a_gate_into_two_python_sinks(stream_builder: StreamBui
 
 @graph_generator
 def python_level_source_through_a_gate_into_a_native_converter(stream_builder: StreamBuilder) -> None:
-    """A Python class's levels through `Gate` into a native `ChannelsToRecords`, read by a Python class.
+    """A Python class's levels through `Gate` into a native `FloatToInteger`, read by a Python class.
 
     The converter runs no node code, so the stream's function node pool reads
     the source's channel and evaluates `Gate`, handing each level on unread.
     """
     source = stream_builder.add(CountsEachTickAsALevelSource, name="source")
     gate = stream_builder.add(Gate, name="gate")
-    converter = stream_builder.add(
-        ChannelsToRecords, config={"channel_names": ["level"]}, name="converter"
-    )
-    sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
+    converter = stream_builder.add(FloatToInteger, name="converter")
+    sink = stream_builder.add(ReportsTheLevelsItReadSink, name="sink")
     stream_builder.connect(source.output("level_to_downstream"), gate.input("value"))
-    stream_builder.connect(gate.output("result"), converter.input("channels"))
-    stream_builder.connect(converter.output("records"), sink.input("level_records"))
+    stream_builder.connect(gate.output("result"), converter.input("value"))
+    stream_builder.connect(converter.output("cast"), sink.input("levels"))
 
 
 @graph_generator

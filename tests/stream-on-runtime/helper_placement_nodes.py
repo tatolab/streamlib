@@ -96,22 +96,22 @@ class ReportsUpstreamProcessSink:
             )
 
 
-@node.process
-class ReportsItsOwnProcessRecordsSink:
+@node
+class ReportsItsOwnProcessIntegerSink:
     """Announces its own process at setup, downstream of a native built-in.
 
-    The records come from `ChannelsToRecords`, which is native and therefore
+    The integers come from `FloatToInteger`, which is native and therefore
     has no process of its own — so this sink's pid, set against `tatolabd`'s,
     is what discriminates the two sides of the boundary.
     """
 
-    records_from_upstream = Input(Records, delivery="newest")
+    integers_from_upstream: InputPin[Annotated[int, StreamDelivery("newest")]]
 
     def setup(self, ctx) -> None:
-        report("RECORDS_SINK_PID", {"pid": os.getpid()})
+        report("INTEGER_SINK_PID", {"pid": os.getpid()})
 
     def process(self, ctx) -> None:
-        ctx.inputs.read("records_from_upstream")
+        self.integers_from_upstream.read()
 
 
 @node(execution="continuous", interval_ms=10)
@@ -569,29 +569,30 @@ def GateThatCrashesItsHelperOnCue[PinValue](value: PinValue, crash: bool = False
     return value
 
 
-#: How many records of a pooled island's level a sink reads before it reports them.
-LEVEL_RECORDS_READ_BEFORE_REPORTING = 10
+#: How many levels a native converter casts of a pooled island's value a sink reads before it
+#: reports them.
+LEVELS_READ_BEFORE_REPORTING = 10
 
 
-@node.process(execution="continuous", interval_ms=10)
-class ReportsTheLevelRecordsItReadSink:
-    """Reads the records a native converter makes of a pooled island's value,
-    and reports its first records with its own pid."""
+@node(execution="continuous", interval_ms=10)
+class ReportsTheLevelsItReadSink:
+    """Reads the integer a native converter casts of a pooled island's value,
+    and reports its first levels with its own pid."""
+
+    levels: InputPin[Annotated[int, StreamDelivery("newest")]]
 
     def __init__(self) -> None:
-        self.records_read: "list[dict]" = []
-
-    level_records = Input(Records, delivery="newest")
+        self.levels_read: "list[int]" = []
 
     def process(self, ctx) -> None:
-        if len(self.records_read) >= LEVEL_RECORDS_READ_BEFORE_REPORTING:
+        if len(self.levels_read) >= LEVELS_READ_BEFORE_REPORTING:
             return
-        record = ctx.inputs.read(self.level_records)
-        if record is None:
+        level = self.levels.read()
+        if level is None:
             return
-        self.records_read.append(record)
-        if len(self.records_read) == LEVEL_RECORDS_READ_BEFORE_REPORTING:
-            report("LEVEL_RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})
+        self.levels_read.append(level)
+        if len(self.levels_read) == LEVELS_READ_BEFORE_REPORTING:
+            report("LEVELS_READ", {"sink_pid": os.getpid(), "levels": self.levels_read})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -730,25 +731,25 @@ def HangsAfterItsFirstCalls(level: float = 0.25) -> float:  # noqa: N802
     return level
 
 
-#: How many count records a sink reads between reports.
-COUNT_RECORDS_READ_BETWEEN_REPORTS = 25
+#: How many counts a sink reads between reports.
+COUNTS_READ_BETWEEN_REPORTS = 25
 
 
-@node.process(execution="continuous", interval_ms=10)
-class ReportsTheCountRecordsItReadSink:
-    """Reads the records a native converter makes of a pooled counter, and
-    reports each `COUNT_RECORDS_READ_BETWEEN_REPORTS` counts it read."""
+@node(execution="continuous", interval_ms=10)
+class ReportsTheCountsItReadSink:
+    """Reads the integer a native converter casts of a pooled counter, and
+    reports each `COUNTS_READ_BETWEEN_REPORTS` counts it read."""
+
+    counts: InputPin[Annotated[int, StreamDelivery("newest")]]
 
     def __init__(self) -> None:
-        self.counts_since_the_last_report: "list[float]" = []
-
-    count_records = Input(Records, delivery="newest")
+        self.counts_since_the_last_report: "list[int]" = []
 
     def process(self, ctx) -> None:
-        record = ctx.inputs.read(self.count_records)
-        if record is None:
+        count = self.counts.read()
+        if count is None:
             return
-        self.counts_since_the_last_report.append(record["count"])
-        if len(self.counts_since_the_last_report) == COUNT_RECORDS_READ_BETWEEN_REPORTS:
-            report("COUNT_RECORDS_READ", {"pid": os.getpid(), "counts": self.counts_since_the_last_report})
+        self.counts_since_the_last_report.append(count)
+        if len(self.counts_since_the_last_report) == COUNTS_READ_BETWEEN_REPORTS:
+            report("COUNTS_READ", {"pid": os.getpid(), "counts": self.counts_since_the_last_report})
             self.counts_since_the_last_report = []

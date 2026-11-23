@@ -18,29 +18,6 @@ pub(crate) struct ChannelsBlockReadByAConversion<'payload> {
     pub(crate) planar_payload: &'payload [u8],
 }
 
-impl ChannelsBlockReadByAConversion<'_> {
-    /// The last sample of channel `channel_index`, widened to `f64`; the
-    /// block holds at least one sample per channel.
-    pub(crate) fn last_sample_of_channel_as_f64(&self, channel_index: usize) -> f64 {
-        let sample_byte_len = self.sample_type.sample_byte_len();
-        let channel_run_end =
-            (channel_index + 1) * self.body.samples_per_channel as usize * sample_byte_len;
-        let last_sample = &self.planar_payload[channel_run_end - sample_byte_len..channel_run_end];
-        match self.sample_type {
-            ChannelsBlockSampleType::F32 => {
-                let mut sample = [0u8; 4];
-                sample.copy_from_slice(last_sample);
-                f64::from(f32::from_le_bytes(sample))
-            }
-            ChannelsBlockSampleType::F64 => {
-                let mut sample = [0u8; 8];
-                sample.copy_from_slice(last_sample);
-                f64::from_le_bytes(sample)
-            }
-        }
-    }
-}
-
 /// The Channels block `payload_descriptor` and `payload` carry, refused naming
 /// `node_type_name` and `input_port` when the descriptor is not a Channels
 /// block's or the payload is not the length its body states.

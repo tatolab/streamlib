@@ -28,7 +28,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 13
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 11
 
 
 @pytest.mark.parametrize(
@@ -41,34 +41,23 @@ def test_a_built_in_is_named_by_its_own_class_in_the_stream_package(built_in_nod
     assert class_name in tatolab.stream.__all__
 
 
-# The built-ins whose every port states one pin type and which take no config: each declares
-# its fields and pins and publishes no config class.
-TYPED_BUILT_IN_NODE_CLASS_NAMES = {
-    "AudioToTensor",
-    "BooleanToFloat",
-    "BooleanToInteger",
-    "FloatToBoolean",
-    "FloatToInteger",
-    "IntegerToBoolean",
-    "IntegerToFloat",
-    "TensorToAudio",
-    "TensorToTexture",
-    "TextureFormatConvert",
-    "TextureToTensor",
-}
-
-
 @pytest.mark.parametrize(
     "built_in_node_class", GENERATED_BUILT_IN_NODE_CLASSES, ids=lambda cls: cls.__name__
 )
-def test_a_typed_built_in_declares_fields_and_pins_and_one_with_a_config_its_config(
+def test_every_built_in_declares_fields_and_pins_and_publishes_no_config_class(
     built_in_node_class,
 ):
     class_name = built_in_node_class.__name__
-    typed = class_name in TYPED_BUILT_IN_NODE_CLASS_NAMES
-    assert (TypedNodePins.of(built_in_node_class, class_name) is not None) == typed
-    assert (f"{class_name}Config" in tatolab.stream.__all__) != typed
-    assert hasattr(_built_in_nodes, f"{class_name}Config") != typed
+    assert TypedNodePins.of(built_in_node_class, class_name) is not None
+    assert f"{class_name}Config" not in tatolab.stream.__all__
+    assert not hasattr(_built_in_nodes, f"{class_name}Config")
+
+
+@pytest.mark.parametrize("removed_class_name", ["ChannelsToRecords", "RecordsToChannels"])
+def test_no_class_is_published_for_a_removed_record_conversion(removed_class_name):
+    assert not hasattr(tatolab.stream, removed_class_name)
+    assert not hasattr(tatolab.stream, f"{removed_class_name}Config")
+    assert removed_class_name not in tatolab.stream.__all__
 
 
 def test_a_typed_built_ins_settings_are_fields_read_at_setup_with_their_defaults():
@@ -96,56 +85,45 @@ def test_the_built_in_class_cannot_be_instantiated(built_in_node_class):
 
 
 def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
-    with pytest.raises(TypeError, match=r"stream_builder\.add\(ChannelsToRecords, input_values="):
-        tatolab.stream.ChannelsToRecords()  # pyright: ignore[reportCallIssue]
+    with pytest.raises(TypeError, match=r"stream_builder\.add\(TensorToAudio, input_values="):
+        tatolab.stream.TensorToAudio()  # pyright: ignore[reportCallIssue]
 
 
 @graph_generator
-def a_channels_to_records_conversion(stream_builder: tatolab.stream.StreamBuilder) -> None:
+def a_tensor_to_audio_conversion(stream_builder: tatolab.stream.StreamBuilder) -> None:
     stream_builder.add(
-        _built_in_nodes.ChannelsToRecords,
+        _built_in_nodes.TensorToAudio,
         input_values={"channel_names": ["level"]},
     )
 
 
 def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
-    graph = run_graph_generator(a_channels_to_records_conversion)
+    graph = run_graph_generator(a_tensor_to_audio_conversion)
 
     assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
-        ("channelstorecords", "tatolab.stream:ChannelsToRecords"),
+        ("tensortoaudio", "tatolab.stream:TensorToAudio"),
     ]
     assert graph["nodes"][0]["input_values"] == {"channel_names": ["level"]}
 
 
 @graph_generator
-def a_control_value_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> None:
-    to_channels = stream_builder.add(
-        tatolab.stream.RecordsToChannels,
-        input_values={"channel_names": ["gain"], "sample_rate": 30},
-    )
+def an_audio_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> None:
     to_array = stream_builder.add(tatolab.stream.AudioToTensor)
     back_to_channels = stream_builder.add(
         tatolab.stream.TensorToAudio,
         input_values={"channel_names": ["gain"], "sample_rate": 30},
     )
-    to_records = stream_builder.add(
-        tatolab.stream.ChannelsToRecords, input_values={"channel_names": ["gain"]}
-    )
-    stream_builder.connect(to_channels.output("channels"), to_array.input("channels"))
     stream_builder.connect(to_array.output("array"), back_to_channels.input("array"))
-    stream_builder.connect(back_to_channels.output("channels"), to_records.input("channels"))
 
 
 def test_the_conversion_built_ins_compile_with_no_runtime_installed():
-    graph = run_graph_generator(a_control_value_round_trip)
+    graph = run_graph_generator(an_audio_round_trip)
 
     assert [node["type"] for node in graph["nodes"]] == [
-        "tatolab.stream:RecordsToChannels",
         "tatolab.stream:AudioToTensor",
         "tatolab.stream:TensorToAudio",
-        "tatolab.stream:ChannelsToRecords",
     ]
-    assert graph["nodes"][2]["input_values"] == {"channel_names": ["gain"], "sample_rate": 30}
+    assert graph["nodes"][1]["input_values"] == {"channel_names": ["gain"], "sample_rate": 30}
 
 
 @pytest.mark.parametrize(

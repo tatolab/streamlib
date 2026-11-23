@@ -98,7 +98,7 @@ def test_a_pooled_function_node_that_overruns_the_pools_frame_interval_three_tim
     stream_id = tatolabd.await_the_latest_stream_loaded()
     overrun_line = tatolabd.await_stderr_containing("frame interval 3 times running")
     tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
-    records_read = tatolabd.await_marker("LEVEL_RECORDS_READ")
+    levels_read = tatolabd.await_marker("LEVELS_READ")
     graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -110,8 +110,8 @@ def test_a_pooled_function_node_that_overruns_the_pools_frame_interval_three_tim
     promotion = sleeper["components"]["metrics"]["promoted_out_of_its_readers_islands"]
     assert promotion["promotions"] == 1, promotion
     assert "overran its island's 10 ms frame interval" in promotion["reason"], promotion
-    levels = [record["level"] for record in records_read["records"]]
-    assert all(level == pytest.approx(0.5) for level in levels), levels
+    levels = levels_read["levels"]
+    assert all(level == 5 for level in levels), levels
 
 
 def test_a_hung_call_in_the_pool_respawns_it_and_its_stateful_nodes_keep_their_state(
@@ -129,11 +129,11 @@ def test_a_hung_call_in_the_pool_respawns_it_and_its_stateful_nodes_keep_their_s
     """
     tatolabd = start_tatolabd_running_stream(pooled_counter_beside_a_pooled_node_that_hangs)
     stream_id = tatolabd.await_the_latest_stream_loaded()
-    tatolabd.await_marker("COUNT_RECORDS_READ")
+    tatolabd.await_marker("COUNTS_READ")
     stall_line = tatolabd.await_stderr_containing("stalled: its call had run for")
     tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
-    reports_by_the_promotion = len(tatolabd.marker_payloads("COUNT_RECORDS_READ"))
-    tatolabd.await_marker("COUNT_RECORDS_READ", occurrence=reports_by_the_promotion + 2)
+    reports_by_the_promotion = len(tatolabd.marker_payloads("COUNTS_READ"))
+    tatolabd.await_marker("COUNTS_READ", occurrence=reports_by_the_promotion + 2)
     graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -141,7 +141,7 @@ def test_a_hung_call_in_the_pool_respawns_it_and_its_stateful_nodes_keep_their_s
     assert "function node `hanger` stalled" in stall_line, stall_line
     counts = [
         count
-        for report in tatolabd.marker_payloads("COUNT_RECORDS_READ")
+        for report in tatolabd.marker_payloads("COUNTS_READ")
         for count in report["counts"]
     ]
     assert counts[-1] > CALLS_RETURNED_BEFORE_A_CALL_HANGS, (
