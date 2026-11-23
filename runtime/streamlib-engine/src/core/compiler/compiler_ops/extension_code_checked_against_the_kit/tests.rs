@@ -234,7 +234,7 @@ fn a_project_with_no_view_or_control_passes_both_checks_without_a_kit() {
 }
 
 #[test]
-fn a_view_with_no_ts_file_is_checked_by_its_files_kinds_without_a_kit() {
+fn a_view_made_of_js_files_is_refused_naming_each_file_and_ts_without_a_kit() {
     let project = tempfile::tempdir().unwrap();
     let view = project.path().join("views/monitor");
     std::fs::create_dir_all(&view).unwrap();
@@ -257,6 +257,13 @@ fn a_view_with_no_ts_file_is_checked_by_its_files_kinds_without_a_kit() {
             .map(|finding| (finding.finding_code.as_str(), finding.path.as_str()))
             .collect::<Vec<_>>(),
         [("not_written_in_ts", "views/monitor/index.js")]
+    );
+    let not_ts = &check.findings[0];
+    assert_eq!(not_ts.severity, ExtensionCodeFindingSeverity::Error);
+    assert_eq!(
+        not_ts.words,
+        "an extension's own code is written in .ts, so `index.js` is refused: write it as .ts, \
+         or put a library the extension carries under vendor/ with its .d.ts beside it"
     );
     assert_eq!(
         check

@@ -816,9 +816,9 @@ pub(crate) fn a_view_reading_records_in(
 
 fn a_view_manifest_reading_records() -> serde_json::Value {
     serde_json::json!({
-        "contract": "1.0", "title": "Program", "description": "What plays out.",
+        "contract": "1.1", "title": "Program", "description": "What plays out.",
         "entry": "index.html", "placement": "node",
-        "inputs": [{ "name": "in1", "family": "records", "description": "What it shows." }],
+        "inputs": [{ "name": "in1", "pin_type": { "type": "string" }, "description": "What it shows." }],
         "outputs": []
     })
 }
