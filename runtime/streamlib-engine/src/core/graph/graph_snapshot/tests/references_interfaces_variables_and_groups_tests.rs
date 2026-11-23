@@ -81,7 +81,7 @@ fn a_graph_whose_track_names_in_its_gateway_key(
             {
                 "name": "camera-track",
                 "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
-                "config": {"gateway": gateway_config_value, "track": "camera"}
+                "input_values": {"gateway": gateway_config_value, "track": "camera"}
             }
         ]
     }))
@@ -110,13 +110,13 @@ fn a_second_node_naming_a_node_under_a_key_taking_one_referrer_is_refused_naming
             "nodes": [
                 {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
                 {"name": "camera-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
-                 "config": {"gateway": {"node": "cloudflare"}}},
+                 "input_values": {"gateway": {"node": "cloudflare"}}},
                 {"name": "screen-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
-                 "config": {"gateway": {"node": "cloudflare"}}},
+                 "input_values": {"gateway": {"node": "cloudflare"}}},
                 {"name": "camera-send", "type": SEND_CLASS_FOR_THE_REFERENCE_TESTS,
-                 "config": {"track": {"node": "camera-track"}}},
+                 "input_values": {"track": {"node": "camera-track"}}},
                 {"name": "second-send", "type": SEND_CLASS_FOR_THE_REFERENCE_TESTS,
-                 "config": {"track": {"node": second_send_track}}}
+                 "input_values": {"track": {"node": second_send_track}}}
             ]
         }))
         .unwrap()
@@ -184,7 +184,7 @@ fn a_key_taking_a_reference_or_a_string_validates_a_string() {
         "nodes": [{
             "name": "camera-track",
             "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
-            "config": {"gateway_or_its_name": "cloudflare"}
+            "input_values": {"gateway_or_its_name": "cloudflare"}
         }]
     }))
     .unwrap();
@@ -201,7 +201,7 @@ fn a_setter_no_get_reads_still_holds_a_node_the_graph_holds() {
             {
                 "name": "set-gateway",
                 "type": "tatolab.stream:SetVariable",
-                "config": {"variable": "gateway", "node_reference": {"node": "nowhere"}}
+                "input_values": {"variable": "gateway", "node_reference": {"node": "nowhere"}}
             }
         ]
     }))
@@ -224,7 +224,7 @@ fn a_node_object_under_a_key_no_schema_marks_is_plain_config() {
         "nodes": [{
             "name": "cloudflare",
             "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS,
-            "config": {"anything": {"node": "nowhere"}}
+            "input_values": {"anything": {"node": "nowhere"}}
         }]
     }))
     .unwrap();
@@ -337,7 +337,8 @@ fn an_empty_graph_is_valid() {
 #[test]
 fn an_integer_wider_than_64_bits_is_refused_naming_it_rather_than_read_as_a_float() {
     let refusal = GraphSnapshot::from_json_str(
-        r#"{"nodes": [{"name": "sink", "type": "a:B", "config": {"value": 18446744073709551616}}]}"#,
+        r#"{"nodes": [{"name": "sink", "type": "a:B",
+                       "input_values": {"value": 18446744073709551616}}]}"#,
     )
     .expect_err("an integer past u64::MAX is refused");
     assert!(
@@ -347,7 +348,8 @@ fn an_integer_wider_than_64_bits_is_refused_naming_it_rather_than_read_as_a_floa
         "{refusal}"
     );
     let refusal = GraphSnapshot::from_json_str(
-        r#"{"nodes": [{"name": "sink", "type": "a:B", "config": {"value": -9223372036854775809}}]}"#,
+        r#"{"nodes": [{"name": "sink", "type": "a:B",
+                       "input_values": {"value": -9223372036854775809}}]}"#,
     )
     .expect_err("an integer below i64::MIN is refused");
     assert!(
@@ -359,7 +361,7 @@ fn an_integer_wider_than_64_bits_is_refused_naming_it_rather_than_read_as_a_floa
 #[test]
 fn every_64_bit_integer_a_float_and_digits_inside_a_string_still_parse() {
     let graph = GraphSnapshot::from_json_str(
-        r#"{"nodes": [{"name": "sink", "type": "a:B", "config": {
+        r#"{"nodes": [{"name": "sink", "type": "a:B", "input_values": {
                 "largest": 18446744073709551615,
                 "smallest": -9223372036854775808,
                 "float": 1.8446744073709552e19,
@@ -436,9 +438,9 @@ fn a_graph_offering_the_source_and_feeding_the_sink(
         "nodes": [
             {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
             {"name": "video", "type": "tatolab.stream:GraphOutput",
-             "config": {"port": "video", "family": output_family}},
+             "input_values": {"port": "video", "family": output_family}},
             {"name": "encoded", "type": "tatolab.stream:GraphInput",
-             "config": {"port": "encoded", "family": input_family}},
+             "input_values": {"port": "encoded", "family": input_family}},
             {"name": "sink", "type": PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS},
         ],
         "links": [
@@ -504,11 +506,11 @@ fn a_variable_set_from_a_graph_input_validates() {
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [
             {"name": "encoded", "type": "tatolab.stream:GraphInput",
-             "config": {"port": "encoded", "family": "packets"}},
+             "input_values": {"port": "encoded", "family": "packets"}},
             {"name": "set-encoded", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "encoded"}},
+             "input_values": {"variable": "encoded"}},
             {"name": "get-encoded", "type": "tatolab.stream:GetVariable",
-             "config": {"variable": "encoded"}},
+             "input_values": {"variable": "encoded"}},
             {"name": "sink", "type": PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS},
         ],
         "links": [
@@ -529,11 +531,11 @@ fn a_variable_set_from(held_node: &str, held_port: &str) -> GraphSnapshot {
         "nodes": [
             {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
             {"name": "video", "type": "tatolab.stream:GraphOutput",
-             "config": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "family": "image"}},
             {"name": "encoded", "type": "tatolab.stream:GraphInput",
-             "config": {"port": "encoded", "family": "packets"}},
+             "input_values": {"port": "encoded", "family": "packets"}},
             {"name": "set-unread", "type": "tatolab.stream:SetVariable",
-             "config": {"variable": "unread"}},
+             "input_values": {"variable": "unread"}},
         ],
         "links": [
             {"source": {"node": "source", "port": "video"},
@@ -591,12 +593,12 @@ fn a_camera_graph_document(groups: serde_json::Value) -> serde_json::Value {
     let mut document = serde_json::json!({
         "nodes": [
             {"id": "0b7d3c1e-6a2f-4e98-b5c4-1d9e8f7a6b52", "name": "camera",
-             "type": A_CAMERA_CLASS, "config": {}, "studio": {"group": A_GROUP_UUID}},
+             "type": A_CAMERA_CLASS, "studio": {"group": A_GROUP_UUID}},
             {"id": "7f4e2d9a-1c3b-4a5e-8d6f-0e9c8b7a6d54", "name": "look",
-             "type": "generators.look:look", "config": {},
+             "type": "generators.look:look",
              "fragment": {
                  "nodes": [{"id": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c65", "name": "blur",
-                            "type": A_CAMERA_CLASS, "config": {},
+                            "type": A_CAMERA_CLASS,
                             "studio": {"group": "2c6a1f7e-93b4-4d0a-8e15-b6f0c3a9d421"}}],
                  "links": [],
                  "groups": [{"id": "2c6a1f7e-93b4-4d0a-8e15-b6f0c3a9d421",
@@ -713,7 +715,7 @@ fn a_graph_whose_graph_input_drives_the_glows_strength(
              "type": GLOW_CLASS_FOR_THE_EXPOSED_CONFIG_FIELD_TESTS,
              "exposed_config_fields": exposed_config_fields},
             {"id": Uuid::new_v4(), "name": "glow_strength", "type": "tatolab.stream:GraphInput",
-             "config": {"port": "glow_strength", "family": "channels", "range": [0, 1]}},
+             "input_values": {"port": "glow_strength", "family": "channels", "range": [0, 1]}},
         ],
         "links": [
             {"source": {"node": "glow_strength", "port": "value"},
@@ -760,7 +762,7 @@ fn a_node_of_a_type_taking_no_config_opens_exposing_none_of_the_fields_it_was_sa
             {"id": Uuid::new_v4(), "name": "mixer", "type": typed.as_str(),
              "exposed_config_fields": ["gain", "alpha"]},
             {"id": Uuid::new_v4(), "name": "level", "type": "tatolab.stream:GraphInput",
-             "config": {"port": "level", "family": "channels", "range": [0, 1]}},
+             "input_values": {"port": "level", "family": "channels", "range": [0, 1]}},
         ],
         "links": [
             {"source": {"node": "level", "port": "value"},

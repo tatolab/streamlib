@@ -50,7 +50,7 @@ members = [
     # path-deps the zone crates and is the one package that stays a workspace
     # member (`publish = false`, which also keeps it out of the release
     # closure).
-    "packages/test-fixtures",    # Attribute-macro test fixtures (TestConfiguredNode)
+    "packages/test-fixtures",    # Attribute-macro test fixture nodes
 ]
 
 [workspace.package]

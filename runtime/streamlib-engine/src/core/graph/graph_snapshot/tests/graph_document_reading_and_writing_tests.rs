@@ -10,9 +10,9 @@ fn a_graph_document_parses_with_its_live_keys_ignored() {
     let graph_document = serde_json::json!({
         "stream": "main",
         "nodes": [
-            {"id": "abc", "name": "camera", "type": A_CAMERA_CLASS, "config": {"fps": 30},
+            {"id": "abc", "name": "camera", "type": A_CAMERA_CLASS, "input_values": {"fps": 30},
              "config_checksum": 7, "ports": {"inputs": [], "outputs": []}, "components": {}},
-            {"id": "def", "name": "display", "type": "my_app.nodes:DisplayNode", "config": {}}
+            {"id": "def", "name": "display", "type": "my_app.nodes:DisplayNode"}
         ],
         "links": [
             {"id": "l1", "state": "wired", "capacity": 4,
@@ -86,10 +86,9 @@ fn a_graph_document_of_a_camera_feeding_a_display() -> (Uuid, Uuid, Uuid, String
         "asset": asset.to_string(),
         "nodes": [
             {"id": camera.to_string(), "name": "camera", "type": A_CAMERA_CLASS,
-             "config": {}, "pins": {"fps": 30}, "exposed_config_fields": ["exposure"],
+             "input_values": {"fps": 30}, "exposed_config_fields": ["exposure"],
              "studio": {"position": [10, 20]}},
-            {"id": display.to_string(), "name": "display", "type": A_CAMERA_CLASS,
-             "config": {}},
+            {"id": display.to_string(), "name": "display", "type": A_CAMERA_CLASS},
         ],
         "links": [{"source": {"node": camera.to_string(), "port": "video"},
                    "target": {"node": display.to_string(), "port": "video"}}],
@@ -175,7 +174,7 @@ fn a_graph_with_no_asset_or_a_node_with_no_uuid_writes_no_document() {
 fn a_node_id_that_is_no_uuid_reads_as_no_uuid() {
     let graph = GraphSnapshot::from_json_str(
         &serde_json::json!({"nodes": [{"id": "P1abc", "name": "camera",
-                                       "type": A_CAMERA_CLASS, "config": {}}],
+                                       "type": A_CAMERA_CLASS}],
                             "links": []})
         .to_string(),
     )
@@ -326,7 +325,7 @@ fn a_setting_the_nodes_type_does_not_take_is_refused_naming_the_node_its_type_an
         crate::core::test_support::MockSourceTakingOneSetting::node_class_import_path();
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [{"name": "Front", "type": source_type.as_str(),
-                   "config": {"frame_widht": 640}}]
+                   "input_values": {"frame_widht": 640}}]
     }))
     .unwrap();
 
@@ -352,7 +351,7 @@ fn a_setting_the_nodes_type_takes_passes() {
         crate::core::test_support::MockSourceTakingOneSetting::node_class_import_path();
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [{"name": "Front", "type": source_type.as_str(),
-                   "config": {"frame_width": 640}},
+                   "input_values": {"frame_width": 640}},
                   {"name": "Back", "type": source_type.as_str()}]
     }))
     .unwrap();

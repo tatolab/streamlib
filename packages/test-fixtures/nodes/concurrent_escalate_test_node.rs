@@ -3,7 +3,7 @@
 
 //! Concurrent-escalate test fixture.
 //!
-//! Spawns `config.thread_count` threads from `start()`, each cloning
+//! Spawns `thread_count` threads from `start()`, each cloning
 //! `gpu_limited_access()` and calling `escalate(|_full| ...)`
 //! concurrently. The escalate gate is documented to serialize
 //! concurrent callers — overlapping closures would be a regression.
@@ -19,6 +19,7 @@
 //! Mirrors the in-process `test_escalate_serializes_concurrent_callers`
 //! test (`runtime/streamlib-engine/src/core/context/gpu_context/tests/access_tiers_and_escalation.rs`).
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -27,9 +28,22 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::nodes::ManualNode;
 
+/// The settings [`ConcurrentEscalateTest`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConcurrentEscalateTestSettings {
+    #[description = "How long each thread holds the escalate gate, in milliseconds."]
+    pub hold_ms: u32,
+    #[description = "The file the node writes its result to."]
+    pub output_path: String,
+    #[description = "How many threads escalate at once."]
+    pub thread_count: u32,
+}
+
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::test_fixture_node_configs::ConcurrentEscalateTestNodeConfig,
+    settings = crate::concurrent_escalate_test_node::ConcurrentEscalateTestSettings,
 )]
 #[meta(
     description = "Concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes concurrent callers."
@@ -46,9 +60,9 @@ impl ManualNode for ConcurrentEscalateTest::Node {
         // fixture was removed, so nothing exercises it. The
         // serialization invariant it guarded is covered by the unit test
         // `escalate_gate::tests::enter_serializes_concurrent_callers`.
-        let output_path = self.config.output_path.clone();
-        let thread_count = self.config.thread_count as usize;
-        let hold_ms = self.config.hold_ms as u64;
+        let output_path = self.settings.output_path.clone();
+        let thread_count = self.settings.thread_count as usize;
+        let hold_ms = self.settings.hold_ms as u64;
 
         // Clone the LimitedAccess handle once; each spawned thread
         // gets its own clone (the Clone impl bumps the inner Arc

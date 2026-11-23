@@ -285,8 +285,10 @@ async fn each_refusal_is_the_runtimes_own_words_and_writes_nothing() {
     std::fs::create_dir_all(served.project_directory().join("streams")).unwrap();
     std::fs::write(
         served.project_directory().join("streams/main.graph.json"),
-        serde_json::to_vec(&json!({ "nodes": [{ "config": { "video": { "asset": asset } } }] }))
-            .unwrap(),
+        serde_json::to_vec(
+            &json!({ "nodes": [{ "input_values": { "video": { "asset": asset } } }] }),
+        )
+        .unwrap(),
     )
     .unwrap();
     let referenced = the_error_text_of(

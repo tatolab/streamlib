@@ -561,7 +561,6 @@ fn a_record_of_a_stream_whose_node_asks_for_a_capture_device(
         "nodes": [{
             "name": "camera",
             "type": MockSourceRefusingAnAccessNobodyAskedFor::Node::node_class_import_path().as_str(),
-            "config": {},
         }],
         "links": [],
     }));

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -33,9 +34,18 @@ const SMOKE_PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<u32>() as u32;
 #[cfg(target_os = "linux")]
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
+/// The settings [`GraphicsKernelSmokeTest`] reads at setup.
+#[streamlib::sdk::node_settings]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphicsKernelSmokeTestSettings {
+    #[description = "The file the node writes its result to."]
+    pub output_path: String,
+}
+
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::test_fixture_node_configs::GraphicsKernelSmokeTestNodeConfig,
+    settings = crate::graphics_kernel_smoke_test_node::GraphicsKernelSmokeTestSettings,
 )]
 #[meta(
     description = "Graphics-kernel smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() to assert the binding methods don't panic. Smoke-only; pixel correctness not asserted."
@@ -48,7 +58,7 @@ impl ManualNode for GraphicsKernelSmokeTest::Node {
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.config.output_path.clone();
+        let output_path = self.settings.output_path.clone();
 
         let outcome = run_graphics_kernel_smoke(ctx);
 

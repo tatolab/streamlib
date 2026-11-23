@@ -35,12 +35,12 @@ fn a_link(source: &str, source_port: &str, target: &str, target_port: &str) -> V
 
 fn a_node(id: &str, name: &str) -> Value {
     json!({ "id": id, "name": name, "type": format!("looks.nodes:{name}"),
-            "config": { "strength": 1 } })
+            "input_values": { "strength": 1 } })
 }
 
 fn a_placement_of(id: &str, name: &str, stream: &str) -> Value {
     json!({ "id": id, "name": name, "type": STREAM_FRAGMENT_NODE_TYPE,
-            "config": { "stream": { "asset": stream } } })
+            "input_values": { "stream": { "asset": stream } } })
 }
 
 /// `source -> look -> sink` and `source -> look-again -> preview`, both placing `look`.
@@ -70,12 +70,12 @@ fn look() -> StreamGraphDocument {
         "asset": LOOK_STREAM,
         "nodes": [
             { "id": LOOK_INPUT, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-              "config": { "port": "video", "family": "image" } },
+              "input_values": { "port": "video", "family": "image" } },
             a_node(BLUR, "blur"),
             a_node(TINT, "tint"),
             a_placement_of(GRAIN_PLACED_IN_LOOK, "grain", GRAIN_STREAM),
             { "id": LOOK_OUTPUT, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-              "config": { "port": "graded", "family": "image" } },
+              "input_values": { "port": "graded", "family": "image" } },
         ],
         "links": [
             a_link(LOOK_INPUT, "value", BLUR, "video"),
@@ -495,12 +495,12 @@ fn a_path_through_an_import_a_generators_output_or_a_plain_node_is_refused() {
         "asset": MAIN_STREAM,
         "nodes": [
             { "id": generated, "name": "soft-look", "type": "generators.looks:soft_look",
-              "config": {}, "fragment": { "nodes": [
+              "fragment": { "nodes": [
                   { "id": "00000000-0000-4000-8000-000000000402", "name": "blur",
-                    "type": "looks.nodes:blur", "config": {} }
+                    "type": "looks.nodes:blur" }
               ], "links": [] } },
             { "id": imported, "name": "camera-rig", "type": STREAM_FRAGMENT_NODE_TYPE,
-              "config": { "stream": { "asset": "00000000-0000-4000-8000-000000000500",
+              "input_values": { "stream": { "asset": "00000000-0000-4000-8000-000000000500",
                                       "from": "00000000-0000-4000-8000-000000000501" } } },
             a_node(SINK, "sink"),
         ],

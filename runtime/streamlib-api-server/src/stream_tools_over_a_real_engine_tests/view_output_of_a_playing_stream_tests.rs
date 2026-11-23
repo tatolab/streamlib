@@ -26,8 +26,7 @@ const DECK_NODE_UUID: &str = "d0ecd0ec-d0ec-4d0e-8d0e-d0ecd0ecd0ec";
 /// and an Array output `fader`.
 fn a_project_whose_stream_holds_the_deck() -> ProjectWithGraphDocuments {
     a_project_bringing_the_deck_whose_stream_holds(json!([
-        { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
-          "config": {} },
+        { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck") },
     ]))
 }
 
@@ -272,7 +271,7 @@ async fn a_document_saving_a_value_on_a_view_outputs_input_loads_with_the_value_
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_bringing_the_deck_whose_stream_holds(json!([
         { "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
-          "config": {}, "pins": { "cue": { "track": "intro" } } },
+          "input_values": { "cue": { "track": "intro" } } },
     ]));
     engine.playing(&project).await;
 
@@ -304,7 +303,7 @@ async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_val
         .clone();
 
     let mut document = project.the_graph_document_of("main");
-    document["nodes"][0]["pins"] = json!({ "cue": { "track": "intro" } });
+    document["nodes"][0]["input_values"]["cue"] = json!({ "track": "intro" });
     project.write_the_graph_document(document);
     engine
         .the_project_action_done("reload_project", &project)

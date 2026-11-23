@@ -153,12 +153,10 @@ fn a_graph_document_naming_ports_by_names_they_had_reads_under_their_names() {
     ensure_the_renamed_ports_node_registered();
     let document = json!({
         "nodes": [
-            { "name": "source", "type": MockPinTypedNode::node_class_import_path().as_str(),
-              "config": {} },
+            { "name": "source", "type": MockPinTypedNode::node_class_import_path().as_str() },
             { "name": "mixer", "type": MockRenamedPortsNode::node_class_import_path().as_str(),
-              "config": {}, "pins": { "level": 0.5 } },
-            { "name": "mixer-2", "type": MockRenamedPortsNode::node_class_import_path().as_str(),
-              "config": {} },
+              "input_values": { "level": 0.5 } },
+            { "name": "mixer-2", "type": MockRenamedPortsNode::node_class_import_path().as_str() },
         ],
         "links": [
             { "source": { "node": "source", "port": "frames" },
@@ -250,17 +248,16 @@ fn a_fragment_linking_its_interface_to_ports_under_names_they_had_loads_under_th
     let renamed = MockRenamedPortsNode::node_class_import_path();
     let document = json!({
         "nodes": [
-            { "name": "source", "type": MockPinTypedNode::node_class_import_path().as_str(),
-              "config": {} },
-            { "name": "look", "type": "looks.generators:look", "config": {},
+            { "name": "source", "type": MockPinTypedNode::node_class_import_path().as_str() },
+            { "name": "look", "type": "looks.generators:look",
               "fragment": {
                   "nodes": [
                       { "name": "in", "type": "tatolab.stream:GraphInput",
-                        "config": { "port": "video", "family": "image" } },
-                      { "name": "mixer", "type": renamed.as_str(), "config": {},
-                        "pins": { "level": 0.5 } },
+                        "input_values": { "port": "video", "family": "image" } },
+                      { "name": "mixer", "type": renamed.as_str(),
+                        "input_values": { "level": 0.5 } },
                       { "name": "out", "type": "tatolab.stream:GraphOutput",
-                        "config": { "port": "video", "family": "image" } },
+                        "input_values": { "port": "video", "family": "image" } },
                   ],
                   "links": [
                       { "source": { "node": "in", "port": "value" },
@@ -269,7 +266,7 @@ fn a_fragment_linking_its_interface_to_ports_under_names_they_had_loads_under_th
                         "target": { "node": "out", "port": "value" } },
                   ],
               } },
-            { "name": "mixer-2", "type": renamed.as_str(), "config": {} },
+            { "name": "mixer-2", "type": renamed.as_str() },
         ],
         "links": [
             { "source": { "node": "source", "port": "frames" },
@@ -327,10 +324,9 @@ fn a_set_variable_holding_an_output_under_a_name_it_had_holds_it_under_its_name(
     ensure_the_renamed_ports_node_registered();
     let document = json!({
         "nodes": [
-            { "name": "mixer", "type": MockRenamedPortsNode::node_class_import_path().as_str(),
-              "config": {} },
+            { "name": "mixer", "type": MockRenamedPortsNode::node_class_import_path().as_str() },
             { "name": "set-frames", "type": "tatolab.stream:SetVariable",
-              "config": { "variable": "frames" } },
+              "input_values": { "variable": "frames" } },
         ],
         "links": [
             { "source": { "node": "mixer", "port": "video" },
@@ -339,7 +335,7 @@ fn a_set_variable_holding_an_output_under_a_name_it_had_holds_it_under_its_name(
     });
     let inside_a_fragment = json!({
         "nodes": [
-            { "name": "look", "type": "looks.generators:look", "config": {},
+            { "name": "look", "type": "looks.generators:look",
               "fragment": document.clone() },
         ],
         "links": [],
@@ -458,8 +454,8 @@ fn a_document_saved_under_the_names_a_python_nodes_pins_had_loads_under_their_na
     let node_types = node_types_holding_the_renamed_python_node(hum);
     let document = json!({
         "nodes": [
-            { "name": "hum", "type": hum, "config": {}, "pins": { "frequency_hz": 220.0 } },
-            { "name": "hum-2", "type": hum, "config": {} },
+            { "name": "hum", "type": hum, "input_values": { "frequency_hz": 220.0 } },
+            { "name": "hum-2", "type": hum },
         ],
         "links": [
             { "source": { "node": "hum", "port": "level" },

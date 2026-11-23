@@ -30,7 +30,7 @@ impl ProjectWithGraphDocuments {
             self.path().join("generator-run.json"),
             json!({
                 "generator": LOOK_GENERATOR,
-                "placed": { "name": "look", "type": LOOK_GENERATOR, "config": {}, "fragment": fragment },
+                "placed": { "name": "look", "type": LOOK_GENERATOR, "fragment": fragment },
             })
             .to_string(),
         )
@@ -52,11 +52,11 @@ fn a_source_into_a_sink_fragment(with_a_spare: bool) -> Value {
     let source_type = StreamToolsTestSource::node_class_import_path();
     let sink_type = StreamToolsTestSink::node_class_import_path();
     let mut nodes = vec![
-        json!({ "name": "pass-source", "type": source_type.as_str(), "config": {} }),
-        json!({ "name": "pass-sink", "type": sink_type.as_str(), "config": {} }),
+        json!({ "name": "pass-source", "type": source_type.as_str() }),
+        json!({ "name": "pass-sink", "type": sink_type.as_str() }),
     ];
     if with_a_spare {
-        nodes.push(json!({ "name": "pass-spare", "type": sink_type.as_str(), "config": {} }));
+        nodes.push(json!({ "name": "pass-spare", "type": sink_type.as_str() }));
     }
     json!({
         "nodes": nodes,
@@ -247,7 +247,7 @@ async fn an_import_under_the_name_of_a_node_that_is_no_fragment_is_refused() {
         project.path().join("generator-run.json"),
         json!({
             "generator": LOOK_GENERATOR,
-            "placed": { "name": "source", "type": LOOK_GENERATOR, "config": {},
+            "placed": { "name": "source", "type": LOOK_GENERATOR,
                         "fragment": a_source_into_a_sink_fragment(false) },
         })
         .to_string(),
@@ -344,8 +344,8 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
     project.next_look_run_places(json!({
         "nodes": [
             { "name": "graphinput", "type": "tatolab.stream:GraphInput",
-              "config": { "port": "video", "family": "image" } },
-            { "name": "pass-sink", "type": sink_type.as_str(), "config": {} },
+              "input_values": { "port": "video", "family": "image" } },
+            { "name": "pass-sink", "type": sink_type.as_str() },
         ],
         "links": [{
             "source": { "node": "graphinput", "port": "value" },

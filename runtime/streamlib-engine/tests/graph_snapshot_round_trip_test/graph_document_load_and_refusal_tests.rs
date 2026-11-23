@@ -96,7 +96,7 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
 fn a_graph_carrying_exposed_is_refused_naming_the_keys_a_graph_has() {
     let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
         "stream": "main",
-        "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource", "config": {}}],
+        "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource"}],
         "exposed": [{"node": "camera", "port": "video"}]
     }))
     .expect_err("a graph carries no exposure")
