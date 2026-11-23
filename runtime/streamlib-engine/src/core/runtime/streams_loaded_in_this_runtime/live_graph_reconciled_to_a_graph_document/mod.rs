@@ -191,6 +191,26 @@ impl LoadedStreamInThisRuntime {
         .await
     }
 
+    /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
+    /// code, as [`Self::reconcile_the_live_graph_to_the_graph_document`] does.
+    pub(in crate::core::runtime) fn reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
+        self: &Arc<Self>,
+        graph_document: serde_json::Value,
+        links_it_makes: LinksAReconcileMakes,
+        left_to_rebuild: KeptNodesLeftToRebuild,
+    ) -> Result<()> {
+        let stream = Arc::clone(self);
+        self.block_on_the_engines_tokio_runtime(async move {
+            stream
+                .reconcile_the_live_graph_to_the_graph_document(
+                    graph_document,
+                    links_it_makes,
+                    left_to_rebuild,
+                )
+                .await
+        })
+    }
+
     /// Reconcile the live graph to `graph_document` within the graph edits the running task
     /// holds for one commit.
     async fn reconcile_the_live_graph_within_the_graph_edits_held(
