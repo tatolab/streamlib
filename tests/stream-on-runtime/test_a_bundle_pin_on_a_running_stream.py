@@ -90,6 +90,7 @@ class ReportsTheToneItReads:
 
 TONE_BUNDLE = {
     "type": "bundle",
+    "name": "Tone",
     "members": [
         {"name": "frequency", "member_type": {"type": "float"}, "meaning": "frequency"},
         {"name": "gain", "member_type": {"type": "float"}, "default_value": 1.0},
@@ -98,6 +99,7 @@ TONE_BUNDLE = {
 
 DOT_BUNDLE = {
     "type": "bundle",
+    "name": "Dot",
     "members": [
         {"name": "x", "member_type": {"type": "float"}},
         {"name": "y", "member_type": {"type": "float"}, "default_value": 0.0},

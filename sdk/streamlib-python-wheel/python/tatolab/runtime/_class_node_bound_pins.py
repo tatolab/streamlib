@@ -320,6 +320,19 @@ class BoundOutputPin:
                 f"exactly one"
             )
         pin_type = pin_types[0]
+        if pin_type["type"] == "connection":
+
+            def refuse_a_write_on_a_connection(value: Any, timestamp_ns: Optional[int]) -> None:
+                del value, timestamp_ns
+                raise TypeError(
+                    f"`{node_id}`'s output `{member.port}` gives its node out as a connection, so "
+                    f"nothing is written on it: each wire from it brings the node"
+                )
+
+            self._write_a_value = refuse_a_write_on_a_connection
+            self._write_through = None
+            self._writes = "connection"
+            return
         family = _FAMILY_OF_EACH_STREAM_PIN_TYPE.get(pin_type["type"])
         self._write_a_value: Optional[Callable[[Any, Optional[int]], None]] = None
         if family is None:
