@@ -38,7 +38,7 @@ class UndecoratedFilter:
     """A class that never met `@node`."""
 
 
-NESTED_CONFIG: "dict[str, Any]" = {
+NESTED_INPUT_VALUES: "dict[str, Any]" = {
     "title": "Rig",
     "size": (640, 480),
     "overlay": MappingProxyType({"labels": ["left", "right"], "opacity": 0.5}),
@@ -59,8 +59,8 @@ def every_kind_of_node(stream_builder: StreamBuilder) -> None:
 
 
 @graph_generator
-def a_configured_stream(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(StandInMarker, config=NESTED_CONFIG)
+def a_stream_setting_input_values(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(StandInMarker, input_values=NESTED_INPUT_VALUES)
 
 
 def names_of_nodes_added(stream_builder: StreamBuilder, *node_classes: type) -> "list[str]":

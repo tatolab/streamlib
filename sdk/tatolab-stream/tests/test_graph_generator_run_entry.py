@@ -21,14 +21,14 @@ RUN_ENTRY_MODULE = "tatolab.stream._graph_generator_run_entry"
 RUN_ENTRY_TIMEOUT_SECONDS = 60.0
 
 LOOK_GENERATOR_SOURCE = '''
-from tatolab.stream import GraphInput, GraphOutput, Packets, StreamBuilder, graph_generator
+from tatolab.stream import GraphInput, GraphOutput, StreamBuilder, graph_generator
 
 
 @graph_generator
 def look(stream_builder: StreamBuilder, port: str = "video") -> None:
     """A pass-through: one Input wired to one Output."""
-    source = stream_builder.add(GraphInput, input_values={"port": port, "family": Packets})
-    sink = stream_builder.add(GraphOutput, input_values={"port": port, "family": Packets})
+    source = stream_builder.add(GraphInput, input_values={"port": port, "family": "packets"})
+    sink = stream_builder.add(GraphOutput, input_values={"port": port, "family": "packets"})
     stream_builder.connect(source.output("value"), sink.input("value"))
 
 

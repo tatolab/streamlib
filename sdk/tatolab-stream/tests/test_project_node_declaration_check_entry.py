@@ -131,7 +131,7 @@ def test_a_declaration_error_is_answered_with_its_path_line_code_and_words(
     assert "To fix:" in finding["words"]
 
 
-def test_a_retired_declaration_is_a_warning_naming_its_replacement(
+def test_a_retired_declaration_is_an_error_naming_its_replacement(
     project_directory: Path,
 ) -> None:
     write_project(project_directory, {"nodes/clamp.py": RETIRED_FUNCTION_NODE_SOURCE})
@@ -140,10 +140,30 @@ def test_a_retired_declaration_is_a_warning_naming_its_replacement(
 
     (finding,) = the_findings_of(lines, "nodes/clamp.py")
     assert finding["finding_code"] == "declaration_retired"
-    assert finding["severity"] == "warning"
+    assert finding["severity"] == "error"
     assert (finding["line"], finding["column"]) == (4, 1)
     assert finding["node_type"] == "nodes.clamp:Clamp"
     assert "`@node.function`" in finding["words"] and "bare `@node`" in finding["words"]
+
+
+RETIRED_IMPORT_SOURCE = '''\
+from tatolab.stream import Input, node
+'''
+
+
+def test_a_module_holding_only_a_retired_import_is_checked_and_found_at_it(
+    project_directory: Path,
+) -> None:
+    """A module declaring no node still answers for the retired name it imports.
+
+    Mental-revert: checking only the modules the listing names leaves this one out.
+    """
+    write_project(project_directory, {"nodes/ports.py": RETIRED_IMPORT_SOURCE})
+
+    (finding,) = the_findings_of(run_check(project_directory), "nodes/ports.py")
+    assert (finding["finding_code"], finding["severity"]) == ("declaration_retired", "error")
+    assert (finding["line"], finding["node_type"]) == (1, None)
+    assert finding["words"].startswith("`tatolab.stream.Input` is retired. To fix:")
 
 
 def test_a_module_that_does_not_import_is_one_finding_with_its_traceback(

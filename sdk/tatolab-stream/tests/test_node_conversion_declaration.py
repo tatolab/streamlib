@@ -11,12 +11,9 @@ import pytest
 
 from tatolab.stream import (
     EncodedVideo,
-    Image,
     ImageFrame,
-    Input,
     InputPin,
     NodeDeclarationRefusal,
-    Output,
     OutputPin,
     SettingOnly,
     Texture,
@@ -83,10 +80,6 @@ def LevelAsText(level: float = 0.0, places: int = 2) -> str:
 
 
 def Brighten(image: ImageFrame, amount: float = 0.0) -> ImageFrame: ...
-
-
-def level_as_count(level: float) -> int:
-    return round(level)
 
 
 def LevelOfAnyType(level: object) -> float:
@@ -263,32 +256,3 @@ def test_a_node_with_two_outputs_is_refused_naming_them():
         "only the output it converts to, or leave `conversion=True` out."
     )
     assert refused.value.pin == "right"
-
-
-def test_a_conversion_under_node_process_is_refused_with_its_replacement():
-    with pytest.raises(NodeDeclarationRefusal) as refused:
-
-        @node.meta(conversion=True)
-        @node.process
-        class Decoder:
-            encoded = Input(Image, delivery="newest")
-            video = Output(Image)
-
-    assert str(refused.value) == (
-        "`Decoder` states `conversion=True` under `@node.process`, whose ports declare "
-        "families, and a conversion is judged by the pin types its pins state. To fix: declare "
-        "it with bare `@node`, its streams as `InputPin[...]` and `OutputPin[...]` and its "
-        "settings as fields marked `SettingOnly()`, or leave `conversion=True` out."
-    )
-    assert refused.value.finding_code == "conversion_under_a_family_grammar"
-
-
-@pytest.mark.parametrize("meta_above", [True, False])
-def test_a_conversion_under_node_function_is_refused_with_its_replacement(meta_above: bool):
-    with pytest.raises(NodeDeclarationRefusal, match="under `@node.function`") as refused:
-        if meta_above:
-            node.meta(conversion=True)(node.function(level_as_count))
-        else:
-            node.function(node.meta(conversion=True)(level_as_count))
-
-    assert refused.value.finding_code == "conversion_under_a_family_grammar"

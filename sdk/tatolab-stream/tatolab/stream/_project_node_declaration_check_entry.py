@@ -100,17 +100,22 @@ def _the_modules_to_check(
             (module_name_of_a_source_path(path), path)
             for path in sorted({PurePosixPath(path).as_posix() for path in paths})
         ]
-    listing = read_node_types_and_graph_generators_from_module_sources(
-        project_module_sources(project_directory)
-    )
-    paths_the_listing_names = {
+    module_sources = list(project_module_sources(project_directory))
+    listing = read_node_types_and_graph_generators_from_module_sources(module_sources)
+    paths_to_check = {
         row["path"]
         for rows in (listing["node_types"], listing["graph_generators"], listing["unreadable_modules"])
         for row in rows
     }
-    return [
-        (module_name_of_a_source_path(path), path) for path in sorted(paths_the_listing_names)
-    ]
+    # A node in a retired form is no node type the listing names, so its module is found by
+    # what it retired.
+    paths_to_check.update(
+        path
+        for module_name, path, source_text in module_sources
+        if isinstance(source_text, str)
+        and read_retired_declarations_from_module_source(module_name, path, source_text)
+    )
+    return [(module_name_of_a_source_path(path), path) for path in sorted(paths_to_check)]
 
 
 def _the_findings_of_one_module(

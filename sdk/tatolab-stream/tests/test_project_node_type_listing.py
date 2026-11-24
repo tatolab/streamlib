@@ -18,6 +18,7 @@ import pytest
 
 from tatolab.stream._node_type_source_reader import (
     read_node_types_and_graph_generators_from_module_sources,
+    read_retired_declarations_from_module_source,
 )
 from tatolab.stream._project_node_type_listing_entry import (
     list_the_node_types_and_graph_generators_of_a_project,
@@ -34,26 +35,37 @@ PROJECT_NODE_SOURCE = (
 from dataclasses import dataclass
 from typing import Annotated
 
-from tatolab.stream import Color, Description, Image, Input, Output, State, Stateful, Time, Vector2, node
+from typing import NamedTuple
+
+from tatolab.stream import (
+    Color,
+    Description,
+    ImageFrame,
+    InputPin,
+    OutputPin,
+    State,
+    Stateful,
+    StreamDelivery,
+    Texture,
+    Time,
+    Vector2,
+    node,
+)
 
 
 INVERSE_KINEMATICS_DESCRIPTION = "Solves joint angles for a target pose."
 
 
 @node.meta(category="Robot/Arms", description=INVERSE_KINEMATICS_DESCRIPTION)
-@node.process(execution="continuous")
+@node(execution="continuous")
 class InverseKinematics:
     """A docstring, which the listing never reads."""
 
-    target = Input(Image, delivery="newest", description="The target pose.")
-    Joint_Angles = Output(family_named("joints"))
-
-    def __init__(self) -> None:
-        pass
+    target: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("The target pose.")]]
+    Joint_Angles: OutputPin[joint_angles_type()]
 
 
-@dataclass(frozen=True)
-class Split:
+class Split(NamedTuple):
     low: Annotated[float, Description("What falls under `threshold`.")]
     high: float | None
 
@@ -63,19 +75,19 @@ class Phase:
     phase: float = 0.0
 
 
-@node.function
+@node
 @node.meta(description="Splits a value at a threshold.")
 def split(
     x: "Annotated[float, Description(INVERSE_KINEMATICS_DESCRIPTION)] | None",
     threshold: float = 0.5,
-    config: "SplitConfig" = None,
-    now: Time = 0,
+    *,
+    now: Time,
 ) -> Split:
     return Split(x, None)
 
 
-@node.function
-def ramp(rate: float, previous: State[Phase]) -> Stateful[Annotated[float, Description("The ramp.")], Phase]:
+@node
+def ramp(rate: float, *, previous: State[Phase]) -> Stateful[Annotated[float, Description("The ramp.")], Phase]:
     """A ramp at `rate`."""
     return previous.phase, previous
 
@@ -114,9 +126,9 @@ DEPENDENCY_NODE_SOURCE = (
 from tatolab import stream
 
 
-@stream.node.process
+@stream.node
 class Gripper:
-    grip = stream.Input(stream.Channels, delivery="ordered")
+    grip: stream.InputPin[float]
 '''
     + RAISES_AT_IMPORT
 )
@@ -130,7 +142,7 @@ from .image_file import ImageFile
 Lerp = node.rust_function(_native.Lerp)
 
 
-@node.function
+@node
 def Add(a: float = 0.0, b: float = 0.0) -> float:
     return a + b
 '''
@@ -139,12 +151,12 @@ def Add(a: float = 0.0, b: float = 0.0) -> float:
 
 INSTALLED_PACKAGE_IMAGE_FILE_SOURCE = (
     '''
-from tatolab.stream import Image, Output, node
+from tatolab.stream import OutputPin, Texture, node
 
 
-@node.process(execution="continuous")
+@node(execution="continuous")
 class ImageFile:
-    video = Output(Image)
+    video: OutputPin[Texture]
 '''
     + RAISES_AT_IMPORT
 )
@@ -172,7 +184,7 @@ def a_plain_project(project_directory: Path) -> Path:
             "nodes/inverse_kinematics.py": PROJECT_NODE_SOURCE,
             "generators/arm.py": PROJECT_GENERATOR_SOURCE,
             "tools/unrelated_script.py": "print('no sdk here'\n",
-            ".venv/lib/site.py": "from tatolab.stream import node\n@node.function\ndef hidden(x: float) -> float: ...\n",
+            ".venv/lib/site.py": "from tatolab.stream import node\n@node\ndef hidden(x: float) -> float: ...\n",
             "nodes/__pycache__/stale.py": "from tatolab.stream import node\n(",
         },
     )
@@ -197,7 +209,7 @@ def an_installed_distribution(site_directory: Path) -> list[str]:
             ),
             "unrelated-0.1.dist-info/METADATA": "Metadata-Version: 2.1\nName: unrelated\nVersion: 0.1\n",
             "unrelated-0.1.dist-info/RECORD": "unrelated.py,,\n",
-            "unrelated.py": "from tatolab.stream import node\n@node.function\ndef unlisted(x: float) -> float: ...\n",
+            "unrelated.py": "from tatolab.stream import node\n@node\ndef unlisted(x: float) -> float: ...\n",
         },
     )
     return [str(site_directory)]
@@ -232,10 +244,27 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         "kind": "process",
         "description": "Solves joint angles for a target pose.",
         "category": "Robot/Arms",
-        "inputs": [{"name": "target", "family": "image", "description": "The target pose.", "annotation": None}],
-        "outputs": [{"name": "joint_angles", "family": None, "description": "", "annotation": None}],
+        "inputs": [
+            {
+                "name": "target",
+                "family": "image",
+                "description": "The target pose.",
+                "annotation": (
+                    "InputPin[Annotated[Texture, StreamDelivery('newest'), "
+                    "Description('The target pose.')]]"
+                ),
+            }
+        ],
+        "outputs": [
+            {
+                "name": "joint_angles",
+                "family": None,
+                "description": "",
+                "annotation": "OutputPin[joint_angles_type()]",
+            }
+        ],
         "path": "nodes/inverse_kinematics.py",
-        "line": 13,
+        "line": 28,
     }
     split = node_types["nodes.inverse_kinematics:split"]
     assert split["kind"] == "function"
@@ -294,8 +323,8 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
 
 NODE_META_AS_WRITTEN = '@node.meta(category="Effects/Stylize", description="Tints a frame.")'
 KIND_DECORATOR_AND_DECLARATION_BY_KIND = {
-    "process": ('@node.process(execution="reactive")', "class Tint:\n    pass"),
-    "function": ("@node.function", "def Tint(amount: float = 1.0) -> float:\n    return amount"),
+    "process": ("@node", "class Tint:\n    video: InputPin[Texture]"),
+    "function": ("@node", "def Tint(amount: float = 1.0) -> float:\n    return amount"),
     "shader": (
         '@node.shader("float4 Tint(ImageInput image) { return image.pixel; }")',
         "def Tint(image: ImageFrame) -> ImageFrame: ...",
@@ -313,7 +342,7 @@ def test_a_node_meta_is_read_from_source_above_or_below_the_decorator_of_every_k
     if meta_is_written == "below_the_kind_decorator":
         decorators.reverse()
     module_source = "\n".join(
-        ["from tatolab.stream import ImageFrame, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
+        ["from tatolab.stream import ImageFrame, InputPin, Texture, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
     )
 
     read = read_node_types_and_graph_generators_from_module_sources(
@@ -326,6 +355,54 @@ def test_a_node_meta_is_read_from_source_above_or_below_the_decorator_of_every_k
     assert node_type["kind"] == kind
     assert node_type["category"] == "Effects/Stylize"
     assert node_type["description"] == "Tints a frame."
+
+
+RETIRED_FORMS_SOURCE = "\n".join(
+    [
+        "from tatolab.stream import Image, Output, node",
+        "",
+        "@node.meta(category='Old')",
+        "@node.process(execution='continuous')",
+        "class Camera:",
+        "    video = Output(Image)",
+        "",
+        "@node.function",
+        "def half(value: float = 0.0) -> float:",
+        "    return value / 2",
+        RAISES_AT_IMPORT,
+    ]
+)
+
+
+def test_a_node_in_a_retired_form_is_no_node_type_and_is_read_as_retired_where_it_is_written() -> (
+    None
+):
+    """Each retired decorator and import is found at its place, in order, and lists nothing.
+
+    Mental-revert: listing the old forms again names `Camera` and `half` as node types.
+    """
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.old", "nodes/old.py", RETIRED_FORMS_SOURCE)]
+    )
+    assert read["node_types"] == []
+
+    retired = read_retired_declarations_from_module_source(
+        "nodes.old", "nodes/old.py", RETIRED_FORMS_SOURCE
+    )
+    assert [(each["node_type"], each["line"], each["column"]) for each in retired] == [
+        (None, 1, 1),
+        (None, 1, 1),
+        ("nodes.old:Camera", 4, 1),
+        ("nodes.old:half", 8, 1),
+    ]
+    assert [each["words"].split(" is ")[0] for each in retired] == [
+        "`tatolab.stream.Image`",
+        "`tatolab.stream.Output`",
+        "`Camera`",
+        "`half`",
+    ]
+    assert "`@node.process`, which is retired" in retired[2]["words"]
+    assert "`@node.function`, which is retired" in retired[3]["words"]
 
 
 def test_a_function_under_bare_node_is_listed_as_a_function_node_returning_one_output() -> None:
@@ -402,10 +479,6 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
             "@node",
             "def Tally(value: float = 0.0) -> Counted:",
             "    ...",
-            "",
-            "@node.function",
-            "def OldTally(value: float = 0.0) -> Counted:",
-            "    ...",
             RAISES_AT_IMPORT,
         ]
     )
@@ -433,11 +506,9 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
     assert outputs_by_node_type["nodes.limits:Widen"] == [
         {"name": "width", "family": "channels", "description": "", "annotation": "float"}
     ]
-    # A named pin type is one pin. Under bare `@node` a dataclass is one bundle pin; under
-    # `@node.function`, one output per field.
+    # A named pin type is one pin, and a dataclass one bundle pin.
     assert [port["name"] for port in outputs_by_node_type["nodes.limits:Measure"]] == ["result"]
     assert [port["name"] for port in outputs_by_node_type["nodes.limits:Tally"]] == ["result"]
-    assert [port["name"] for port in outputs_by_node_type["nodes.limits:OldTally"]] == ["count"]
 
 
 SHAPES_MODULE_SOURCE = "\n".join(
@@ -587,10 +658,10 @@ def test_a_named_tuple_reexported_by_a_package_and_one_called_into_being_are_rea
     assert outputs["nodes.limits:Split"] == ["left", "right"]
 
 
-def test_an_imported_record_lists_as_the_loaded_node_reads_it_under_either_grammar() -> None:
+def test_an_imported_record_lists_as_the_loaded_node_reads_it() -> None:
     limits_source = "\n".join(
         [
-            "from nodes.shapes import Bounds, Counted, Span, Spread",
+            "from nodes.shapes import Counted, Span",
             "from tatolab.stream import node",
             "",
             "@node",
@@ -599,18 +670,6 @@ def test_an_imported_record_lists_as_the_loaded_node_reads_it_under_either_gramm
             "",
             "@node",
             "def Tally(value: float = 0.0) -> Counted:",
-            "    ...",
-            "",
-            "@node.function",
-            "def OldTally(value: float = 0.0) -> Counted:",
-            "    ...",
-            "",
-            "@node.function",
-            "def OldLimits(value: float = 0.0) -> Bounds:",
-            "    ...",
-            "",
-            "@node.function",
-            "def OldWiden(value: float = 0.0) -> Spread:",
             "    ...",
             RAISES_AT_IMPORT,
         ]
@@ -623,11 +682,6 @@ def test_an_imported_record_lists_as_the_loaded_node_reads_it_under_either_gramm
 
     assert outputs["nodes.limits:Measure"] == ["result"]
     assert outputs["nodes.limits:Tally"] == ["result"]
-    # Under `@node.function` an imported dataclass is one output per field, as a local one is,
-    # and a NamedTuple is one `result`, as the loaded node reads it.
-    assert outputs["nodes.limits:OldTally"] == ["count"]
-    assert outputs["nodes.limits:OldLimits"] == ["result"]
-    assert outputs["nodes.limits:OldWiden"] == ["result"]
 
 
 def test_a_record_the_source_does_not_hold_or_an_import_cycle_is_listed_as_one_output() -> None:
@@ -839,7 +893,7 @@ def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: 
     ] == [
         (
             "imports/gripper/nodes.gripper:Gripper",
-            [{"name": "grip", "family": "channels", "description": "", "annotation": None}],
+            [{"name": "grip", "family": "channels", "description": "", "annotation": "stream.InputPin[float]"}],
         )
     ]
     assert [node_type["category"] for node_type in dependency_source["node_types"]] == [None]
@@ -870,7 +924,7 @@ def test_an_installed_distribution_lists_each_node_type_its_entry_points_name(
     ]
     assert node_types["tatolab_fixture_ops:ImageFile"]["path"] == "tatolab_fixture_ops/image_file.py"
     assert node_types["tatolab_fixture_ops:ImageFile"]["outputs"] == [
-        {"name": "video", "family": "image", "description": "", "annotation": None}
+        {"name": "video", "family": "image", "description": "", "annotation": "OutputPin[Texture]"}
     ]
     assert node_types["tatolab_fixture_ops:Lerp"]["kind"] == "function"
     assert node_types["tatolab_fixture_ops:Lerp"]["inputs"] is None
@@ -906,7 +960,7 @@ def test_a_syntax_error_is_reported_for_its_module_only(tmp_path: Path) -> None:
     project_directory = a_plain_project(tmp_path)
     write_files(
         project_directory,
-        {"nodes/broken.py": "from tatolab.stream import node\n\n@node.function\ndef broken(x: float -> float:\n"},
+        {"nodes/broken.py": "from tatolab.stream import node\n\n@node\ndef broken(x: float -> float:\n"},
     )
 
     project = the_source(

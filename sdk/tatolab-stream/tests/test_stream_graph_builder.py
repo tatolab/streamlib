@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """The `StreamBuilder`, with no engine: the names it gives nodes, the classes it
-adds, the config it records, and the ports it connects.
+adds, the input_values it records, and the ports it connects.
 
 A stream compiles to its graph as plain data, so every case is a literal
 expectation about that data or a refusal at the line the author wrote.
@@ -26,13 +26,16 @@ from stream_graph_builder_nodes import (
     TintedLevel,
     remap_onto_a_range,
 )
+from typing import Annotated
+
 from tatolab.stream import (
-    Input,
+    EncodedVideo,
+    InputPin,
     NodeInputPortReference,
     NodeOutputPortReference,
     NodeReference,
-    Output,
-    Packets,
+    OutputPin,
+    StreamDelivery,
     StreamBuilder,
     run_graph_generator,
     node,
@@ -46,12 +49,12 @@ from tatolab.stream._exposed_name_cast import (
 from stream_graph_builder_streams import (
     BRIGHTNESS_READER_TYPE,
     FRAME_INVERTER_TYPE,
-    NESTED_CONFIG,
+    NESTED_INPUT_VALUES,
     RIG_CHANNEL_NAMES,
     TENSOR_TO_AUDIO_TYPE,
     StandInMarker,
     UndecoratedFilter,
-    a_configured_stream,
+    a_stream_setting_input_values,
     every_kind_of_node,
     names_of_nodes_added,
 )
@@ -109,27 +112,27 @@ def hand_built_references_at_one_member(stream_builder: StreamBuilder) -> None:
     )
 
 
-def config_compiled_for(config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """The config `run_graph_generator` records for one node added with `config`."""
+def input_values_compiled_for(input_values: "Mapping[str, Any]") -> "dict[str, Any]":
+    """The input_values `run_graph_generator` records for one node added with `input_values`."""
     namespace: "dict[str, Any]" = {
         "__name__": "rig_streams",
         "StandInMarker": StandInMarker,
-        "config_under_test": config,
+        "input_values_under_test": input_values,
     }
     exec(
-        "def main(stream_builder):\n    stream_builder.add(StandInMarker, config=config_under_test)\n",
+        "def main(stream_builder):\n    stream_builder.add(StandInMarker, input_values=input_values_under_test)\n",
         namespace,
     )
     return run_graph_generator(graph_generator(namespace["main"]))["nodes"][0]["input_values"]
 
 
-def a_config_holding_itself() -> "dict[str, Any]":
-    config: "dict[str, Any]" = {"title": "Rig"}
-    config["overlay"] = {"parent": config}
-    return config
+def input_values_holding_itself() -> "dict[str, Any]":
+    input_values: "dict[str, Any]" = {"title": "Rig"}
+    input_values["overlay"] = {"parent": input_values}
+    return input_values
 
 
-def a_config_holding_a_list_holding_itself() -> "dict[str, Any]":
+def input_values_holding_a_list_holding_itself() -> "dict[str, Any]":
     labels: "list[Any]" = ["left"]
     labels.append(labels)
     return {"overlay": {"labels": labels}}
@@ -137,14 +140,14 @@ def a_config_holding_a_list_holding_itself() -> "dict[str, Any]":
 
 # serde_json's default recursion limit parses 127 nested containers, `tatolab`
 # reads the graph one container inside its compile document, and the graph, its
-# `nodes` list and the node enclose every config.
-CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 127 - 1 - 3
+# `nodes` list and the node enclose every input_values.
+CONTAINERS_INPUT_VALUES_NEST_AT_MOST_COUNTING_ITSELF = 127 - 1 - 3
 
 
-def a_config_nesting_containers_deep(containers_counting_the_config: int) -> "dict[str, Any]":
-    """`{"nested": [[...]]}`, `containers_counting_the_config` containers deep in all."""
+def input_values_nesting_containers_deep(containers_counting_the_input_values: int) -> "dict[str, Any]":
+    """`{"nested": [[...]]}`, `containers_counting_the_input_values` containers deep in all."""
     nested: "list[Any]" = []
-    for _ in range(containers_counting_the_config - 2):
+    for _ in range(containers_counting_the_input_values - 2):
         nested = [nested]
     return {"nested": nested}
 
@@ -304,11 +307,11 @@ def test_a_native_marker_is_the_type_its_class_carries() -> None:
 
 
 def test_a_node_class_defined_inside_a_function_is_refused_naming_stream_add() -> None:
-    @node.process
+    @node
     class FunctionLocalFilter:
-        video_from_upstream = Input(Packets, delivery="newest")
+        video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
-        video_to_downstream = Output(Packets)
+        video_to_downstream: OutputPin[EncodedVideo]
 
     with pytest.raises(ValueError) as refusal:
         StreamBuilder("rig").add(FunctionLocalFilter)
@@ -320,7 +323,7 @@ def test_a_node_class_defined_inside_a_function_is_refused_naming_stream_add() -
         "a function"
     )
     assert "Move the class to module scope." in message
-    assert "`stream_builder.add(..., config={...})`" in message
+    assert "`stream_builder.add(..., input_values={...})`" in message
 
 
 def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
@@ -340,7 +343,7 @@ def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
     )
     assert (
         "    # entry_file_detector.py\n"
-        "    @node.process(...)\n"
+        "    @node\n"
         "    class EntryFileDetector: ...\n"
         "\n"
         "    # stream.py\n"
@@ -353,12 +356,12 @@ def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
 
 
 def test_a_function_node_in_the_entry_file_is_refused_naming_its_reader() -> None:
-    def entry_file_ease(x: float) -> float:
+    def entry_file_ease(x: float = 0.0) -> float:
         return x
 
     entry_file_ease.__module__ = "__main__"
     entry_file_ease.__qualname__ = "entry_file_ease"
-    entry_file_function_node = node.function(entry_file_ease)
+    entry_file_function_node = node(entry_file_ease)
 
     with pytest.raises(ValueError) as refusal:
         StreamBuilder("rig").add(entry_file_function_node)
@@ -369,7 +372,7 @@ def test_a_function_node_in_the_entry_file_is_refused_naming_its_reader() -> Non
         "`__main__:entry_file_ease`"
     )
     assert "runs inside the read of the node it feeds" in message
-    assert "    @node.function\n    def entry_file_ease(...): ...\n" in message
+    assert "    @node\n    def entry_file_ease(...): ...\n" in message
 
 
 def test_a_class_both_function_local_and_in_the_entry_file_gets_the_function_local_fix() -> (
@@ -403,9 +406,9 @@ def test_a_function_node_is_added_by_its_import_path_under_its_cast_name() -> No
     assert graph["links"][0]["source"] == {"node": "remap_onto_a_range", "port": "result"}
 
 
-def test_an_undecorated_function_is_refused_naming_node_function() -> None:
-    with pytest.raises(TypeError, match="`@node.function`"):
-        StreamBuilder("rig").add(a_config_holding_itself)  # pyright: ignore[reportArgumentType, reportCallIssue]
+def test_an_undecorated_function_is_refused_naming_bare_node() -> None:
+    with pytest.raises(TypeError, match="decorate the class or the function with bare `@node`"):
+        StreamBuilder("rig").add(input_values_holding_itself)  # pyright: ignore[reportArgumentType, reportCallIssue]
 
 
 def test_an_undecorated_class_is_refused_naming_node() -> None:
@@ -413,7 +416,7 @@ def test_an_undecorated_class_is_refused_naming_node() -> None:
         StreamBuilder("rig").add(UndecoratedFilter)
 
     message = str(refusal.value)
-    assert "is not a node: decorate the class with `@node.process`" in message
+    assert "is not a node: decorate the class or the function with bare `@node`" in message
     assert "pass it itself rather than an instance of it" in message
 
 
@@ -425,13 +428,13 @@ def test_an_instance_is_refused_naming_the_class_itself() -> None:
 
 
 @pytest.mark.parametrize(
-    "config",
+    "input_values",
     [
         {"labels": {"left"}},
         {1: "left"},
         {"gain": math.nan},
         {"frame_count": 2**64},
-        a_config_holding_itself(),
+        input_values_holding_itself(),
         ["gain"],
     ],
     ids=[
@@ -439,56 +442,56 @@ def test_an_instance_is_refused_naming_the_class_itself() -> None:
         "a-non-string-key",
         "nan",
         "an-integer-beyond-64-bits",
-        "a-config-holding-itself",
+        "input-values-holding-itself",
         "not-a-mapping",
     ],
 )
-def test_an_add_refused_for_its_config_records_nothing(config: Any) -> None:
+def test_an_add_refused_for_its_input_values_records_nothing(input_values: Any) -> None:
     stream_builder = StreamBuilder("rig")
 
     with pytest.raises((TypeError, ValueError)):
-        stream_builder.add(StandInMarker, config=config)
+        stream_builder.add(StandInMarker, input_values=input_values)
     with pytest.raises((TypeError, ValueError)):
-        stream_builder.add(StandInMarker, name="Front Camera", config=config)
+        stream_builder.add(StandInMarker, name="Front Camera", input_values=input_values)
 
     assert stream_builder.add(FrameInverter).name == "frameinverter"
     assert stream_builder.add(BrightnessReader, name="Front Camera").name == "front-camera"
 
 
-def test_config_is_normalised_to_plain_json() -> None:
-    config = run_graph_generator(a_configured_stream)["nodes"][0]["input_values"]
+def test_input_values_is_normalised_to_plain_json() -> None:
+    input_values = run_graph_generator(a_stream_setting_input_values)["nodes"][0]["input_values"]
 
-    assert config == {
+    assert input_values == {
         "title": "Rig",
         "size": [640, 480],
         "overlay": {"labels": ["left", "right"], "opacity": 0.5},
         "enabled": True,
         "device": None,
     }
-    assert type(config["overlay"]) is dict
-    assert type(config["size"]) is list
-    assert config["overlay"]["labels"] is not NESTED_CONFIG["overlay"]["labels"]
+    assert type(input_values["overlay"]) is dict
+    assert type(input_values["size"]) is list
+    assert input_values["overlay"]["labels"] is not NESTED_INPUT_VALUES["overlay"]["labels"]
 
 
-def test_a_node_with_no_config_records_an_empty_object() -> None:
+def test_a_node_with_no_input_values_records_an_empty_object() -> None:
     graph = run_graph_generator(every_kind_of_node)
 
     assert [each_node["input_values"] for each_node in graph["nodes"]] == [{}, {}, {}]
 
 
-def test_a_config_that_is_not_a_mapping_is_refused() -> None:
-    with pytest.raises(TypeError, match="config must be a mapping"):
-        StreamBuilder("rig").add(StandInMarker, config=[("gain", 2)])  # pyright: ignore[reportCallIssue, reportArgumentType]
+def test_input_values_that_is_not_a_mapping_is_refused() -> None:
+    with pytest.raises(TypeError, match="input_values must be a mapping"):
+        StreamBuilder("rig").add(StandInMarker, input_values=[("gain", 2)])  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
-def test_a_config_value_json_cannot_carry_is_refused_naming_its_key_path() -> None:
+def test_input_values_value_json_cannot_carry_is_refused_naming_its_key_path() -> None:
     with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config={"overlay": {"labels": ["left", {"right"}]}}
+        StreamBuilder("rig").add(StandInMarker, input_values={"overlay": {"labels": ["left", {"right"}]}}
         )
 
     message = str(refusal.value)
-    assert message.startswith("config must be JSON:")
-    assert "`config['overlay']['labels'][1]` is of type `set`" in message
+    assert message.startswith("input_values must be JSON:")
+    assert "`input_values['overlay']['labels'][1]` is of type `set`" in message
     assert "a collection with `list(...)`" in message
 
 
@@ -497,46 +500,46 @@ def test_a_config_value_json_cannot_carry_is_refused_naming_its_key_path() -> No
     [(numpy.bool_(True), "numpy.bool"), (numpy.int64(7), "numpy.int64")],
     ids=["numpy-bool", "numpy-int64"],
 )
-def test_a_config_value_of_a_type_outside_builtins_is_refused_naming_its_module(
+def test_input_values_value_of_a_type_outside_builtins_is_refused_naming_its_module(
     value: object, type_as_written: str
 ) -> None:
     with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config={"enabled": value})
+        StreamBuilder("rig").add(StandInMarker, input_values={"enabled": value})
 
     message = str(refusal.value)
     assert message.startswith(
-        f"config must be JSON: `config['enabled']` is of type `{type_as_written}`, and a "
-        f"graph carries only dict, list, tuple, str, int, float, bool, None, a "
+        f"input_values must be JSON: `input_values['enabled']` is of type `{type_as_written}`, and a "
+        f"graph carries only dict, list, tuple, str, int, float, bool, None and the "
     )
     assert (
         "convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`" in message
     )
 
 
-def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
+def test_input_values_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
     with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config={"overlay": {1: "left"}})
+        StreamBuilder("rig").add(StandInMarker, input_values={"overlay": {1: "left"}})
 
     message = str(refusal.value)
-    assert message.startswith("config must be JSON:")
-    assert "`config['overlay']` has the key 1, of type `int`" in message
+    assert message.startswith("input_values must be JSON:")
+    assert "`input_values['overlay']` has the key 1, of type `int`" in message
     assert "convert it with `str(...)`" in message
 
 
-def test_a_config_float_json_cannot_carry_is_refused_naming_its_key_path() -> None:
+def test_input_values_float_json_cannot_carry_is_refused_naming_its_key_path() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config={"gain": math.nan})
+        StreamBuilder("rig").add(StandInMarker, input_values={"gain": math.nan})
 
     assert str(refusal.value) == (
-        "config must be JSON: `config['gain']` is nan, which JSON cannot carry — pass "
+        "input_values must be JSON: `input_values['gain']` is nan, which JSON cannot carry — pass "
         "`None` where there is no value, or carry it as a `str`"
     )
 
 
-def test_config_values_subclassing_str_int_or_float_are_recorded_as_the_base_type() -> (
+def test_input_values_values_subclassing_str_int_or_float_are_recorded_as_the_base_type() -> (
     None
 ):
-    config = config_compiled_for(
+    input_values = input_values_compiled_for(
         {
             "colour": FrameColour.RED,
             "frame_rate": FrameRate.SIXTY,
@@ -546,42 +549,42 @@ def test_config_values_subclassing_str_int_or_float_are_recorded_as_the_base_typ
         }
     )
 
-    assert config == {
+    assert input_values == {
         "colour": "red",
         "frame_rate": 60,
         "gain": 0.5,
         "palette": ["red", 60, 0.25],
         "enabled": True,
     }
-    assert [type(value) for value in config.values()] == [str, int, float, list, bool]
-    assert [type(item) for item in config["palette"]] == [str, int, float]
+    assert [type(value) for value in input_values.values()] == [str, int, float, list, bool]
+    assert [type(item) for item in input_values["palette"]] == [str, int, float]
 
 
-def test_config_keys_subclassing_str_are_recorded_as_plain_strings() -> None:
-    config = config_compiled_for({FrameColour.RED: {FrameColour.RED: 1}})
+def test_input_values_keys_subclassing_str_are_recorded_as_plain_strings() -> None:
+    input_values = input_values_compiled_for({FrameColour.RED: {FrameColour.RED: 1}})
 
-    assert config == {"red": {"red": 1}}
-    assert type(next(iter(config))) is str
-    assert type(next(iter(config["red"]))) is str
+    assert input_values == {"red": {"red": 1}}
+    assert type(next(iter(input_values))) is str
+    assert type(next(iter(input_values["red"]))) is str
 
 
-def test_config_keys_equal_only_as_plain_strings_are_refused_naming_the_key() -> None:
+def test_input_values_keys_equal_only_as_plain_strings_are_refused_naming_the_key() -> None:
     with pytest.raises(ValueError) as refusal:
         StreamBuilder("rig").add(StandInMarker,
-            config={"overlay": {"gain": 1, KeyComparedByIdentity("gain"): 2}},
+            input_values={"overlay": {"gain": 1, KeyComparedByIdentity("gain"): 2}},
         )
 
     message = str(refusal.value)
-    assert message.startswith("config must be JSON:")
-    assert "`config['overlay']`" in message
+    assert message.startswith("input_values must be JSON:")
+    assert "`input_values['overlay']`" in message
     assert "'gain'" in message
     assert message.endswith("keep one of them, or rename the other")
 
 
-def test_config_integers_at_the_64_bit_bounds_are_kept() -> None:
+def test_input_values_integers_at_the_64_bit_bounds_are_kept() -> None:
     bounds = [-(2**63), 2**63 - 1, 2**64 - 1]
 
-    assert config_compiled_for({"bounds": bounds}) == {"bounds": bounds}
+    assert input_values_compiled_for({"bounds": bounds}) == {"bounds": bounds}
 
 
 @pytest.mark.parametrize(
@@ -589,89 +592,89 @@ def test_config_integers_at_the_64_bit_bounds_are_kept() -> None:
     [2**64, -(2**63) - 1, 10**5000],
     ids=["past-u64", "below-i64", "five-thousand-digits"],
 )
-def test_a_config_integer_beyond_64_bits_is_refused_naming_its_key_path(
+def test_input_values_integer_beyond_64_bits_is_refused_naming_its_key_path(
     integer: int,
 ) -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config={"limits": [0, integer]})
+        StreamBuilder("rig").add(StandInMarker, input_values={"limits": [0, integer]})
 
     assert str(refusal.value) == (
-        "config integers must fit the graph's 64-bit range: `config['limits'][1]` is "
+        "input_values integers must fit the graph's 64-bit range: `input_values['limits'][1]` is "
         "outside -2**63 to 2**64 - 1; carry a value that large as a `str`"
     )
 
 
-def test_a_config_holding_itself_is_refused_naming_where_it_loops() -> None:
+def test_input_values_holding_itself_is_refused_naming_where_it_loops() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config=a_config_holding_itself())
+        StreamBuilder("rig").add(StandInMarker, input_values=input_values_holding_itself())
 
     message = str(refusal.value)
-    assert message.startswith("config must be JSON:")
-    assert "`config['overlay']['parent']` is `config`" in message
+    assert message.startswith("input_values must be JSON:")
+    assert "`input_values['overlay']['parent']` is `input_values`" in message
     assert message.endswith(
-        "Break the cycle: put the data `config['overlay']['parent']` should carry "
+        "Break the cycle: put the data `input_values['overlay']['parent']` should carry "
         "there, not the container holding it"
     )
 
 
 def test_a_list_holding_itself_is_refused_naming_where_it_loops() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config=a_config_holding_a_list_holding_itself()
+        StreamBuilder("rig").add(StandInMarker, input_values=input_values_holding_a_list_holding_itself()
         )
 
     message = str(refusal.value)
-    assert message.startswith("config must be JSON:")
+    assert message.startswith("input_values must be JSON:")
     assert (
-        "`config['overlay']['labels'][1]` is `config['overlay']['labels']`" in message
+        "`input_values['overlay']['labels'][1]` is `input_values['overlay']['labels']`" in message
     )
 
 
 def test_a_container_two_keys_share_is_recorded_under_each() -> None:
     shared_size = [640, 480]
 
-    config = config_compiled_for({"size": shared_size, "preview_size": shared_size})
+    input_values = input_values_compiled_for({"size": shared_size, "preview_size": shared_size})
 
-    assert config == {"size": [640, 480], "preview_size": [640, 480]}
-    assert config["size"] is not config["preview_size"]
+    assert input_values == {"size": [640, 480], "preview_size": [640, 480]}
+    assert input_values["size"] is not input_values["preview_size"]
 
 
-def test_a_config_nested_as_deep_as_a_graph_carries_compiles_unchanged() -> None:
-    config = a_config_nesting_containers_deep(
-        CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF
+def test_input_values_nested_as_deep_as_a_graph_carries_compiles_unchanged() -> None:
+    input_values = input_values_nesting_containers_deep(
+        CONTAINERS_INPUT_VALUES_NEST_AT_MOST_COUNTING_ITSELF
     )
 
-    assert config_compiled_for(config) == config
+    assert input_values_compiled_for(input_values) == input_values
 
 
-def test_a_config_nested_one_past_what_a_graph_carries_is_refused_at_add_by_key_path() -> (
+def test_input_values_nested_one_past_what_a_graph_carries_is_refused_at_add_by_key_path() -> (
     None
 ):
     with pytest.raises(ValueError) as refusal:
         StreamBuilder("rig").add(StandInMarker,
-            config=a_config_nesting_containers_deep(
-                CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF + 1
+            input_values=input_values_nesting_containers_deep(
+                CONTAINERS_INPUT_VALUES_NEST_AT_MOST_COUNTING_ITSELF + 1
             ),
         )
 
-    deepest_key_path = "config['nested']" + "[0]" * (
-        CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF - 1
+    deepest_key_path = "input_values['nested']" + "[0]" * (
+        CONTAINERS_INPUT_VALUES_NEST_AT_MOST_COUNTING_ITSELF - 1
     )
     assert str(refusal.value) == (
-        f"config nests too deep for a graph: `{deepest_key_path}` is a container 124 "
-        f"deep counting `config` itself, and `config` nests at most 123 — "
+        f"input_values nests too deep for a graph: `{deepest_key_path}` is a container 124 "
+        f"deep counting `input_values` itself, and `input_values` nests at most 123 — "
         f"a graph nests at most 126 containers from its root, and the graph, its "
         f"`nodes` list and the node enclose every node's values. Nest the data at most 123 "
         f"containers deep, or carry the deeper part as a `str`"
     )
 
 
-def test_a_config_nested_5000_deep_is_refused_by_name_rather_than_by_recursion() -> None:
+def test_input_values_nested_5000_deep_is_refused_by_name_rather_than_by_recursion() -> None:
     with pytest.raises(ValueError) as refusal:
-        StreamBuilder("rig").add(StandInMarker, config=a_config_nesting_containers_deep(5000))
+        StreamBuilder("rig").add(StandInMarker, input_values=input_values_nesting_containers_deep(5000))
 
     assert type(refusal.value) is ValueError
-    assert str(refusal.value).startswith("config nests too deep for a graph: ")
-    assert "`config` nests at most 123" in str(refusal.value)
+    assert str(refusal.value).startswith("input_values nests too deep for a graph: ")
+    assert "`input_values` nests at most 123" in str(refusal.value)
 
 
 def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:

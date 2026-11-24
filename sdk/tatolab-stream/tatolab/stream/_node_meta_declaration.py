@@ -114,7 +114,7 @@ def the_conversion_a_node_states(
             f"judged by the pin types its pins state, which only bare `@node` and `@node.shader` "
             f"read. To fix: declare it with bare `@node`, each pin typed by its pin type, or "
             f"leave `conversion=True` out.",
-            finding_code="conversion_under_a_family_grammar",
+            finding_code="conversion_reads_no_pin_types",
             node=node,
         )
     if pin_groups:

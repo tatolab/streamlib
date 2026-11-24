@@ -37,7 +37,7 @@ class GraphOutput(BuiltInNode):
         Literal["image", "array", "channels", "packets", "records"] | None,
         SettingOnly(),
         Description(
-            "The Output's family, or a port family such as `Image`, while no `pin_type` is "
+            "The Output's family, such as `image`, while no `pin_type` is "
             "chosen; left out with it, the Output takes the family of the port linked into it, "
             "and runs nothing until one is"
         ),
@@ -72,7 +72,7 @@ class GraphInput(BuiltInNode):
         Literal["image", "array", "channels", "packets", "records"] | None,
         SettingOnly(),
         Description(
-            "The Input's family, or a port family such as `Image`, while no `pin_type` is "
+            "The Input's family, such as `image`, while no `pin_type` is "
             "chosen; left out with it, the Input takes the family of its first reader's port, "
             "and runs nothing until one is linked"
         ),

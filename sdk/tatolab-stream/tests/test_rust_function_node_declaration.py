@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 
 from tatolab.stream import (
+    NodeDeclarationRefusal,
     RustFunctionNode,
     StreamBuilder,
-    UnreadMessage,
     graph_generator,
     node,
     run_graph_generator,
@@ -329,3 +329,15 @@ def test_a_gate_declaration_breaking_what_unread_messages_allow_is_refused_by_na
 ):
     with pytest.raises(ValueError, match=refusal):
         node.rust_function(a_gate_declaration(**override))
+
+
+def test_a_conversion_stated_on_a_rust_function_node_is_refused_naming_bare_node():
+    """Only bare `@node` and `@node.shader` read the pin types a conversion is judged by.
+
+    Mental-revert: dropping the check stamps the Rust gate a conversion.
+    """
+    with pytest.raises(NodeDeclarationRefusal) as refused:
+        node.meta(conversion=True)(node.rust_function(a_gate_declaration()))
+
+    assert "states `conversion=True` under `node.rust_function`" in str(refused.value)
+    assert refused.value.finding_code == "conversion_reads_no_pin_types"

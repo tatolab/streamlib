@@ -15,7 +15,6 @@ import pytest
 
 import tatolab.stream
 from tatolab.stream import (
-    Audio,
     AudioWindowContract,
     InputPin,
     NodeDeclarationRefusal,

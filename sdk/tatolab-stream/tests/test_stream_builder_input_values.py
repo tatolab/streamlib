@@ -61,21 +61,14 @@ def test_input_values_are_recorded_under_the_documents_one_key_for_them() -> Non
     }
 
 
-def test_config_records_the_same_values_as_input_values_on_a_node_declaring_no_pin_types() -> None:
-    values = {"name": "Rig Monitor"}
+@pytest.mark.parametrize("node_class", [StandInMarker, TintedLevel], ids=["untyped", "typed"])
+def test_config_is_refused_naming_input_values(node_class: Any) -> None:
+    """`config=` is retired on every node, so it fails where it is written.
 
-    assert the_values_recorded_for(StandInMarker, config=values) == values
-    assert the_values_recorded_for(StandInMarker, input_values=values) == values
-
-
-def test_a_node_given_both_spellings_is_refused_naming_input_values() -> None:
-    with pytest.raises(TypeError, match=r"pass them as `input_values=\{\.\.\.\}` alone"):
-        StreamBuilder("rig").add(StandInMarker, input_values={"name": "a"}, config={"name": "b"})
-
-
-def test_a_typed_node_given_config_is_refused_naming_input_values() -> None:
-    with pytest.raises(TypeError, match=r"`TintedLevel` is a typed node, which takes its values as `input_values="):
-        StreamBuilder("rig").add(TintedLevel, config={"level": 0.25})
+    Mental-revert: reading `config=` again records the values on the untyped node.
+    """
+    with pytest.raises(TypeError, match=r"`config=` is retired, and .* takes its values as `input_values="):
+        StreamBuilder("rig").add(node_class, config={"level": 0.25})  # pyright: ignore[reportCallIssue]
 
 
 def test_a_typed_nodes_values_are_recorded_in_the_stored_form_of_each_pin_type() -> None:

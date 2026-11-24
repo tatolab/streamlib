@@ -36,7 +36,7 @@ type NodeDeclarationFindingCode = Literal[
     "pin_has_a_value",
     "init_takes_parameters",
     "class_takes_a_config",
-    "conversion_under_a_family_grammar",
+    "conversion_reads_no_pin_types",
     "conversion_not_one_input_to_one_output",
     "conversion_end_states_no_one_pin_type",
     "pin_group_slot_not_a_frozen_dataclass",
