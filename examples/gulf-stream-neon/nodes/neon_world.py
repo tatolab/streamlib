@@ -288,7 +288,7 @@ STAGE_CAMERA_AT_HOME = StageCamera()
 
 
 @dataclass(frozen=True)
-class Look:
+class StageLookReading:
     """The stage's look: the real map to neon morph, the time of day, the skyline, the neon and
     the current's speed."""
 
