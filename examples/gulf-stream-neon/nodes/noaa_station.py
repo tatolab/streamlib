@@ -14,6 +14,7 @@ time-lapsed across the take, so every take reads the same real numbers.
 from __future__ import annotations
 
 import calendar
+import dataclasses
 import json
 import threading
 import time
@@ -36,18 +37,7 @@ from nodes.neon_world import DATA_FOLDER, StationReading, TakeClock
 STATION_ID = "8723214"
 API = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 PRODUCTS = ("water_level", "wind", "air_temperature", "water_temperature", "air_pressure")
-STATION_RECORD_NAMES = [
-    "station",
-    "observed_at_unix",
-    "water_level_m",
-    "wind_speed_mps",
-    "wind_from_degrees",
-    "wind_gust_mps",
-    "air_temperature_c",
-    "water_temperature_c",
-    "air_pressure_hpa",
-    "live",
-]
+STATION_RECORD_NAMES = [field.name for field in dataclasses.fields(StationReading)]
 
 
 def _unix_of(stamp: str) -> float:

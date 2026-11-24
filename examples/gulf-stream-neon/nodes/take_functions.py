@@ -45,9 +45,9 @@ class SoundtrackReading(NamedTuple):
     description="The soundtrack's kick envelope and loudness, both 0 to 1, at `seconds` into the track.",
 )
 @node
-def SoundtrackBeat(
+def SoundtrackBeat(  # noqa: N802
     seconds: Annotated[float, Description("Seconds into the track.")] = 0.0,
-) -> SoundtrackReading:  # noqa: N802
+) -> SoundtrackReading:
     """The kick and the loudness of the take's soundtrack at `seconds`."""
     beat, energy = soundtrack_curves().at(seconds)
     return SoundtrackReading(beat, energy)
@@ -67,9 +67,9 @@ class TakeReading(NamedTuple):
     description="The take's sections as levels: `drop` is up from 10 s to 20 s, `sunset` rises over the build, `reveal` holds the real map; plus the focus distance.",
 )
 @node
-def TakeBeats(
+def TakeBeats(  # noqa: N802
     seconds: Annotated[float, Description("Seconds into the take.")] = 0.0,
-) -> TakeReading:  # noqa: N802
+) -> TakeReading:
     """The take's drop, sunset and reveal levels at `seconds`, and the distance to focus at."""
     moment = take_moment_at(seconds)
     return TakeReading(moment.drop, smoothstep(7.5, 10.0, seconds), moment.reveal, moment.focus_distance)

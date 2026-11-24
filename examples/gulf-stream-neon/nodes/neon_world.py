@@ -88,6 +88,8 @@ class StageLookValues:
     skyline_height: float
     neon: float
     current_speed: float
+
+
 HDR_LAYER_FORMAT = "rgba16_float"
 
 
