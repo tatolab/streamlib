@@ -67,6 +67,10 @@ def test_the_project_declares_every_node_it_is_meant_to():
     assert len(DECLARED_NODES) == 78
 
 
+def test_no_constant_is_declared_beside_the_runtimes_own():
+    assert not [node_type for node_type in DECLARED_NODES if node_type.endswith(":Constant")]
+
+
 @pytest.mark.parametrize("node_type", sorted(DECLARED_NODES))
 def test_each_node_declares_a_listed_group_and_a_description(node_type: str):
     declared = DECLARED_NODES[node_type]

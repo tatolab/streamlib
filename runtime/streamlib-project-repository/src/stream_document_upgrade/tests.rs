@@ -180,7 +180,7 @@ fn each_renamed_node_type_takes_its_new_type_and_keeps_everything_else() {
     assert_eq!(RENAMED_NODE_TYPES.len(), 35);
     for (from, to) in RENAMED_NODE_TYPES
         .iter()
-        .filter(|(from, _)| !CONSTANT_NODE_TYPES_HOLDING_ONE_FLOAT.contains(from))
+        .filter(|(_, to)| *to != CONSTANT_NODE_TYPE)
     {
         let document = json!({
             "nodes": [{

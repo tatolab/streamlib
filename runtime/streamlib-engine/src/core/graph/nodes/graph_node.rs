@@ -227,8 +227,9 @@ impl GraphNode {
 
     /// Resolve this node's ports against what its config and pins declare of them: a
     /// `GraphInput`'s `value` ports take the pin type, the family, the range and the lifetime
-    /// its settings name, a `Constant`'s the pin type its `pin_type` chooses, and every output carries its stream facts on the family its settings
-    /// read at setup choose. The ports of every other node type are as it declares them.
+    /// its settings name, a `Constant`'s the pin type its `pin_type` chooses, and every output
+    /// carries its stream facts on the family its settings read at setup choose. The ports of
+    /// every other node type are as it declares them.
     pub(crate) fn resolve_the_ports_its_settings_declare(&mut self) {
         if self.node_type.carries_the_value_its_pin_type_chooses() {
             let settings = serde_json::Value::Object(self.input_values());

@@ -11,7 +11,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::stream_graph_document::GRAPH_INPUT_NODE_TYPE;
+use crate::stream_graph_document::{GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME};
 use streamlib_node_schema::CONSTANT_NODE_TYPE;
 
 use inputs_moved_onto_pin_group_slots::INPUTS_MOVED_ONTO_PIN_GROUP_SLOTS;
@@ -112,9 +112,6 @@ const RENAMED_NODE_TYPES: &[(&str, &str)] = &[
         "tatolab.ops:Step",
         "imports/core-nodes/core_nodes.math_nodes:Step",
     ),
-    // `Constant` held one Float, first as a `tatolab-ops` node, then as a Core Nodes function
-    // node; the runtime's own `Constant` holds a value of the type its `pin_type` chooses, and
-    // one renamed from either holds the Float it held.
     ("tatolab.ops:Constant", CONSTANT_NODE_TYPE),
     (
         "imports/core-nodes/core_nodes.math_nodes:Constant",
@@ -396,21 +393,18 @@ fn the_node_type_renamed(node: &mut Map<String, Value>) -> bool {
     true
 }
 
-/// The node types of a `Constant` that held one Float, before the runtime's own `Constant` held a
-/// value of the type its `pin_type` chooses.
-const CONSTANT_NODE_TYPES_HOLDING_ONE_FLOAT: [&str; 2] = [
-    "tatolab.ops:Constant",
-    "imports/core-nodes/core_nodes.math_nodes:Constant",
-];
+/// The setting a `Constant` chooses the type of its value by.
+const THE_SETTING_A_CONSTANT_CHOOSES_ITS_TYPE_BY: &str = "pin_type";
 
 /// The `value` a `Constant` holding one Float read while it saved none.
 const THE_FLOAT_A_CONSTANT_HELD_BY_DEFAULT: f64 = 0.0;
 
-/// Whether `node` is a `Constant` of a type that held one Float.
+/// Whether `node` is of a type renamed to `Constant`, each of which holds one Float.
 fn the_node_was_a_constant_holding_one_float(node: &Map<String, Value>) -> bool {
     node.get("type")
         .and_then(Value::as_str)
-        .is_some_and(|node_type| CONSTANT_NODE_TYPES_HOLDING_ONE_FLOAT.contains(&node_type))
+        .and_then(the_type_a_node_type_was_renamed_to)
+        == Some(CONSTANT_NODE_TYPE)
 }
 
 /// Have `node`, a `Constant` renamed from a type that held one Float, choose a Float as its
@@ -419,12 +413,15 @@ fn the_node_was_a_constant_holding_one_float(node: &Map<String, Value>) -> bool 
 fn a_constant_renamed_holds_the_float_it_held(node: &mut Map<String, Value>) {
     let mut input_values = object_or_empty(node.remove(NODE_INPUT_VALUES_KEY));
     input_values.insert(
-        "pin_type".to_owned(),
+        THE_SETTING_A_CONSTANT_CHOOSES_ITS_TYPE_BY.to_owned(),
         serde_json::json!({ "type": "float" }),
     );
-    if input_values.get("value").is_none_or(Value::is_null) {
+    if input_values
+        .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
+        .is_none_or(Value::is_null)
+    {
         input_values.insert(
-            "value".to_owned(),
+            GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
             serde_json::json!(THE_FLOAT_A_CONSTANT_HELD_BY_DEFAULT),
         );
     }

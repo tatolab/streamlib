@@ -41,40 +41,39 @@ struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
 static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
     Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>,
 > = std::sync::LazyLock::new(|| {
-    let descriptor =
-        the_node_type_of_a_graph_input().expect("the GraphInput node type's names are valid");
-    Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
-        input_and_output_port_info: GraphNodePorts::of_a_node_just_placed(&descriptor),
-        descriptor,
-        conversion: None,
-        how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
-            |node| {
-                Ok(
-                    Box::new(ValueSourceNode::for_a_top_level_graph_input(node)?)
-                        as Box<dyn crate::core::nodes::DynGeneratedNode + Send>,
-                )
-            },
-        )),
-    })
+    a_node_type_run_as_a_value_source(
+        the_node_type_of_a_graph_input().expect("the GraphInput node type's names are valid"),
+        ValueSourceNode::for_a_top_level_graph_input,
+    )
 });
 
 /// The node type every `Constant` runs as.
 static THE_NODE_TYPE_A_CONSTANT_RUNS_AS: std::sync::LazyLock<
     Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>,
 > = std::sync::LazyLock::new(|| {
-    let descriptor = THE_DESCRIPTOR_OF_A_CONSTANT.clone();
+    a_node_type_run_as_a_value_source(
+        THE_DESCRIPTOR_OF_A_CONSTANT.clone(),
+        ValueSourceNode::for_a_constant,
+    )
+});
+
+/// The node type `descriptor` declares, each node of it run as the [`ValueSourceNode`] `build`
+/// makes of it.
+fn a_node_type_run_as_a_value_source(
+    descriptor: NodeDescriptor,
+    build: fn(&GraphNode) -> Result<ValueSourceNode>,
+) -> Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes> {
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
         input_and_output_port_info: GraphNodePorts::of_a_node_just_placed(&descriptor),
         descriptor,
         conversion: None,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
-            |node| {
-                Ok(Box::new(ValueSourceNode::for_a_constant(node)?)
-                    as Box<dyn crate::core::nodes::DynGeneratedNode + Send>)
+            move |node| {
+                Ok(Box::new(build(node)?) as Box<dyn crate::core::nodes::DynGeneratedNode + Send>)
             },
         )),
     })
-});
+}
 
 pub(crate) enum HowANodeOfADescribedTypeRuns {
     AsANodeItsConstructorBuilds(DynamicNodeConstructorFn),

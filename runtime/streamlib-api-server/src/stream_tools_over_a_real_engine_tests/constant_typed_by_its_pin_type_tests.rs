@@ -105,7 +105,8 @@ fn what_the_constant_holds(
 /// `Constant` is listed once among the runtime's own node types, filed under Math, its
 /// `pin_type` a choice among the eight small types holding a Float until one is chosen.
 ///
-/// Mental-revert: listing the Core Nodes `Constant` beside it, or none, fails the count.
+/// Mental-revert: a listing without the runtime's own `Constant` fails the count; that Core
+/// Nodes declares none is held by its own tests.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_constant_is_listed_once_its_pin_type_choosing_among_the_small_types() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -271,4 +272,66 @@ async fn a_core_nodes_constant_saved_with_its_link_loads_as_the_runtimes_own() {
     let links = live_graph["links"].as_array().expect("links");
     assert_eq!(links.len(), 1, "{live_graph}");
     assert_eq!(links[0]["source"]["port"], "value", "{live_graph}");
+}
+
+/// A Float Constant saving 0.1 inside a placed stream that chooses an Integer saves 0 in that
+/// stream's graph document, cast by `FloatToInteger`, and one undo puts back the Float and 0.1.
+///
+/// Mental-revert: carrying a saved value only on a stream's own level sets the Integer as sent,
+/// which is refused for the 0.1 it holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_constant_inside_a_placed_stream_choosing_an_integer_casts_its_value() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project =
+        a_project_whose_main_stream_holds_a_constant(json!({ "type": "float" }), json!(0.1), false);
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+    let collapsed = engine
+        .the_answer_or_the_refusal_of(
+            "collapse_selection_into_subgraph",
+            json!({ "stream": stream, "nodes": [CONSTANT_NODE_UUID], "name": "sub",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the Constant collapses into `sub`");
+    let subgraph = collapsed["added_nodes"][0]["node"]
+        .as_str()
+        .expect("the subgraph node")
+        .to_owned();
+    let inside = the_node_named(&project.the_graph_document_of("sub"), "greeting");
+    let inside_id = inside["id"].as_str().expect("the Constant's id").to_owned();
+    let drawn = the_uuid_a_held_node_takes_under(&subgraph, &inside_id);
+    let what_sub_saves = || {
+        let saved = super::input_value_set_tests::the_input_values_of(
+            &project.the_graph_document_of("sub"),
+            &inside_id,
+        );
+        (saved["value"].clone(), saved["pin_type"].clone())
+    };
+
+    let retyped = transact_by_alice(
+        &engine,
+        json!([{ "operation": "set_node_input_value", "stream": stream, "level": [subgraph],
+                 "node": drawn, "input": "pin_type", "value": { "type": "integer" } }]),
+    )
+    .await
+    .expect("the retype inside the placed stream casts the saved value");
+    assert_eq!(
+        retyped["saved_values_retyped"][0]["cast_by"], "tatolab.stream:FloatToInteger",
+        "{retyped}"
+    );
+    assert_eq!(what_sub_saves(), (json!(0), json!({ "type": "integer" })));
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the retype undoes");
+    assert_eq!(
+        what_sub_saves(),
+        (json!(0.1), json!({ "type": "float" })),
+        "one undo puts back both the type and the value"
+    );
 }

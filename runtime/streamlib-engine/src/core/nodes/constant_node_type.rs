@@ -9,22 +9,18 @@
 use std::sync::LazyLock;
 
 use crate::core::descriptors::{
-    DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor, PortFamily,
-    PortFamilyDeclaration, SettingReadTime, VectorComponentCount,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinType,
+    PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime, VectorComponentCount,
 };
 use crate::core::error::{Error, Result};
-use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_VALUE_PORT_NAME,
-};
+use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_PIN_TYPE_SETTING;
 
-use super::graph_interface_node_types::setting;
+use super::graph_interface_node_types::{setting, value_port_of_family};
 
-/// The category a `Constant` is filed under, beside the number nodes it was one of.
+/// The category a `Constant` is filed under.
 const CONSTANT_NODE_TYPE_CATEGORY: &str = "Math";
 
-/// The name the output of the Constant that held one Float went by, which a link saved
-/// before the Constant held a type of its choosing still names.
+/// The former name of a `Constant`'s `value` output, which a saved link may still name.
 const THE_FORMER_NAME_OF_A_CONSTANT_OUTPUT: &str = "result";
 
 /// The import path of `Constant`.
@@ -54,8 +50,7 @@ pub(crate) fn the_pin_types_a_constant_offers() -> Vec<PinType> {
     ]
 }
 
-/// The type a `Constant` holds while its `pin_type` holds none: a Float, the one type every
-/// Constant held before it had a menu.
+/// The type a `Constant` holds while its `pin_type` holds none: a Float.
 pub fn the_pin_type_a_constant_holds_by_default() -> PinType {
     PinType::Float { exact_size: None }
 }
@@ -86,7 +81,7 @@ fn the_node_type_of_a_constant() -> Result<NodeDescriptor> {
             false,
             Some(
                 serde_json::to_value(the_pin_type_a_constant_holds_by_default())
-                    .expect("a pin type is written as JSON"),
+                    .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
             ),
         ),
         the_value_port_of_a_constant(
@@ -117,24 +112,12 @@ pub fn the_descriptor_of_a_constant() -> NodeDescriptor {
 
 /// A `value` port of a `Constant` stating `description`, carried as a value of the type its
 /// `pin_type` chooses, on the family a Float travels on until that type is resolved; one a
-/// person may clear, and a link saved naming any of `former_names` still resolves to.
+/// person may clear, and a link naming any of `former_names` resolves to.
 fn the_value_port_of_a_constant(description: &str, former_names: Vec<String>) -> PortDescriptor {
-    let family =
-        PortFamily::a_chosen_pin_type_travels_on(&the_pin_type_a_constant_holds_by_default())
-            .unwrap_or(PortFamily::Channels);
-    PortDescriptor::new(
-        GRAPH_INTERFACE_VALUE_PORT_NAME,
+    value_port_of_family(
         description,
-        false,
-        PortFamilyDeclaration::of_family(family),
-    )
-    .with_pin_declaration(PinDeclaration {
-        pin_type: DeclaredPinType::SetByInput {
-            input_name: GRAPH_INTERFACE_PIN_TYPE_SETTING.to_string(),
-        },
-        flow: PinFlow::Value,
-        annotations: PinAnnotations::default(),
         former_names,
-        may_be_unset: true,
-    })
+        true,
+        PortFamilyDeclaration::of_family(PortFamily::Channels),
+    )
 }

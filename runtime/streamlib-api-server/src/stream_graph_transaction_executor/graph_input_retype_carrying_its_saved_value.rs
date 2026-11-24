@@ -1,19 +1,22 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A `set_node_input_value` that chooses another `pin_type` for a top-level `GraphInput` or a
-//! `Constant` saving a value carries that value into the new type in the same transaction, as
-//! three value sets it records: the saved value taken off, the type set, and the value the one
-//! conversion fitting the two types casts, held within the Input's `range`, set again. With no such cast the value
-//! gives way to the new type's default, which is no saved value, and the answer says why. One
-//! undo puts back both the type and the value.
+//! A `set_node_input_value` that chooses another `pin_type` for a node whose value that setting
+//! types, a top-level `GraphInput` or a `Constant` on any level, saving a value carries that
+//! value into the new type in the same transaction, as three value sets it records: the saved
+//! value taken off, the type set, and the value the one conversion fitting the two types casts,
+//! held within a `GraphInput`'s `range`, set again. With no such cast the value gives way to the
+//! new type's default, which is no saved value, and the answer says why. One undo puts back both
+//! the type and the value.
 //!
 //! A module's conversion casts by running its body in the stream's interpreter, so each cast a
 //! transaction asks for is worked out before the transaction takes the project's lock or opens
 //! a stream's edit batch, from the documents as they stand then; the transaction takes the cast
 //! worked out for the value and types it finds. One they no longer match, as when an earlier
 //! change in the same transaction touched the Input, runs no module's conversion: it is worked
-//! out by the casts that start no process, and a module's says why it did not run.
+//! out by the casts that start no process, and a module's says why it did not run. A retype
+//! inside a placed stream is worked out under the lock alone, so a module's conversion does not
+//! run for it either.
 
 use streamlib::sdk::descriptors::{
     PinConversion, PinConversionSavedValueCast, PinNumberRange, PinType, SavedValueRetyped,
@@ -33,18 +36,19 @@ use serde::Deserialize;
 
 use super::*;
 
-/// The saved value a retype of a `GraphInput` carries: the stream asset and node the request
-/// names, the input the value is saved under, and what the answer names of it, among it the
-/// value it saves next.
+/// The saved value a retype carries: the stream asset, level and node the request names, the
+/// input the value is saved under, and what the answer names of it, among it the value it saves
+/// next.
 struct SavedValueARetypeCarries {
     stream: Uuid,
+    level: Vec<Uuid>,
     node: String,
     held_under: &'static str,
     answered: GraphTransactionSavedValueRetyped,
 }
 
-/// What a retype of a `GraphInput` carries: the value it saves, the type it is of, the type
-/// chosen and the Input's range. A retype worked out before the edit is taken for one that
+/// What a retype carries: the value it saves, the type it is of, the type
+/// chosen and a `GraphInput`'s range. A retype worked out before the edit is taken for one that
 /// carries the same.
 #[derive(Clone, PartialEq)]
 struct WhatARetypeCarries {
@@ -54,7 +58,7 @@ struct WhatARetypeCarries {
     range: Option<PinNumberRange>,
 }
 
-/// A retype of a `GraphInput` saving a value: the input the value is saved under, and what it
+/// A retype of a node saving a value: the input the value is saved under, and what it
 /// carries.
 struct RetypeOfASavedValue {
     held_under: &'static str,
@@ -97,9 +101,9 @@ const AN_EARLIER_CHANGE_IN_THE_TRANSACTION_TOUCHED_THE_INPUT: &str = "an earlier
      out before the transaction took the project's lock, and a module's conversion does not run \
      under it";
 
-/// The stream asset, node and chosen type of `request` when it sets `pin_type` on a node of a
-/// stream's own level; `None` for any other request.
-fn what_a_retype_names(request: &StreamGraphAction) -> Option<(Uuid, &str, &Value)> {
+/// The stream asset, level, node and chosen type of `request` when it sets `pin_type` on a node;
+/// `None` for any other request.
+fn what_a_retype_names(request: &StreamGraphAction) -> Option<(Uuid, &[Uuid], &str, &Value)> {
     let StreamGraphAction::SetNodeInputValue {
         stream,
         level,
@@ -111,24 +115,40 @@ fn what_a_retype_names(request: &StreamGraphAction) -> Option<(Uuid, &str, &Valu
     else {
         return None;
     };
-    (input == GRAPH_INTERFACE_PIN_TYPE_SETTING && level.is_empty()).then_some((
+    (input == GRAPH_INTERFACE_PIN_TYPE_SETTING).then_some((
         *stream,
+        level.as_slice(),
         node.as_str(),
         chosen,
     ))
 }
 
-/// The retype of the value `retyped` saves into `chosen`: `None` unless `retyped` is a
-/// `GraphInput` or a `Constant` saving a value of another type than `chosen`. A `Constant`
-/// choosing no type holds a Float, and has no range.
+/// The retype of the value `retyped`, on a stream's own level when `on_the_top_level`, saves into
+/// `chosen`: `None` unless `retyped` is a top-level `GraphInput` or a `Constant` saving a value
+/// of another type than `chosen`. A `Constant` choosing no type holds a Float, and has no range.
 fn the_retype_of_what_a_node_saves(
     retyped: &StreamGraphDocumentNode,
+    on_the_top_level: bool,
     chosen: &Value,
 ) -> Option<RetypeOfASavedValue> {
-    let a_constant = retyped.node_type == CONSTANT_NODE_TYPE;
-    if retyped.node_type != GRAPH_INPUT_NODE_TYPE && !a_constant {
-        return None;
-    }
+    let pin_type_of = |value: &Value| PinType::deserialize(value).ok();
+    let held = retyped.input_values.get(GRAPH_INTERFACE_PIN_TYPE_SETTING);
+    let (from, range) = match retyped.node_type.as_str() {
+        GRAPH_INPUT_NODE_TYPE if on_the_top_level => (
+            pin_type_of(held?)?,
+            the_range_a_graph_input_config_declares(Some(&Value::Object(
+                retyped.input_values.clone(),
+            ))),
+        ),
+        CONSTANT_NODE_TYPE => (
+            held.map_or_else(
+                || Some(the_pin_type_a_constant_holds_by_default()),
+                pin_type_of,
+            )?,
+            None,
+        ),
+        _ => return None,
+    };
     let (held_under, saved) = [
         GRAPH_INTERFACE_VALUE_PORT_NAME,
         GRAPH_INPUT_VALUE_FORMER_NAME,
@@ -141,23 +161,10 @@ fn the_retype_of_what_a_node_saves(
             .filter(|saved| !saved.is_null())
             .map(|saved| (key, saved.clone()))
     })?;
-    let pin_type_of = |value: &Value| PinType::deserialize(value).ok();
-    let from = match retyped.input_values.get(GRAPH_INTERFACE_PIN_TYPE_SETTING) {
-        Some(held) => pin_type_of(held)?,
-        None if a_constant => the_pin_type_a_constant_holds_by_default(),
-        None => return None,
-    };
     let into = pin_type_of(chosen)?;
     if from == into {
         return None;
     }
-    let range = (!a_constant)
-        .then(|| {
-            the_range_a_graph_input_config_declares(Some(&Value::Object(
-                retyped.input_values.clone(),
-            )))
-        })
-        .flatten();
     Some(RetypeOfASavedValue {
         held_under,
         carried: WhatARetypeCarries {
@@ -207,7 +214,8 @@ impl StreamGraphTransactionExecutor<'_> {
     /// What becomes of each saved value `requests_and_the_stream_id_each_names` retype, worked
     /// out against the documents as they stand: read under `project_repository`'s lock, taken
     /// only while they are read, or from each stream's live graph when there is none. A
-    /// retype whose node or document cannot be read now is left for the transaction.
+    /// retype whose node or document cannot be read now, or inside a placed stream, is left for
+    /// the transaction.
     pub(super) fn the_saved_value_retypes_worked_out_before_the_edit(
         &self,
         requests_and_the_stream_id_each_names: &[(StreamGraphAction, String)],
@@ -219,8 +227,10 @@ impl StreamGraphTransactionExecutor<'_> {
         let retypes: Vec<(&str, Uuid, &str, &Value)> = requests_and_the_stream_id_each_names
             .iter()
             .filter_map(|(request, stream_id)| {
-                let (stream, node, chosen) = what_a_retype_names(request)?;
-                Some((stream_id.as_str(), stream, node, chosen))
+                let (stream, level, node, chosen) = what_a_retype_names(request)?;
+                level
+                    .is_empty()
+                    .then_some((stream_id.as_str(), stream, node, chosen))
             })
             .collect();
         if retypes.is_empty() {
@@ -257,7 +267,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 .get(stream_id)
                 .and_then(Option::as_ref)
                 .and_then(|document| document.node(node).ok())
-                .and_then(|retyped| the_retype_of_what_a_node_saves(&retyped, chosen))
+                .and_then(|retyped| the_retype_of_what_a_node_saves(&retyped, true, chosen))
             else {
                 continue;
             };
@@ -280,7 +290,8 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 
     /// Apply `request` as [`Self::apply_one_request`] does; when it chooses another `pin_type`
-    /// for a top-level `GraphInput` saving a value its new type is not to keep as it is, carry
+    /// for a node whose value that setting types, saving a value its new type is not to keep as it
+    /// is, carry
     /// that value into the new type first, as the value sets this module names. One refused
     /// reverses those made live before it.
     pub(super) fn apply_a_set_carrying_a_retyped_saved_value(
@@ -297,7 +308,7 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let set = |input: &str, value: Option<Value>| StreamGraphAction::SetNodeInputValue {
             stream: carried.stream,
-            level: Vec::new(),
+            level: carried.level.clone(),
             node: carried.node.clone(),
             input: input.to_owned(),
             member: None,
@@ -323,7 +334,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         node = %carried.node,
                         input = %input_set,
                         refusal = %refusal.runtime_words(),
-                        "a value set carrying a retyped Graph Input's saved value was refused, \
+                        "a value set carrying a retyped node's saved value was refused, \
                          and the retype is reversed"
                     );
                     let applied_live = applied_by_the_retype
@@ -342,7 +353,8 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 
     /// The saved value `request` carries into another type: `None` unless it sets a `pin_type`
-    /// other than the one held on a top-level `GraphInput` the transaction has staged, which
+    /// other than the one held on a top-level `GraphInput` or a `Constant` the transaction has
+    /// staged, which
     /// saves a value its new type is not to keep as it is, and the stream's conversions are read,
     /// so a request whose carry cannot be worked out is applied as it is sent. What becomes of
     /// the value is the one worked out before the edit for the retype found here; when none
@@ -353,7 +365,7 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_id: &str,
         staged: &WhatTheTransactionHasStaged<'_>,
     ) -> Option<SavedValueARetypeCarries> {
-        let (stream, node, chosen) = what_a_retype_names(request)?;
+        let (stream, level, node, chosen) = what_a_retype_names(request)?;
         let node_uuid = staged
             .node_by_label
             .get(node)
@@ -362,7 +374,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let retyped = self
             .the_level_a_request_reaches(
                 stream_id,
-                &[],
+                level,
                 &staged.streams,
                 &staged.staged_graph_of_each_stream_not_running,
                 staged.project_repository,
@@ -372,7 +384,7 @@ impl StreamGraphTransactionExecutor<'_> {
             .ok()?
             .node(node_uuid)
             .ok()?;
-        let retype = the_retype_of_what_a_node_saves(&retyped, chosen)?;
+        let retype = the_retype_of_what_a_node_saves(&retyped, level.is_empty(), chosen)?;
         let what_became_of_it = match staged.saved_value_retypes_worked_out_before_the_edit.of(
             stream,
             node_uuid,
@@ -416,6 +428,7 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         Some(SavedValueARetypeCarries {
             stream,
+            level: level.to_vec(),
             node: node.to_owned(),
             held_under: retype.held_under,
             answered,
