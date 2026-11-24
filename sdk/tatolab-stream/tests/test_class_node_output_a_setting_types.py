@@ -68,12 +68,12 @@ def the_port(ports_stamp: str, port_name: str) -> "dict[str, Any]":
     return port
 
 
-def test_the_output_is_of_the_type_its_setting_chooses_among_its_union():
+def test_the_output_travels_on_the_family_of_the_type_its_setting_chooses_by_default():
     assert the_port(NODE_DECLARATION_OUTPUT_PORTS_STAMP, "content") == {
         "name": "content",
         "description": "What arrives",
         "family": {
-            "family": "packets",
+            "family": "records",
             "family_from_config_key": "content_type",
             "codec_from_config_key": "content_type",
         },
@@ -114,6 +114,16 @@ def _a_default_none_of_the_union_chooses() -> None:
     @node(execution="manual")
     class ChoosesSound:
         content_type: PinTypeChoice = PinTypeChoice(Audio)
+        content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]]
+
+        def process(self, ctx: Any) -> None:
+            del ctx
+
+
+def _a_choice_holding_no_default() -> None:
+    @node(execution="manual")
+    class ChoosesNothingByDefault:
+        content_type: PinTypeChoice | None = None
         content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]]
 
         def process(self, ctx: Any) -> None:
@@ -195,6 +205,7 @@ def _a_narrowing_on_the_whole_union() -> None:
     ("declare", "finding_code", "words"),
     [
         (_a_default_none_of_the_union_chooses, "pin_default_not_of_its_type", "none of the types"),
+        (_a_choice_holding_no_default, "pin_default_not_of_its_type", "no type by default"),
         (_a_choice_no_output_names, "pin_annotation_not_taken", "types no output"),
         (_an_output_naming_no_choice, "output_type_found_from_no_input", "no `PinTypeChoice` field"),
         (_two_outputs_naming_one_choice, "pin_annotation_repeated", "both typed by the setting"),

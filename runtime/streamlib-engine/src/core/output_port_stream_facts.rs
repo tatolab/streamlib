@@ -66,6 +66,27 @@ impl StreamFactsOfOutputPorts {
         }
     }
 
+    /// Carry each of `output_ports` on the family its declaration resolves to against
+    /// `node_values` again: a port whose family that changes takes the facts it declares, as
+    /// [`Self::as_declared_by`] reads them, and every other port keeps what it carries.
+    pub(crate) fn take_the_families_declared_by(
+        &self,
+        output_ports: &[PortInfo],
+        node_values: Option<&serde_json::Value>,
+    ) {
+        let mut facts_by_output_port = self.facts_by_output_port.write();
+        for port in output_ports {
+            let declared = the_facts_declared_by(port, node_values);
+            match facts_by_output_port.get_mut(&port.name) {
+                Some(held) if held.family == declared.family => {}
+                Some(held) => *held = declared,
+                None => {
+                    facts_by_output_port.insert(port.name.clone(), declared);
+                }
+            }
+        }
+    }
+
     /// The facts `output_port` carries now, or `None` — also for a port the
     /// node does not have.
     pub(crate) fn current_facts_of(&self, output_port: &str) -> Option<PortStreamFacts> {

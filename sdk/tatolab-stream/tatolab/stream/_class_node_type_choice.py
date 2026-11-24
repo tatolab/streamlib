@@ -25,8 +25,9 @@ def family_declaration_of_an_output_a_setting_types(
     declaration: PinDeclarationOnTheWire, chosen_among: Sequence[PinType]
 ) -> dict[str, Any]:
     """The family declaration of an output of the type the setting its `declaration` names
-    chooses among `chosen_among`: the family of the first until the runtime reads the setting,
-    then the family, and the codec, of the type it holds."""
+    chooses among `chosen_among`: the family of the first, until
+    `give_each_type_choice_what_it_may_choose` writes the family of the setting's default, and,
+    once the runtime reads the setting, the family and the codec of the type it holds."""
     setting: str = declaration["pin_type"]["input_name"]  # pyright: ignore[reportGeneralTypeIssues, reportTypedDictNotRequiredAccess]
     return {
         "family": family_a_pin_type_travels_on(chosen_among[0]),
@@ -44,9 +45,11 @@ def give_each_type_choice_what_it_may_choose(
     """Write, onto each `PinTypeChoice` field of `node`'s `input_ports`, the types the one output
     of `output_ports` it types may choose, `among_of_each_output` by the output's port.
 
+    Each such output travels on the family of the type its field chooses by default.
+
     Refused, as a `NodeDeclarationRefusal`: an output naming a setting that is no `PinTypeChoice`
-    field, two outputs naming one, a default choosing none of the types, and a `PinTypeChoice`
-    field no output names, which would choose nothing."""
+    field, two outputs naming one, a field choosing no type by default or one none of the types
+    is, and a `PinTypeChoice` field no output names, which would choose nothing."""
     choice_by_name = {
         port["name"]: port for port in input_ports if _chooses_a_pin_type(port["pin_declaration"])
     }
@@ -76,8 +79,9 @@ def give_each_type_choice_what_it_may_choose(
                 pin=output["name"],
             )
         output_typed_by_each_choice[setting] = output["name"]
-        _refuse_a_default_choosing_none_of(node, choice, among)
+        default = _the_default_among(node, choice, among)
         choice["pin_declaration"]["pin_type"]["pin_type"]["among"] = list(among)
+        output["family"]["family"] = family_a_pin_type_travels_on(default)
     for name in choice_by_name:
         if name not in output_typed_by_each_choice:
             raise NodeDeclarationRefusal(
@@ -90,12 +94,21 @@ def give_each_type_choice_what_it_may_choose(
             )
 
 
-def _refuse_a_default_choosing_none_of(
-    node: str, choice: Mapping[str, Any], among: Sequence[PinType]
-) -> None:
+def _the_default_among(node: str, choice: Mapping[str, Any], among: Sequence[PinType]) -> PinType:
+    """The type the `PinTypeChoice` field `choice` chooses by default, one of `among`."""
     default = choice.get("pin_default")
-    if default is None or default in among:
-        return
+    if default is None:
+        raise NodeDeclarationRefusal(
+            f"`{node}`'s `PinTypeChoice` field `{choice['name']}` chooses no type by default, so "
+            f"the output it types would carry none until it is set. To fix: default it to one of "
+            f"{', '.join(pin_type_in_words(each) for each in among)}, "
+            f"`{choice['name']}: PinTypeChoice = PinTypeChoice(...)`.",
+            finding_code="pin_default_not_of_its_type",
+            node=node,
+            pin=choice["name"],
+        )
+    if default in among:
+        return default
     raise NodeDeclarationRefusal(
         f"`{node}`'s `PinTypeChoice` field `{choice['name']}` defaults to "
         f"{pin_type_in_words(default)}, which is none of the types the output it types may "

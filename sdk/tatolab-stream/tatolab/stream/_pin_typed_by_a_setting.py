@@ -15,8 +15,8 @@ from ._contract_pin_types import PinDeclarationOnTheWire, PinType
 from ._description import Description
 from ._formerly_named import FormerlyNamed
 from ._pin_declaration_refusal_words import (
-    PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES,
-    words_refusing_an_input_pin_of_several_types_taking,
+    PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES,
+    words_refusing_a_pin_of_several_types_taking,
 )
 from ._pin_spelling_words import is_a_union, name_of
 from ._pin_type_choice import PinTypeFromSetting
@@ -125,9 +125,9 @@ def _declaration_of_an_output_pin_a_setting_chooses_among(
     chosen_among: list[PinType] = []
     for member in typing.get_args(written_type):
         pin_type = member_pin_type(member)
-        if pin_type["type"] not in PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES:
+        if pin_type["type"] not in PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES:
             raise refusal(
-                words_refusing_an_input_pin_of_several_types_taking(
+                words_refusing_a_pin_of_several_types_taking(
                     pin_named, pin_type["type"], "OutputPin"
                 ),
                 "pin_type_not_read_yet",

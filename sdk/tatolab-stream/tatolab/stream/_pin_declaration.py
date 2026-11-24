@@ -57,9 +57,9 @@ from ._pin_annotations_on_the_wire import (
 from ._pin_declaration_refusal_words import (
     TypeParameterLimit,
     words_refusing_a_function_pin_of,
-    PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES,
+    PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES,
     words_refusing_an_input_declaration_annotation_on,
-    words_refusing_an_input_pin_of_several_types_taking,
+    words_refusing_a_pin_of_several_types_taking,
     words_refusing_a_type_parameter_limited_to,
 )
 from ._pin_default_refusal_words import fix_of_a_default_not_taken
@@ -321,7 +321,12 @@ class _PinReading:
         return DeclaredPin(declaration, optional=optional, default_value=default_value)
 
     def _read_a_pin_a_setting_types(
-        self, written_type: object, metadata: "list[object]", type_settings: "list[PinTypeFromSetting]", optional: bool, default: object
+        self,
+        written_type: object,
+        metadata: "list[object]",
+        type_settings: "list[PinTypeFromSetting]",
+        optional: bool,
+        default: object,
     ) -> DeclaredPin:
         """A pin carrying `PinTypeFromSetting("...")`, of the type that setting chooses."""
         declaration, chosen_among = declaration_of_a_pin_a_setting_types(
@@ -340,7 +345,10 @@ class _PinReading:
         self._state_former_names(declaration, metadata)
         takes_none = self._direction != "output" and optional
         return DeclaredPin(
-            declaration, optional=optional, default_value=None if takes_none else NO_DEFAULT, chosen_among=chosen_among
+            declaration,
+            optional=optional,
+            default_value=None if takes_none else NO_DEFAULT,
+            chosen_among=chosen_among,
         )
 
     def _read_an_input_holding_no_value(
@@ -540,9 +548,9 @@ class _PinReading:
             pin_types.append(pin_type)
         if self._form != "pin":
             return {"kind": "one_of", "pin_types": pin_types}, the_flow_a_function_input_reads(pin_types[0])
-        not_streamed = [each for each in pin_types if each["type"] not in PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES]
+        not_streamed = [each for each in pin_types if each["type"] not in PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES]
         if not_streamed:
-            raise self._refusal(words_refusing_an_input_pin_of_several_types_taking(self._pin_named, not_streamed[0]["type"]), "pin_type_not_read_yet")
+            raise self._refusal(words_refusing_a_pin_of_several_types_taking(self._pin_named, not_streamed[0]["type"]), "pin_type_not_read_yet")
         return {"kind": "one_of", "pin_types": pin_types}, "stream"
 
     def _a_union_input_pin(self, written_type: object) -> bool:
