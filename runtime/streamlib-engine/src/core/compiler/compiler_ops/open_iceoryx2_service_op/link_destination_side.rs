@@ -271,7 +271,7 @@ pub(super) fn wire_rust_dest(
     let subscriber_ring_depth =
         subscriber_ring_depth_of_input_port(dest_input_port_delivery, audio_windowing.as_ref());
 
-    if !input_inner.has_port(dest_port) {
+    if !input_inner.has_a_mailbox(dest_port) {
         match audio_windowing {
             None => input_inner.add_port(dest_port, input_port_ring_depth, drain_order),
             Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(contract)) => {

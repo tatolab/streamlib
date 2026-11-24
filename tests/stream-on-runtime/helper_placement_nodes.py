@@ -753,3 +753,48 @@ class ReportsTheCountsItReadSink:
         if len(self.counts_since_the_last_report) == COUNTS_READ_BETWEEN_REPORTS:
             report("COUNTS_READ", {"pid": os.getpid(), "counts": self.counts_since_the_last_report})
             self.counts_since_the_last_report = []
+
+
+#: The width `WritesOneWidthSource` writes at each tick.
+WIDTH_WRITTEN = 7
+
+#: The width `ReportsEachBatchOfTheWidthItHolds` holds while no link drives it.
+WIDTH_HELD_UNLINKED = 4
+
+
+@node(execution="continuous", interval_ms=10)
+class WritesOneWidthSource:
+    """Writes `WIDTH_WRITTEN` every tick."""
+
+    width: OutputPin[int]
+
+    def process(self, ctx) -> None:
+        self.width.write(WIDTH_WRITTEN)
+
+
+@node(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfTheWidthItHolds:
+    """Reads its `width` setting at each run, as `SolidColor` reads its size, and reports the
+    range of each batch with its own pid and when the batch started."""
+
+    width: int = WIDTH_HELD_UNLINKED
+
+    def __init__(self) -> None:
+        self.widths_in_this_batch: "list[int]" = []
+        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+
+    def process(self, ctx) -> None:
+        if not self.widths_in_this_batch:
+            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        self.widths_in_this_batch.append(self.width)
+        if len(self.widths_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
+            report(
+                "FUNCTION_NODE_VALUE_BATCH_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
+                    "lowest": min(self.widths_in_this_batch),
+                    "highest": max(self.widths_in_this_batch),
+                },
+            )
+            self.widths_in_this_batch = []

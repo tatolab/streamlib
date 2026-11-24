@@ -89,6 +89,7 @@ mod stream_named_by_its_id_tests;
 mod texture_format_convert_inserted_on_a_link_tests;
 mod trigger_fire_tests;
 mod typed_pin_link_tests;
+mod value_input_linked_after_a_live_add_tests;
 mod venv_sync_stream_action_resource_tests;
 mod view_output_of_a_playing_stream_tests;
 
