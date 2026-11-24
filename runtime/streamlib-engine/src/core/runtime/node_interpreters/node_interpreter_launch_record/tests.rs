@@ -766,7 +766,7 @@ fn a_load_lists_the_node_types_the_projects_own_code_declares_before_a_graph_nam
             .into_iter()
             .map(|descriptor| descriptor.node_class_import_path)
             .collect::<Vec<_>>(),
-        [project_type.clone()]
+        std::slice::from_ref(&project_type)
     );
     assert_eq!(
         input_port_names_the_stream_resolves_for(&stream, &project_type),
