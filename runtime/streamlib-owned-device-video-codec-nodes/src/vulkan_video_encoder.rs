@@ -17,7 +17,9 @@ use crate::video_codec_host_session_of_the_node::{
     VideoCodecHostSessionConnection, VideoCodecHostSessionOfTheNode, VideoCodecHostSessionOpening,
 };
 use crate::video_codec_retry_gate::VideoCodecRefusal;
-use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
+use crate::video_encode_on_a_device::{
+    VideoFrameEncodeOutcome, VideoFrameEncoded, VideoFrameToEncode,
+};
 use crate::video_encoder_settings::VideoEncoderSettings;
 use crate::{VideoCodecNodeIdentity, VideoFrameNotEncoded};
 
@@ -102,14 +104,8 @@ impl VulkanVideoEncoder {
             as_a_sync_point: self.next_frame_must_be_a_sync_point || opened_again,
         };
         let (reply, _) = self.session.ask(&request, 0)?;
-        let outcome = reply.into_the_encode()?;
-        let encoded = match outcome {
-            VideoFrameEncodeOutcome::Encoded(encoded) => encoded,
-            VideoFrameEncodeOutcome::NotCheckedOut
-            | VideoFrameEncodeOutcome::DiscardedWithoutASession => return Ok(()),
-            VideoFrameEncodeOutcome::RefusedForItsFormat { refusal } => {
-                return Err(VideoFrameNotEncoded::EveryFrameOfItsProducer(refusal));
-            }
+        let Some(encoded) = the_frame_encoded_or_why_not(reply.into_the_encode()?)? else {
+            return Ok(());
         };
         self.next_frame_must_be_a_sync_point = false;
         if encoded.minted_a_session {
@@ -149,5 +145,20 @@ impl VulkanVideoEncoder {
             );
         }
         Ok(())
+    }
+}
+
+/// The frame `outcome` encoded, `None` for one only skipped, and a refusal that fails the node
+/// for a frame of a format the encoder never reads.
+pub fn the_frame_encoded_or_why_not(
+    outcome: VideoFrameEncodeOutcome,
+) -> Result<Option<VideoFrameEncoded>, VideoFrameNotEncoded> {
+    match outcome {
+        VideoFrameEncodeOutcome::Encoded(encoded) => Ok(Some(encoded)),
+        VideoFrameEncodeOutcome::NotCheckedOut
+        | VideoFrameEncodeOutcome::DiscardedWithoutASession => Ok(None),
+        VideoFrameEncodeOutcome::RefusedForItsFormat { refusal } => {
+            Err(VideoFrameNotEncoded::EveryFrameOfItsProducer(refusal))
+        }
     }
 }

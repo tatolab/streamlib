@@ -7,7 +7,8 @@ use crate::video_codec_retry_gate::VideoCodecRefusal;
 use streamlib_consumer_rhi::TextureFormat;
 
 use crate::video_encode_on_a_device::{
-    the_texture_format_the_encoder_reads, why_no_session_was_minted,
+    the_pixel_buffer_format_the_encoder_reads, the_texture_format_the_encoder_reads,
+    why_no_session_was_minted,
 };
 
 #[test]
@@ -54,5 +55,14 @@ fn a_texture_of_a_format_the_encoder_does_not_read_is_refused_naming_both() {
              bgra8_unorm, bgra8_unorm_srgb"
                 .to_string()
         )
+    );
+}
+
+#[test]
+fn a_pixel_buffer_of_a_format_the_encoder_does_not_read_is_refused_naming_both() {
+    assert_eq!(the_pixel_buffer_format_the_encoder_reads("rgba32"), Ok(()));
+    assert_eq!(
+        the_pixel_buffer_format_the_encoder_reads("bgra32"),
+        Err("is a bgra32 pixel buffer; the encoder reads only rgba32".to_string())
     );
 }

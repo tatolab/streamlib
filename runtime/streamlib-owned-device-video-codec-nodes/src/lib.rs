@@ -78,11 +78,13 @@ const INPUT_PORT_WAIT: Duration = Duration::from_millis(100);
 pub enum VideoFrameNotEncoded {
     /// This frame only; the next may encode.
     ThisFrame(String),
-    /// The frame's producer sends what the encoder never reads, so every frame
-    /// after would be refused too and the node fails, naming why.
+    /// The frame is of a format the encoder never reads, so the node fails,
+    /// naming it; a producer that states no format may send it on every frame.
     EveryFrameOfItsProducer(String),
 }
 
+/// A refusal written as a plain message is for this frame only; a refusal that fails the node
+/// names [`VideoFrameNotEncoded::EveryFrameOfItsProducer`] where it is made.
 impl From<String> for VideoFrameNotEncoded {
     fn from(refusal: String) -> Self {
         Self::ThisFrame(refusal)
@@ -377,12 +379,12 @@ fn encode_until_stopped(
                     return;
                 }
             };
-            let Some(encoder) = encoder.as_mut() else {
+            let Some(opened_encoder) = encoder.as_mut() else {
                 continue;
             };
             let encoded = ImageFrameReadByTheEncoder::of_the_video_message(&message)
                 .map_err(VideoFrameNotEncoded::ThisFrame)
-                .and_then(|frame| encoder.encode_and_publish(&frame, &encoded_video));
+                .and_then(|frame| opened_encoder.encode_and_publish(&frame, &encoded_video));
             match encoded {
                 Ok(()) => {}
                 Err(VideoFrameNotEncoded::ThisFrame(refusal)) => {
@@ -392,13 +394,14 @@ fn encode_until_stopped(
                     }
                 }
                 Err(VideoFrameNotEncoded::EveryFrameOfItsProducer(refusal)) => {
-                    tracing::error!("{refusal}; the node fails");
+                    tracing::error!("{refusal}; the node fails and every frame is discarded");
                     if let Err(failure) = module_host.fail_the_node_unrecoverably(&refusal) {
                         tracing::error!(
                             "{node_type_name}: the node could not be failed: {failure}"
                         );
                     }
-                    return;
+                    // Draining on keeps upstream's consumer live until the node is stopped.
+                    encoder = None;
                 }
             }
         }

@@ -97,6 +97,18 @@ pub const TEXTURE_FORMATS_THE_ENCODER_READS: [TextureFormat; 4] = [
     TextureFormat::Bgra8UnormSrgb,
 ];
 
+/// Refused, naming the format and the one the encoder reads, unless a pixel buffer whose format
+/// is `format_wire_name` is `rgba32`.
+pub fn the_pixel_buffer_format_the_encoder_reads(format_wire_name: &str) -> Result<(), String> {
+    match PixelFormat::parse_wire_name(format_wire_name) {
+        Ok(PixelFormat::Rgba32) => Ok(()),
+        _ => Err(format!(
+            "is a {format_wire_name} pixel buffer; the encoder reads only {}",
+            PixelFormat::Rgba32.wire_name()
+        )),
+    }
+}
+
 /// The format a texture whose format is `format_wire_name` is read in, refused
 /// in words naming it and each format the encoder reads when it is none of them.
 pub fn the_texture_format_the_encoder_reads(
@@ -220,7 +232,13 @@ impl VideoEncodeOnADevice {
         };
         let encoded = match checked_out {
             CheckedOutSurface::PixelBuffer(pixel_buffer) => {
-                Ok(self.encode_checked_out_pixel_buffer(frame, pixel_buffer))
+                match the_pixel_buffer_format_the_encoder_reads(&pixel_buffer.format_wire_name) {
+                    Ok(()) => Ok(self.encode_checked_out_pixel_buffer(frame, pixel_buffer)),
+                    Err(refusal) => Err(format!(
+                        "{node_type_name}: surface {:?} {refusal}",
+                        frame.surface_id()
+                    )),
+                }
             }
             CheckedOutSurface::Texture(texture) => {
                 match the_texture_format_the_encoder_reads(&texture.format_wire_name) {
@@ -259,20 +277,6 @@ impl VideoEncodeOnADevice {
         checked_out: CheckedOutPixelBuffer,
     ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
         let node_type_name = self.node.node_type_name;
-        let pixel_format =
-            PixelFormat::parse_wire_name(&checked_out.format_wire_name).map_err(|refusal| {
-                format!(
-                    "{node_type_name}: surface {:?}: {refusal}",
-                    frame.surface_id()
-                )
-            })?;
-        if pixel_format != PixelFormat::Rgba32 {
-            return Err(format!(
-                "{node_type_name}: surface {:?} is a {} pixel buffer; the encoder reads rgba32",
-                frame.surface_id(),
-                checked_out.format_wire_name
-            ));
-        }
         let (width, height, bytes_per_row) = (
             checked_out.width,
             checked_out.height,
