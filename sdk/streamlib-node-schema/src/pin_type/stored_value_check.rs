@@ -218,14 +218,27 @@ impl PinType {
             Self::ListOf { element_type } => {
                 format!("a list, each element {}", element_type.what_it_takes())
             }
-            Self::Bundle { members, .. } => format!(
-                "an object of the members {}",
-                members
-                    .iter()
-                    .map(|member| format!("`{}`", member.name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            Self::Bundle { members, .. } => {
+                let names = |carried_only_by_a_link: bool| {
+                    members
+                        .iter()
+                        .filter(|member| {
+                            member.is_carried_only_by_a_link() == carried_only_by_a_link
+                        })
+                        .map(|member| format!("`{}`", member.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let carried_only_by_a_link = names(true);
+                if carried_only_by_a_link.is_empty() {
+                    format!("an object of the members {}", names(false))
+                } else {
+                    format!(
+                        "an object of the members {}, as {carried_only_by_a_link} takes only a link",
+                        names(false)
+                    )
+                }
+            }
             Self::NodeReference { .. } => "a node reference, `{\"node\": \"<name>\"}`".to_owned(),
             Self::PinTypeChoice { .. } => match self.the_pin_types_a_choice_takes() {
                 Some(PinTypesAChoiceTakes::OneOfTheBundlesItsStreamDeclares([])) => {

@@ -829,10 +829,12 @@ fn a_bundle_holding_a_texture_holds_the_values_of_its_small_members() {
             .check_value(&json!({ "level": 0.5, "label": "kitchen" }))
             .is_ok()
     );
-    assert!(
-        bundle
-            .check_value(&json!({ "level": 0.5, "picture": { "surface_id": 1 } }))
-            .is_err()
+    let setting_the_picture = bundle
+        .check_value(&json!({ "level": 0.5, "picture": { "surface_id": 1 } }))
+        .expect_err("the picture takes only a link");
+    assert_eq!(
+        setting_the_picture.takes,
+        "an object of the members `level`, `label`, as `picture` takes only a link"
     );
     assert!(bundle.check_value(&json!({ "label": "kitchen" })).is_err());
     let refused = bundle
