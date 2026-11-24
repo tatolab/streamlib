@@ -17,6 +17,7 @@ from typing import Annotated, Any
 
 import pytest
 
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._class_node_fields import ClassNodeFields
@@ -123,9 +124,11 @@ def test_each_slot_reads_through_its_own_pin_and_holds_its_own_value_set_live():
         {}, data_plane, "runtime-under-test", "mixer-1"
     )
     source = _engine.open_node_link_data_access_for_helper_process()
-    source_outputs = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, source, "runtime-under-test", "source-1"
-    )._link_output_data_writer
+    source_outputs = link_output_data_writer_of(
+        _engine.open_runtime_context_full_access_for_helper_process(
+            {}, source, "runtime-under-test", "source-1"
+        )
+    )
     node_interpreter_bootstrap.wire_link_data_access(
         data_plane, {"inputs": [_wiring_of_one_link_end("input", "layers.1.level", "L-layer-1")]}
     )
@@ -148,7 +151,7 @@ def test_each_slot_reads_through_its_own_pin_and_holds_its_own_value_set_live():
             ),
         ),
         link_data_access=data_plane,
-        inputs=ctx._link_input_data_reader,
+        inputs=link_input_data_reader_of(ctx),
         node_id="mixer-1",
         stored_input_values={"layers.0.gain": 2.0, "bands.0.width": 0.5},
     )
@@ -157,8 +160,8 @@ def test_each_slot_reads_through_its_own_pin_and_holds_its_own_value_set_live():
         members,
         fields,
         link_data_access=data_plane,
-        inputs=ctx._link_input_data_reader,
-        outputs=ctx._link_output_data_writer,
+        inputs=link_input_data_reader_of(ctx),
+        outputs=link_output_data_writer_of(ctx),
         node_id="mixer-1",
         members_of_each_slot=members_of_each_slot,
     )

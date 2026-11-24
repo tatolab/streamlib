@@ -18,6 +18,7 @@ from dataclasses import FrozenInstanceError, dataclass
 
 import pytest
 
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of
 from tatolab.runtime import _engine
 from tatolab.stream import (
     Message,
@@ -96,7 +97,7 @@ def test_a_message_arrives_with_its_stamp_its_group_flag_and_its_link(
 ):
     one_link_into_one_port.deliver(b"keyframe")
     one_link_into_one_port.deliver(b"delta", starts_group=False)
-    inputs = one_link_into_one_port.context._link_input_data_reader
+    inputs = link_input_data_reader_of(one_link_into_one_port.context)
     inbound_link = one_link_into_one_port.inbound_link
 
     assert message_with_its_payload_copied(inputs.read_message(INPUT_PORT)) == Message(
@@ -122,7 +123,7 @@ def test_messages_the_link_lost_are_told_to_the_next_read_and_to_no_read_after_i
     """Fail-without-fix: leave `lost_since_last_read` at zero and the reader
     reads two messages that look contiguous over a gap of two."""
     messages_past_the_ring = 2
-    inputs = one_link_into_one_port.context._link_input_data_reader
+    inputs = link_input_data_reader_of(one_link_into_one_port.context)
     one_link_into_one_port.deliver(b"first")
     first = inputs.read_message(INPUT_PORT)
 
@@ -143,7 +144,7 @@ def test_messages_the_link_lost_are_told_to_the_next_read_and_to_no_read_after_i
 
 def test_a_message_is_frozen(one_link_into_one_port: OneLinkIntoOnePort):
     one_link_into_one_port.deliver(b"keyframe")
-    message = one_link_into_one_port.context._link_input_data_reader.read_message(INPUT_PORT)
+    message = link_input_data_reader_of(one_link_into_one_port.context).read_message(INPUT_PORT)
 
     assert message is not None
     with pytest.raises(FrozenInstanceError):

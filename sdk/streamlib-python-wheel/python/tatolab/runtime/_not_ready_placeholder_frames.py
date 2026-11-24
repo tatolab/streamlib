@@ -16,6 +16,8 @@ from typing import Any, Callable, Optional
 
 from tatolab.stream import ColorInfo, ImageFrameToWrite, NodeOutputTextureRing
 
+from tatolab.runtime._node_the_wheel_hosts import link_output_data_writer_of
+
 #: The texture formats in which every channel zero is a transparent pixel.
 TEXTURE_FORMATS_TRANSPARENT_WHEN_ZEROED = (
     "rgba8_unorm",
@@ -100,7 +102,7 @@ class TransparentFramesOnTheImageOutputsOfANodeNotReady:
                     slot.as_numpy()[...] = 0
                 finally:
                     slot.unlock()
-                context._link_output_data_writer.write(
+                link_output_data_writer_of(context).write(
                     port_name,
                     ImageFrameToWrite.of_texture(slot, PLACEHOLDER_FRAME_COLOUR),
                     family="image",

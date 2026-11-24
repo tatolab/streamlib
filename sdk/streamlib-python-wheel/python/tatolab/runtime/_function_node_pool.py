@@ -28,7 +28,11 @@ from tatolab.runtime._engine import (
     hand_an_unread_message_on,
     read_the_message_at_an_input_port_unread,
 )
-from tatolab.runtime._node_the_wheel_hosts import stamp_the_ports_of_a_node_the_wheel_hosts
+from tatolab.runtime._node_the_wheel_hosts import (
+    link_input_data_reader_of,
+    link_output_data_writer_of,
+    stamp_the_ports_of_a_node_the_wheel_hosts,
+)
 
 # What a carry's `family` names, besides `"channels"`, a control message: a record, or a message
 # handed on unread.
@@ -132,9 +136,9 @@ class _FunctionNodePoolBase:
     def _write_one_carry(self, ctx: Any, input_port: str, output_port: str, carries: str) -> None:
         """Write the value of the island `input_port` reads to `output_port`; an island into a setting only once it changed."""
         if carries == _CARRIES_A_RECORD:
-            record = ctx._link_input_data_reader.read(input_port, families=[_CARRIES_A_RECORD])
+            record = link_input_data_reader_of(ctx).read(input_port, families=[_CARRIES_A_RECORD])
             if record is not None:
-                ctx._link_output_data_writer.write(output_port, record, family=_CARRIES_A_RECORD)
+                link_output_data_writer_of(ctx).write(output_port, record, family=_CARRIES_A_RECORD)
             return
         message = read_the_message_at_an_input_port_unread(
             link_data_access=self._link_data_access, input_port=input_port

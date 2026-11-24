@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 import pytest
 
+from tatolab.runtime._node_the_wheel_hosts import link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._function_node_compilation import (
@@ -102,9 +103,11 @@ class _ChannelsBlocksWrittenIntoAPromotedNode:
                 ]
             },
         )
-        self._source_outputs = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, self._source, "runtime-under-test", "source-under-test"
-        )._link_output_data_writer
+        self._source_outputs = link_output_data_writer_of(
+            _engine.open_runtime_context_full_access_for_helper_process(
+                {}, self._source, "runtime-under-test", "source-under-test"
+            )
+        )
 
     def write_control_value(self, input_port: str, control_value: float) -> None:
         """Write `control_value` as one f64 sample at rate 0, as an island or a pin hands it."""

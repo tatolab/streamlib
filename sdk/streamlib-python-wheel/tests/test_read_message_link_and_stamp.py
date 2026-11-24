@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of
 from tatolab.runtime import _engine
 from tatolab.stream import (
     NodeLinkDataAccess,
@@ -98,7 +99,7 @@ def read_everything_waiting(
 ) -> "list[tuple[Any, str, int]]":
     """Drain the port, which two links may interleave in either order."""
     drained: "list[tuple[Any, str, int]]" = []
-    while (message := context._link_input_data_reader.read_message(INPUT_PORT)) is not None:
+    while (message := link_input_data_reader_of(context).read_message(INPUT_PORT)) is not None:
         drained.append((message.payload, message.inbound_link, message.timestamp_ns))
     return drained
 
@@ -108,7 +109,7 @@ def test_a_message_arrives_as_its_payload_bytes_with_its_link_and_its_producers_
 ):
     two_links_into_one_port.deliver("video", b"h264", VIDEO_STAMP_NS)
 
-    message = two_links_into_one_port.context._link_input_data_reader.read_message(INPUT_PORT)
+    message = link_input_data_reader_of(two_links_into_one_port.context).read_message(INPUT_PORT)
 
     assert message is not None
     assert bytes(message.payload) == b"h264"
@@ -139,7 +140,7 @@ def test_each_producers_own_stamp_survives_the_read_that_names_it(
 
 
 def test_an_empty_port_reads_as_no_message(two_links_into_one_port: TwoLinksIntoOnePort):
-    assert two_links_into_one_port.context._link_input_data_reader.read_message(INPUT_PORT) is None
+    assert link_input_data_reader_of(two_links_into_one_port.context).read_message(INPUT_PORT) is None
 
 
 def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
@@ -169,10 +170,10 @@ def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
         {}, destination, "runtime-under-test", "node-under-test"
     )
 
-    assert context._link_input_data_reader.inbound_link_names(INPUT_PORT) == [inbound_link_name]
+    assert link_input_data_reader_of(context).inbound_link_names(INPUT_PORT) == [inbound_link_name]
 
     source.write_to_output_port(OUTPUT_PORT, b"h264", VIDEO_STAMP_NS)
 
-    message = context._link_input_data_reader.read_message(INPUT_PORT)
+    message = link_input_data_reader_of(context).read_message(INPUT_PORT)
     assert message is not None
     assert (bytes(message.payload), message.inbound_link) == (b"h264", inbound_link_name)

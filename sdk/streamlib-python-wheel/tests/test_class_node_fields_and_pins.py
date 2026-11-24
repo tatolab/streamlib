@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._class_node_fields import ClassNodeFields
@@ -120,9 +121,11 @@ class LevelTinterOnARealDataPlane:
             {"outputs": [_wiring_of_one_link_end("output", "tinted", out_of_the_node)]},
         )
         self.source = _engine.open_node_link_data_access_for_helper_process()
-        self.source_outputs = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, self.source, "runtime-under-test", "source-1"
-        )._link_output_data_writer
+        self.source_outputs = link_output_data_writer_of(
+            _engine.open_runtime_context_full_access_for_helper_process(
+                {}, self.source, "runtime-under-test", "source-1"
+            )
+        )
         self.link_id_by_input_port: "dict[str, str]" = {}
         self._blocks_written = 0
         members = class_node_members_of(LevelTinter)
@@ -130,7 +133,7 @@ class LevelTinterOnARealDataPlane:
         self.fields = ClassNodeFields(
             members,
             link_data_access=self.data_plane,
-            inputs=self.ctx._link_input_data_reader,
+            inputs=link_input_data_reader_of(self.ctx),
             node_id="tinter-1",
             stored_input_values=stored_input_values,
         )
@@ -139,8 +142,8 @@ class LevelTinterOnARealDataPlane:
             members,
             self.fields,
             link_data_access=self.data_plane,
-            inputs=self.ctx._link_input_data_reader,
-            outputs=self.ctx._link_output_data_writer,
+            inputs=link_input_data_reader_of(self.ctx),
+            outputs=link_output_data_writer_of(self.ctx),
             node_id="tinter-1",
         )
 

@@ -142,7 +142,7 @@ impl PythonLinkInputDataReader {
 /// What a read of `port_name` hands back: the type of the family a message
 /// arrived as, the first of `families` the one the port declares, or the raw
 /// borrow when `families` is `None`.
-fn read_shape_of_the_families<'py>(
+fn read_shape_of_the_families(
     port_name: &str,
     families: Option<Vec<String>>,
 ) -> PyResult<PortPayloadReadShape> {

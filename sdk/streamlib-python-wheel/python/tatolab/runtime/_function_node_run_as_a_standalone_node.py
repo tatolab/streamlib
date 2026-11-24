@@ -35,7 +35,11 @@ from typing import Any, Optional
 from tatolab.stream import NodeLinkDataAccess, log
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
-from tatolab.runtime._node_the_wheel_hosts import stamp_the_ports_of_a_node_the_wheel_hosts
+from tatolab.runtime._node_the_wheel_hosts import (
+    link_input_data_reader_of,
+    link_output_data_writer_of,
+    stamp_the_ports_of_a_node_the_wheel_hosts,
+)
 from tatolab.runtime._engine import (
     FunctionNodeEvaluatedAsAStandaloneNode,
     hand_an_unread_message_on,
@@ -87,7 +91,7 @@ def the_node_class_a_promoted_function_node_runs_as(
         runner_class, input_ports=prepared.input_ports, output_ports=prepared.output_ports
     )
     setattr(declared, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
-    declared.__init__ = _FunctionNodeRunAsAStandaloneNode.start_from_its_config
+    setattr(declared, "__init__", _FunctionNodeRunAsAStandaloneNode.start_from_its_config)
     return declared
 
 
@@ -204,7 +208,7 @@ class _FunctionNodeRunAsAStandaloneNode:
                 )
                 continue
             if input_port in ports_carrying_records:
-                record = ctx._link_input_data_reader.read(input_port, families=["records"])
+                record = link_input_data_reader_of(ctx).read(input_port, families=["records"])
                 if record is not None:
                     self._input_values[input_index] = record
                 continue
@@ -259,7 +263,7 @@ class _FunctionNodeRunAsAStandaloneNode:
                 )
                 continue
             if output_port in ports_carrying_records:
-                ctx._link_output_data_writer.write(output_port, output_value, family="records")
+                link_output_data_writer_of(ctx).write(output_port, output_value, family="records")
                 continue
             if output_port in ports_carrying_a_named_value:
                 if not isinstance(output_value, bytes):
@@ -285,7 +289,7 @@ class _FunctionNodeRunAsAStandaloneNode:
                 )
                 continue
             parts = output_value if isinstance(output_value, tuple) else (output_value,)
-            ctx._link_output_data_writer.write_channels_block(
+            link_output_data_writer_of(ctx).write_channels_block(
                 output_port,
                 memoryview(struct.pack(f"={len(parts)}d", *parts)).cast("d", (len(parts), 1)),
                 start_sample=self._control_values_written,
