@@ -25,8 +25,8 @@ use streamlib::sdk::graph::graph_interface_resolution::{
 };
 use streamlib::sdk::nodes::the_pin_type_a_constant_holds_by_default;
 use streamlib_project_repository::{
-    CONSTANT_NODE_TYPE, GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME, StreamGraphDocument,
-    StreamGraphDocumentNode,
+    CONSTANT_NODE_TYPE, GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME,
+    StreamGraphDocument, StreamGraphDocumentNode,
 };
 
 use serde::Deserialize;

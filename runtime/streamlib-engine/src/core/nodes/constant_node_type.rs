@@ -89,10 +89,13 @@ fn the_node_type_of_a_constant() -> Result<NodeDescriptor> {
                     .expect("a pin type is written as JSON"),
             ),
         ),
-        the_value_port_of_a_constant("The value the Constant holds; it takes no wire.", Vec::new())
-            .with_input_mode(NodeInputMode::SettingOnly {
-                read: SettingReadTime::EachRun,
-            }),
+        the_value_port_of_a_constant(
+            "The value the Constant holds; it takes no wire.",
+            Vec::new(),
+        )
+        .with_input_mode(NodeInputMode::SettingOnly {
+            read: SettingReadTime::EachRun,
+        }),
     ];
     descriptor.outputs = vec![the_value_port_of_a_constant(
         "The value the Constant holds.",
@@ -116,8 +119,9 @@ pub fn the_descriptor_of_a_constant() -> NodeDescriptor {
 /// `pin_type` chooses, on the family a Float travels on until that type is resolved; one a
 /// person may clear, and a link saved naming any of `former_names` still resolves to.
 fn the_value_port_of_a_constant(description: &str, former_names: Vec<String>) -> PortDescriptor {
-    let family = PortFamily::a_chosen_pin_type_travels_on(&the_pin_type_a_constant_holds_by_default())
-        .unwrap_or(PortFamily::Channels);
+    let family =
+        PortFamily::a_chosen_pin_type_travels_on(&the_pin_type_a_constant_holds_by_default())
+            .unwrap_or(PortFamily::Channels);
     PortDescriptor::new(
         GRAPH_INTERFACE_VALUE_PORT_NAME,
         description,

@@ -241,7 +241,11 @@ fn a_constant_that_held_one_float_becomes_the_runtimes_own_holding_that_float() 
         let upgraded = upgraded_stream_document(&document).expect("an upgrade");
 
         assert_eq!(upgraded, expected, "{from} saving {saved}");
-        assert_eq!(upgraded_stream_document(&upgraded), None, "{from} saving {saved}");
+        assert_eq!(
+            upgraded_stream_document(&upgraded),
+            None,
+            "{from} saving {saved}"
+        );
     }
 }
 

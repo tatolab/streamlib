@@ -167,8 +167,11 @@ async fn the_constant_is_listed_once_its_pin_type_choosing_among_the_small_types
 async fn a_constant_holding_a_string_hands_it_to_the_node_reading_it() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let word = json!(format!("hello-{}", Uuid::new_v4()));
-    let project =
-        a_project_whose_main_stream_holds_a_constant(json!({ "type": "string" }), word.clone(), true);
+    let project = a_project_whose_main_stream_holds_a_constant(
+        json!({ "type": "string" }),
+        word.clone(),
+        true,
+    );
 
     engine.playing(&project).await;
 
@@ -212,7 +215,10 @@ async fn a_float_constant_choosing_an_integer_casts_its_value_and_one_undo_puts_
         "{retyped}"
     );
     let (live, saved, chosen, output) = what_the_constant_holds(&engine, &project, &stream_id);
-    assert_eq!((live, saved, chosen), (json!(0), json!(0), json!({ "type": "integer" })));
+    assert_eq!(
+        (live, saved, chosen),
+        (json!(0), json!(0), json!({ "type": "integer" }))
+    );
     assert_eq!(output["type"], "integer", "{output}");
 
     engine
