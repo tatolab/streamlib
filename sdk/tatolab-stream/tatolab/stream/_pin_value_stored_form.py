@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from collections.abc import Mapping
 from typing import Final, Literal, Optional
 
+from ._bundle_pin_type import HEAVY_MEMBER_TYPES_A_BUNDLE_CARRIES
 from ._contract_pin_types import (
     BUILT_IN_PIN_TYPES,
     BuiltInPinTypeName,
+    BundleMember,
     PinAnnotations,
     PinType,
     PinTypeDescription,
@@ -148,6 +151,11 @@ def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
                 _stored_form_of_its_type(element, element_type)
                 for element in value  # pyright: ignore[reportUnknownVariableType]
             ]
+        case {"type": "bundle", "members": members} if any(
+            member["member_type"]["type"] in HEAVY_MEMBER_TYPES_A_BUNDLE_CARRIES
+            for member in members
+        ):
+            return _stored_form_of_the_small_members_of_a_bundle(value, members, pin_type)
         case {"type": "bundle", "members": members}:
             if not dataclasses.is_dataclass(value) or isinstance(value, type):
                 raise not_of_its_type
@@ -182,6 +190,43 @@ def _stored_form_of_its_type(value: object, pin_type: PinType) -> object:
             return value.chosen
         case _:
             raise not_of_its_type
+
+
+def _stored_form_of_the_small_members_of_a_bundle(
+    value: object, members: "list[BundleMember]", pin_type: PinType
+) -> "dict[str, object]":
+    """`value`, a mapping of the small members of a bundle holding a Texture, in the stored form
+    each member's type holds it: a Texture member, which only a link carries, is left out, and
+    each small member declaring no default is named."""
+    if not isinstance(value, Mapping):
+        raise PinValueNotTaken(
+            value,
+            "which is not a mapping of its members other than a Texture",
+            kind="not_of_its_type",
+            pin_type=pin_type,
+        )
+    held: "Mapping[object, object]" = value  # pyright: ignore[reportUnknownVariableType]
+    small_members = [
+        member
+        for member in members
+        if member["member_type"]["type"] not in HEAVY_MEMBER_TYPES_A_BUNDLE_CARRIES
+    ]
+    names = {member["name"] for member in small_members}
+    needed = {member["name"] for member in small_members if "default_value" not in member}
+    if not needed <= set(held) <= names:
+        raise PinValueNotTaken(
+            value,
+            f"whose keys are not among its members other than a Texture, "
+            f"{', '.join(repr(member['name']) for member in small_members)}, "
+            f"naming each with no default",
+            kind="not_of_its_type",
+            pin_type=pin_type,
+        )
+    return {
+        member["name"]: _stored_form_of_its_type(held[member["name"]], member["member_type"])
+        for member in small_members
+        if member["name"] in held
+    }
 
 
 def _the_value_class_of(pin_type: PinType) -> type[PinValueOfParts]:
