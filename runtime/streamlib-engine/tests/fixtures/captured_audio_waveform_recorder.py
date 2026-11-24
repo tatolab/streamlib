@@ -13,11 +13,12 @@ still decodes.
 """
 
 import os
+from typing import Annotated
 
 import numpy
 
 import known_audio_signal
-from tatolab.stream import Channels, Input, RuntimeContextLimitedAccess, log, node
+from tatolab.stream import Audio, InputPin, RuntimeContextLimitedAccess, StreamDelivery, log, node
 
 RESULT_MARKER = "MARKER:WAVEFORM_WRITTEN "
 
@@ -47,9 +48,14 @@ def waveform_placed_by_start_sample(
     return waveform
 
 
-@node.process
+@node
 class CapturedAudioWaveformRecorder:
     """Accumulates captured blocks, then writes them once as one waveform."""
+
+    # The plan's profile for audio: order carries meaning, so blocks arrive in
+    # the order they were published rather than skipping to the freshest. It
+    # promises nothing about how many arrive.
+    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
         self._blocks: "list[tuple[int, numpy.ndarray]]" = []
@@ -57,13 +63,8 @@ class CapturedAudioWaveformRecorder:
         self._sample_rate = None
         self._written = False
 
-    # The plan's profile for audio: order carries meaning, so blocks arrive in
-    # the order they were published rather than skipping to the freshest. It
-    # promises nothing about how many arrive.
-    audio_from_upstream = Input(Channels, delivery="ordered")
-
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        block = ctx.inputs.read(self.audio_from_upstream)
+        block = self.audio_from_upstream.read()
         if block is None:
             return
         if self._written:
