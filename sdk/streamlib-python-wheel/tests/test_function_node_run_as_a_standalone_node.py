@@ -18,11 +18,11 @@ from typing import Any, Literal
 
 import pytest
 
+from tatolab.runtime._node_the_wheel_hosts import link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeCompiledToItsEvaluateEntry,
-    FunctionNodeDoesNotCompile,
     FunctionNodeRunAsPythonInItsReader,
     prepare_function_node_to_evaluate,
 )
@@ -62,13 +62,14 @@ def _constructed_with_its_ports_declared(node_class: Any, config: Any, data_plan
 
 
 class _InputsHandingOverRecords:
-    """`ctx.inputs` handing each Records port attribute the record set for it, once."""
+    """The input reader handing each Records port the record set for it, once."""
 
     def __init__(self) -> None:
         self.record_by_port: "dict[str, dict[str, Any]]" = {}
 
-    def read(self, port: Any) -> "dict[str, Any] | None":
-        return self.record_by_port.pop(port.port_name, None)
+    def read(self, port: str, *, families: "list[str]") -> "dict[str, Any] | None":
+        assert families == ["records"]
+        return self.record_by_port.pop(port, None)
 
 
 _links_into_promoted_nodes_opened = itertools.count()
@@ -102,9 +103,11 @@ class _ChannelsBlocksWrittenIntoAPromotedNode:
                 ]
             },
         )
-        self._source_outputs = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, self._source, "runtime-under-test", "source-under-test"
-        ).outputs
+        self._source_outputs = link_output_data_writer_of(
+            _engine.open_runtime_context_full_access_for_helper_process(
+                {}, self._source, "runtime-under-test", "source-under-test"
+            )
+        )
 
     def write_control_value(self, input_port: str, control_value: float) -> None:
         """Write `control_value` as one f64 sample at rate 0, as an island or a pin hands it."""
@@ -134,7 +137,7 @@ class _ChannelsBlocksWrittenIntoAPromotedNode:
 
 
 class _OutputsRecordingEachControlValueWritten:
-    """`ctx.outputs` recording each Channels block written."""
+    """The output writer recording each Channels block written."""
 
     def __init__(self) -> None:
         self.blocks_written: "list[tuple[str, object, int, int]]" = []
@@ -147,8 +150,8 @@ class _OutputsRecordingEachControlValueWritten:
 
 class _ContextOfOneProcess:
     def __init__(self) -> None:
-        self.inputs = _InputsHandingOverRecords()
-        self.outputs = _OutputsRecordingEachControlValueWritten()
+        self._link_input_data_reader = _InputsHandingOverRecords()
+        self._link_output_data_writer = _OutputsRecordingEachControlValueWritten()
 
 
 def test_a_promoted_function_node_runs_as_a_process_writing_each_output_as_a_control_value():
@@ -164,13 +167,13 @@ def test_a_promoted_function_node_runs_as_a_process_writing_each_output_as_a_con
     ctx = _ContextOfOneProcess()
 
     runner.process(ctx)
-    assert ctx.outputs.blocks_written == [], "an input with no pin value waits for its first value"
+    assert ctx._link_output_data_writer.blocks_written == [], "an input with no pin value waits for its first value"
 
     control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
     control_values.write_control_value("x", 2.0)
     runner.process(ctx)
     runner.process(ctx)
-    assert ctx.outputs.blocks_written == [
+    assert ctx._link_output_data_writer.blocks_written == [
         ("result", [[6.0]], 0, 0),
         ("result", [[6.0]], 1, 0),
     ], "each run writes one f64 at rate 0, the input keeping its newest value between reads"
@@ -195,7 +198,7 @@ def test_a_promoted_function_node_reads_a_number_as_an_island_does_off_an_f32_bl
     control_values.write_block("x", "d", [[1.5, 3.0]], sample_rate=48_000)
     runner.process(ctx)
 
-    assert [block[1] for block in ctx.outputs.blocks_written] == [[[0.5]], [[1.5]], [[3.0]]], (
+    assert [block[1] for block in ctx._link_output_data_writer.blocks_written] == [[[0.5]], [[1.5]], [[3.0]]], (
         "a number reads the first sample of an f32 or f64 block, whatever its channels and samples"
     )
 
@@ -283,10 +286,7 @@ def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
     runner_class = the_node_class_a_promoted_function_node_runs_as(
         function_node, import_path, "gate-1", data_plane
     )
-    input_families = {
-        port["name"]: port["family"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)
-    }
-    assert input_families["value"]["also_takes_families"] == ["array", "channels", "packets", "records"]
+    assert "value" in [port["name"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)]
     runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
     destination = _engine.open_node_link_data_access_for_helper_process()
     node_interpreter_bootstrap.wire_link_data_access(
@@ -342,8 +342,8 @@ def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_famil
         },
         data_plane,
     )
-    assert [port["family"]["family"] for port in getattr(pool_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
-        "image"
+    assert [port["name"] for port in getattr(pool_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
+        "island_0_output"
     ]
     pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)
     destination = _engine.open_node_link_data_access_for_helper_process()
@@ -579,11 +579,11 @@ def test_a_promoted_function_node_feeding_a_setting_is_called_as_it_sets_up():
 
     feeding_a_setting, ctx, _control_values = a_runner(evaluated_at_setup=True)
     feeding_a_setting.setup(ctx)
-    assert ctx.outputs.blocks_written == [("result", [[7.0]], 0, 0)]
+    assert ctx._link_output_data_writer.blocks_written == [("result", [[7.0]], 0, 0)]
 
     feeding_no_setting, ctx, _control_values = a_runner(evaluated_at_setup=False)
     feeding_no_setting.setup(ctx)
-    assert ctx.outputs.blocks_written == []
+    assert ctx._link_output_data_writer.blocks_written == []
 
 
 def test_a_running_pool_takes_a_new_carry_and_hands_its_island_on_without_a_restart():
@@ -638,7 +638,7 @@ def test_a_promoted_function_node_starts_from_its_pin_values():
 
     runner.process(ctx)
 
-    assert ctx.outputs.blocks_written == [("result", [[7.0]], 0, 0)]
+    assert ctx._link_output_data_writer.blocks_written == [("result", [[7.0]], 0, 0)]
 
 
 def test_a_promoted_function_node_reads_a_live_config_update_at_its_next_call():
@@ -659,7 +659,7 @@ def test_a_promoted_function_node_reads_a_live_config_update_at_its_next_call():
     apply_configuration(runner, {"gain": 5.0, "inverted": True})
     runner.process(ctx)
 
-    assert ctx.outputs.blocks_written == [
+    assert ctx._link_output_data_writer.blocks_written == [
         ("result", [[6.0]], 0, 0),
         ("result", [[-10.0]], 1, 0),
     ], "a compiled node's float and bool config fields reach the call after the update"
@@ -697,7 +697,7 @@ def test_a_promoted_function_node_run_as_python_reads_a_live_config_update_at_it
     apply_configuration(runner, {"gain": 0.5, "label": ""})
     runner.process(ctx)
 
-    assert ctx.outputs.blocks_written == [
+    assert ctx._link_output_data_writer.blocks_written == [
         ("result", [[6.0]], 0, 0),
         ("result", [[1.0]], 1, 0),
         ("result", [[0.0]], 2, 0),
@@ -740,36 +740,50 @@ def test_a_promoted_stateful_function_node_keeps_its_state_through_a_live_config
     apply_configuration(runner, {"step": 10.0})
     runner.process(ctx)
 
-    assert [block[1] for block in ctx.outputs.blocks_written] == [[[1.0]], [[2.0]], [[12.0]]], (
+    assert [block[1] for block in ctx._link_output_data_writer.blocks_written] == [[[1.0]], [[2.0]], [[12.0]]], (
         "the count carries on from its state, stepping by the step it was handed"
     )
 
 
 @node
-def passes_its_process_input_through(process: float = 0.0) -> float:
-    return process
+def passes_its_process_and_setup_inputs_on(process: float = 0.0, setup: float = 0.0) -> float:
+    return process + setup
 
 
-def test_a_promoted_function_node_with_a_port_named_like_a_runner_member_is_refused_by_name():
+def test_a_promoted_function_node_with_ports_named_like_runner_members_runs():
+    """Its ports are stamped by name, never set on the class, so a port named `process` or
+    `setup` leaves the runner's own members as they are."""
     data_plane = _engine.open_node_link_data_access_for_helper_process()
-    with pytest.raises(FunctionNodeDoesNotCompile, match="its port 'process' is named like a member"):
+    runner = _constructed_with_its_ports_declared(
         the_node_class_a_promoted_function_node_runs_as(
-            passes_its_process_input_through,
-            f"{__name__}:passes_its_process_input_through",
+            passes_its_process_and_setup_inputs_on,
+            f"{__name__}:passes_its_process_and_setup_inputs_on",
             "passes-1",
             data_plane,
-        )
+        ),
+        None,
+        data_plane,
+    )
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["process", "setup"])
+    ctx = _ContextOfOneProcess()
+
+    control_values.write_control_value("process", 2.0)
+    control_values.write_control_value("setup", 0.5)
+    runner.process(ctx)
+
+    assert ctx._link_output_data_writer.blocks_written == [("result", [[2.5]], 0, 0)]
 
 
 class _OutputsRecordingEachWrite(_OutputsRecordingEachControlValueWritten):
-    """`ctx.outputs` recording each Channels block, and each Records write by its port."""
+    """The output writer recording each Channels block, and each Records write by its port."""
 
     def __init__(self) -> None:
         super().__init__()
         self.records_written: "list[tuple[str, object]]" = []
 
-    def write(self, port: Any, payload: Any) -> None:
-        self.records_written.append((port.port_name, payload))
+    def write(self, port: str, payload: Any, *, family: str) -> None:
+        assert family == "records"
+        self.records_written.append((port, payload))
 
 
 def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compiled():
@@ -802,9 +816,9 @@ def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
         data_plane,
     )
     ctx = _ContextOfOneProcess()
-    ctx.outputs = _OutputsRecordingEachWrite()
+    ctx._link_output_data_writer = _OutputsRecordingEachWrite()
     labelling.process(ctx)
-    assert ctx.outputs.records_written == [("result", {"label": "high"})], (
+    assert ctx._link_output_data_writer.records_written == [("result", {"label": "high"})], (
         "the input keeps its pin value until one arrives"
     )
 
@@ -817,7 +831,7 @@ def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
     )
     ctx = _ContextOfOneProcess()
     counting.process(ctx)
-    assert ctx.outputs.blocks_written == [], "an input with no pin value waits for its first record"
-    ctx.inputs.record_by_port["record"] = {"label": "low"}
+    assert ctx._link_output_data_writer.blocks_written == [], "an input with no pin value waits for its first record"
+    ctx._link_input_data_reader.record_by_port["record"] = {"label": "low"}
     counting.process(ctx)
-    assert ctx.outputs.blocks_written == [("result", [[3.0]], 0, 0)]
+    assert ctx._link_output_data_writer.blocks_written == [("result", [[3.0]], 0, 0)]

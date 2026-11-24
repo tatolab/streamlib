@@ -167,9 +167,8 @@ def construct_node_instance(
     The configuration arrives as the mapping the class was added with and is
     constructed into the config class `__init__` names. Construction is the
     only check performed here: how strict it is is the author's choice of
-    config class, the same dial `read(port, into=T)` is. The link data access
-    argument is unused — ports are reached through `ctx.inputs` / `ctx.outputs`
-    — but the host still passes it, so the arity stays.
+    config class. The link data access argument is unused, but the host still
+    passes it, so the arity stays.
     """
     config_class = getattr(node_class, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
     configuration = _as_configuration_mapping(node_class, configuration)

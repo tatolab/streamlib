@@ -350,13 +350,17 @@ impl PythonRuntimeContextFullAccess {
         PythonStreamClockReading::now()
     }
 
-    #[getter]
-    fn inputs(&self, python: Python<'_>) -> Py<PythonLinkInputDataReader> {
+    /// The reader the wheel's own hosts bind a node's input pins to; node
+    /// code reads through its pins.
+    #[getter(_link_input_data_reader)]
+    fn link_input_data_reader(&self, python: Python<'_>) -> Py<PythonLinkInputDataReader> {
         self.link_input_data_reader.clone_ref(python)
     }
 
-    #[getter]
-    fn outputs(&self, python: Python<'_>) -> Py<PythonLinkOutputDataWriter> {
+    /// The writer the wheel's own hosts bind a node's output pins to; node
+    /// code writes through its pins.
+    #[getter(_link_output_data_writer)]
+    fn link_output_data_writer(&self, python: Python<'_>) -> Py<PythonLinkOutputDataWriter> {
         self.link_output_data_writer.clone_ref(python)
     }
 
@@ -511,13 +515,17 @@ impl PythonRuntimeContextLimitedAccess {
         PythonStreamClockReading::now()
     }
 
-    #[getter]
-    fn inputs(&self, python: Python<'_>) -> Py<PythonLinkInputDataReader> {
+    /// The reader the wheel's own hosts bind a node's input pins to; node
+    /// code reads through its pins.
+    #[getter(_link_input_data_reader)]
+    fn link_input_data_reader(&self, python: Python<'_>) -> Py<PythonLinkInputDataReader> {
         self.link_input_data_reader.clone_ref(python)
     }
 
-    #[getter]
-    fn outputs(&self, python: Python<'_>) -> Py<PythonLinkOutputDataWriter> {
+    /// The writer the wheel's own hosts bind a node's output pins to; node
+    /// code writes through its pins.
+    #[getter(_link_output_data_writer)]
+    fn link_output_data_writer(&self, python: Python<'_>) -> Py<PythonLinkOutputDataWriter> {
         self.link_output_data_writer.clone_ref(python)
     }
 

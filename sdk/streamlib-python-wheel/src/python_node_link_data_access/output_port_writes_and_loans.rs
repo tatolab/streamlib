@@ -444,22 +444,6 @@ impl PythonNodeLinkDataAccess {
             Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
         }
     }
-
-    /// Whether a reader now connected to `port_name` connected after its last
-    /// write; a declared port no link has reached has no reader.
-    pub(crate) fn output_port_has_a_reader_the_last_write_missed(
-        &self,
-        python: Python<'_>,
-        port_name: &str,
-    ) -> PyResult<bool> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        Ok(match self.output_writer_reaching(port_name)? {
-            Some(output_writer) => {
-                python.detach(|| output_writer.has_a_reader_the_last_write_missed(port_name))
-            }
-            None => false,
-        })
-    }
 }
 
 /// The Image frame descriptor of `image`, an `ImageFrame` this node read or a GPU surface it
@@ -574,12 +558,21 @@ pub(crate) enum ArrayOutputPortDeclaredResidency {
 }
 
 impl ArrayOutputPortDeclaredResidency {
+    const ALL: [Self; 2] = [Self::Gpu, Self::Cpu];
+
     /// The spelling `residency=` takes.
     fn wire_name(self) -> &'static str {
         match self {
             Self::Gpu => "gpu",
             Self::Cpu => "cpu",
         }
+    }
+
+    /// The residency `wire_name` spells, or `None` for any other spelling.
+    pub(crate) fn of_wire_name(wire_name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|residency| residency.wire_name() == wire_name)
     }
 }
 

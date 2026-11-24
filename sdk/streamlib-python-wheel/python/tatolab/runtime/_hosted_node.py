@@ -26,6 +26,10 @@ from tatolab.runtime._node_hosting import (
     construct_node_instance,
     the_members_of_each_slot_built,
 )
+from tatolab.runtime._node_the_wheel_hosts import (
+    link_input_data_reader_of,
+    link_output_data_writer_of,
+)
 from tatolab.runtime._parent_process_bridge import ParentProcessBridge
 
 if TYPE_CHECKING:
@@ -238,7 +242,7 @@ def construct_hosted_node(
             ),
         ),
         link_data_access=link_data_access,
-        inputs=full_access_context.inputs,
+        inputs=link_input_data_reader_of(full_access_context),
         node_id=node_run_id,
         stored_input_values=stored_input_values,
     )
@@ -248,8 +252,8 @@ def construct_hosted_node(
             members,
             fields,
             link_data_access=link_data_access,
-            inputs=full_access_context.inputs,
-            outputs=full_access_context.outputs,
+            inputs=link_input_data_reader_of(full_access_context),
+            outputs=link_output_data_writer_of(full_access_context),
             node_id=node_run_id,
             members_of_each_slot=members_of_each_slot,
         ),

@@ -16,8 +16,9 @@ import pytest
 
 from helper_process_link_wiring import wire_one_link
 from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
-from tatolab.stream import Channels, ChannelsBlock, Input, RuntimeContextFullAccess, log
+from tatolab.stream import ChannelsBlock, RuntimeContextFullAccess, log
 from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
 
@@ -32,12 +33,6 @@ def a_microphone(**field_values: object) -> MicrophoneSource:
 FIRST_BLOCKS_DEADLINE_SECONDS = 5.0
 
 BLOCKS_READ_PER_TEST = 5
-
-
-class MicrophoneBlockReader:
-    """The reader's `audio` input, read through its attribute as Channels blocks."""
-
-    audio = Input(Channels, delivery="ordered")
 
 
 class MicrophoneWiredToAReader:
@@ -72,7 +67,9 @@ class MicrophoneWiredToAReader:
         blocks: "list[ChannelsBlock]" = []
         deadline = time.monotonic() + FIRST_BLOCKS_DEADLINE_SECONDS
         while len(blocks) < block_count:
-            block = self.reader.inputs.read(MicrophoneBlockReader.audio)
+            block = link_input_data_reader_of(self.reader).read(
+                AUDIO_OUTPUT_PORT, families=["channels"]
+            )
             if block is not None:
                 blocks.append(block)
                 continue
@@ -135,7 +132,7 @@ def test_the_audio_port_is_lent_to_native_code_so_python_cannot_write_it(
     microphone.setup(context)
     try:
         with pytest.raises(Exception, match=AUDIO_OUTPUT_PORT):
-            context.outputs.write(AUDIO_OUTPUT_PORT, b"from python")
+            link_output_data_writer_of(context).write(AUDIO_OUTPUT_PORT, b"from python")
     finally:
         microphone.teardown(context)
 

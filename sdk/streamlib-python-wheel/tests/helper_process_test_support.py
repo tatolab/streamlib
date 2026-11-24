@@ -7,6 +7,7 @@ import json
 import os
 import threading
 
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime._class_node_bound_pins import BoundOutputPin, bind_the_pins_of_a_class_node
 from tatolab.runtime._node_hosting import class_node_members_of
@@ -42,8 +43,8 @@ def the_pin_upstream_of_a_pass_through_probe(link_data_access) -> BoundOutputPin
     pin = bind_the_pins_of_a_class_node(
         members,
         link_data_access=link_data_access,
-        inputs=context.inputs,
-        outputs=context.outputs,
+        inputs=link_input_data_reader_of(context),
+        outputs=link_output_data_writer_of(context),
         node_id="upstream-of-the-probe",
     )["frames_to_downstream"]
     assert isinstance(pin, BoundOutputPin)

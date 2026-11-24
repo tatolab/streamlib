@@ -6,7 +6,7 @@
 The type's name is the class's import path, `module:QualifiedClassName`, and a pin of it links
 only to a pin of the same name, so a module's data never reaches a node that would misread it.
 The class packs a value with `to_bytes()` and builds one back with its `from_bytes` classmethod,
-the one `read(port, into=…)` takes, so a value travels between nodes as bytes, never as a live
+so a value travels between nodes as bytes, never as a live
 object. A named type holds no stored value: an input of one reads only what a link brings.
 """
 

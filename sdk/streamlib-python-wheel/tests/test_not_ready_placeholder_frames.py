@@ -7,8 +7,6 @@ from typing import Any
 
 import numpy
 
-from tatolab.stream import Output
-
 from tatolab.runtime._not_ready_placeholder_frames import (
     TransparentFramesOnTheImageOutputsOfANodeNotReady,
     the_placeholder_texture_format_of_an_image_output,
@@ -58,17 +56,15 @@ class OutputsRecordingEachWrite:
     def __init__(self) -> None:
         self.writes: "list[tuple[str, Any]]" = []
 
-    def write(self, port: Any, frame: Any) -> None:
-        assert isinstance(port, Output), (
-            "an Image frame is written through an Output attribute; by name a write takes only a buffer"
-        )
-        self.writes.append((port.port_name, frame))
+    def write(self, port: str, frame: Any, *, family: str) -> None:
+        assert family == "image", "a placeholder frame is written as an Image frame"
+        self.writes.append((port, frame))
 
 
 class NodeContextOfTheTest:
     def __init__(self) -> None:
         self.gpu_limited_access: Any = GpuContextHandingOutSlots()
-        self.outputs = OutputsRecordingEachWrite()
+        self._link_output_data_writer = OutputsRecordingEachWrite()
 
 
 def test_each_image_output_is_sent_one_frame_every_channel_zero_at_the_named_size():
@@ -85,11 +81,11 @@ def test_each_image_output_is_sent_one_frame_every_channel_zero_at_the_named_siz
 
     frames.send_one_transparent_frame_on_each_image_output(context, 64, 32)
 
-    assert [port for port, _ in context.outputs.writes] == ["video", "matte"]
+    assert [port for port, _ in context._link_output_data_writer.writes] == ["video", "matte"]
     for slot in context.gpu_limited_access.slots_handed_out:
         assert (slot.width, slot.height, slot.format) == (64, 32, "rgba8_unorm")
         assert not slot.pixels.any(), "every channel of a placeholder frame is zero"
-    for _, frame in context.outputs.writes:
+    for _, frame in context._link_output_data_writer.writes:
         assert (frame.width, frame.height) == (64, 32)
     assert warnings == []
 
@@ -104,7 +100,7 @@ def test_a_frame_that_cannot_be_made_is_dropped_and_warned_of():
     context.gpu_limited_access = GpuContextRefusingEverySlot()
     frames.send_one_transparent_frame_on_each_image_output(context, 64, 32)
 
-    assert context.outputs.writes == []
+    assert context._link_output_data_writer.writes == []
     assert warnings and warnings[0][1]["error"] == "RuntimeError: no GPU in this helper"
 
 

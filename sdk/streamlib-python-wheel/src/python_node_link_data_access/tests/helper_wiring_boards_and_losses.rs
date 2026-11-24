@@ -28,7 +28,7 @@ fn a_loss_declared_upstream_of_a_link_reaches_a_helpers_reader_as_lost_since_las
             .unwrap();
 
         let (_, message, _) = destination
-            .read_message_naming_its_inbound_link_with_its_payload_cast(
+            .read_message_naming_its_inbound_link(
                 python,
                 "frames_from_upstream",
                 PortPayloadReadShape::RawBorrow,
@@ -253,7 +253,7 @@ fn a_helper_that_opened_its_board_mirrors_its_losses_as_its_reads_and_writes_cou
         };
         let read_frame_index = || {
             let payload = destination
-                .read_from_input_port(python, "frames_from_upstream", None)
+                .read_from_input_port(python, "frames_from_upstream")
                 .unwrap()
                 .expect("the port holds a message");
             i64::from_le_bytes(

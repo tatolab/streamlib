@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The tensor protocol a cast type composes to reach its own pixels.
+"""The tensor protocol a frame type composes to reach its own pixels.
 
-The object `ctx.inputs.read(port, into=T)` hands back is the tensor-protocol
-producer: compose `ClaimedSurfacePixelAccess` and `torch.from_dlpack(frame)`
+The frame a Texture or Tensor input pin's read hands back is the tensor-protocol
+producer: it composes `ClaimedSurfacePixelAccess`, so `torch.from_dlpack(frame)`
 works straight off the read, with no resolve and no lock in the caller's hands.
 The bare view is read-only by declaration; `writable()` is the GPU write door
 and `cpu()` the CPU one. The claim rides the same public offer any constructing
@@ -103,9 +103,8 @@ def _claim_taken_on(
 def _no_typed_read_offered_the_means_error(cast_type_name: str) -> RuntimeError:
     return RuntimeError(
         f"this {cast_type_name} was not built by a typed read, so nothing offered it the "
-        f"means to reach its surface's pixels. Read the message with "
-        f"`ctx.inputs.read(port, into={cast_type_name})` — the view rides the claim that "
-        f"read takes."
+        f"means to reach its surface's pixels. Read it off a Texture or Tensor input pin — "
+        f"the view rides the claim that read takes."
     )
 
 
@@ -346,7 +345,6 @@ class ClaimedSurfacePixelAccess:
     `pixel_access_to_the_surface_declared_in` — the bare doors below refuse a
     type holding several rather than guess which surface was meant.
 
-    A type with a `from_bytes` beside this is a `read(port, into=T)` target.
     `@dataclass(frozen=True, init=False)` is the
     spelling to write: this class's constructor drops a key the type does not
     declare, so a producer adding one never breaks the read. A

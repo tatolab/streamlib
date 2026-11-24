@@ -4,9 +4,8 @@
 """An output port's stream facts: what its family states about the stream it carries.
 
 Image and Packets outputs carry facts; `connect` never compares them. Replace
-an output's facts while running with `ctx.outputs.set_stream_facts(port_name,
-facts)` and read the ones feeding an input with
-`ctx.inputs.upstream_stream_facts(port_name)`. Each field mirrors the runtime's
+an output's facts while running with its pin's `set_stream_facts(facts)` and
+read the ones feeding an input with its pin's `upstream_stream_facts()`. Each field mirrors the runtime's
 wire form, so `to_wire()` and `stream_facts_from_wire()` round-trip.
 """
 

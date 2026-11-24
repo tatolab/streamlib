@@ -25,11 +25,11 @@ __all__ = ["ImageFrame", "ImageFrameToWrite"]
 
 @dataclass(frozen=True, init=False)
 class ImageFrame(ClaimedSurfacePixelAccess):
-    """An Image frame, as `ctx.inputs.read(self.video)` returns it.
+    """An Image frame, as a Texture input pin's `read()` returns it.
 
     `surface_id` names the pooled GPU surface, `format` is its texture format's
     wire name such as `rgba16_float`, and `colour` its H.273 description.
-    `ctx.outputs.write(self.video_out, frame)` publishes it again.
+    A Texture output pin's `write(frame)` publishes it again.
     """
 
     pin_type: ClassVar[Literal["texture"]] = "texture"
@@ -66,7 +66,7 @@ class ImageFrame(ClaimedSurfacePixelAccess):
 class ImageFrameToWrite:
     """An Image frame a node publishes from a texture it acquired from a pool.
 
-    `ctx.outputs.write(self.video_out, frame_to_write)` publishes the texture's
+    A Texture output pin's `write(frame_to_write)` publishes the texture's
     slot with this extent, format and colour; the write's own `timestamp_ns`
     stamps it.
     """

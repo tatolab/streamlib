@@ -457,7 +457,7 @@ nodes (`tatolab-moq`) among them, and anything else is a package or a node you w
 <br>
 
 ```python
-frame = ctx.inputs.read(self.video_from_upstream)
+frame = self.video_from_upstream.read()
 if frame is not None:
     pixels = torch.from_dlpack(frame)   # H×W×4 uint8, on the device the frame already lives on
 ```
@@ -509,8 +509,8 @@ What crosses a link is a message of one family. `connect` refuses a link whose o
 names or codec the input does not accept, naming both ends. Past that there is no schema
 registry, no negotiation, no versions and no code-generation step. An Image, Array or Channels
 read is a fixed layout the runtime describes; a Packets read is the unit's bytes; a Records write
-takes a plain `dict` and a read returns one. By name, `ctx.inputs.read(port_name)` hands you the
-raw bytes, and `read(port_name, into=T)` hands them to `T.from_bytes`.
+takes a plain `dict` and a read returns one. An input pin's `read_message_as_sent()` hands you a
+message with the raw bytes it was sent as.
 
 **It costs you** checking inside a record. A Records port checks only that its declared names are
 present, so a value of the wrong type surfaces at the consumer while running, not when you wire

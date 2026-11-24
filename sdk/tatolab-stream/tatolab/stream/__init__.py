@@ -104,9 +104,6 @@ from ._gpu_surface_protocols import IOSurfaceMachPortExport as IOSurfaceMachPort
 from ._gpu_protocols import KernelDispatchBatch as KernelDispatchBatch
 from ._gpu_surface_protocols import OpaqueFdAllocationExport as OpaqueFdAllocationExport
 from ._gpu_protocols import RayTracingKernel as RayTracingKernel
-from ._node_context_protocols import (
-    CastFromMessagePayloadBytes as CastFromMessagePayloadBytes,
-)
 from ._node_context_protocols import LinkInputDataReader as LinkInputDataReader
 from ._node_context_protocols import LinkOutputDataWriter as LinkOutputDataWriter
 from ._node_context_protocols import NodeLinkDataAccess as NodeLinkDataAccess
@@ -203,7 +200,6 @@ __all__ = [
     "BooleanToFloat",
     "BooleanToInteger",
     "BreakBundle",
-    "CastFromMessagePayloadBytes",
     "Channels",
     "ChannelsBlock",
     "ClaimedSurfacePixelAccess",

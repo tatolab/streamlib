@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Buffer, Sequence
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 
@@ -20,11 +20,7 @@ if TYPE_CHECKING:
     from ._gpu_protocols import GpuContextFullAccess, GpuContextLimitedAccess
     from .stream_facts import PortStreamFacts
     from ._message import Message
-    from ._port_family_declaration import Input, Output
 
-_MessageReadTarget = TypeVar("_MessageReadTarget")
-_MessageReadTarget_co = TypeVar("_MessageReadTarget_co", covariant=True)
-_PortFamilyReadType = TypeVar("_PortFamilyReadType")
 
 
 @runtime_backed_protocol
@@ -205,7 +201,7 @@ class PacketsUnit(Protocol):
 class PortPayloadLoan(Protocol):
     """A sample loaned on an output port for its writer to fill in place.
 
-    `with ctx.outputs.loan(port, byte_len) as out:` hands out a writable buffer
+    `with pin.loan(byte_len) as out:` hands out a writable buffer
     over the sample. A clean exit publishes it; a raise gives it back
     unpublished. Leaving the block while a `memoryview` or DLPack tensor over it
     lives raises `BufferError` and publishes nothing, and the port stays loaned,
@@ -237,18 +233,6 @@ class PortPayloadLoan(Protocol):
         ...
 
     def __dlpack_device__(self) -> tuple[int, int]: ...
-
-
-class CastFromMessagePayloadBytes(Protocol[_MessageReadTarget_co]):
-    """What `read(port, into=…)` takes: anything whose `from_bytes` builds the read's result.
-
-    A class with a `from_bytes` classmethod is one. It is handed the read's
-    `PortPayloadBorrow`, so it takes a `Buffer`.
-    """
-
-    def from_bytes(self, payload: PortPayloadBorrow, /) -> _MessageReadTarget_co:
-        """Build the read's result from one message's payload."""
-        ...
 
 
 @runtime_backed_protocol
@@ -412,24 +396,8 @@ class NodeLinkDataAccess(Protocol):
         """Whether any input port has a message waiting."""
         ...
 
-    @overload
-    def read_from_input_port(
-        self, port_name: str, *, into: None = None
-    ) -> PortPayloadBorrow | None: ...
-    @overload
-    def read_from_input_port(
-        self,
-        port_name: str,
-        *,
-        into: CastFromMessagePayloadBytes[_MessageReadTarget],
-    ) -> _MessageReadTarget | None: ...
-    def read_from_input_port(
-        self,
-        port_name: str,
-        *,
-        into: CastFromMessagePayloadBytes[Any] | None = None,
-    ) -> Any:
-        """The next message's payload on `port_name`, cast by `into` when given, or `None`."""
+    def read_from_input_port(self, port_name: str) -> PortPayloadBorrow | None:
+        """The next message's payload on `port_name` as the bytes it was sent, or `None`."""
         ...
 
     def read_from_input_port_with_timestamp(
@@ -503,16 +471,6 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
     @property
     def stream_clock(self) -> StreamClockReading:
         """Which clock the node's stream runs on and where it stands."""
-        ...
-
-    @property
-    def inputs(self) -> LinkInputDataReader:
-        """The node's input ports."""
-        ...
-
-    @property
-    def outputs(self) -> LinkOutputDataWriter:
-        """The node's output ports."""
         ...
 
     @property
@@ -626,152 +584,38 @@ class RuntimeContextLimitedAccess(_RuntimeContextMembersBothCapabilitiesShare, P
 
 @runtime_backed_protocol
 class LinkInputDataReader(Protocol):
-    """A node's input ports, as `ctx.inputs`.
+    """The input ports of a node the wheel hosts, which its input pins read through.
 
-    A port name is cast the way `@node.process` casts it — lowercased, accents dropped,
+    A port name is cast the way a node's pins cast it — lowercased, accents dropped,
     anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
+    `families` names, by wire name, the families a read takes: `"image"`, `"array"`,
+    `"channels"`, `"packets"` or `"records"`, the first the one the port declares.
     """
 
-    @overload
-    def read(
-        self, port: Input[_PortFamilyReadType], *, into: None = None
-    ) -> _PortFamilyReadType | None: ...
-    @overload
-    def read(
-        self, port: str, *, into: None = None
-    ) -> PortPayloadBorrow | None: ...
-    @overload
-    def read(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[_MessageReadTarget],
-    ) -> _MessageReadTarget | None: ...
-    def read(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[Any] | None = None,
-    ) -> Any:
-        """The next message's payload on `port`, or `None` when none is waiting.
+    def read(self, port_name: str, *, families: Sequence[str] | None = None) -> Any:
+        """The next message's payload on `port_name`, or `None` when none is waiting.
 
-        Read through an `Input` attribute — `read(self.audio)` — the payload is
-        the port family's type, built from the message's descriptor:
-        `ImageFrame`, `ArrayFrame`, `ChannelsBlock`, `PacketsUnit`, or a `dict`
-        for Records. Read by name, it is a `PortPayloadBorrow` of the sample it
-        arrived in. With
-        `into`, the borrow is handed to `into.from_bytes` and its result
-        returned, so a payload that does not fit raises here, at the consuming
-        read.
+        Naming `families`, the payload is the type of the family it arrived as,
+        built from the message's descriptor: `ImageFrame`, `ArrayFrame`,
+        `ChannelsBlock`, `PacketsUnit`, or a `dict` for Records. Naming none,
+        it is a `PortPayloadBorrow` of the sample it arrived in.
         """
         ...
 
-    @overload
-    def read_with_timestamp(
-        self, port: Input[_PortFamilyReadType]
-    ) -> tuple[_PortFamilyReadType, int] | tuple[None, None]: ...
-    @overload
-    def read_with_timestamp(
-        self, port: str
-    ) -> tuple[PortPayloadBorrow, int] | tuple[None, None]: ...
-    def read_with_timestamp(self, port: str | Input[Any]) -> Any:
-        """The next message's payload on `port` with its timestamp, or `(None, None)`.
-
-        The payload is typed as `read` types it.
-        """
-        ...
-
-    @overload
-    def read_from_inbound_link(
-        self, port: Input[_PortFamilyReadType], *, into: None = None
-    ) -> tuple[_PortFamilyReadType, str] | None: ...
-    @overload
-    def read_from_inbound_link(
-        self, port: str, *, into: None = None
-    ) -> tuple[PortPayloadBorrow, str] | None: ...
-    @overload
-    def read_from_inbound_link(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[_MessageReadTarget],
-    ) -> tuple[_MessageReadTarget, str] | None: ...
-    def read_from_inbound_link(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[Any] | None = None,
-    ) -> Any:
-        """The next message's payload on `port` with the link it arrived on, or `None`.
-
-        Any number of links may enter one input port, each a separate producer.
-        The name is the source channel the link subscribed to —
-        `{source node id}/{source output port}`, the name `graph` shows — which
-        the engine knows and a producer cannot misstate.
-
-        Messages from one link arrive in that link's order; nothing is promised
-        about how two links interleave. `into` casts as it does for `read`.
-        """
-        ...
-
-    @overload
-    def read_from_inbound_link_with_timestamp(
-        self, port: Input[_PortFamilyReadType], *, into: None = None
-    ) -> tuple[_PortFamilyReadType, str, int] | None: ...
-    @overload
-    def read_from_inbound_link_with_timestamp(
-        self, port: str, *, into: None = None
-    ) -> tuple[PortPayloadBorrow, str, int] | None: ...
-    @overload
-    def read_from_inbound_link_with_timestamp(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[_MessageReadTarget],
-    ) -> tuple[_MessageReadTarget, str, int] | None: ...
-    def read_from_inbound_link_with_timestamp(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[Any] | None = None,
-    ) -> Any:
-        """The next message's payload on `port` with its link and its timestamp.
-
-        The stamp is the one the producer wrote — the source frame's instant,
-        not the moment of the read.
-        """
-        ...
-
-    @overload
     def read_message(
-        self, port: Input[_PortFamilyReadType], *, into: None = None
-    ) -> Message[_PortFamilyReadType] | None: ...
-    @overload
-    def read_message(
-        self, port: str, *, into: None = None
-    ) -> Message[PortPayloadBorrow] | None: ...
-    @overload
-    def read_message(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[_MessageReadTarget],
-    ) -> Message[_MessageReadTarget] | None: ...
-    def read_message(
-        self,
-        port: str | Input[Any],
-        *,
-        into: CastFromMessagePayloadBytes[Any] | None = None,
-    ) -> Any:
-        """The next message on `port` with its stamp, group flag, losses and link, or `None`.
+        self, port_name: str, *, families: Sequence[str] | None = None
+    ) -> Message[Any] | None:
+        """The next message on `port_name` with its stamp, group flag, losses and link, or `None`.
 
         `lost_since_last_read` counts the messages its link lost since the
         previous message read from that link, so a reader that needs every
         message of a group — a decoder — discards until the next message whose
-        `starts_group` is set. `into` casts the payload as it does for `read`.
-        A message no link delivered is refused by name, and the refusal
-        consumes it.
+        `starts_group` is set. Its payload is read as `read` reads it. The link
+        is the source channel the link subscribed to — `{source node id}/{source
+        output port}`, the name `graph` shows — and the stamp the one its
+        producer wrote. A message no link delivered is refused by name, and the
+        refusal consumes it.
         """
         ...
 
@@ -779,8 +623,7 @@ class LinkInputDataReader(Protocol):
         """Count the message last read from `port_name` as lost on the link that delivered it.
 
         For a message whose frame is gone by the time it is read — its producer
-        recycled the frame before this node's claim, which the read's `into`
-        cast raises naming the recycling. The loss lands in the link's dropped
+        recycled the frame before this node's claim. The loss lands in the link's dropped
         count `graph` renders and in the next message's `lost_since_last_read`,
         never as an error. Each message counts once; raises `RuntimeError` when
         nothing read from the port since its last count came over a link.
@@ -815,59 +658,50 @@ class LinkInputDataReader(Protocol):
 
 @runtime_backed_protocol
 class LinkOutputDataWriter(Protocol):
-    """A node's output ports, as `ctx.outputs`.
+    """The output ports of a node the wheel hosts, which its output pins write through.
 
-    A port name is cast the way `@node.process` casts it — lowercased, accents dropped,
+    A port name is cast the way a node's pins cast it — lowercased, accents dropped,
     anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
     """
 
-    @overload
     def write(
         self,
-        port: str,
-        payload: Buffer,
-        timestamp_ns: int | None = None,
-        starts_group: bool = True,
-    ) -> None: ...
-    @overload
-    def write(
-        self,
-        port: Output[Any],
+        port_name: str,
         payload: Any,
         timestamp_ns: int | None = None,
         starts_group: bool = True,
         *,
+        family: str | None = None,
+        codec: str | None = None,
+        formats: Sequence[str] | None = None,
+        names: Sequence[str] | None = None,
+        sample_type: str | None = None,
+        residency: str | None = None,
         start_sample: int | None = None,
-    ) -> None: ...
-    def write(
-        self,
-        port: str | Output[Any],
-        payload: Any,
-        timestamp_ns: int | None = None,
-        starts_group: bool = True,
-        *,
-        start_sample: int | None = None,
+        sample_rate: int | None = None,
     ) -> None:
-        """Publish one message carrying a copy of `payload` to every downstream link on `port`.
+        """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
 
-        Written through an `Output` attribute, `payload` is the family's object
-        and the runtime builds its descriptor: an Image write takes an
-        `ImageFrame` this node read, an `ImageFrameToWrite`, or a texture it
-        acquired from a pool, whose colour is then unspecified, an
-        Array write a mapping of name to a C-contiguous array or a tensor
-        surface, a Channels write a `[channel][sample]` array with
-        `start_sample`, a Packets write the unit's bytes, and a Records write a
-        `dict` of at most 64 KiB carrying every declared name.
+        Naming `family` by its wire name, `payload` is the family's object and
+        the runtime builds its descriptor: an Image write takes an `ImageFrame`
+        this node read, an `ImageFrameToWrite`, or a texture it acquired from a
+        pool, whose colour is then unspecified, in one of `formats` when any is
+        named; an Array write a mapping of `names` to a C-contiguous array or a
+        tensor surface, its tensors where `residency` (`"gpu"` or `"cpu"`) says;
+        a Channels write a `[channel][sample]` array of `sample_type` (`"f32"`
+        or `"f64"`) from `start_sample` at `sample_rate`; a Packets write the
+        unit's bytes as `codec`; and a Records write a `dict` of at most 64 KiB
+        carrying every one of `names`.
 
-        Written by name:
+        Naming no family, `payload` is any contiguous buffer — `bytes`, a
+        `memoryview`, a numpy array. A keyword the named family does not take,
+        or any of them with no family, raises `TypeError` naming it.
 
-        `payload` is any contiguous buffer — `bytes`, a `memoryview`, a numpy
-        array. Omitting `timestamp_ns` stamps stream time now.
-        `starts_group=True` says the message stands alone; only encoded media
-        passes `False`, for a message a decoder cannot enter at. A payload over
-        the channel's ceiling is dropped and counted against this port, never
-        raised.
+        Omitting `timestamp_ns` stamps stream time now. `starts_group=True` says
+        the message stands alone; only encoded media passes `False`, for a
+        message a decoder cannot enter at. A payload over the channel's ceiling
+        is dropped and counted against this port, never raised.
         """
         ...
 
@@ -894,23 +728,13 @@ class LinkOutputDataWriter(Protocol):
         timestamp_ns: int | None = None,
         starts_group: bool = True,
     ) -> PortPayloadLoan:
-        """Loan `payload_byte_len` bytes on `port_name` to fill in place: `with ctx.outputs.loan(...) as out:`.
+        """Loan `payload_byte_len` bytes on `port_name` to fill in place: `with pin.loan(...) as out:`.
 
         The sample is published when the block exits cleanly, stamped
         `timestamp_ns` or stream time now, and given back when it raises. A
         write or a second loan on the port is refused while this one is open,
         so a port's order is its write order. A port no link has reached, or a
         payload over the channel's ceiling, loans bytes that publish nowhere.
-        """
-        ...
-
-    def has_a_reader_the_last_write_missed(self, port: str | Output[Any]) -> bool:
-        """Whether a reader now connected to `port` connected after its last write, so that write never reached it.
-
-        A channel keeps no history, so a node that writes only on change
-        writes again for such a reader. Every reader counts: a link's
-        destination once its subscriber is open, a viewer, an island. A port
-        no link has reached has no reader.
         """
         ...
 
@@ -928,13 +752,12 @@ class LinkOutputDataWriter(Protocol):
 def gpu_limited_access_of_the_typed_read_in_progress() -> (
     GpuContextLimitedAccess | None
 ):
-    """The GPU capability of the `read(port, into=T)` currently constructing an
-    object, or `None` when nothing is being read into a type.
+    """The GPU capability of the read currently building a family type, an
+    `ImageFrame` or an Array frame's GPU attribute, or `None` when no read is.
 
-    The same capability as `ctx.gpu_limited_access`, offered so a type can do
+    The same capability as `ctx.gpu_limited_access`, offered so the type can do
     per-frame work at construction that needs the engine — claiming the frame's
     surface against producer reuse is what `ClaimedSurfacePixelAccess` does with
-    it. Any class reachable through `into=` may call this; there is no
-    registration, no marker and no privileged type.
+    it.
     """
     ...

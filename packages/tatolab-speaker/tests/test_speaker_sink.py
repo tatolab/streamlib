@@ -18,6 +18,7 @@ import time
 import pytest
 
 from helper_process_link_wiring import wire_one_link
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.speaker import (
     AUDIO_INPUT_PORT,
@@ -82,12 +83,12 @@ class SpeakerWiredToAWriter:
         )
 
     def write(self, payload: bytes) -> None:
-        self.writer.outputs.write(AUDIO_INPUT_PORT, payload)
+        link_output_data_writer_of(self.writer).write(AUDIO_INPUT_PORT, payload)
 
     def write_silent_channels_block(
         self, channel_count: int, samples_per_channel: int, sample_rate: int
     ) -> None:
-        self.writer.outputs.write_channels_block(
+        link_output_data_writer_of(self.writer).write_channels_block(
             AUDIO_INPUT_PORT,
             silent_planar_f32_samples(channel_count, samples_per_channel),
             start_sample=self.next_start_sample,
@@ -181,7 +182,7 @@ def test_the_audio_port_is_lent_to_native_code_so_python_cannot_read_it(
     speaker.setup(context)
     try:
         with pytest.raises(Exception, match=AUDIO_INPUT_PORT):
-            context.inputs.read(AUDIO_INPUT_PORT)
+            link_input_data_reader_of(context).read(AUDIO_INPUT_PORT)
     finally:
         speaker.teardown(context)
 

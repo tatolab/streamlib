@@ -107,10 +107,7 @@ impl PythonChannelsBlock {
     /// The sample type, `"f32"` or `"f64"`.
     #[getter]
     fn dtype(&self) -> &'static str {
-        match self.sample_type {
-            ChannelsBlockSampleType::F32 => "f32",
-            ChannelsBlockSampleType::F64 => "f64",
-        }
+        channels_sample_type_wire_name(self.sample_type)
     }
 
     /// The stream time the block was stamped with, in nanoseconds.
@@ -315,3 +312,21 @@ impl PythonPacketsUnit {
 
 /// The codecs a Packets unit of encoded audio names; a unit of any other is encoded video.
 const AUDIO_CODECS: &[&str] = &["opus", "aac", "flac", "vorbis", "mp3"];
+
+/// The spelling of `sample_type` on the Python surface: a block's `dtype` and a
+/// write's `sample_type=`.
+fn channels_sample_type_wire_name(sample_type: ChannelsBlockSampleType) -> &'static str {
+    match sample_type {
+        ChannelsBlockSampleType::F32 => "f32",
+        ChannelsBlockSampleType::F64 => "f64",
+    }
+}
+
+/// The sample type `wire_name` spells, or `None` for any other spelling.
+pub(crate) fn channels_sample_type_of_wire_name(
+    wire_name: &str,
+) -> Option<ChannelsBlockSampleType> {
+    [ChannelsBlockSampleType::F32, ChannelsBlockSampleType::F64]
+        .into_iter()
+        .find(|sample_type| channels_sample_type_wire_name(*sample_type) == wire_name)
+}

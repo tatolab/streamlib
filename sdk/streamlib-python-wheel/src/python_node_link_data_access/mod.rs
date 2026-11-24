@@ -590,17 +590,17 @@ impl PythonNodeLinkDataAccess {
         }
     }
 
-    #[pyo3(signature = (port_name, *, into = None))]
+    /// The next message's payload on `port_name` as the bytes it was sent,
+    /// or `None` when the mailbox is empty.
     fn read_from_input_port<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
-        into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         self.read_from_input_port_offering_gpu_access(
             python,
             port_name,
-            PortPayloadReadShape::by_name_cast_into(into),
+            PortPayloadReadShape::RawBorrow,
             None,
         )
     }

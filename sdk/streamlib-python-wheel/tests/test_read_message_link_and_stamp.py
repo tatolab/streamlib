@@ -1,25 +1,24 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Reading a message's payload with its link and its producer's stamp.
+"""Reading a message with its link and its producer's stamp.
 
 A many-track sink needs both at once: the link says which producer, and the
 stamp is the one the producer wrote rather than the moment of the read. The
-payload comes back as the bytes the producer wrote, or cast by `into=`.
+payload comes back as the bytes the producer wrote.
 
 GPU-free by construction. The links are real iceoryx2 ports and the context is
 a helper-process one opened directly on them, so nothing here starts a runtime
 or touches a device.
 """
 
-import json
 import os
-from collections.abc import Buffer, Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of
 from tatolab.runtime import _engine
 from tatolab.stream import (
     NodeLinkDataAccess,
@@ -36,17 +35,6 @@ OUTPUT_PORT = "messages_to_downstream"
 
 VIDEO_STAMP_NS = 1_700_000_000
 AUDIO_STAMP_NS = 1_700_020_000
-
-
-@dataclass
-class TrackDescription:
-    """A record a fan-in read can cast into."""
-
-    codec: str
-
-    @classmethod
-    def from_bytes(cls, payload: Buffer) -> "TrackDescription":
-        return cls(**json.loads(bytes(payload)))
 
 
 class TwoLinksIntoOnePort:
@@ -111,8 +99,8 @@ def read_everything_waiting(
 ) -> "list[tuple[Any, str, int]]":
     """Drain the port, which two links may interleave in either order."""
     drained: "list[tuple[Any, str, int]]" = []
-    while (read := context.inputs.read_from_inbound_link_with_timestamp(INPUT_PORT)) is not None:
-        drained.append(read)
+    while (message := link_input_data_reader_of(context).read_message(INPUT_PORT)) is not None:
+        drained.append((message.payload, message.inbound_link, message.timestamp_ns))
     return drained
 
 
@@ -121,33 +109,13 @@ def test_a_message_arrives_as_its_payload_bytes_with_its_link_and_its_producers_
 ):
     two_links_into_one_port.deliver("video", b"h264", VIDEO_STAMP_NS)
 
-    read = two_links_into_one_port.context.inputs.read_from_inbound_link_with_timestamp(
-        INPUT_PORT
-    )
+    message = link_input_data_reader_of(two_links_into_one_port.context).read_message(INPUT_PORT)
 
-    assert read is not None
-    payload, inbound_link, timestamp_ns = read
-    assert bytes(payload) == b"h264"
-    assert type(payload).__name__ == "PortPayloadBorrow", "a read borrows rather than copying"
-    assert inbound_link == two_links_into_one_port.channel_named["video"]
-    assert timestamp_ns == VIDEO_STAMP_NS
-
-
-def test_into_casts_the_payload_on_both_fan_in_reads(
-    two_links_into_one_port: TwoLinksIntoOnePort,
-):
-    two_links_into_one_port.deliver("video", json.dumps({"codec": "h264"}).encode(), VIDEO_STAMP_NS)
-    two_links_into_one_port.deliver("video", json.dumps({"codec": "h265"}).encode(), VIDEO_STAMP_NS)
-    inputs = two_links_into_one_port.context.inputs
-    video_link = two_links_into_one_port.channel_named["video"]
-
-    assert inputs.read_from_inbound_link_with_timestamp(
-        INPUT_PORT, into=TrackDescription
-    ) == (TrackDescription(codec="h264"), video_link, VIDEO_STAMP_NS)
-    assert inputs.read_from_inbound_link(INPUT_PORT, into=TrackDescription) == (
-        TrackDescription(codec="h265"),
-        video_link,
-    )
+    assert message is not None
+    assert bytes(message.payload) == b"h264"
+    assert type(message.payload).__name__ == "PortPayloadBorrow", "a read borrows rather than copying"
+    assert message.inbound_link == two_links_into_one_port.channel_named["video"]
+    assert message.timestamp_ns == VIDEO_STAMP_NS
 
 
 def test_each_producers_own_stamp_survives_the_read_that_names_it(
@@ -171,32 +139,8 @@ def test_each_producers_own_stamp_survives_the_read_that_names_it(
     }
 
 
-def test_an_empty_port_reads_as_nothing_rather_than_a_triple_of_nones(
-    two_links_into_one_port: TwoLinksIntoOnePort,
-):
-    """The shape `read_from_inbound_link` already has, kept — a caller
-    unpacks a triple only once it has one."""
-    assert (
-        two_links_into_one_port.context.inputs.read_from_inbound_link_with_timestamp(
-            INPUT_PORT
-        )
-        is None
-    )
-
-
-def test_the_untimestamped_fan_in_read_yields_the_payload_bytes_and_the_link(
-    two_links_into_one_port: TwoLinksIntoOnePort,
-):
-    two_links_into_one_port.deliver("audio", b"opus", AUDIO_STAMP_NS)
-
-    read = two_links_into_one_port.context.inputs.read_from_inbound_link(INPUT_PORT)
-
-    assert read is not None
-    payload, inbound_link = read
-    assert (bytes(payload), inbound_link) == (
-        b"opus",
-        two_links_into_one_port.channel_named["audio"],
-    )
+def test_an_empty_port_reads_as_no_message(two_links_into_one_port: TwoLinksIntoOnePort):
+    assert link_input_data_reader_of(two_links_into_one_port.context).read_message(INPUT_PORT) is None
 
 
 def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
@@ -226,11 +170,10 @@ def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
         {}, destination, "runtime-under-test", "node-under-test"
     )
 
-    assert context.inputs.inbound_link_names(INPUT_PORT) == [inbound_link_name]
+    assert link_input_data_reader_of(context).inbound_link_names(INPUT_PORT) == [inbound_link_name]
 
     source.write_to_output_port(OUTPUT_PORT, b"h264", VIDEO_STAMP_NS)
 
-    read = context.inputs.read_from_inbound_link(INPUT_PORT)
-    assert read is not None
-    payload, inbound_link = read
-    assert (bytes(payload), inbound_link) == (b"h264", inbound_link_name)
+    message = link_input_data_reader_of(context).read_message(INPUT_PORT)
+    assert message is not None
+    assert (bytes(message.payload), message.inbound_link) == (b"h264", inbound_link_name)

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""One message read off an input port, as `ctx.inputs.read_message` returns it."""
+"""One message read off an input port, as an input pin's `read_message()` returns it."""
 
 from __future__ import annotations
 

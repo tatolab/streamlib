@@ -32,20 +32,14 @@ import json
 import struct
 from typing import Any, Optional
 
-from tatolab.stream import (
-    Array,
-    Channels,
-    Image,
-    Input,
-    NodeLinkDataAccess,
-    Output,
-    Packets,
-    Records,
-    log,
-    node,
-)
+from tatolab.stream import NodeLinkDataAccess, log
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
+from tatolab.runtime._node_the_wheel_hosts import (
+    link_input_data_reader_of,
+    link_output_data_writer_of,
+    stamp_the_ports_of_a_node_the_wheel_hosts,
+)
 from tatolab.runtime._engine import (
     FunctionNodeEvaluatedAsAStandaloneNode,
     hand_an_unread_message_on,
@@ -79,64 +73,25 @@ def the_node_class_a_promoted_function_node_runs_as(
     node_id: str,
     link_data_access: NodeLinkDataAccess,
 ) -> type:
-    """A `@node.process` class whose `process` calls `function_node`, compiled or as Python, once per run of its loop."""
+    """A node class whose `process` calls `function_node`, compiled or as Python, once per run of its loop."""
     prepared = prepare_function_node_to_evaluate(function_node, import_path)
-    ports_carrying_records = _ports_carrying_records(prepared) | _ports_carrying_a_named_value(prepared)
     config_class: Optional[type] = getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
-    ports_named_like_a_runner_member = sorted(
-        port
-        for port in (*prepared.input_ports, *prepared.output_ports)
-        if port in vars(_FunctionNodeRunAsAStandaloneNode)
-        or port in _FunctionNodeRunAsAStandaloneNode.__annotations__
-    )
-    ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
-    if ports_named_like_a_runner_member:
-        raise FunctionNodeDoesNotCompile(
-            f"function node `{node_id}` ({import_path}) cannot run in a helper of its own: its "
-            f"port {', '.join(repr(port) for port in ports_named_like_a_runner_member)} is "
-            "named like a member of the node it would run as"
-        )
-
-    pin_types_of_stored_values = _pin_types_of_the_stored_values_it_carries(prepared)
-    class_attributes: "dict[str, Any]" = {}
-    for input_port in prepared.input_ports:
-        if input_port in ports_carrying_an_unread_message:
-            class_attributes[input_port] = Input(
-                Image, also_takes=(Array, Channels, Packets, Records), delivery="newest"
-            )
-        elif input_port in pin_types_of_stored_values:
-            class_attributes[input_port] = Input(
-                _family_a_stored_value_travels_on(pin_types_of_stored_values[input_port]),
-                delivery="newest",
-            )
-        else:
-            class_attributes[input_port] = Input(
-                Records if input_port in ports_carrying_records else Channels, delivery="newest"
-            )
-    for output_port in prepared.output_ports:
-        if output_port in ports_carrying_an_unread_message:
-            class_attributes[output_port] = Output(Image)
-        elif output_port in pin_types_of_stored_values:
-            class_attributes[output_port] = Output(
-                _family_a_stored_value_travels_on(pin_types_of_stored_values[output_port])
-            )
-        else:
-            class_attributes[output_port] = Output(
-                Records if output_port in ports_carrying_records else Channels
-            )
-    class_attributes["__doc__"] = f"Function node `{node_id}` ({import_path}), run in its own helper."
-    class_attributes["__module__"] = __name__
     runner_class = type(
         f"FunctionNodeRunAsAStandaloneNode_{function_node.__name__}",
         (_FunctionNodeRunAsAStandaloneNode,),
-        class_attributes,
+        {
+            "__doc__": f"Function node `{node_id}` ({import_path}), run in its own helper.",
+            "__module__": __name__,
+        },
     )
     runner_class._prepared = prepared
     runner_class._node_id = node_id
     runner_class._link_data_access = link_data_access
-    declared = node.process(execution="continuous")(runner_class)
+    declared = stamp_the_ports_of_a_node_the_wheel_hosts(
+        runner_class, input_ports=prepared.input_ports, output_ports=prepared.output_ports
+    )
     setattr(declared, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
-    declared.__init__ = _FunctionNodeRunAsAStandaloneNode.start_from_its_config
+    setattr(declared, "__init__", _FunctionNodeRunAsAStandaloneNode.start_from_its_config)
     return declared
 
 
@@ -253,7 +208,7 @@ class _FunctionNodeRunAsAStandaloneNode:
                 )
                 continue
             if input_port in ports_carrying_records:
-                record = ctx.inputs.read(getattr(type(self), input_port))
+                record = link_input_data_reader_of(ctx).read(input_port, families=["records"])
                 if record is not None:
                     self._input_values[input_index] = record
                 continue
@@ -308,7 +263,7 @@ class _FunctionNodeRunAsAStandaloneNode:
                 )
                 continue
             if output_port in ports_carrying_records:
-                ctx.outputs.write(getattr(type(self), output_port), output_value)
+                link_output_data_writer_of(ctx).write(output_port, output_value, family="records")
                 continue
             if output_port in ports_carrying_a_named_value:
                 if not isinstance(output_value, bytes):
@@ -334,7 +289,7 @@ class _FunctionNodeRunAsAStandaloneNode:
                 )
                 continue
             parts = output_value if isinstance(output_value, tuple) else (output_value,)
-            ctx.outputs.write_channels_block(
+            link_output_data_writer_of(ctx).write_channels_block(
                 output_port,
                 memoryview(struct.pack(f"={len(parts)}d", *parts)).cast("d", (len(parts), 1)),
                 start_sample=self._control_values_written,
@@ -402,19 +357,6 @@ def _the_output_value_types_of(prepared: FunctionNodeReadyToEvaluate) -> "tuple[
     if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
         return ()
     return tuple(each_output["value_type"] for each_output in prepared.function_signature["outputs"])
-
-
-def _family_a_stored_value_travels_on(pin_type: "dict[str, Any]") -> Any:
-    """The port family whose message a String, a Menu, an Asset or a List travels as."""
-    if pin_type["type"] == "list_of" and pin_type["element_type"]["type"] in _TYPES_OF_A_CONTROL_MESSAGE:
-        return Array
-    return Records
-
-
-# The pin types whose value travels as a control message, a List of which travels as an Array.
-_TYPES_OF_A_CONTROL_MESSAGE = frozenset(
-    {"boolean", "integer", "float", "color", "vector", "rectangle", "transform"}
-)
 
 
 def _ports_carrying_records(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":
