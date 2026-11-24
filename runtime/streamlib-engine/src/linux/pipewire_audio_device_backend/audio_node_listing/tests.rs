@@ -291,3 +291,47 @@ fn a_node_the_session_removes_before_the_listing_ends_is_dropped_and_the_rest_ke
         [(31, "source-a".to_owned()), (32, "sink-b".to_owned())]
     );
 }
+
+fn the_capture_refusal_for(device_id: &str) -> Option<String> {
+    super::super::refuse_a_capture_device_id_the_session_does_not_list(
+        device_id,
+        a_session().capture_device_listing(),
+    )
+    .err()
+    .map(|refusal| refusal.to_string())
+}
+
+#[test]
+fn a_source_a_sinks_monitor_and_the_default_output_monitor_alias_open_for_capture() {
+    for device_id in [
+        "alsa_input.usb-mic.mono",
+        "virtual-source",
+        "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
+        crate::core::context::DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
+    ] {
+        assert_eq!(the_capture_refusal_for(device_id), None, "{device_id}");
+    }
+}
+
+#[test]
+fn a_source_the_session_does_not_hold_is_refused_naming_the_ones_it_does() {
+    let refusal = the_capture_refusal_for("alsa_input.usb-gone.mono")
+        .expect("the source is not in the session");
+    for expected in [
+        "'alsa_input.usb-gone.mono'",
+        "alsa_input.usb-mic.mono (USB Microphone)",
+        "alsa_output.usb-headset.analog-stereo.monitor (Monitor of USB Headset)",
+    ] {
+        assert!(refusal.contains(expected), "{expected} in: {refusal}");
+    }
+}
+
+#[test]
+fn the_monitor_of_a_sink_the_session_does_not_hold_is_refused() {
+    assert!(the_capture_refusal_for("alsa_output.usb-gone.analog-stereo.monitor").is_some());
+}
+
+#[test]
+fn a_sink_named_without_its_monitor_suffix_is_refused_for_capture() {
+    assert!(the_capture_refusal_for("alsa_output.usb-headset.analog-stereo").is_some());
+}

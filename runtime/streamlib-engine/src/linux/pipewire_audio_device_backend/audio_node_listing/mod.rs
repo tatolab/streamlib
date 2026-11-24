@@ -61,8 +61,6 @@ const MONITOR_DEVICE_ID_SUFFIX: &str = ".monitor";
 /// The room each default node name is read into. A longer name reads as no default.
 const DEFAULT_NODE_NAME_CAPACITY: usize = 256;
 
-/// Whether a capture stream can open `sink_name`'s monitor: the audio shim refuses a sink name
-/// that does not fit its buffer, so such a sink's monitor is not listed.
 /// Whether the audio shim reads `device_id` as a sink's monitor, as it does any id ending in
 /// `.monitor`. A source named that way cannot be opened by its own name, so it is not listed.
 fn opens_as_a_monitor(device_id: &str) -> bool {
@@ -76,6 +74,8 @@ fn opens_as_a_monitor(device_id: &str) -> bool {
     }
 }
 
+/// Whether a capture stream can open `sink_name`'s monitor: the audio shim refuses a sink name
+/// that does not fit its buffer, so such a sink's monitor is not listed.
 fn a_monitor_of_it_opens(sink_name: &str) -> bool {
     // SAFETY: the shim returns a compile-time constant.
     sink_name.len() < unsafe { listing_shim::streamlib_pipewire_max_monitored_sink_name_bytes() }

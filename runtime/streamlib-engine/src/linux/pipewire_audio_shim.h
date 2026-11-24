@@ -40,7 +40,7 @@ enum StreamLibPipeWireSampleFormat {
 /// How many properties [`streamlib_pipewire_stream_properties`] declares.
 /// Shared so the array and the function that fills it cannot disagree about
 /// its size.
-#define STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES 5
+#define STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES 6
 
 /// Longest sink name carved out of a `<sink>.monitor` device id. PipeWire node
 /// names are short; this is generous, and a longer one is refused by name

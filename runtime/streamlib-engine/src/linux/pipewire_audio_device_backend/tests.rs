@@ -176,7 +176,7 @@ pub(super) fn monitored_sink_name_of(device_id: &str) -> Option<String> {
 /// compose anything when handed a smaller capacity than its own maximum, so
 /// a property added on the C side without updating this fails these tests
 /// loudly rather than overflowing the array.
-const MAX_STREAM_PROPERTIES: usize = 5;
+const MAX_STREAM_PROPERTIES: usize = 6;
 
 /// The key/value pairs the shim would announce a stream with, read back as
 /// owned strings.
@@ -289,6 +289,43 @@ fn an_over_long_monitor_device_id_composes_nothing_rather_than_a_plain_target() 
     assert!(
         composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, Some(&over_long))
             .is_none()
+    );
+}
+
+/// WirePlumber links a stream whose `target.object` it cannot find to the session default
+/// unless the stream sets `node.dont-fallback`, so every named device carries it, in both
+/// directions and on the monitor path, and the default carries none.
+#[test]
+fn a_named_device_asks_the_session_not_to_fall_back_to_its_default() {
+    let dont_fallback = ("node.dont-fallback".to_string(), "true".to_string());
+    for (direction, device_id) in [
+        (
+            audio_shim::STREAM_DIRECTION_CAPTURE,
+            "alsa_input.usb-gone.mono",
+        ),
+        (
+            audio_shim::STREAM_DIRECTION_CAPTURE,
+            "streamlib-fixture-audio-sink.monitor",
+        ),
+        (
+            audio_shim::STREAM_DIRECTION_PLAYBACK,
+            "streamlib-fixture-audio-sink",
+        ),
+    ] {
+        let properties = composed_stream_properties(direction, Some(device_id))
+            .expect("a named device composes properties");
+        assert!(
+            properties.contains(&dont_fallback),
+            "{device_id}: {properties:?}"
+        );
+    }
+    let properties = composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
+        .expect("the default composes");
+    assert!(
+        !properties
+            .iter()
+            .any(|(key, _)| key == "node.dont-fallback"),
+        "{properties:?}"
     );
 }
 

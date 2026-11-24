@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The audio arm against a real machine: each capture device it lists opens by the id it lists
-//! and delivers, and on PipeWire the default sink's monitor is listed, with the alias that
-//! resolves to it ahead of it.
+//! and delivers, an id it does not list is refused at open, and on PipeWire a stream whose device
+//! goes away fails, and the default sink's monitor is listed, with the alias that resolves to it
+//! ahead of it.
 //!
 //! Audio tier — needs a reachable audio backend with a capture device. Each test but the last
 //! captures and never plays; the last plays a tone into the default output and is audible unless
@@ -108,6 +109,133 @@ fn every_capture_device_the_arm_lists_opens_by_its_id_and_delivers() {
         refused.is_empty(),
         "listed devices that do not capture: {refused:?}"
     );
+}
+
+/// An id no backend lists, spelled the way PipeWire names an ALSA source.
+const A_CAPTURE_DEVICE_ID_THAT_IS_NOT_ATTACHED: &str = "alsa_input.usb-gone.mono";
+
+#[test]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "audio tier — needs a reachable audio backend with a capture device. Run with --features streamlib/hardware-tests"
+)]
+fn a_capture_device_id_the_arm_does_not_list_is_refused_at_open_rather_than_opening_another() {
+    let Some(backend) = a_real_audio_arm_or_skip() else {
+        return;
+    };
+    let refusal = match the_first_block_of(&backend, A_CAPTURE_DEVICE_ID_THAT_IS_NOT_ATTACHED) {
+        Ok(()) => panic!(
+            "the {} arm opened '{A_CAPTURE_DEVICE_ID_THAT_IS_NOT_ATTACHED}', which is not \
+             attached, and delivered from another device",
+            backend.backend_name()
+        ),
+        Err(refusal) => refusal,
+    };
+    eprintln!("{}: {refusal}", backend.backend_name());
+    assert!(
+        refusal.starts_with("did not open:")
+            && refusal.contains(A_CAPTURE_DEVICE_ID_THAT_IS_NOT_ATTACHED),
+        "refused at open, naming the id: {refusal}"
+    );
+    if backend.backend_name() == "pipewire" {
+        let listed = list_audio_capture_devices(backend.as_ref()).expect("the arm lists");
+        for device in &listed {
+            assert!(
+                refusal.contains(&device.id),
+                "the refusal names each listed id, '{}' among them: {refusal}",
+                device.id
+            );
+        }
+    }
+}
+
+/// `virtual_audio_device.sh`, beside this suite's other fixtures.
+#[cfg(target_os = "linux")]
+fn the_virtual_audio_device_fixture(verb: &str) -> Result<String, String> {
+    let output = std::process::Command::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/virtual_audio_device.sh"
+    ))
+    .arg(verb)
+    .output()
+    .map_err(|refusal| format!("the fixture did not run: {refusal}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(format!(
+            "{stdout} {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+/// How long the session has to end a stream whose device it removed.
+#[cfg(target_os = "linux")]
+const REMOVED_DEVICE_FAILURE_DEADLINE: Duration = Duration::from_secs(5);
+
+#[cfg(target_os = "linux")]
+#[test]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "audio tier — needs a reachable PipeWire session the fixture can add a null sink to. Run with --features streamlib/hardware-tests"
+)]
+fn a_capture_stream_whose_device_goes_away_fails_rather_than_moving_to_the_default() {
+    let Some(backend) = a_real_audio_arm_or_skip() else {
+        return;
+    };
+    if backend.backend_name() != "pipewire" || the_virtual_audio_device_fixture("check").is_err() {
+        skip_because_this_machine_lacks(RigOnlyCapability::AudioDevice);
+        return;
+    }
+    let sink = the_virtual_audio_device_fixture("start").expect("the fixture adds its null sink");
+    let monitor = format!("{sink}.monitor");
+    let request = AudioDeviceStreamRequest {
+        device_id: Some(monitor.clone()),
+        deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
+            48_000, 512,
+        ))),
+        capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+        requested_format: RequestedAudioStreamFormat::default(),
+    };
+    let opened = open_capture_stream_in_requested_format(backend.as_ref(), &request);
+    let mut capture_stream = match opened {
+        Ok(capture_stream) => capture_stream,
+        Err(refusal) => {
+            let _ = the_virtual_audio_device_fixture("stop");
+            panic!("'{monitor}' did not open: {refusal}");
+        }
+    };
+    let liveness_report = capture_stream.liveness_report();
+    let (delivered_sender, delivered_receiver) = mpsc::channel();
+    capture_stream
+        .start_delivering_to(Box::new(move |block: CapturedAudioBlockFromDevice<'_>| {
+            let _ = delivered_sender.send(block.sample_count);
+        }))
+        .expect("the monitor delivers");
+    let first_block = delivered_receiver.recv_timeout(FIRST_BLOCK_DEADLINE);
+    let stopped = the_virtual_audio_device_fixture("stop");
+    assert!(
+        first_block.is_ok(),
+        "'{monitor}' delivered no block in {FIRST_BLOCK_DEADLINE:?}"
+    );
+    stopped.expect("the fixture removes its null sink");
+
+    let removed_at = std::time::Instant::now();
+    while liveness_report.failure_that_ended_the_stream().is_none()
+        && removed_at.elapsed() < REMOVED_DEVICE_FAILURE_DEADLINE
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let failure = liveness_report.failure_that_ended_the_stream();
+    capture_stream.stop_delivering().expect("the stream stops");
+    let failure = failure.unwrap_or_else(|| {
+        panic!(
+            "'{monitor}' went away and the stream reported no failure in \
+             {REMOVED_DEVICE_FAILURE_DEADLINE:?}: it lives on, on another device or none"
+        )
+    });
+    eprintln!("'{monitor}' went away: {failure}");
 }
 
 #[cfg(target_os = "linux")]

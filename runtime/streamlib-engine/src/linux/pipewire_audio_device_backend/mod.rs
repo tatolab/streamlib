@@ -17,6 +17,7 @@ use crate::core::context::{
     AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
     DeviceStreamLivenessReport, RequestedAudioStreamFormat,
+    refuse_a_capture_device_id_that_is_not_listed,
 };
 use crate::core::{Error, Result};
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
@@ -161,6 +162,8 @@ mod audio_shim {
     }
 }
 
+const PIPEWIRE_AUDIO_BACKEND_NAME: &str = "pipewire";
+
 /// Audio over a PipeWire session, with libpipewire bound at runtime.
 pub(crate) struct PipeWireAudioDeviceBackend {
     entry_points: Arc<PipeWireLibraryEntryPoints>,
@@ -195,7 +198,7 @@ impl PipeWireAudioDeviceBackend {
 
 impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
     fn backend_name(&self) -> &'static str {
-        "pipewire"
+        PIPEWIRE_AUDIO_BACKEND_NAME
     }
 
     fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing> {
@@ -209,6 +212,12 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         &self,
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioCaptureStream>> {
+        if let Some(device_id) = request.device_id.as_deref() {
+            refuse_a_capture_device_id_the_session_does_not_list(
+                device_id,
+                self.list_capture_devices()?,
+            )?;
+        }
         let (opened, capture_stream_format) = self.open_audio_stream(
             audio_shim::STREAM_DIRECTION_CAPTURE,
             request,
@@ -262,6 +271,19 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         }
         Ok(Box::new(playback_stream))
     }
+}
+
+/// Refused by name unless `listing` holds `device_id`: the session links a capture stream whose
+/// target it cannot find to its default source.
+fn refuse_a_capture_device_id_the_session_does_not_list(
+    device_id: &str,
+    listing: AudioCaptureDeviceListing,
+) -> Result<()> {
+    refuse_a_capture_device_id_that_is_not_listed(
+        PIPEWIRE_AUDIO_BACKEND_NAME,
+        device_id,
+        &listing.devices_with_the_default_output_monitor_alias(),
+    )
 }
 
 impl PipeWireAudioDeviceBackend {
