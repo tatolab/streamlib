@@ -219,7 +219,7 @@ fn a_bundle_object(members: &[BundleMember]) -> Value {
         .collect();
     let required: Vec<&str> = members
         .iter()
-        .filter(|member| member.default_value.is_none() && !member.member_type.is_a_heavy_type())
+        .filter(|member| member.a_stored_value_must_name_it())
         .map(|member| member.name.as_str())
         .collect();
     json!({

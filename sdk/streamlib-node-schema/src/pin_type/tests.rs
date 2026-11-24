@@ -792,25 +792,23 @@ fn a_labelled_metered_picture() -> PinType {
     PinType::Bundle {
         name: None,
         members: vec![
+            a_member("picture", a_pin_type_named(BuiltInPinTypeName::Texture)),
+            a_member("level", PinType::Float { exact_size: None }),
             BundleMember {
-                name: "picture".into(),
-                member_type: a_pin_type_named(BuiltInPinTypeName::Texture),
-                meaning: None,
-                default_value: None,
-            },
-            BundleMember {
-                name: "level".into(),
-                member_type: PinType::Float { exact_size: None },
-                meaning: None,
-                default_value: None,
-            },
-            BundleMember {
-                name: "label".into(),
-                member_type: PinType::String {},
-                meaning: None,
                 default_value: Some(json!("unnamed")),
+                ..a_member("label", PinType::String {})
             },
         ],
+    }
+}
+
+/// A member `name` of `member_type`, meaning nothing and declaring no default.
+fn a_member(name: &str, member_type: PinType) -> BundleMember {
+    BundleMember {
+        name: name.into(),
+        member_type,
+        meaning: None,
+        default_value: None,
     }
 }
 
@@ -848,12 +846,10 @@ fn a_bundle_holding_a_texture_holds_the_values_of_its_small_members() {
 
     let only_a_picture = PinType::Bundle {
         name: None,
-        members: vec![BundleMember {
-            name: "picture".into(),
-            member_type: a_pin_type_named(BuiltInPinTypeName::Texture),
-            meaning: None,
-            default_value: None,
-        }],
+        members: vec![a_member(
+            "picture",
+            a_pin_type_named(BuiltInPinTypeName::Texture),
+        )],
     };
     assert!(!only_a_picture.holds_a_stored_value());
 }
