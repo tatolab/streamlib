@@ -177,8 +177,11 @@ fn the_fold_reaches_every_level_of_a_fragment() {
 
 #[test]
 fn each_renamed_node_type_takes_its_new_type_and_keeps_everything_else() {
-    assert_eq!(RENAMED_NODE_TYPES.len(), 34);
-    for (from, to) in RENAMED_NODE_TYPES {
+    assert_eq!(RENAMED_NODE_TYPES.len(), 35);
+    for (from, to) in RENAMED_NODE_TYPES
+        .iter()
+        .filter(|(_, to)| *to != CONSTANT_NODE_TYPE)
+    {
         let document = json!({
             "nodes": [{
                 "id": "00000000-0000-0000-0000-000000000001",
@@ -200,6 +203,64 @@ fn each_renamed_node_type_takes_its_new_type_and_keeps_everything_else() {
             "{from}"
         );
     }
+}
+
+#[test]
+fn a_constant_that_held_one_float_becomes_the_runtimes_own_holding_that_float() {
+    for (from, saved, held) in [
+        ("tatolab.ops:Constant", json!({"value": 0.25}), json!(0.25)),
+        (
+            "imports/core-nodes/core_nodes.math_nodes:Constant",
+            json!({"value": 2}),
+            json!(2),
+        ),
+        (
+            "imports/core-nodes/core_nodes.math_nodes:Constant",
+            json!({}),
+            json!(0.0),
+        ),
+    ] {
+        let document = json!({
+            "nodes": [{
+                "id": "00000000-0000-0000-0000-000000000001",
+                "name": "level",
+                "type": from,
+                "input_values": saved,
+                "studio": {"position": {"x": 10.0, "y": 20.0}}
+            }],
+            "links": [{
+                "source": {"node": "00000000-0000-0000-0000-000000000001", "port": "result"},
+                "target": {"node": "00000000-0000-0000-0000-000000000002", "port": "in"}
+            }]
+        });
+        let mut expected = document.clone();
+        expected["nodes"][0]["type"] = json!(CONSTANT_NODE_TYPE);
+        expected["nodes"][0]["input_values"] =
+            json!({"pin_type": {"type": "float"}, "value": held});
+
+        let upgraded = upgraded_stream_document(&document).expect("an upgrade");
+
+        assert_eq!(upgraded, expected, "{from} saving {saved}");
+        assert_eq!(
+            upgraded_stream_document(&upgraded),
+            None,
+            "{from} saving {saved}"
+        );
+    }
+}
+
+#[test]
+fn a_constant_of_the_runtimes_own_type_is_left_as_it_is() {
+    let document = json!({
+        "nodes": [{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "word",
+            "type": CONSTANT_NODE_TYPE,
+            "input_values": {"pin_type": {"type": "string"}, "value": "hello"}
+        }],
+        "links": []
+    });
+    assert_eq!(upgraded_stream_document(&document), None);
 }
 
 #[test]

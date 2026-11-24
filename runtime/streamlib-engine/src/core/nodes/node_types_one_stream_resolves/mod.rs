@@ -24,8 +24,8 @@ use crate::core::nodes::node_instance_factory::{
 };
 use crate::core::nodes::project_view_node::{ValueSourceNode, the_node_type_of_a_project_view};
 use crate::core::nodes::{
-    DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, the_node_type_of_a_graph_input,
-    the_node_types_of_the_graph_itself,
+    DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, THE_DESCRIPTOR_OF_A_CONSTANT,
+    the_node_type_of_a_graph_input, the_node_types_of_the_graph_itself,
 };
 use crate::core::{NodeDescriptor, PortDirection};
 
@@ -41,22 +41,39 @@ struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
 static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
     Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>,
 > = std::sync::LazyLock::new(|| {
-    let descriptor =
-        the_node_type_of_a_graph_input().expect("the GraphInput node type's names are valid");
+    a_node_type_run_as_a_value_source(
+        the_node_type_of_a_graph_input().expect("the GraphInput node type's names are valid"),
+        ValueSourceNode::for_a_top_level_graph_input,
+    )
+});
+
+/// The node type every `Constant` runs as.
+static THE_NODE_TYPE_A_CONSTANT_RUNS_AS: std::sync::LazyLock<
+    Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>,
+> = std::sync::LazyLock::new(|| {
+    a_node_type_run_as_a_value_source(
+        THE_DESCRIPTOR_OF_A_CONSTANT.clone(),
+        ValueSourceNode::for_a_constant,
+    )
+});
+
+/// The node type `descriptor` declares, each node of it run as the [`ValueSourceNode`] `build`
+/// makes of it.
+fn a_node_type_run_as_a_value_source(
+    descriptor: NodeDescriptor,
+    build: fn(&GraphNode) -> Result<ValueSourceNode>,
+) -> Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes> {
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
         input_and_output_port_info: GraphNodePorts::of_a_node_just_placed(&descriptor),
         descriptor,
         conversion: None,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
-            |node| {
-                Ok(
-                    Box::new(ValueSourceNode::for_a_top_level_graph_input(node)?)
-                        as Box<dyn crate::core::nodes::DynGeneratedNode + Send>,
-                )
+            move |node| {
+                Ok(Box::new(build(node)?) as Box<dyn crate::core::nodes::DynGeneratedNode + Send>)
             },
         )),
     })
-});
+}
 
 pub(crate) enum HowANodeOfADescribedTypeRuns {
     AsANodeItsConstructorBuilds(DynamicNodeConstructorFn),
@@ -711,6 +728,9 @@ impl NodeTypesOneStreamResolves {
     ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
         if node_type.is_the_graph_input_type() {
             return Some(Arc::clone(&THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS));
+        }
+        if node_type.is_the_constant_type() {
+            return Some(Arc::clone(&THE_NODE_TYPE_A_CONSTANT_RUNS_AS));
         }
         self.view_types_this_streams_project_brings
             .read()

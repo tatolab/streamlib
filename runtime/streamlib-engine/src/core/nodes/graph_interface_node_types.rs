@@ -237,19 +237,31 @@ fn family_setting() -> PortDescriptor {
 /// [`the_family_a_graph_interface_value_port_declares`] until it is resolved; one a client may
 /// clear when `may_be_unset`.
 fn value_port(description: &str, former_names: Vec<String>, may_be_unset: bool) -> PortDescriptor {
-    PortDescriptor::new(
-        GRAPH_INTERFACE_VALUE_PORT_NAME,
+    value_port_of_family(
         description,
-        false,
-        the_family_a_graph_interface_value_port_declares(),
-    )
-    .with_pin_declaration(PinDeclaration {
-        pin_type: DeclaredPinType::SetByInput {
-            input_name: GRAPH_INTERFACE_PIN_TYPE_SETTING.to_string(),
-        },
-        flow: PinFlow::Value,
-        annotations: PinAnnotations::default(),
         former_names,
         may_be_unset,
-    })
+        the_family_a_graph_interface_value_port_declares(),
+    )
+}
+
+/// A `value` port stating `description` and `former_names`, carried as a value of the type the
+/// `pin_type` setting chooses, of `family` until it is resolved; one a client may clear when
+/// `may_be_unset`.
+pub(super) fn value_port_of_family(
+    description: &str,
+    former_names: Vec<String>,
+    may_be_unset: bool,
+    family: PortFamilyDeclaration,
+) -> PortDescriptor {
+    PortDescriptor::new(GRAPH_INTERFACE_VALUE_PORT_NAME, description, false, family)
+        .with_pin_declaration(PinDeclaration {
+            pin_type: DeclaredPinType::SetByInput {
+                input_name: GRAPH_INTERFACE_PIN_TYPE_SETTING.to_string(),
+            },
+            flow: PinFlow::Value,
+            annotations: PinAnnotations::default(),
+            former_names,
+            may_be_unset,
+        })
 }

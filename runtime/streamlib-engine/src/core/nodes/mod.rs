@@ -6,6 +6,7 @@ pub mod traits;
 #[doc(hidden)]
 pub mod __generated_private;
 
+mod constant_node_type;
 mod empty_config;
 mod graph_interface_node_types;
 #[cfg(test)]
@@ -41,6 +42,10 @@ pub(crate) use __generated_private::{
     FiresNotHandedToTheFarSide, FunctionNodeCallUnderWayInTheFarSide,
     FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
     FunctionNodeThatOverranItsFarSidesFrameInterval,
+};
+pub(crate) use constant_node_type::THE_DESCRIPTOR_OF_A_CONSTANT;
+pub use constant_node_type::{
+    the_descriptor_of_a_constant, the_pin_type_a_constant_holds_by_default,
 };
 pub use empty_config::EmptyConfig;
 pub(crate) use graph_interface_node_types::{

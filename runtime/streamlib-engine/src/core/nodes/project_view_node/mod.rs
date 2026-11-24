@@ -4,8 +4,9 @@
 //! The value source: a node that publishes the value each of its settings is set to on its output
 //! of the same name. A node of a project view's type, the plug a Tato Studio view takes in a
 //! stream, whose linked inputs a panel reads through a viewer and whose outputs carry what a
-//! panel sets their same-named inputs to; and a stream's top-level `GraphInput`, whose `value`
-//! output carries the value its `value` input is set to.
+//! panel sets their same-named inputs to; a stream's top-level `GraphInput`, whose `value`
+//! output carries the value its `value` input is set to; and a `Constant`, which does the same
+//! without declaring an Input of its stream.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,12 +27,13 @@ use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::graph_interface_resolution::{
     carry_on_every_value_port, what_the_value_port_of_an_interface_node_carries,
+    what_the_value_ports_of_a_constant_carry,
 };
 use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode};
 use crate::core::graph::{GraphNode, GraphNodePorts};
 use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
-use crate::core::nodes::the_node_type_of_a_graph_input;
 use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
+use crate::core::nodes::{THE_DESCRIPTOR_OF_A_CONSTANT, the_node_type_of_a_graph_input};
 pub use crate::core::pin_value_packing::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 use crate::core::pin_value_packing::{
     PackedPinValue, pack_pin_value, the_message_a_value_written_onto_an_output_is,
@@ -289,13 +291,43 @@ impl ValueSourceNode {
     /// its `pin_type` setting chooses and the family that type travels on, else of the family
     /// its `family` setting names.
     pub(crate) fn for_a_top_level_graph_input(node: &GraphNode) -> Result<Self> {
-        let refused = |why: String| {
-            Error::Configuration(format!("`GraphInput` node `{}`: {why}", node.display_name))
-        };
+        Self::with_value_ports_carrying(
+            node,
+            "GraphInput",
+            the_node_type_of_a_graph_input()?,
+            what_the_value_port_of_an_interface_node_carries,
+        )
+    }
+
+    /// The value source a `Constant` runs as: both its `value` ports of the pin type its
+    /// `pin_type` setting chooses, else a Float, and the family that type travels on.
+    pub(crate) fn for_a_constant(node: &GraphNode) -> Result<Self> {
+        Self::with_value_ports_carrying(
+            node,
+            "Constant",
+            THE_DESCRIPTOR_OF_A_CONSTANT.clone(),
+            |settings| {
+                what_the_value_ports_of_a_constant_carry(settings)
+                    .map(|(chosen, family)| (Some(chosen), family))
+            },
+        )
+    }
+
+    /// The value source `node`, of the node type `type_name` whose `descriptor` declares it,
+    /// runs as: its `value` ports carrying what `carried` reads off its settings, or refused
+    /// naming the node and why.
+    fn with_value_ports_carrying(
+        node: &GraphNode,
+        type_name: &str,
+        mut descriptor: NodeDescriptor,
+        carried: impl FnOnce(
+            Option<&JsonValue>,
+        ) -> std::result::Result<(Option<PinType>, PortFamily), String>,
+    ) -> Result<Self> {
         let settings = JsonValue::Object(node.input_values());
-        let mut descriptor = the_node_type_of_a_graph_input()?;
-        let (chosen, family) =
-            what_the_value_port_of_an_interface_node_carries(Some(&settings)).map_err(refused)?;
+        let (chosen, family) = carried(Some(&settings)).map_err(|why| {
+            Error::Configuration(format!("`{type_name}` node `{}`: {why}", node.display_name))
+        })?;
         carry_on_every_value_port(
             descriptor.inputs.iter_mut().chain(&mut descriptor.outputs),
             family,

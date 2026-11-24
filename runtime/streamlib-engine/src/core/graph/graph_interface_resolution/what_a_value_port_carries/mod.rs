@@ -67,6 +67,19 @@ pub(crate) fn what_the_value_port_of_an_interface_node_carries(
     Ok((chosen, family))
 }
 
+/// What the `value` ports of the `Constant` holding `settings` carry: the pin type its `pin_type`
+/// setting chooses, else the Float a Constant holds while it chooses none, and the family that
+/// type travels on. Refused for a pin type no link carries or no family's message carries.
+pub(crate) fn what_the_value_ports_of_a_constant_carry(
+    settings: Option<&serde_json::Value>,
+) -> std::result::Result<(PinType, PortFamily), String> {
+    let chosen =
+        the_pin_type_an_interface_node_chooses(settings.and_then(serde_json::Value::as_object))?
+            .unwrap_or_else(crate::core::nodes::the_pin_type_a_constant_holds_by_default);
+    let family = the_family_a_chosen_pin_type_travels_on(&chosen)?;
+    Ok((chosen, family))
+}
+
 /// Whether the interface node holding `settings` states what its `value` port carries, a pin type
 /// its `pin_type` chooses or a family its `family` names, so no link decides it.
 pub(crate) fn an_interface_node_states_what_its_value_port_carries(

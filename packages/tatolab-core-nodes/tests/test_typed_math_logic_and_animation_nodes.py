@@ -39,8 +39,8 @@ def ports_of(declared: Any) -> "dict[str, dict[str, Any]]":
     }
 
 
-def test_the_thirty_two_math_logic_and_animation_nodes_are_all_typed():
-    assert len(TYPED_NODES) == 32
+def test_the_thirty_one_math_logic_and_animation_nodes_are_all_typed():
+    assert len(TYPED_NODES) == 31
 
 
 @pytest.mark.parametrize("node_type", sorted(TYPED_NODES))

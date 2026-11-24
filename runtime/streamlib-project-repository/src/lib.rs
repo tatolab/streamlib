@@ -187,6 +187,7 @@ pub use stream_graph_studio_contract::{
     STUDIO_CONTRACT_VERSION, StreamGraphDocumentNote, StreamGraphNodeStudioFields,
     StreamGraphNoteFields, StudioCanvasPair,
 };
+pub use streamlib_node_schema::CONSTANT_NODE_TYPE;
 
 /// The directory inside a project that holds what the runtime keeps for it: history, content,
 /// staged imports and the project's store.

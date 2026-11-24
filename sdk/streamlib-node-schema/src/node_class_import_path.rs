@@ -47,6 +47,9 @@ pub const SET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:SetVariable";
 /// The import path a graph names `GetVariable` by, in the built-in node module.
 pub const GET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:GetVariable";
 
+/// The import path a graph names `Constant` by, in the built-in node module.
+pub const CONSTANT_NODE_TYPE: &str = "tatolab.stream:Constant";
+
 /// Whether `node_type` is `GraphInput` or `GraphOutput`.
 pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
     matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
@@ -67,6 +70,17 @@ impl NodeClassImportPath {
     /// Whether this is `GraphInput`.
     pub fn is_the_graph_input_type(&self) -> bool {
         self.0 == GRAPH_INPUT_NODE_TYPE
+    }
+
+    /// Whether this is `Constant`.
+    pub fn is_the_constant_type(&self) -> bool {
+        self.0 == CONSTANT_NODE_TYPE
+    }
+
+    /// Whether this is a node type whose `value` ports carry the type its `pin_type` setting
+    /// chooses: `GraphInput` or `Constant`.
+    pub fn carries_the_value_its_pin_type_chooses(&self) -> bool {
+        self.is_the_graph_input_type() || self.is_the_constant_type()
     }
 
     /// Whether this is a node type the graph resolves itself, which no node code runs:
