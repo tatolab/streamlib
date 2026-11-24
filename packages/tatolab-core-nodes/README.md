@@ -27,7 +27,7 @@ tatolab dev
 | Filters | `filters.py` | Blur, Sharpen, Edge Detect, Pixelate, Displace, Rgb Split, Vignette, Chroma Key, Luma Key |
 | Transform | `transform.py` | Transform, Crop, Flip, Tile, Mirror, Kaleidoscope |
 | Composite | `composite.py` | Mix, Over, Blend Add, Blend Multiply, Blend Screen, Blend Difference, Mask, Wipe |
-| Math | `math_nodes.py` | Add, Subtract, Multiply, Divide, Power, Minimum, Maximum, Absolute, Modulo, Lerp, Clamp, Remap, Smoothstep, Step, Constant, Random, Perlin Noise |
+| Math | `math_nodes.py`, `texture_info.py` | Add, Subtract, Multiply, Divide, Power, Minimum, Maximum, Absolute, Modulo, Lerp, Clamp, Remap, Smoothstep, Step, Constant, Random, Perlin Noise, Texture Info |
 | Animation | `animation.py` | Lfo, Timer, Lag, Ramp, Pulse, Speed, Envelope |
 | Logic | `logic.py` | Compare, Switch, Select, Gate, Trigger, Counter, Sample And Hold, Hold Frame |
 | Audio | `oscillator.py` | Oscillator |

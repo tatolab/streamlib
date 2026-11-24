@@ -20,8 +20,8 @@ from tatolab.stream import (
 from tatolab.stream.stream_facts import ImageStreamFacts
 
 
-class TextureFacts(NamedTuple):
-    """What `TextureInfo` last handed on: a picture's size, its pixel format and its frame rate."""
+class _TextureInfoValues(NamedTuple):
+    """The values `TextureInfo` hands on for one picture, the frame rate `None` while unstated."""
 
     width: int
     height: int
@@ -35,8 +35,8 @@ class TextureFacts(NamedTuple):
 )
 @node
 class TextureInfo:
-    """Hands on the facts of each picture it reads, writing an output only when its value has
-    changed since it was last written."""
+    """Hands on the values of each picture it reads. It writes an output when its value has
+    changed since it was last written, or when a reader connected after that write."""
 
     picture: InputPin[Annotated[Texture, StreamDelivery("newest")]]
     width: OutputPin[Annotated[int, Description("The picture's width in pixels")]]
@@ -53,26 +53,33 @@ class TextureInfo:
     ]
 
     def __init__(self) -> None:
-        self._facts_written: "TextureFacts | None" = None
+        self._values_written: "_TextureInfoValues | None" = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        del ctx
         frame = self.picture.read()
         if frame is None:
             return
-        facts = TextureFacts(
+        values = _TextureInfoValues(
             frame.width, frame.height, frame.format, self._frame_rate_the_stream_states()
         )
-        written = self._facts_written
-        if written is None or (facts.width, facts.height) != (written.width, written.height):
-            self.width.write(facts.width)
-            self.height.write(facts.height)
-            self.size.write(Vector2(float(facts.width), float(facts.height)))
-        if written is None or facts.pixel_format != written.pixel_format:
-            self.pixel_format.write(facts.pixel_format)
-        if facts.frame_rate is not None and (written is None or facts.frame_rate != written.frame_rate):
-            self.frame_rate.write(facts.frame_rate)
-        self._facts_written = facts
+        written = self._values_written
+
+        def to_write(port: str, value_now: object, value_written: object) -> bool:
+            return value_now != value_written or ctx.outputs.has_a_reader_the_last_write_missed(port)
+
+        if to_write("width", values.width, written and written.width):
+            self.width.write(values.width)
+        if to_write("height", values.height, written and written.height):
+            self.height.write(values.height)
+        if to_write("size", values[:2], written and written[:2]):
+            self.size.write(Vector2(float(values.width), float(values.height)))
+        if to_write("pixel_format", values.pixel_format, written and written.pixel_format):
+            self.pixel_format.write(values.pixel_format)
+        if values.frame_rate is not None and to_write(
+            "frame_rate", values.frame_rate, written and written.frame_rate
+        ):
+            self.frame_rate.write(values.frame_rate)
+        self._values_written = values
 
     def _frame_rate_the_stream_states(self) -> "float | None":
         stream_facts = self.picture.upstream_stream_facts()
