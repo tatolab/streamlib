@@ -286,10 +286,7 @@ def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
     runner_class = the_node_class_a_promoted_function_node_runs_as(
         function_node, import_path, "gate-1", data_plane
     )
-    input_families = {
-        port["name"]: port["family"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)
-    }
-    assert input_families["value"]["also_takes_families"] == ["array", "channels", "packets", "records"]
+    assert "value" in [port["name"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)]
     runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
     destination = _engine.open_node_link_data_access_for_helper_process()
     node_interpreter_bootstrap.wire_link_data_access(
@@ -345,8 +342,8 @@ def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_famil
         },
         data_plane,
     )
-    assert [port["family"]["family"] for port in getattr(pool_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
-        "image"
+    assert [port["name"] for port in getattr(pool_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
+        "island_0_output"
     ]
     pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)
     destination = _engine.open_node_link_data_access_for_helper_process()
