@@ -283,6 +283,10 @@ class StageCamera:
     burst_y: float = 0.0
 
 
+#: The stage's camera at home, before the hand has moved it.
+STAGE_CAMERA_AT_HOME = StageCamera()
+
+
 @dataclass(frozen=True)
 class Look:
     """The stage's look: the real map to neon morph, the time of day, the skyline, the neon and

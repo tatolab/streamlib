@@ -40,6 +40,7 @@ from tatolab.stream import (
 )
 
 from nodes.motion import BAND_COUNT, SILENCE, BallCamera, Motion
+
 GRID_HALF = 20
 GRID_SIDE = 2 * GRID_HALF + 1
 CUBE_VERTEX_COUNT = 36

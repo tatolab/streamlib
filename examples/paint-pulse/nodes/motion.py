@@ -46,6 +46,10 @@ class StageCamera:
     burst: int = 0
 
 
+#: The stage before it has been dragged, zoomed or clicked.
+STAGE_AT_REST = StageCamera()
+
+
 @dataclass(frozen=True)
 class BallCamera:
     """Where the ball is drawn from, and how many bursts the stage has asked for."""
@@ -83,7 +87,7 @@ def MotionReadout(
 )
 @node
 def OrbitCamera(
-    view: Annotated[StageCamera, Description("From the stage view")] = StageCamera(),
+    view: Annotated[StageCamera, Description("From the stage view")] = STAGE_AT_REST,
     spin: Annotated[float, Description("Radians added to the stage's yaw.")] = 0.0,
     tilt: Annotated[float, Description("Radians added to the stage's pitch.")] = 0.14,
     distance: Annotated[float, Description("How far the camera sits at the stage's own zoom.")] = 11.5,

@@ -19,9 +19,10 @@ from typing import NamedTuple
 from tatolab.stream import State, Stateful, Time, node
 
 from nodes.neon_world import (
+    STAGE_CAMERA_AT_HOME,
     STAGE_HOME,
-    StageCamera,
     Look,
+    StageCamera,
     TakeMoment,
     camera_basis,
     project_to_frame,
@@ -125,7 +126,7 @@ def _placement_of(moment: TakeMoment, aspect: float, vertical_fov_degrees: float
 )
 @node
 def StageSunOnScreen(  # noqa: N802
-    stage: StageCamera = StageCamera(),
+    stage: StageCamera = STAGE_CAMERA_AT_HOME,
     time_of_day: float = 0.35,
     aspect: float = 1.7778,
     vertical_fov_degrees: float = 50.0,
@@ -172,7 +173,7 @@ CAMERA_KEYS = ("target_x", "target_y", "distance", "yaw_degrees", "pitch_degrees
 )
 @node
 def SmoothCamera(  # noqa: N802
-    stage: StageCamera = StageCamera(),
+    stage: StageCamera = STAGE_CAMERA_AT_HOME,
     seconds: float = 0.18,
     *,
     now: Time,
