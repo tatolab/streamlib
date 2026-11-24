@@ -20,16 +20,15 @@ from helper_placement_nodes import (
     CrashesItsHelper,
     DiesAbruptlyProbe,
     GateThatCrashesItsHelperOnCue,
-    HoldsItsConfiguredLevelCountingItsCalls,
+    HoldsItsLevelCountingItsCalls,
     HangsAfterItsFirstCalls,
     LabelsTheLevel,
     LevelScaledByItsGain,
-    LevelScaledByItsTypedGain,
     LendsTheLabelToItsNativeHalf,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
     ReportsEachBatchOfGatedCountsItReadSink,
-    ReportsEachBatchOfItsConfiguredLevel,
+    ReportsEachBatchOfItsLevel,
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessIntegerSink,
@@ -176,16 +175,8 @@ def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBui
 
 
 @graph_generator
-def clamp_with_its_input_linked_to_nothing_into_python_sink(stream_builder: StreamBuilder) -> None:
-    """`Clamp`, its `x` linked to nothing and unpinned, read by a Python class."""
-    clamp = stream_builder.add(Clamp, name="clamp")
-    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
-    stream_builder.connect(clamp.output("result"), sink.input("brightness"))
-
-
-@graph_generator
 def level_scaled_by_its_gain_into_python_sink(stream_builder: StreamBuilder) -> None:
-    """A function node scaling its level by the `gain` of its config, read by a Python class."""
+    """A function node scaling its level by its `gain` input, 0.25, read by a Python class."""
     scaled = stream_builder.add(LevelScaledByItsGain, name="scaled")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(scaled.output("result"), sink.input("brightness"))
@@ -197,7 +188,7 @@ def typed_level_scaled_by_the_gain_its_input_values_hold_into_python_sink(
 ) -> None:
     """A typed function node built with `input_values` setting its `gain` to 0.5, read by a Python class."""
     scaled = stream_builder.add(
-        LevelScaledByItsTypedGain, name="scaled", input_values={"gain": 0.5}
+        LevelScaledByItsGain, name="scaled", input_values={"gain": 0.5}
     )
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(scaled.output("result"), sink.input("brightness"))
@@ -289,15 +280,15 @@ def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> 
 
 
 @graph_generator
-def python_class_reporting_its_configured_level(stream_builder: StreamBuilder) -> None:
-    """A Python class reading the `level` of its config at each run."""
-    stream_builder.add(ReportsEachBatchOfItsConfiguredLevel, name="configured")
+def python_class_reporting_its_level(stream_builder: StreamBuilder) -> None:
+    """A Python class reading its `level` setting at each run."""
+    stream_builder.add(ReportsEachBatchOfItsLevel, name="configured")
 
 
 @graph_generator
 def held_level_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
-    """A stateful function node holding the `level` of its config, read by two Python classes."""
-    held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
+    """A stateful function node holding its `level` input, read by two Python classes."""
+    held = stream_builder.add(HoldsItsLevelCountingItsCalls, name="held")
     for reader_name in ("first_reader", "second_reader"):
         reader = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name=reader_name)
         stream_builder.connect(held.output("result"), reader.input("brightness"))
@@ -403,7 +394,7 @@ def python_level_source_through_a_gate_into_a_native_converter(stream_builder: S
 def typed_level_into_a_setting_a_python_class_reads_at_setup(stream_builder: StreamBuilder) -> None:
     """A typed function node built with `gain` 0.5 into `level`, a setting a Python class reads at setup."""
     scaled = stream_builder.add(
-        LevelScaledByItsTypedGain, name="scaled", input_values={"gain": 0.5}
+        LevelScaledByItsGain, name="scaled", input_values={"gain": 0.5}
     )
     reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
     stream_builder.connect(scaled.output("result"), reader.input("level"))
@@ -411,9 +402,9 @@ def typed_level_into_a_setting_a_python_class_reads_at_setup(stream_builder: Str
 
 @graph_generator
 def held_level_into_a_setting_and_read_by_a_python_sink(stream_builder: StreamBuilder) -> None:
-    """A stateful function node holding its config's `level`, into a setting a Python class reads
+    """A stateful function node holding its `level` input, into a setting a Python class reads
     at setup and into a second Python class: two readers, so it runs in a process of its own."""
-    held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
+    held = stream_builder.add(HoldsItsLevelCountingItsCalls, name="held")
     reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(held.output("result"), reader.input("level"))
