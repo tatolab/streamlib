@@ -50,7 +50,7 @@ impl PythonNodeLinkDataAccess {
             .detach(|| input_mailboxes.read_raw(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
-            Some(message) => payload_borrowed_into_the_read_target_when_named(
+            Some(message) => payload_read_as_its_shape(
                 python,
                 port_name,
                 message.payload,
@@ -84,7 +84,7 @@ impl PythonNodeLinkDataAccess {
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
             Some(message) => Ok((
-                Some(payload_borrowed_into_the_read_target_when_named(
+                Some(payload_read_as_its_shape(
                     python,
                     port_name,
                     message.payload,
@@ -112,7 +112,7 @@ impl PythonNodeLinkDataAccess {
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         static TATOLAB_STREAM_MESSAGE_CLASS: PyOnceLock<Py<PyType>> = PyOnceLock::new();
         let Some((payload, message, inbound_link_name)) = self
-            .read_message_naming_its_inbound_link_with_its_payload_cast(
+            .read_message_naming_its_inbound_link(
                 python,
                 port_name,
                 read_shape,
@@ -138,7 +138,7 @@ impl PythonNodeLinkDataAccess {
 
     /// The one fan-in read body: the next message on `port_name`, its payload
     /// read as `read_shape` asks, and the inbound link it arrived on.
-    pub(super) fn read_message_naming_its_inbound_link_with_its_payload_cast<'py>(
+    pub(super) fn read_message_naming_its_inbound_link<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
@@ -155,7 +155,7 @@ impl PythonNodeLinkDataAccess {
         let Some((mut message, inbound_link_name)) = read else {
             return Ok(None);
         };
-        let payload = payload_borrowed_into_the_read_target_when_named(
+        let payload = payload_read_as_its_shape(
             python,
             port_name,
             std::mem::take(&mut message.payload),
@@ -228,7 +228,7 @@ pub(crate) enum PortPayloadReadShape {
     FamilyType(PortFamiliesOfTheRead),
 }
 
-/// The family of the `Input` attribute a read names.
+/// A port family, as a read or a write names it by its wire name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PortFamilyOfTheRead {
     Image,
@@ -247,16 +247,22 @@ impl PortFamilyOfTheRead {
         Self::Records,
     ];
 
-    /// The family the wire names `wire_name`, such as `image`.
+    /// The family's name on the wire, such as `image`.
+    pub(crate) fn wire_name(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Array => "array",
+            Self::Channels => "channels",
+            Self::Packets => "packets",
+            Self::Records => "records",
+        }
+    }
+
+    /// The family the wire names `wire_name`, or `None` for any other name.
     pub(crate) fn of_wire_name(wire_name: &str) -> Option<Self> {
-        Some(match wire_name {
-            "image" => Self::Image,
-            "array" => Self::Array,
-            "channels" => Self::Channels,
-            "packets" => Self::Packets,
-            "records" => Self::Records,
-            _ => return None,
-        })
+        Self::ALL
+            .into_iter()
+            .find(|family| family.wire_name() == wire_name)
     }
 
     /// The descriptor kind every message of this family carries.
@@ -271,8 +277,7 @@ impl PortFamilyOfTheRead {
     }
 }
 
-/// The families an `Input` attribute a read names takes: its own and its
-/// `also_takes`.
+/// The families a read takes: the one its port declares and any other its pin's types imply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PortFamiliesOfTheRead {
     declared_family: PortFamilyOfTheRead,
@@ -301,6 +306,12 @@ impl PortFamiliesOfTheRead {
         }
     }
 
+    /// These families and `family` too.
+    pub(crate) fn also_taking(mut self, family: PortFamilyOfTheRead) -> Self {
+        self.is_taken_by_family[family as usize] = true;
+        self
+    }
+
     /// The taken family whose messages carry `kind`.
     fn family_carrying(
         self,
@@ -319,7 +330,7 @@ impl PortFamiliesOfTheRead {
     clippy::too_many_arguments,
     reason = "each argument is a separate piece of the read the caller already holds"
 )]
-fn payload_borrowed_into_the_read_target_when_named<'py>(
+fn payload_read_as_its_shape<'py>(
     python: Python<'py>,
     port_name: &str,
     payload: InputPortMessagePayload,

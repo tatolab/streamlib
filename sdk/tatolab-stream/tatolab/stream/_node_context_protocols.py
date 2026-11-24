@@ -695,7 +695,8 @@ class LinkOutputDataWriter(Protocol):
         carrying every one of `names`.
 
         Naming no family, `payload` is any contiguous buffer — `bytes`, a
-        `memoryview`, a numpy array.
+        `memoryview`, a numpy array. A keyword the named family does not take,
+        or any of them with no family, raises `TypeError` naming it.
 
         Omitting `timestamp_ns` stamps stream time now. `starts_group=True` says
         the message stands alone; only encoded media passes `False`, for a

@@ -3,16 +3,16 @@
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyBytes, PyDict};
-use streamlib::sdk::iceoryx2::{
-    ChannelsBlockSampleType, DataChannelPayloadDescriptor, PacketsUnitDescriptorBody,
-};
+use streamlib::sdk::iceoryx2::{DataChannelPayloadDescriptor, PacketsUnitDescriptorBody};
 
 use crate::python_bag_conversion::records_message_payload_of;
 use crate::python_node_link_data_access::{
     ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, PortFamiliesOfTheRead,
     PortFamilyOfTheRead, PortPayloadReadShape, PythonNodeLinkDataAccess,
 };
+use crate::python_port_family_read_types::channels_sample_type_of_wire_name;
 use crate::python_port_payload::PythonPortPayloadLoan;
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
@@ -42,7 +42,7 @@ impl PythonLinkInputDataReader {
         &self,
         python: Python<'py>,
         port_name: &str,
-        families: Option<Vec<String>>,
+        families: Option<Vec<PyBackedStr>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let read_shape = read_shape_of_the_families(port_name, families)?;
         self.link_data_access
@@ -63,7 +63,7 @@ impl PythonLinkInputDataReader {
         &self,
         python: Python<'py>,
         port_name: &str,
-        families: Option<Vec<String>>,
+        families: Option<Vec<PyBackedStr>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let read_shape = read_shape_of_the_families(port_name, families)?;
         self.link_data_access.get().read_message_from_input_port(
@@ -140,28 +140,59 @@ impl PythonLinkInputDataReader {
 }
 
 /// What a read of `port_name` hands back: the type of the family a message
-/// arrived as, the first of `families` the one the port declares, or the raw
-/// borrow when `families` is `None`.
+/// arrived as among `families`, the first of which is the one the port
+/// declares, or the raw borrow when `families` is `None`.
 fn read_shape_of_the_families(
     port_name: &str,
-    families: Option<Vec<String>>,
+    families: Option<Vec<PyBackedStr>>,
 ) -> PyResult<PortPayloadReadShape> {
     let Some(families) = families else {
         return Ok(PortPayloadReadShape::RawBorrow);
     };
-    let mut families = families
-        .iter()
-        .map(|family| port_family_named(port_name, family))
-        .collect::<PyResult<Vec<_>>>()?
-        .into_iter();
-    let declared_family = families.next().ok_or_else(|| {
-        PyValueError::new_err(format!(
+    let Some((declared_family, also_taken_families)) = families.split_first() else {
+        return Err(PyValueError::new_err(format!(
             "a read of input port {port_name:?} names no family to read it as"
-        ))
-    })?;
-    Ok(PortPayloadReadShape::FamilyType(
-        PortFamiliesOfTheRead::of_the_declared_family_and_also(declared_family, families),
-    ))
+        )));
+    };
+    also_taken_families
+        .iter()
+        .try_fold(
+            PortFamiliesOfTheRead::of_the_declared_family_and_also(
+                port_family_named(port_name, declared_family)?,
+                [],
+            ),
+            |families, family| Ok(families.also_taking(port_family_named(port_name, family)?)),
+        )
+        .map(PortPayloadReadShape::FamilyType)
+}
+
+/// Refuse each of `stated_keywords` a write as `family` does not take, naming it
+/// and the family that does; a write naming no family takes none of them.
+fn refuse_a_keyword_the_family_does_not_take(
+    port_name: &str,
+    family: Option<PortFamilyOfTheRead>,
+    stated_keywords: &[(&str, bool)],
+) -> PyResult<()> {
+    let taken: &[&str] = match family {
+        None => &[],
+        Some(PortFamilyOfTheRead::Records) => &["names"],
+        Some(PortFamilyOfTheRead::Packets) => &["codec"],
+        Some(PortFamilyOfTheRead::Channels) => {
+            &["names", "sample_type", "start_sample", "sample_rate"]
+        }
+        Some(PortFamilyOfTheRead::Image) => &["formats"],
+        Some(PortFamilyOfTheRead::Array) => &["names", "residency"],
+    };
+    match stated_keywords
+        .iter()
+        .find(|(keyword, stated)| *stated && !taken.contains(keyword))
+    {
+        None => Ok(()),
+        Some((keyword, _)) => Err(PyTypeError::new_err(format!(
+            "a write on output port {port_name:?} as {} takes no {keyword}=",
+            family.map_or("raw bytes", PortFamilyOfTheRead::wire_name)
+        ))),
+    }
 }
 
 /// The family `family` names on the wire, such as `image`.
@@ -224,13 +255,23 @@ impl PythonLinkOutputDataWriter {
         sample_rate: Option<u32>,
     ) -> PyResult<()> {
         let link_data_access = self.link_data_access.get();
+        let family = family
+            .map(|family| port_family_named(port_name, family))
+            .transpose()?;
+        refuse_a_keyword_the_family_does_not_take(
+            port_name,
+            family,
+            &[
+                ("codec", codec.is_some()),
+                ("formats", formats.is_some()),
+                ("names", names.is_some()),
+                ("sample_type", sample_type.is_some()),
+                ("residency", residency.is_some()),
+                ("start_sample", start_sample.is_some()),
+                ("sample_rate", sample_rate.is_some()),
+            ],
+        )?;
         let Some(family) = family else {
-            if start_sample.is_some() || sample_rate.is_some() {
-                return Err(PyTypeError::new_err(format!(
-                    "start_sample= and sample_rate= belong to a write of output port \
-                     {port_name:?} as family \"channels\""
-                )));
-            }
             return link_data_access.write_described_by(
                 python,
                 port_name,
@@ -241,7 +282,7 @@ impl PythonLinkOutputDataWriter {
             );
         };
         let names = names.unwrap_or_default();
-        match port_family_named(port_name, family)? {
+        match family {
             PortFamilyOfTheRead::Records => {
                 let record_payload = records_message_payload_of(port_name, payload, &names)?;
                 link_data_access.write_described_by(
@@ -276,17 +317,16 @@ impl PythonLinkOutputDataWriter {
                     )));
                 };
                 let declared_shape = ChannelsOutputPortDeclaredShape {
-                    sample_type: match sample_type {
-                        None => None,
-                        Some("f32") => Some(ChannelsBlockSampleType::F32),
-                        Some("f64") => Some(ChannelsBlockSampleType::F64),
-                        Some(other) => {
-                            return Err(PyValueError::new_err(format!(
-                                "Channels output port {port_name:?} is written as {other:?}, \
-                                 which is neither \"f32\" nor \"f64\""
-                            )));
-                        }
-                    },
+                    sample_type: sample_type
+                        .map(|sample_type| {
+                            channels_sample_type_of_wire_name(sample_type).ok_or_else(|| {
+                                PyValueError::new_err(format!(
+                                    "Channels output port {port_name:?} is written as \
+                                     {sample_type:?}, which is neither \"f32\" nor \"f64\""
+                                ))
+                            })
+                        })
+                        .transpose()?,
                     channel_count: match names.len() {
                         0 => None,
                         stated => Some(u32::try_from(stated).map_err(|_| {
@@ -317,17 +357,16 @@ impl PythonLinkOutputDataWriter {
                 starts_group,
             ),
             PortFamilyOfTheRead::Array => {
-                let declared_residency = match residency {
-                    None => None,
-                    Some("gpu") => Some(ArrayOutputPortDeclaredResidency::Gpu),
-                    Some("cpu") => Some(ArrayOutputPortDeclaredResidency::Cpu),
-                    Some(other) => {
-                        return Err(PyValueError::new_err(format!(
-                            "Array output port {port_name:?} is written as residency {other:?}, \
-                             which is neither \"gpu\" nor \"cpu\""
-                        )));
-                    }
-                };
+                let declared_residency = residency
+                    .map(|residency| {
+                        ArrayOutputPortDeclaredResidency::of_wire_name(residency).ok_or_else(|| {
+                            PyValueError::new_err(format!(
+                                "Array output port {port_name:?} is written as residency \
+                                 {residency:?}, which is neither \"gpu\" nor \"cpu\""
+                            ))
+                        })
+                    })
+                    .transpose()?;
                 link_data_access.write_array_frame_to_output_port(
                     python,
                     port_name,

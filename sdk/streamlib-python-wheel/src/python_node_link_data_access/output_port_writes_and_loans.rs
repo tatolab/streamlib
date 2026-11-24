@@ -558,12 +558,21 @@ pub(crate) enum ArrayOutputPortDeclaredResidency {
 }
 
 impl ArrayOutputPortDeclaredResidency {
+    const ALL: [Self; 2] = [Self::Gpu, Self::Cpu];
+
     /// The spelling `residency=` takes.
     fn wire_name(self) -> &'static str {
         match self {
             Self::Gpu => "gpu",
             Self::Cpu => "cpu",
         }
+    }
+
+    /// The residency `wire_name` spells, or `None` for any other spelling.
+    pub(crate) fn of_wire_name(wire_name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|residency| residency.wire_name() == wire_name)
     }
 }
 

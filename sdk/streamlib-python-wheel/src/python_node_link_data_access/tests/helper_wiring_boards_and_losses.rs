@@ -28,7 +28,7 @@ fn a_loss_declared_upstream_of_a_link_reaches_a_helpers_reader_as_lost_since_las
             .unwrap();
 
         let (_, message, _) = destination
-            .read_message_naming_its_inbound_link_with_its_payload_cast(
+            .read_message_naming_its_inbound_link(
                 python,
                 "frames_from_upstream",
                 PortPayloadReadShape::RawBorrow,
