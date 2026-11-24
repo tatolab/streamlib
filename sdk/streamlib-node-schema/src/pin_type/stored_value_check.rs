@@ -155,6 +155,7 @@ impl PinType {
                     .iter()
                     .all(|element| element_type.is_a_stored_value(element))
             }),
+            Self::Bundle { .. } if !self.holds_a_stored_value() => false,
             Self::Bundle { members, .. } => value.as_object().is_some_and(|stored| {
                 stored
                     .keys()
@@ -217,6 +218,9 @@ impl PinType {
             Self::Asset { .. } => "an asset, `{\"asset\": \"<uuid>\"}`".to_owned(),
             Self::ListOf { element_type } => {
                 format!("a list, each element {}", element_type.what_it_takes())
+            }
+            Self::Bundle { .. } if !self.holds_a_stored_value() => {
+                "no value, only a link".to_owned()
             }
             Self::Bundle { members, .. } => {
                 let names = |carried_only_by_a_link: bool| {

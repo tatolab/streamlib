@@ -77,8 +77,8 @@ def dataclass_a_bundle_pin_is_written_as(annotation: object) -> Optional[type]:
 
 
 def holds_a_member_carried_by_reference(pin_type: PinType) -> bool:
-    """Whether `pin_type` is a bundle holding a Texture, which holds no stored value and
-    travels only as the one message a node sends."""
+    """Whether `pin_type` is a bundle holding a Texture, which only a link carries, so the
+    bundle travels only as the one message a node sends."""
     if pin_type["type"] != "bundle":
         return False
     return any(
@@ -91,7 +91,7 @@ def words_refusing_a_bundle_only_a_pin_carries(
     pin_named: str, pin_name: str, form: str, written_type: object, bundle: PinType
 ) -> str:
     """Why a bundle holding a Texture is not taken by a class node's field or a function's pin:
-    it holds no stored value, so only an `InputPin` or `OutputPin` carries it."""
+    its Texture takes only a link, so only an `InputPin` or `OutputPin` carries it whole."""
     assert bundle["type"] == "bundle", "only a bundle holds a member"
     carried = ", ".join(
         f"`{member['name']}`"

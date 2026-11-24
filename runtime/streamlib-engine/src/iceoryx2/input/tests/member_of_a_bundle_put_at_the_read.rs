@@ -399,9 +399,7 @@ fn a_texture_and_a_number_wired_into_members_arrive_as_one_bundle_frame() {
 }
 
 /// A number set on the input, beside a picture wired into its member, rides each Bundle frame
-/// the picture's messages make, as the value a member no link has carried reads. The read was
-/// already so; the input taking the value at load is held by the schema's and the input values'
-/// own tests.
+/// the picture's messages make, as the value a member no link has carried reads.
 #[test]
 fn a_number_set_beside_a_wired_texture_rides_each_bundle_frame() {
     let mailboxes = InputMailboxesInner::new();

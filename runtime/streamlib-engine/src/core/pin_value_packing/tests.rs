@@ -778,7 +778,7 @@ fn a_bundle_of_tensors_packs_as_one_array_frame_of_an_attribute_for_each_member(
 }
 
 /// A bundle or a List holding a Texture, Audio or encoded unit travels as one Bundle frame, and
-/// holds no stored value to pack; a bundle of small members and one of Tensors keep their kinds,
+/// has no JSON message of its own to pack; a bundle of small members and one of Tensors keep their kinds,
 /// whose golden bytes the tests above pin.
 ///
 /// Mental-revert: without the Bundle frame arm, a bundle with a Texture member is named a

@@ -854,4 +854,8 @@ fn a_bundle_holding_a_texture_holds_the_values_of_its_small_members() {
         )],
     };
     assert!(!only_a_picture.holds_a_stored_value());
+    let refused = only_a_picture
+        .check_value(&json!({}))
+        .expect_err("a bundle of only a picture holds no value");
+    assert_eq!(refused.takes, "no value, only a link");
 }
